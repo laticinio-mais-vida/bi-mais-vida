@@ -1,13 +1,16 @@
-// Página Usuários (só administradores): quem entra no painel e o que cada um vê.
-// O visualizador vê só as abas marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores;
-// quem barra é o servidor, a página só monta o cadastro.
+// Página Usuários (só administradores): quem entra no painel e quais páginas cada um vê.
+// Em Metas, o visualizador vê só as abas marcadas e, se a lista de vendedores estiver preenchida, só esses
+// vendedores. Os vendedores de Projeções ficam na configuração da própria página (aqui só aparece o resumo).
+// Quem barra é o servidor, a página só monta o cadastro.
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
 const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia" };
+const DESCRICAO_PAGINA = { metas: "Metas do mês por vendedor e produto", projecoes: "Faturamento previsto para 6 meses" };
 
 let ctx = null, raiz = null;
-let dados = null;     // { usuarios, visoes, vendedores }
+let dados = null;     // { usuarios, visoes, paginas, vendedores }
 let sel = null;       // login em edição; "" = novo acesso; null = nenhum
 let form = null, base = null;
 let busca = "";
@@ -35,8 +38,9 @@ export async function montarUsuarios(container, contexto) {
 
 // ---------- apoio ----------
 function rascunho(u) {
-  if (!u) return { login: "", nome: "", senha: "", papel: "visualizador", ativo: true, visoes: [], vendedores: null };
+  if (!u) return { login: "", nome: "", senha: "", papel: "visualizador", ativo: true, paginas: ["metas"], visoes: [], vendedores: null };
   return { login: u.login, nome: u.nome, senha: "", papel: u.papel, ativo: u.ativo,
+           paginas: u.paginas ? [...u.paginas] : ["metas"],
            visoes: u.visoes ? [...u.visoes] : [], vendedores: u.vendedores ? [...u.vendedores] : null };
 }
 
@@ -58,6 +62,7 @@ function trocarPara(login) {
 
 const ehEu = (login) => login && login === ctx.eu.login;
 const tituloVisao = (id) => dados.visoes.find((v) => v.id === id)?.titulo || id;
+const tituloPagina = (id) => dados.paginas.find((p) => p.id === id)?.titulo || id;
 const nomeVendedor = (id) => dados.vendedores.find((v) => v.id === id)?.nome || `Vendedor ${id}`;
 
 function emLista(itens) {
@@ -67,23 +72,43 @@ function emLista(itens) {
 
 function resumoCurto(u) {
   if (u.papel === "admin") return "vê tudo";
-  const n = u.vendedores?.length;
-  return `${u.visoes.length} aba${u.visoes.length === 1 ? "" : "s"} · ${n ? `${n} vendedor${n === 1 ? "" : "es"}` : "todos os vendedores"}`;
+  const partes = [emLista((u.paginas || []).map(tituloPagina))];
+  if ((u.paginas || []).includes("metas")) {
+    const n = u.vendedores?.length;
+    partes.push(`${u.visoes.length} aba${u.visoes.length === 1 ? "" : "s"}`, n ? `${n} vendedor${n === 1 ? "" : "es"}` : "todos os vendedores");
+  }
+  return partes.join(" · ");
+}
+
+// Como a pessoa vê Projeções (definido na configuração da página Projeções).
+function modoProjecoes(login) {
+  const p = dados.usuarios.find((x) => x.login === login)?.projecoes || { modo: "metas" };
+  if (p.modo === "todos") return "todos os vendedores da página";
+  if (p.modo === "alguns") return `${p.vendedores.length} vendedor${p.vendedores.length === 1 ? "" : "es"} escolhido${p.vendedores.length === 1 ? "" : "s"}`;
+  return "igual ao acesso de Metas";
 }
 
 function resumoCompleto(f) {
   const quem = esc(f.nome.trim() || "Esta pessoa");
   if (f.papel === "admin") {
-    return `<b>${quem}</b> vê todas as abas e todos os vendedores, e pode mudar as Configurações e os acessos.`;
+    return `<b>${quem}</b> vê todas as páginas, abas e vendedores, e pode mudar as Configurações e os acessos.`;
   }
-  if (!f.visoes.length) return "Marque ao menos uma aba para este acesso.";
-  const abas = emLista(f.visoes.map((v) => `<b>${esc(tituloVisao(v))}</b>`));
-  let vend;
-  if (f.vendedores === null) vend = "com todos os vendedores dessas abas";
-  else if (!f.vendedores.length) vend = "mas falta marcar os vendedores";
-  else if (f.vendedores.length <= 3) vend = `só com ${emLista(f.vendedores.map((v) => `<b>${esc(nomeVendedor(v))}</b>`))}; os totais somam só ${f.vendedores.length === 1 ? "esse vendedor" : "esses vendedores"}`;
-  else vend = `só com os <b>${f.vendedores.length} vendedores</b> marcados; os totais somam só esses vendedores`;
-  return `<b>${quem}</b> vai ver ${abas}, ${vend}.${f.ativo ? "" : " <b>O acesso está desativado:</b> a pessoa não consegue entrar."}`;
+  if (!f.paginas.length) return "Marque ao menos uma página para este acesso.";
+  const metas = f.paginas.includes("metas");
+  if (metas && !f.visoes.length) return "Marque ao menos uma aba de Metas para este acesso.";
+  const paginas = emLista(f.paginas.map((p) => `<b>${esc(tituloPagina(p))}</b>`));
+  let txt = `<b>${quem}</b> vai ver a${f.paginas.length > 1 ? "s páginas" : " página"} ${paginas}.`;
+  if (metas) {
+    const abas = emLista(f.visoes.map((v) => `<b>${esc(tituloVisao(v))}</b>`));
+    let vend;
+    if (f.vendedores === null) vend = "com todos os vendedores dessas abas";
+    else if (!f.vendedores.length) vend = "mas falta marcar os vendedores";
+    else if (f.vendedores.length <= 3) vend = `só com ${emLista(f.vendedores.map((v) => `<b>${esc(nomeVendedor(v))}</b>`))}; os totais somam só ${f.vendedores.length === 1 ? "esse vendedor" : "esses vendedores"}`;
+    else vend = `só com os <b>${f.vendedores.length} vendedores</b> marcados; os totais somam só esses vendedores`;
+    txt += ` Em Metas: abas ${abas}, ${vend}.`;
+  }
+  if (f.paginas.includes("projecoes")) txt += ` Em Projeções: ${esc(modoProjecoes(sel))}.`;
+  return txt + (f.ativo ? "" : " <b>O acesso está desativado:</b> a pessoa não consegue entrar.");
 }
 
 function gerarSenha() {
@@ -169,7 +194,7 @@ function desenharEditor(primeira = false) {
 
     <h3 class="usu-titulo">Papel</h3>
     <div class="papeis">
-      ${[["visualizador", "olho", "Vê só as abas e os vendedores que você liberar."],
+      ${[["visualizador", "olho", "Vê só as páginas, abas e vendedores que você liberar."],
          ["admin", "escudo", "Vê tudo, muda as Configurações e cadastra acessos."]].map(([p, ic, txt]) => `
         <button type="button" class="papel-op ${form.papel === p ? "ativo" : ""}" data-papel="${p}" aria-pressed="${form.papel === p}" ${eu ? "disabled" : ""}>
           <span class="papel-ic">${icone(ic)}</span><span><b>${PAPEL[p]}</b><small>${txt}</small></span>
@@ -239,8 +264,20 @@ function desenharPermissoes() {
   const alvo = raiz.querySelector("#u-permissoes");
   if (form.papel === "admin") { alvo.innerHTML = ""; atualizarResumo(); return; }
   const alguns = form.vendedores !== null;
+  const metas = form.paginas.includes("metas"), projecoes = form.paginas.includes("projecoes");
+  const semAbas = (dados.usuarios.find((x) => x.login === sel)?.projecoes?.modo || "metas") === "metas" && !form.visoes.length;
   alvo.innerHTML = `
-    <h3 class="usu-titulo">Abas que pode ver</h3>
+    <h3 class="usu-titulo">Páginas que pode ver</h3>
+    <div class="visoes-escolha paginas-escolha">
+      ${dados.paginas.map((p) => {
+        const on = form.paginas.includes(p.id);
+        return `<button type="button" class="visao-op ${on ? "ativo" : ""}" data-pagina="${p.id}" aria-pressed="${on}">
+          <span class="marca-caixa">${icone("visto")}</span>${icone(ICONE_PAGINA[p.id] || "alvo")}
+          <span><b>${esc(p.titulo)}</b><small>${esc(DESCRICAO_PAGINA[p.id] || "")}</small></span>
+        </button>`;
+      }).join("")}
+    </div>
+    ${metas ? `<h3 class="usu-titulo">Metas: abas que pode ver</h3>
     <div class="visoes-escolha">
       ${dados.visoes.map((v) => {
         const on = form.visoes.includes(v.id);
@@ -250,13 +287,23 @@ function desenharPermissoes() {
         </button>`;
       }).join("")}
     </div>
-    <h3 class="usu-titulo">Vendedores</h3>
+    <h3 class="usu-titulo">Metas: vendedores</h3>
     <div class="seletor v2 usu-modo" data-v="${alguns ? 1 : 0}"><span class="marcador"></span>
       <button type="button" data-modo="todos" class="${alguns ? "" : "ativo"}">${icone("pessoas")}Todos dessas abas</button>
       <button type="button" data-modo="alguns" class="${alguns ? "ativo" : ""}">${icone("usuario")}Só alguns vendedores</button>
     </div>
-    <div id="u-vendedores"></div>`;
-  alvo.querySelectorAll(".visao-op").forEach((b) => b.addEventListener("click", () => {
+    <div id="u-vendedores"></div>` : ""}
+    ${projecoes ? `<h3 class="usu-titulo">Projeções: vendedores</h3>
+    <p class="usu-nota">${icone("tendencia")}<span>Ficam na configuração da página Projeções. Hoje: <b>${esc(modoProjecoes(sel))}</b>.
+      ${sel ? `<a href="#/config-projecoes?u=${encodeURIComponent(sel)}">Abrir a configuração das projeções</a>` : "Depois de criar o acesso, ajuste lá."}</span></p>
+    ${semAbas ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Sem abas de Metas, "igual ao acesso de Metas" não mostra nenhum vendedor: escolha os vendedores na configuração das projeções.</span></p>` : ""}` : ""}`;
+  alvo.querySelectorAll(".visao-op[data-pagina]").forEach((b) => b.addEventListener("click", () => {
+    const marcadas = new Set(form.paginas);
+    marcadas.has(b.dataset.pagina) ? marcadas.delete(b.dataset.pagina) : marcadas.add(b.dataset.pagina);
+    form.paginas = dados.paginas.map((p) => p.id).filter((id) => marcadas.has(id));
+    desenharPermissoes(); // mostra ou esconde o que é de cada página
+  }));
+  alvo.querySelectorAll(".visao-op[data-visao]").forEach((b) => b.addEventListener("click", () => {
     const marcadas = new Set(form.visoes);
     marcadas.has(b.dataset.visao) ? marcadas.delete(b.dataset.visao) : marcadas.add(b.dataset.visao);
     form.visoes = dados.visoes.map((v) => v.id).filter((id) => marcadas.has(id));
@@ -279,6 +326,7 @@ function desenharPermissoes() {
 
 function desenharVendedores() {
   const alvo = raiz.querySelector("#u-vendedores");
+  if (!alvo) { atualizarResumo(); return; } // sem a página Metas
   if (form.vendedores === null) {
     alvo.innerHTML = `<p class="usu-nota">${icone("info")}Vê todos os vendedores que aparecem nas abas marcadas, inclusive os que entrarem depois.</p>`;
     atualizarResumo();
@@ -357,8 +405,10 @@ function mostrarErro(msg) {
 async function salvar() {
   const btn = raiz.querySelector("#u-salvar");
   mostrarErro("");
-  if (form.papel === "visualizador" && !form.visoes.length) return mostrarErro("marque ao menos uma aba");
-  if (form.papel === "visualizador" && form.vendedores && !form.vendedores.length) return mostrarErro("marque ao menos um vendedor, ou escolha todos dessas abas");
+  if (form.papel === "visualizador" && !form.paginas.length) return mostrarErro("marque ao menos uma página");
+  const temMetas = form.paginas.includes("metas");
+  if (form.papel === "visualizador" && temMetas && !form.visoes.length) return mostrarErro("marque ao menos uma aba de Metas");
+  if (form.papel === "visualizador" && temMetas && form.vendedores && !form.vendedores.length) return mostrarErro("marque ao menos um vendedor de Metas, ou escolha todos dessas abas");
   btn.disabled = true;
   try {
     const original = sel || null;

@@ -2,7 +2,14 @@
 
 Versão em Python das páginas de metas do Power BI (Metas ES, Metas BA, Metas Edir, Metas Produtos BA e
 Metas Outras Linhas ES), reunidas numa página só, com filtros de visão, vendedor, mês e ano, e uma página
-de Configurações para as regras que antes ficavam dentro das fórmulas DAX.
+de Configurações para as regras que antes ficavam dentro das fórmulas DAX. A página **Projeções** prevê o
+faturamento bruto dos próximos 6 meses.
+
+As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
+aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
+uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção Administração, que só o
+administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
+administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções.
 
 ## Como abrir
 
@@ -24,7 +31,7 @@ no computador onde o painel está instalado. Depois, o administrador cadastra os
 **Usuários**.
 
 Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird),
-`duckdb` e `pandas`, que já estão instalados.
+`duckdb`, `pandas` e `numpy` (que vem com o pandas), que já estão instalados.
 
 ## De onde vêm os dados
 
@@ -84,14 +91,78 @@ A situação compara o realizado com o ritmo esperado do dia:
 
 Em mês fechado, o ritmo esperado é 100%.
 
+## Página Projeções
+
+Previsão do **faturamento bruto** dos próximos 6 meses, separado em **Mussarela** e **Mix** (outras linhas),
+com o total. Bruto quer dizer todas as vendas válidas **sem descontar as devoluções**, por isso os valores ficam
+acima do realizado da página de Metas. Valem as equivalências de produto, os produtos "não conta" ficam fora e
+entram os vendedores escolhidos na configuração da página (por padrão, todas as equipes ES, BA e Edir,
+inclusive vendedores sem meta na planilha).
+
+- **Filtros de vendedores e produtos:** seleção múltipla com busca. Vendedores vêm agrupados por equipe e
+  produtos por Mussarela e pelas categorias do mix. Marcar o nome do grupo marca todos dele. Nada marcado é
+  todos. O filtro fica no endereço da página (dá para mandar o link) e é lembrado neste navegador.
+- **Indicadores:** total projetado dos 6 meses, comparação com os mesmos meses do ano anterior, média por mês,
+  faixa provável, fechamento do mês em andamento e o erro médio do método. Quando o filtro não tem mussarela
+  (ou mix), o cartão mostra "Não se aplica".
+- **Gráficos:** realizado mês a mês, projeção pontilhada com a faixa provável e o mesmo mês do ano anterior.
+- **Mês a mês:** tabela com dias úteis, projeção e faixa de cada mês, também em imagem (Copiar imagem).
+- **Como a projeção é calculada:** o passo a passo e o erro do método por mês projetado, para o filtro escolhido.
+
+### Configurar (Projeções)
+
+O botão **Configurar** da página Projeções (só administradores) abre duas seções. Tudo vale depois de
+**Salvar alterações**, e nada muda nas metas nem no ERP.
+
+- **Vendedores da página:** quem entra nos totais, nos gráficos e no filtro. Vendedores novos das equipes ES,
+  BA e Edir entram sozinhos, para a projeção não perder faturamento sem ninguém perceber. Desmarque contas
+  internas (Venda interna, Funcionário, Produtor...) ou quem não deve contar, e marque quem é de fora dessas
+  equipes e deve entrar. A lista mostra a venda bruta dos últimos 12 meses e a última venda de cada um.
+  Fica gravado em `config_projecoes.json` (a versão anterior em `config_projecoes.anterior.json`).
+- **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
+  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Usuários. Se o acesso
+    de Metas mudar, este muda junto;
+  - **Todos da página;**
+  - **Só alguns:** a lista que você marcar.
+  Os totais somam só os vendedores que a pessoa vê. Administradores veem todos os vendedores da página.
+
+### Como a projeção é calculada
+
+1. Cada mês fechado desde jan/2024 vira **R$ por dia útil** (calendário de ES e BA com os feriados e os extras
+   das Configurações), para meses curtos ou com feriado não parecerem queda.
+2. A projeção é a **média de dois métodos**:
+   - mesmo mês do ano anterior × crescimento (média dos últimos 12 meses ÷ média dos 12 anteriores);
+   - tendência dos últimos 12 meses sem a sazonalidade, amortecida (a inclinação perde 20% a cada mês à
+     frente), × o fator de sazonalidade do mês.
+   O resultado volta para reais multiplicando pelos dias úteis de cada mês futuro. Faturamento = mussarela + mix.
+3. **Com filtro:** média entre o modelo aplicado só ao filtro e a projeção do total × a participação do filtro
+   nos últimos 6 meses. Se o filtro não tem 24 meses seguidos de vendas (vendedor ou produto novo), vale só a
+   participação. Para quem vê só alguns vendedores, o acesso funciona como um filtro: a projeção de um vendedor
+   é a mesma para ele e para o administrador.
+4. **Faixa provável:** o método é refeito para os últimos 12 meses usando só o que se sabia antes de cada um, e a
+   faixa é o erro médio dessas tentativas para cada distância (1 mês à frente, 2 meses...). Sem histórico para
+   medir, a faixa é o dobro da do total.
+5. **Mês em andamento:** realizado até agora mais o fechamento pelo ritmo (realizado ÷ dias úteis passados × dias
+   úteis do mês), a mesma conta da página de Metas, mas sobre o bruto.
+
+O método foi escolhido testando seis alternativas (Holt-Winters entre elas) nos meses de jul/2025 a set/2026.
+Erro médio de 1 a 6 meses à frente, sem filtro: **faturamento 6,6%**, **mix 5,7%** e **mussarela 11,5%** (a
+mussarela varia mais). Por vendedor o erro fica perto de 19% no mix e 26% na mussarela, e a faixa da página
+mostra isso. As constantes ficam no topo de `bi/projecoes.py`.
+
 ## Login e acessos
 
 Todo mundo entra com usuário e senha. Há dois papéis:
 
 | Papel | Vê | Pode mexer |
 |---|---|---|
-| **Administrador** | todas as abas e todos os vendedores | Configurações, Usuários e o botão Atualizar dados |
-| **Visualizador** | só as abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
+| **Administrador** | todas as páginas, abas e vendedores | Configurações, Usuários e o botão Atualizar dados |
+| **Visualizador** | só as páginas e abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
+
+Em Usuários ficam as páginas de cada pessoa e, para Metas, as abas e os vendedores. Os vendedores que a
+pessoa vê em Projeções ficam na configuração da página Projeções (o padrão é igual ao acesso de Metas). Quem
+foi cadastrado antes da página Projeções existir continua só com Metas até o administrador marcar a página
+nova.
 
 Exemplos:
 
@@ -107,8 +178,10 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Abas que pode ver** e **Vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a
-  lista). O quadro azul no fim resume o que a pessoa vai ver.
+- **Páginas que pode ver** (Metas, Projeções). Com Metas marcada aparecem as **abas** e os **vendedores** de
+  Metas ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). Com Projeções marcada
+  aparece um resumo e o link para a configuração das projeções. O quadro azul no fim resume o que a pessoa vai
+  ver.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
 
 Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura
@@ -140,9 +213,9 @@ python app.py --senha LOGIN
 O comando pede a senha nova duas vezes, reativa o usuário e derruba as sessões abertas. Se o login não
 existir, ele cria um administrador com esse nome.
 
-## Página Configurações
+## Página Configurações (das metas)
 
-Tudo é gravado em `config_metas.json`. A versão anterior fica em `config_metas.anterior.json`. O padrão
+Abre pelo botão **Configurar** da página Metas. Tudo é gravado em `config_metas.json`. A versão anterior fica em `config_metas.anterior.json`. O padrão
 reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Power BI" volta a ele.
 
 - **Produtos:** cada produto conta como **Mussarela**, **Outras linhas** ou **Não conta**. Os de outras
@@ -183,6 +256,7 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `app.py` | servidor local e rotas da API |
 | `bi/cache.py` | leitura do Firebird e cache DuckDB |
 | `bi/metas.py` | cálculo das visões |
+| `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |
 | `bi/configuracao.py` | regras editáveis e padrões do Power BI |
 | `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
@@ -193,13 +267,14 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `logs/bi.log` | registro de atualizações e erros |
 | `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
 | `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
+| `config_projecoes.json` | vendedores da página Projeções, salvos em Projeções › Configurar (só existe depois do primeiro Salvar) |
 | `usuarios.json` | acessos do painel: senhas em hash e a chave das sessões (fica fora do repositório) |
 | `docs/analise_pbi_metas.md` | análise do Power BI original: tabelas, medidas DAX e divergências encontradas |
 | `docs/publicacao_vps.md` | como o painel está publicado no VPS e como mantê-lo |
 | `deploy/` | Dockerfile e docker-compose do painel no VPS |
 
 Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `dados/` (cache com as vendas), `logs/`,
-`marca/` (guia da marca em PDF) e a cópia `config_metas.anterior.json`.
+`marca/` (guia da marca em PDF) e as cópias `config_metas.anterior.json` e `config_projecoes.anterior.json`.
 
 ## Se algo der errado
 

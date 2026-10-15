@@ -38,6 +38,7 @@ export function montarMetas(container, contexto) {
         <label class="campo vendedor"><span class="ic-campo">${icone("usuario")}</span><span class="sr">Vendedor</span><select id="f-vendedor"></select></label>
         <label class="campo mes"><span class="ic-campo">${icone("calendario")}</span><span class="sr">Mês</span><select id="f-mes"></select></label>
         <label class="campo ano"><span class="sr">Ano</span><select id="f-ano" style="padding-left:14px"></select></label>
+        ${ctx.admin ? `<a class="btn btn-config" href="#/configuracoes" title="Configurações das metas: produtos, vendedores, devoluções e dias úteis">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="m-avisos"></div>

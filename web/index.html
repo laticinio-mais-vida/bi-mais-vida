@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Metas Mais Vida</title>
+<title>Painel Mais Vida</title>
 <link rel="icon" href="/img/logo-maisvida.png">
 <script>
   // Aplica o tema antes de desenhar a página, para não piscar.
@@ -19,7 +19,26 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
 <link rel="stylesheet" href="/css/app.css">
 </head>
-<body>
+<body class="com-lateral">
+<aside class="lateral" id="lateral" aria-label="Páginas do painel">
+  <div class="lateral-topo">
+    <button class="lateral-alternar" id="btn-lateral" type="button" aria-controls="lateral" aria-expanded="false" aria-label="Expandir o menu">
+      <span data-icone="painel"></span>
+    </button>
+    <span class="lateral-titulo">Painel Mais Vida</span>
+  </div>
+  <nav class="lateral-nav">
+    <span class="lateral-secao"><span>Páginas</span></span>
+    <a href="#/metas" class="lateral-item" data-rota="metas" data-pagina="metas" hidden><span data-icone="alvo"></span><span class="rotulo">Metas</span></a>
+    <a href="#/projecoes" class="lateral-item" data-rota="projecoes" data-pagina="projecoes" hidden><span data-icone="tendencia"></span><span class="rotulo">Projeções</span></a>
+    <div class="lateral-grupo" data-admin hidden>
+      <span class="lateral-secao"><span>Administração</span></span>
+      <a href="#/usuarios" class="lateral-item" data-rota="usuarios"><span data-icone="escudo"></span><span class="rotulo">Usuários</span></a>
+    </div>
+  </nav>
+</aside>
+<div class="lateral-fundo" id="lateral-fundo" hidden></div>
+
 <header class="hero" id="hero">
   <svg class="hero-cena" viewBox="0 0 1440 300" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
     <defs>
@@ -65,19 +84,17 @@
   </svg>
 
   <div class="hero-conteudo">
-    <a class="marca" href="#/metas" aria-label="Início">
+    <button class="btn-vidro btn-menu" id="btn-menu" type="button" aria-controls="lateral" aria-expanded="false" aria-label="Abrir o menu de páginas">
+      <span data-icone="menu"></span>
+    </button>
+    <a class="marca" href="#/" aria-label="Início">
       <img src="/img/logo-maisvida.png" alt="Mais Vida" width="176" height="67">
     </a>
     <div class="hero-titulo">
       <h1 id="titulo-pagina">Acompanhamento de Metas</h1>
       <p id="subtitulo-pagina" class="hero-sub">Carregando…</p>
     </div>
-    <nav class="hero-acoes" aria-label="Navegação">
-      <div class="nav-pilulas" role="tablist">
-        <a href="#/metas" class="nav-pilula" data-rota="metas" role="tab"><span data-icone="alvo"></span>Metas</a>
-        <a href="#/configuracoes" class="nav-pilula" data-rota="configuracoes" role="tab" data-admin hidden><span data-icone="engrenagem"></span>Configurações</a>
-        <a href="#/usuarios" class="nav-pilula" data-rota="usuarios" role="tab" data-admin hidden><span data-icone="escudo"></span>Usuários</a>
-      </div>
+    <div class="hero-acoes">
       <button class="btn-vidro" id="btn-atualizar" type="button" title="Ler de novo a cópia do banco" data-admin data-so-local hidden>
         <span data-icone="atualizar"></span><span class="rotulo">Atualizar dados</span>
       </button>
@@ -87,13 +104,15 @@
       <button class="tema-alternar" id="btn-tema" type="button" aria-label="Alternar tema claro e escuro">
         <span class="tema-trilho"><span class="tema-bola"><span data-icone="sol" class="ic-sol"></span><span data-icone="lua" class="ic-lua"></span></span></span>
       </button>
-    </nav>
+    </div>
   </div>
 </header>
 
 <main id="app" class="app" tabindex="-1">
   <section id="pagina-metas" class="pagina" hidden></section>
+  <section id="pagina-projecoes" class="pagina" hidden></section>
   <section id="pagina-configuracoes" class="pagina" hidden></section>
+  <section id="pagina-config-projecoes" class="pagina" hidden></section>
   <section id="pagina-usuarios" class="pagina" hidden></section>
 </main>
 

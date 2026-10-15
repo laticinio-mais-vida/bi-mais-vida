@@ -12,6 +12,7 @@ logs/
 
 # Cópia de segurança automática das regras e arquivos temporários
 config_metas.anterior.json
+config_projecoes.anterior.json
 *.tmp
 
 # Material da marca (guia em PDF, de uso interno)

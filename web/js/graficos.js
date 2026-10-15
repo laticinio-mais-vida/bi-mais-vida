@@ -1,4 +1,5 @@
-// Gráficos em SVG desenhados à mão (sem bibliotecas): anel de progresso, corrida da meta, ranking e barras.
+// Gráficos em SVG desenhados à mão (sem bibliotecas): anel de progresso, corrida da meta, ranking, barras e
+// histórico com projeção.
 import { esc, fmt, icone, STATUS, corStatus, mostrarTooltip, esconderTooltip, linhaTT, reduzMovimento } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -196,4 +197,132 @@ export function barras(itens, { cor = "var(--s-out)", total = null, formato = fm
       <span class="trilho"><span class="enche" style="--cor:${it.cor || cor}" data-largura="${(Math.max(0, it.valor) / max) * 100}%"></span></span>
       <span class="val">${formato(it.valor)}${total ? `<small>${fmt.pct(it.valor / total)} do total</small>` : ""}</span>
     </div>`).join("")}</div>`;
+}
+
+// ---------- histórico e projeção mensal (página Projeções) ----------
+// pontos: [{ rotulo, tipo: "real" | "atual" | "proj", real, valor, min, max, realizado, anterior, dias }]
+// Realizado em linha cheia; mês em andamento e meses projetados em linha pontilhada com a faixa provável;
+// o mesmo mês do ano anterior em cinza, para comparar.
+function ticksIntervalo(min, max, n = 4) {
+  if (max <= min) return [min, min + 1];
+  const bruto = (max - min) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(bruto)));
+  const passo = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= bruto) || 10 * mag;
+  const saida = [];
+  for (let v = Math.floor(min / passo) * passo; v <= max + passo * 0.001; v += passo) saida.push(v);
+  if (saida[saida.length - 1] < max) saida.push(saida[saida.length - 1] + passo);
+  return saida;
+}
+
+export function projecao(el, { pontos: todos, cor = "var(--s-fat)", nome = "Faturamento" }) {
+  let w = 0;
+  const desenhar = () => {
+    w = el.clientWidth;
+    const tela = el.closest(".tela-cheia");
+    const W = Math.max(300, el.clientWidth);
+    const pontos = W < 460 ? todos.slice(-13) : todos; // celular: menos meses passados, para caber
+    const H = tela ? Math.max(340, Math.min(820, tela.clientHeight - 250)) : (W < 520 ? 240 : 300);
+    const m = tela ? { e: 74, d: 96, t: 30, b: 34 } : { e: 58, d: W < 520 ? 56 : 78, t: 26, b: 30 };
+    const n = pontos.length;
+    const ultimoReal = pontos.reduce((u, p, i) => (p.tipo === "real" ? i : u), -1);
+    const valores = pontos.flatMap((p) => [p.real, p.valor, p.min, p.max, p.anterior]).filter((v) => v != null && !isNaN(v));
+    if (!valores.length) { el.innerHTML = `<div class="vazio">${icone("grafico")}<p>Sem vendas para mostrar.</p></div>`; return; }
+    const tk = ticksIntervalo(Math.max(0, Math.min(...valores) * 0.92), Math.max(...valores) * 1.04, 4);
+    const yMin = tk[0], yMax = tk[tk.length - 1];
+    const x = (i) => m.e + (i / Math.max(1, n - 1)) * (W - m.e - m.d);
+    const y = (v) => H - m.b - ((v - yMin) / (yMax - yMin || 1)) * (H - m.t - m.b);
+    const seq = (lista) => lista.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("L");
+    const passoRotulo = Math.ceil(n / Math.max(4, Math.floor((W - m.e - m.d) / 58)));
+    const ap = el.dataset.desenhado ? "" : " aparece"; // só anima na primeira vez, não a cada redesenho
+
+    let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(nome)}: realizado mês a mês e projeção dos próximos meses">`;
+    // região projetada
+    if (ultimoReal < n - 1) {
+      const x0 = ultimoReal >= 0 ? (x(ultimoReal) + x(ultimoReal + 1)) / 2 : m.e;
+      s += `<rect class="regiao-proj" x="${x0}" y="${m.t - 18}" width="${W - m.d - x0 + 10}" height="${H - m.b - m.t + 18}" rx="10"/>`;
+      s += `<text class="rotulo-regiao" x="${x0 + 10}" y="${m.t - 4}">Projeção</text>`;
+    }
+    tk.forEach((v) => {
+      s += `<line class="grade-l" x1="${m.e}" x2="${W - m.d}" y1="${y(v)}" y2="${y(v)}"/>`;
+      s += `<text class="eixo-t" x="${m.e - 10}" y="${y(v) + 4}" text-anchor="end">${fmt.eixo(v)}</text>`;
+    });
+    pontos.forEach((p, i) => {
+      if ((n - 1 - i) % passoRotulo === 0) s += `<text class="eixo-t" x="${x(i)}" y="${H - 8}" text-anchor="middle">${esc(p.rotulo)}</text>`;
+    });
+    // mesmo mês do ano anterior
+    const ant = pontos.map((p, i) => [i, p.anterior]).filter(([, v]) => v != null);
+    if (ant.length > 1) s += `<path class="linha-anterior" d="M${seq(ant)}"/>`;
+    // faixa provável e linha projetada (saem do último mês realizado)
+    const futuros = pontos.map((p, i) => [i, p]).filter(([, p]) => p.tipo !== "real" && p.valor != null);
+    if (futuros.length) {
+      const inicio = ultimoReal >= 0 ? [[ultimoReal, pontos[ultimoReal].real]] : [];
+      const topo = inicio.concat(futuros.map(([i, p]) => [i, p.max]));
+      const base = inicio.concat(futuros.map(([i, p]) => [i, p.min])).reverse();
+      s += `<path class="faixa-proj${ap}" d="M${seq(topo)}L${seq(base)}Z" style="--cor:${cor}"/>`;
+      s += `<path class="linha-proj${ap}" d="M${seq(inicio.concat(futuros.map(([i, p]) => [i, p.valor])))}" style="--cor:${cor}"/>`;
+      futuros.forEach(([i, p]) => {
+        s += `<circle class="ponto-proj${ap}" cx="${x(i)}" cy="${y(p.valor)}" r="4" style="--cor:${cor}"/>`;
+      });
+      const [iu, pu] = futuros[futuros.length - 1];
+      s += `<text class="rotulo-fim${ap}" x="${x(iu) + 10}" y="${y(pu.valor) + 4}">${fmt.moedaC(pu.valor)}</text>`;
+    }
+    // realizado
+    const reais = pontos.map((p, i) => [i, p.real]).filter(([i, v]) => v != null && pontos[i].tipo === "real");
+    if (reais.length) {
+      s += `<path class="linha-real" id="linha-real-proj" d="M${seq(reais)}" style="--cor:${cor}"/>`;
+      const [ir, vr] = reais[reais.length - 1];
+      s += `<circle class="ponto-fim${ap}" cx="${x(ir)}" cy="${y(vr)}" r="5" style="--cor:${cor}"/>`;
+      s += `<text class="rotulo-fim${ap}" x="${x(ir)}" y="${y(vr) - 12}" text-anchor="middle">${fmt.moedaC(vr)}</text>`;
+    }
+    s += `<line class="mira" x1="0" x2="0" y1="${m.t}" y2="${H - m.b}"/><circle class="mira-ponto" r="5" style="--cor:${cor}"/>`;
+    s += `<rect class="captura" x="${m.e - 10}" y="${m.t - 18}" width="${W - m.e - m.d + 20}" height="${H - m.t - m.b + 18}" fill="transparent"/>`;
+    s += "</svg>";
+    el.innerHTML = s;
+    el.style.setProperty("--cor", cor);
+
+    const linha = el.querySelector("#linha-real-proj");
+    if (linha && !reduzMovimento() && !el.dataset.desenhado) {
+      const L = linha.getTotalLength();
+      linha.style.strokeDasharray = L;
+      linha.style.strokeDashoffset = L;
+      linha.classList.add("desenha");
+    }
+    el.dataset.desenhado = "1";
+
+    const svg = el.querySelector("svg"), mira = el.querySelector(".mira"), ponto = el.querySelector(".mira-ponto");
+    const mover = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      const i = Math.max(0, Math.min(n - 1, Math.round(((px - m.e) / (W - m.e - m.d)) * (n - 1))));
+      const p = pontos[i];
+      const v = p.tipo === "real" ? p.real : p.valor;
+      el.classList.add("ativo");
+      mira.setAttribute("x1", x(i)); mira.setAttribute("x2", x(i));
+      if (v != null) { ponto.setAttribute("cx", x(i)); ponto.setAttribute("cy", y(v)); ponto.style.opacity = 1; } else ponto.style.opacity = 0;
+      const situacao = { real: "realizado", atual: "em andamento", proj: "projeção" }[p.tipo];
+      let html = `<div class="tt-t">${esc(p.rotulo)} · ${situacao}</div>`;
+      if (p.tipo === "real") html += linhaTT(nome, fmt.moeda(p.real), cor);
+      if (p.tipo === "atual") {
+        html += linhaTT("Vendido até agora", fmt.moeda(p.realizado));
+        html += linhaTT("Fechamento pelo ritmo", fmt.moeda(p.valor), cor);
+      }
+      if (p.tipo === "proj") html += linhaTT("Projeção", fmt.moeda(p.valor), cor);
+      if (p.tipo !== "real") html += linhaTT("Faixa provável", `${fmt.moedaC(p.min)} a ${fmt.moedaC(p.max)}`);
+      if (p.anterior != null) {
+        html += linhaTT("Mesmo mês, ano anterior", fmt.moeda(p.anterior), "var(--s-ritmo)");
+        if (v && p.anterior > 0) html += linhaTT("Variação", `${v >= p.anterior ? "+" : "−"}${fmt.pct(Math.abs(v / p.anterior - 1))}`);
+      }
+      if (p.dias != null) html += linhaTT("Dias úteis", fmt.dias(p.dias));
+      mostrarTooltip(html, ev.clientX, ev.clientY);
+    };
+    const sair = () => { el.classList.remove("ativo"); esconderTooltip(); };
+    const cap = el.querySelector(".captura");
+    cap.addEventListener("mousemove", mover);
+    cap.addEventListener("mouseleave", sair);
+  };
+  desenhar();
+  el._redesenhar = desenhar;
+  if (el._ro) el._ro.disconnect();
+  el._ro = new ResizeObserver(() => { if (Math.abs(el.clientWidth - w) > 4) desenhar(); });
+  el._ro.observe(el);
 }

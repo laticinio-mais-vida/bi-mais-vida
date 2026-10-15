@@ -3,8 +3,10 @@
 - Senha: PBKDF2-SHA256 com sal próprio; o arquivo nunca guarda a senha em si.
 - Sessão: cookie assinado (HMAC) com o login, a validade e o contador de sessão do usuário. Trocar a senha,
   desativar ou excluir o usuário muda o contador e derruba as sessões abertas em outros aparelhos.
-- Permissões: o administrador vê tudo e mexe em Configurações e Usuários; o visualizador vê só as visões
-  liberadas e, se a lista de vendedores estiver preenchida, só esses vendedores (os totais também).
+- Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
+  liberadas. Em Metas, só as visões marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores
+  (os totais também). Em Projeções, os vendedores escolhidos na configuração da página: igual a Metas (padrão),
+  todos os da página ou só alguns.
 """
 from __future__ import annotations
 
@@ -25,6 +27,9 @@ from pathlib import Path
 from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
+PAGINAS = {"metas": "Metas", "projecoes": "Projeções"}
+PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
+MODOS_PROJECOES = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
 COOKIE = "mv_sessao"
 DURACAO_SESSAO = 12 * 3600            # sem "manter conectado"
 DURACAO_LEMBRAR = 30 * 24 * 3600      # com "manter conectado"
@@ -73,6 +78,8 @@ def publico(login: str, u: dict) -> dict:
     return {
         "login": login, "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
         "visoes": u["visoes"], "vendedores": u["vendedores"],
+        "paginas": None if u["papel"] == "admin" else [p for p in PAGINAS if p in (u.get("paginas") or PAGINAS_PADRAO)],
+        "projecoes": None if u["papel"] == "admin" else (u.get("projecoes") or {"modo": "metas", "vendedores": None}),
         "criado_em": u.get("criado_em"), "ultimo_acesso": u.get("ultimo_acesso"),
     }
 
@@ -159,16 +166,20 @@ class Usuarios:
             raise ValueError("papel inválido")
         ativo = bool(dados.get("ativo", True))
         if papel == "admin":
-            visoes, vendedores = None, None
+            visoes, vendedores, paginas = None, None, None
         else:
+            paginas = [p for p in PAGINAS if p in (dados.get("paginas") or [])]
+            if not paginas:
+                raise ValueError("escolha ao menos uma página para o visualizador")
             visoes = [v for v in VISOES if v in (dados.get("visoes") or [])]
-            if not visoes:
-                raise ValueError("escolha ao menos uma visão para o visualizador")
             vendedores = dados.get("vendedores")
             if vendedores is not None:
                 vendedores = sorted({int(v) for v in vendedores})
-                if not vendedores:
-                    raise ValueError("escolha ao menos um vendedor, ou libere todos")
+            if "metas" in paginas:
+                if not visoes:
+                    raise ValueError("escolha ao menos uma aba de Metas para o visualizador")
+                if vendedores is not None and not vendedores:
+                    raise ValueError("escolha ao menos um vendedor de Metas, ou libere todos")
         senha = dados.get("senha") or None
 
         with self._trava:
@@ -185,7 +196,8 @@ class Usuarios:
                 if not senha:
                     raise ValueError("informe a senha do novo usuário")
                 u = {"sessao": 0, "criado_em": dt.datetime.now().isoformat(timespec="seconds"), "ultimo_acesso": None}
-            novo = {**u, "nome": nome, "papel": papel, "ativo": ativo, "visoes": visoes, "vendedores": vendedores}
+            novo = {**u, "nome": nome, "papel": papel, "ativo": ativo, "visoes": visoes, "vendedores": vendedores,
+                    "paginas": paginas}
             if senha:
                 novo["senha"] = gerar_hash(_valida_senha(senha))
             if login_original and (senha or (u["ativo"] and not ativo)):
@@ -199,6 +211,35 @@ class Usuarios:
             usuarios[login] = novo
             self._grava()
             return publico(login, novo)
+
+    def definir_projecoes(self, mudancas: dict) -> None:
+        """Pela configuração da página Projeções: {login: {"ve": bool, "modo": ..., "vendedores": [ids]}}.
+        Confere tudo antes de gravar, para não salvar só metade."""
+        with self._trava:
+            usuarios = self._dados["usuarios"]
+            novos = {}
+            for login, m in (mudancas or {}).items():
+                u = usuarios.get(login)
+                if not u:
+                    raise ValueError(f"usuário não encontrado: {login}")
+                if u["papel"] == "admin":
+                    continue  # administrador vê tudo
+                modo = m.get("modo", "metas")
+                if modo not in MODOS_PROJECOES:
+                    raise ValueError(f"modo inválido para {login}: {modo}")
+                vendedores = sorted({int(v) for v in m.get("vendedores") or []}) if modo == "alguns" else None
+                if modo == "alguns" and not vendedores:
+                    raise ValueError(f"escolha ao menos um vendedor para {u['nome']}, ou outra opção")
+                paginas = [p for p in PAGINAS if p in (u.get("paginas") or PAGINAS_PADRAO)]
+                if "ve" in m:
+                    paginas = [p for p in PAGINAS if (p in paginas and p != "projecoes") or (p == "projecoes" and m["ve"])]
+                if not paginas:
+                    raise ValueError(f"{u['nome']} ficaria sem nenhuma página; libere outra em Usuários antes")
+                novos[login] = {"projecoes": {"modo": modo, "vendedores": vendedores}, "paginas": paginas}
+            for login, n in novos.items():
+                usuarios[login].update(n)
+            if novos:
+                self._grava()
 
     def excluir(self, login: str) -> None:
         with self._trava:
@@ -227,6 +268,7 @@ class Usuarios:
                     raise ValueError("usuário inválido: use de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado")
                 self._dados["usuarios"][login] = {
                     "nome": nome or login, "papel": "admin", "ativo": True, "visoes": None, "vendedores": None,
+                    "paginas": None,
                     "senha": h, "sessao": 0, "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
                     "ultimo_acesso": None,
                 }
@@ -243,6 +285,27 @@ class Usuarios:
 # --- permissões -----------------------------------------------------------------------------
 def eh_admin(usuario: dict | None) -> bool:
     return bool(usuario) and usuario["papel"] == "admin"
+
+
+def paginas_permitidas(usuario: dict) -> list[str]:
+    return list(PAGINAS) if eh_admin(usuario) else list(usuario["paginas"])
+
+
+def equipes_permitidas(usuario: dict) -> set[str]:
+    """Equipes (grupos de vendedor) das visões liberadas: o modo "igual a Metas" de Projeções usa isto."""
+    return {g for v in visoes_permitidas(usuario) for g in VISOES[v]["grupos"]}
+
+
+def escopo_projecoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) que o usuário vê em Projeções; None = sem limite além dos vendedores da página."""
+    if eh_admin(usuario):
+        return None, None
+    p = usuario.get("projecoes") or {"modo": "metas"}
+    if p["modo"] == "todos":
+        return None, None
+    if p["modo"] == "alguns":
+        return set(p.get("vendedores") or []), None
+    return vendedores_permitidos(usuario), equipes_permitidas(usuario)
 
 
 def visoes_permitidas(usuario: dict) -> list[str]:

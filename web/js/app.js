@@ -1,19 +1,83 @@
-// Inicialização: sessão, tema, rotas (#/metas, #/configuracoes e #/usuarios), estado dos dados e atualização
-// da cópia do banco. Configurações e Usuários só aparecem para administradores (o servidor também barra).
-import { api, esc, fmt, irParaLogin, ligarTema, preencherIcones, toast } from "./util.js";
+// Inicialização: sessão, tema, barra lateral, rotas, estado dos dados e atualização da cópia do banco.
+// Cada pessoa vê só as páginas liberadas no cadastro dela. Cada página tem a sua configuração (botão
+// Configurar dentro dela, só para administradores); Usuários fica na barra lateral. O servidor também barra.
+import { api, esc, fmt, icone, irParaLogin, ligarTema, preencherIcones, toast } from "./util.js";
 import { montarMetas, recarregarMetas } from "./metas.js";
+import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
+import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
+import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 
-const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), usuario: null };
-const ROTAS_ADMIN = ["configuracoes", "usuarios"];
+const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
+const PAGINAS_DE_DADOS = ["metas", "projecoes"];
 
-function subtituloMetas(d) {
-  app.dadosMetas = d;
-  const sub = document.getElementById("subtitulo-pagina");
-  sub.innerHTML = `<span>${esc(d.periodo.rotulo)} · ${esc(d.visao.titulo)}</span>
+const ehAdmin = () => app.usuario?.papel === "admin";
+
+// Para criar uma página: acrescente aqui, no index.html (seção e item da lateral) e, se ela for liberada
+// por usuário, em PAGINAS de bi/acesso.py. A configuração de uma página é outra entrada, com `pai`: ela
+// mantém a página de origem marcada na lateral e ganha o link de volta no topo.
+const PAGINAS = {
+  metas: {
+    nome: "Metas",
+    titulo: "Acompanhamento de Metas",
+    montar: (el) => montarMetas(el, { opcoes: app.opcoes, admin: ehAdmin(), subtitulo: (d) => subtitulo("metas", d) }),
+    recarregar: recarregarMetas,
+  },
+  projecoes: {
+    nome: "Projeções",
+    titulo: "Projeções de faturamento",
+    montar: (el) => montarProjecoes(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("projecoes", d) }),
+    recarregar: recarregarProjecoes,
+  },
+  configuracoes: {
+    titulo: "Configurações das metas",
+    fixo: "Produtos, vendedores, devoluções e dias úteis usados nos cálculos",
+    pai: "metas",
+    admin: true,
+    sempreMonta: true,
+    pendente: configTemAlteracoes,
+    montar: (el) => montarConfig(el, { aoSalvar: () => PAGINAS_DE_DADOS.forEach((p) => app.remontar.add(p)) }),
+  },
+  "config-projecoes": {
+    titulo: "Configurações das projeções",
+    fixo: "Vendedores que entram na página e o que cada pessoa vê nela",
+    pai: "projecoes",
+    admin: true,
+    sempreMonta: true,
+    pendente: configProjecoesTemAlteracoes,
+    montar: (el) => montarConfigProjecoes(el, { aoSalvar: () => app.remontar.add("projecoes") }),
+  },
+  usuarios: {
+    titulo: "Usuários e acessos",
+    fixo: "Quem entra no painel e o que cada pessoa pode ver",
+    admin: true,
+    sempreMonta: true,
+    pendente: usuariosTemAlteracoes,
+    montar: (el) => montarUsuarios(el, {
+      eu: app.usuario,
+      aoSalvarEu: (u) => { app.usuario = { ...app.usuario, ...u }; mostrarUsuario(app.usuario); },
+    }),
+  },
+};
+
+const TEXTO_SUBTITULO = {
+  metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
+  projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
+};
+
+// O subtítulo do topo mostra o filtro e a data dos dados da página aberta.
+function subtitulo(rota, d) {
+  app.dados[rota] = d;
+  if (app.rota !== rota) return; // a resposta chegou depois de trocar de página
+  document.getElementById("subtitulo-pagina").innerHTML = `<span>${esc(TEXTO_SUBTITULO[rota](d))}</span>
     <span class="ponto"><span class="pulso"></span>dados até ${fmt.semana(d.data_ref)}, ${fmt.dataCurta(d.data_ref)}</span>`;
+}
+
+function paginasPermitidas() {
+  const admin = app.usuario.papel === "admin";
+  return Object.keys(PAGINAS).filter((r) => (PAGINAS[r].admin ? admin : admin || app.usuario.paginas.includes(r)));
 }
 
 function rodape() {
@@ -33,39 +97,38 @@ function rodape() {
 }
 
 async function rotear() {
-  const pedida = (location.hash.replace(/^#\/?/, "").split("?")[0] || "metas");
-  const rota = ROTAS_ADMIN.includes(pedida) && app.usuario.papel === "admin" ? pedida : "metas";
-  const pendente = { configuracoes: configTemAlteracoes, usuarios: usuariosTemAlteracoes }[app.rota];
-  if (app.rota !== rota && pendente && pendente() &&
+  const permitidas = paginasPermitidas();
+  const pedida = location.hash.replace(/^#\/?/, "").split("?")[0];
+  const rota = permitidas.includes(pedida) ? pedida : permitidas[0];
+  const pendente = PAGINAS[app.rota]?.pendente;
+  if (app.rota && app.rota !== rota && pendente && pendente() &&
       !confirm("Há alterações não salvas nesta página. Sair mesmo assim?")) {
     history.replaceState(null, "", "#/" + app.rota);
     return;
   }
-  if (rota !== pedida) history.replaceState(null, "", "#/metas");
+  if (!rota) {
+    document.getElementById("app").innerHTML = `<div class="cartao vazio">${icone("cadeado")}<p>Seu acesso ainda não tem nenhuma página liberada. Fale com o administrador.</p></div>`;
+    return;
+  }
+  if (rota !== pedida) history.replaceState(null, "", "#/" + rota);
   app.rota = rota;
-  document.querySelectorAll(".nav-pilula").forEach((a) => a.classList.toggle("ativa", a.dataset.rota === app.rota));
-  const pMetas = document.getElementById("pagina-metas"), pConfig = document.getElementById("pagina-configuracoes");
-  const pUsuarios = document.getElementById("pagina-usuarios");
-  pMetas.hidden = app.rota !== "metas";
-  pConfig.hidden = app.rota !== "configuracoes";
-  pUsuarios.hidden = app.rota !== "usuarios";
-  if (app.rota === "metas") {
-    document.getElementById("titulo-pagina").textContent = "Acompanhamento de Metas";
-    if (!app.montadas.has("metas") || app.precisaRecarregar) {
-      app.montadas.add("metas");
-      app.precisaRecarregar = false;
-      montarMetas(pMetas, { opcoes: app.opcoes, subtitulo: subtituloMetas });
-    } else if (app.dadosMetas) {
-      subtituloMetas(app.dadosMetas); // volta o subtítulo de Metas depois de passar por outra página
-    }
-  } else if (app.rota === "configuracoes") {
-    document.getElementById("titulo-pagina").textContent = "Configurações das metas";
-    document.getElementById("subtitulo-pagina").innerHTML = "<span>Produtos, vendedores, devoluções e dias úteis usados nos cálculos</span>";
-    montarConfig(pConfig, { aoSalvar: () => { app.precisaRecarregar = true; } });
-  } else {
-    document.getElementById("titulo-pagina").textContent = "Usuários e acessos";
-    document.getElementById("subtitulo-pagina").innerHTML = "<span>Quem entra no painel e o que cada pessoa pode ver</span>";
-    montarUsuarios(pUsuarios, { eu: app.usuario, aoSalvarEu: (u) => { app.usuario = { ...app.usuario, ...u }; mostrarUsuario(app.usuario); } });
+  marcarPagina(PAGINAS[rota].pai || rota);
+  Object.keys(PAGINAS).forEach((r) => { document.getElementById(`pagina-${r}`).hidden = r !== rota; });
+  const p = PAGINAS[rota];
+  document.getElementById("titulo-pagina").textContent = p.titulo;
+  document.title = `${p.titulo} · Mais Vida`;
+  const sub = document.getElementById("subtitulo-pagina");
+  if (p.fixo) {
+    const volta = p.pai ? `<a class="link-voltar" href="#/${p.pai}">${icone("voltar")}${esc(PAGINAS[p.pai].nome)}</a>` : "";
+    sub.innerHTML = `${volta}<span>${esc(p.fixo)}</span>`;
+  }
+  if (p.sempreMonta || !app.montadas.has(rota) || app.remontar.has(rota)) {
+    app.montadas.add(rota);
+    app.remontar.delete(rota);
+    if (!p.fixo) sub.innerHTML = "<span>Carregando…</span>";
+    p.montar(document.getElementById(`pagina-${rota}`));
+  } else if (app.dados[rota]) {
+    subtitulo(rota, app.dados[rota]); // volta o subtítulo da página depois de passar por outra
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -127,8 +190,10 @@ async function aoTrocarDados() {
   app.opcoes = await api("/api/opcoes");
   rodape();
   toast(`Dados atualizados até ${fmt.dataCurta(app.estado.data_ref)}`);
-  if (app.rota === "metas") recarregarMetas();
-  else app.precisaRecarregar = true;
+  PAGINAS_DE_DADOS.forEach((p) => {
+    if (p === app.rota) PAGINAS[p].recarregar();
+    else if (app.montadas.has(p)) app.remontar.add(p);
+  });
 }
 
 function vigiar() {
@@ -146,10 +211,12 @@ function vigiar() {
 async function iniciar() {
   preencherIcones(document);
   ligarTema(document.getElementById("btn-tema"));
+  ligarLateral();
   const sessao = await api("/api/sessao");
   if (!sessao.usuario) return irParaLogin();
   app.usuario = sessao.usuario;
   mostrarUsuario(app.usuario);
+  mostrarPaginas(paginasPermitidas());
   ligarMenuUsuario();
   botaoAtualizar();
   await aguardarDados();

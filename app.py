@@ -36,12 +36,13 @@ from urllib.parse import parse_qs, urlparse
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
-from bi.acesso import (COOKIE, LimiteTentativas, Usuarios, eh_admin, vendedores_permitidos,  # noqa: E402
-                       visoes_permitidas)
+from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_projecoes,  # noqa: E402
+                       paginas_permitidas, vendedores_permitidos, visoes_permitidas)
 from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
+from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
 
 log = logging.getLogger("bi")
@@ -52,7 +53,7 @@ mimetypes.add_type("image/svg+xml", ".svg")
 CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
 # Só o administrador usa: regras de cálculo, atualização forçada e cadastro de acessos.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
-               "/api/usuarios", "/api/usuarios/excluir"}
+               "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config"}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
 
@@ -83,6 +84,8 @@ class Aplicacao:
         self.metas_produtos = PlanilhaMonitorada(planilhas["metas_produtos"], ler_metas_produtos)
         self.configuracao = Configuracao(RAIZ / "config_metas.json")
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
+        self.config_projecoes = ConfigProjecoes(RAIZ / "config_projecoes.json")
+        self.projetor = Projetor(self.calc, self.config_projecoes)
         self.usuarios = Usuarios(RAIZ / "usuarios.json")
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
@@ -238,7 +241,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _sessao(self, usuario: dict | None) -> dict:
         if usuario:
-            usuario = {**usuario, "visoes": visoes_permitidas(usuario)}
+            usuario = {**usuario, "visoes": visoes_permitidas(usuario), "paginas": paginas_permitidas(usuario)}
         return {"usuario": usuario, "primeiro_acesso": self.app.usuarios.vazio(), "local": self._local(),
                 "modo": self.app.modo}
 
@@ -279,6 +282,14 @@ class Manipulador(BaseHTTPRequestHandler):
         cookie = self._cookie_login(u["login"], eu["lembrar"]) if original == eu["login"] else None
         return self._json({"ok": True, "usuario": u, "usuarios": self.app.usuarios.listar()}, cookie=cookie)
 
+    def _config_projecoes(self) -> dict:
+        """Configuração da página Projeções: vendedores da página e o que cada visualizador vê nela."""
+        return {
+            **self.app.projetor.catalogo(),
+            "usuarios": [u for u in self.app.usuarios.listar() if u["papel"] != "admin"],
+            "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
+        }
+
     def _receber(self):
         """VPS: pacote com o cache e as planilhas, assinado pelo computador da empresa (sem login)."""
         if not self.app.recebimento:
@@ -315,12 +326,26 @@ class Manipulador(BaseHTTPRequestHandler):
                 opcoes["visoes"] = [v for v in opcoes["visoes"] if v["id"] in permitidas]
                 return self._json(opcoes)
             if url.path == "/api/visao":
+                if "metas" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página de Metas", HTTPStatus.FORBIDDEN)
                 visao = q.get("visao", "es")
                 if visao not in visoes_permitidas(usuario):
                     return self._erro("seu acesso não inclui esta visão", HTTPStatus.FORBIDDEN)
                 vendedor = int(q["vendedor"]) if q.get("vendedor") else None
                 return self._json(self.app.calc.visao(visao, int(q["ano"]), int(q["mes"]), vendedor,
                                                       vendedores_permitidos(usuario)))
+            if url.path == "/api/projecoes":
+                if "projecoes" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página de Projeções", HTTPStatus.FORBIDDEN)
+                lista = lambda k: [int(x) for x in q[k].split(",") if x.strip()] if q.get(k) else None  # noqa: E731
+                permitidos, equipes = escopo_projecoes(usuario)
+                try:
+                    return self._json(self.app.projetor.calcular(lista("vendedores"), lista("produtos"),
+                                                                 permitidos, equipes))
+                except SemVendedores as e:
+                    return self._erro(str(e), HTTPStatus.FORBIDDEN)
+            if url.path == "/api/projecoes/config":
+                return self._json(self._config_projecoes())
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo()})
             if url.path == "/api/calendario":
@@ -329,6 +354,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json({
                     "usuarios": self.app.usuarios.listar(),
                     "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
+                    "paginas": [{"id": k, "titulo": v} for k, v in PAGINAS.items()],
                     "vendedores": self.app.calc.vendedores_catalogo() if self.app.cache.pronto() else [],
                 })
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
@@ -375,6 +401,13 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/config":
                 cfg = self.app.configuracao.salvar(self._corpo_json())
                 return self._json({"ok": True, "config": cfg})
+            if url.path == "/api/projecoes/config":
+                corpo = self._corpo_json()
+                ConfigProjecoes._valida(corpo.get("vendedores") or {})  # erro aqui não deixa gravar só os acessos
+                self.app.usuarios.definir_projecoes(corpo.get("usuarios") or {})
+                self.app.config_projecoes.salvar(corpo.get("vendedores") or {})
+                log.info("%s salvou a configuração das projeções", usuario["login"])
+                return self._json({"ok": True, **self._config_projecoes()})
             if url.path == "/api/config/padrao":
                 return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao()})
             if url.path == "/api/calendario":

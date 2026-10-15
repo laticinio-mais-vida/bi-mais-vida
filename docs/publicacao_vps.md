@@ -140,7 +140,8 @@ O site e o painel do PC têm **cadastros separados**. O que muda num não muda n
 | Quero... | Onde fazer |
 |---|---|
 | Dar acesso a alguém, mudar o que a pessoa vê ou bloquear um acesso | No site, página **Usuários** (só administradores) |
-| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados | No site, página **Configurações** (só administradores) |
+| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados | No site, página **Metas** › botão **Configurar** (só administradores) |
+| Escolher os vendedores das projeções e o que cada pessoa vê nelas | No site, página **Projeções** › botão **Configurar** (só administradores) |
 | Trocar a minha senha | No site, menu com o seu nome (canto superior direito) › Trocar minha senha |
 
 Os acessos do site começaram, em 15/10/2026, como cópia dos do PC (mesmos logins e senhas).
@@ -157,7 +158,7 @@ outros sistemas dependem deles.
 
 | O quê | Onde |
 |---|---|
-| Painel: código, `config.ini` (modo vps e a chave), `usuarios.json`, `config_metas.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
+| Painel: código, `config.ini` (modo vps e a chave), `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
 | Container `bi_metas` (Python 3.12, usuário 10001, até 512 MB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
 | HTTPS de `bi.maisvida.cloud`, encaminhado para `bi_metas:8050` | bloco no fim de `/opt/app-promotoria/Caddyfile` (container `estoque_caddy`) |
 | Rede que liga o Caddy ao painel | `app-promotoria_estoque_network` |
@@ -193,7 +194,7 @@ ssh root@187.127.54.201 'chown -R 10001:10001 /opt/bi-mais-vida && cd /opt/bi-ma
 
 Depois, feche e abra o painel do PC (`iniciar.bat`).
 
-**Não envie** `config.ini`, `usuarios.json`, `config_metas.json`, `dados/` nem `logs/`. No servidor, esses
+**Não envie** `config.ini`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/` nem `logs/`. No servidor, esses
 arquivos são diferentes dos do PC: lá estão a chave, os acessos e as regras salvas no site. Se uma versão nova
 mudar o `config_metas.json` do repositório, aplique a mudança pela página Configurações do site.
 
