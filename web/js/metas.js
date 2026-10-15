@@ -22,7 +22,7 @@ export function montarMetas(container, contexto) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const temFiltroNaUrl = q.has("visao");
   estado.visao = q.get("visao") || (estado.ano ? estado.visao : salvo.visao) || "es";
-  if (!op.visoes.some((v) => v.id === estado.visao)) estado.visao = "es";
+  if (!op.visoes.some((v) => v.id === estado.visao)) estado.visao = op.visoes[0]?.id; // só as visões do acesso
   estado.ano = Number(q.get("ano")) || estado.ano || op.padrao?.ano;
   estado.mes = Number(q.get("mes")) || estado.mes || op.padrao?.mes;
   estado.vendedor = temFiltroNaUrl ? (q.get("v") ? Number(q.get("v")) : null) : estado.vendedor;

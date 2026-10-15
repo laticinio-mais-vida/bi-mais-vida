@@ -6,8 +6,10 @@ de Configurações para as regras que antes ficavam dentro das fórmulas DAX.
 
 ## Como abrir
 
-Na primeira vez numa máquina nova (depois de clonar o repositório), copie `config.exemplo.ini` para
-`config.ini` e preencha a senha do banco. O `config.ini` não vai para o GitHub porque guarda a senha.
+O painel abre sem configurar nada: os caminhos do banco e das planilhas vêm de `config.exemplo.ini`. Para ele
+ler o ERP, falta só a senha do banco: copie `config.exemplo.ini` para `config.ini` e preencha a senha em
+`[banco]` (o `config.ini` vale por cima do exemplo e não vai para o GitHub, porque guarda a senha). Sem a senha, o
+login funciona, mas a tela "Preparando os dados" avisa que ela falta.
 
 Dê dois cliques em `iniciar.bat`, ou rode:
 
@@ -15,8 +17,11 @@ Dê dois cliques em `iniciar.bat`, ou rode:
 python app.py
 ```
 
-O painel abre no navegador em http://127.0.0.1:8050. Só esta máquina acessa. Para encerrar, feche a janela
-do terminal (ou Ctrl+C).
+O painel abre no navegador em http://127.0.0.1:8050. Para encerrar, feche a janela do terminal (ou Ctrl+C).
+
+Na primeira vez, a tela de login pede para criar o **administrador** (nome, usuário e senha). Isso só funciona
+no computador onde o painel está instalado. Depois, o administrador cadastra os outros acessos na página
+**Usuários**.
 
 Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird),
 `duckdb` e `pandas`, que já estão instalados.
@@ -79,6 +84,58 @@ A situação compara o realizado com o ritmo esperado do dia:
 
 Em mês fechado, o ritmo esperado é 100%.
 
+## Login e acessos
+
+Todo mundo entra com usuário e senha. Há dois papéis:
+
+| Papel | Vê | Pode mexer |
+|---|---|---|
+| **Administrador** | todas as abas e todos os vendedores | Configurações, Usuários e o botão Atualizar dados |
+| **Visualizador** | só as abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
+
+Exemplos:
+
+- **Supervisor da BA:** visualizador com as abas Metas BA e Produtos BA e "Todos dessas abas" em Vendedores.
+- **Vendedor:** visualizador com a aba dele e só ele marcado em Vendedores. Indicadores, ranking, corrida e
+  tabelas mostram só os números dele.
+
+Quem barra é o servidor: o visualizador recebe só os números liberados, mesmo se mexer no endereço da página.
+Mudanças de abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
+dessa pessoa.
+
+Na página **Usuários** (só para administradores):
+
+- **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
+  deixa) para você passar à pessoa.
+- **Abas que pode ver** e **Vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a
+  lista). O quadro azul no fim resume o que a pessoa vai ver.
+- **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
+
+Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura
+12 horas, ou 30 dias com "Manter conectado neste aparelho". Depois de 5 senhas erradas seguidas, o usuário
+espera 15 minutos para tentar de novo.
+
+### Abrir para outros computadores da rede
+
+No `config.ini`, em `[servidor]`, troque `endereco = 127.0.0.1` por `endereco = 0.0.0.0` e abra o painel de
+novo. O terminal mostra o endereço para os outros computadores (ex.: `http://192.168.0.10:8050`). Na primeira
+vez, o Windows pergunta se libera o Python no firewall: libere em **rede privada**.
+
+O painel usa HTTP sem criptografia. Na rede interna da empresa isso basta. Para acesso pela internet, coloque um
+túnel ou proxy com HTTPS na frente (o primeiro administrador continua só podendo ser criado no computador do
+painel).
+
+### Esqueci a senha do administrador
+
+No computador do painel, abra um terminal na pasta do projeto e rode:
+
+```bash
+python app.py --senha LOGIN
+```
+
+O comando pede a senha nova duas vezes, reativa o usuário e derruba as sessões abertas. Se o login não
+existir, ele cria um administrador com esse nome.
+
 ## Página Configurações
 
 Tudo é gravado em `config_metas.json`. A versão anterior fica em `config_metas.anterior.json`. O padrão
@@ -124,15 +181,17 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/metas.py` | cálculo das visões |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |
 | `bi/configuracao.py` | regras editáveis e padrões do Power BI |
+| `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
 | `bi/planilhas.py` | leitura das planilhas de metas |
 | `bi/fb.py` | conexão somente leitura com o Firebird 2.1 (a mesma do Painel Comercial ES) |
 | `web/` | página: HTML, CSS (identidade do Guia da Marca 2026) e JavaScript |
 | `logs/bi.log` | registro de atualizações e erros |
 | `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
 | `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
+| `usuarios.json` | acessos do painel: senhas em hash e a chave das sessões (fica fora do repositório) |
 | `docs/analise_pbi_metas.md` | análise do Power BI original: tabelas, medidas DAX e divergências encontradas |
 
-Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `dados/` (cache com as vendas), `logs/`,
+Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `dados/` (cache com as vendas), `logs/`,
 `marca/` (guia da marca em PDF) e a cópia `config_metas.anterior.json`.
 
 ## Se algo der errado
@@ -140,4 +199,6 @@ Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `dados/` (cache
 - **"Preparando os dados" não termina:** veja `logs\bi.log`. O mais comum é o serviço
   *Firebird Server - DefaultInstance* parado.
 - **Porta ocupada:** use `python app.py --porta 8051`.
+- **Outro computador não abre o painel:** confira `endereco = 0.0.0.0` no `config.ini` e se o firewall do
+  Windows liberou o Python em rede privada.
 - **Números estranhos depois de mexer nas regras:** use "Restaurar padrão do Power BI" em Configurações.

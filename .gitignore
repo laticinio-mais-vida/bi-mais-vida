@@ -1,6 +1,9 @@
 # Conexão com o banco (tem a senha): cada máquina cria a sua a partir de config.exemplo.ini
 config.ini
 
+# Usuários do painel (senhas em hash e a chave que assina as sessões)
+usuarios.json
+
 # Dados do ERP copiados para o cache local e registros de execução
 dados/
 *.duckdb

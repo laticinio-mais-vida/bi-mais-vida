@@ -34,11 +34,29 @@ const ICONES = {
   olho: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   expandir: '<path d="M14.5 3.5h6v6M9.5 20.5h-6v-6M20.5 3.5l-7 7M3.5 20.5l7-7"/>',
   recolher: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+  cadeado: '<rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2.5"/>',
+  chave: '<circle cx="8" cy="15" r="4.5"/><path d="m11.2 11.8 8.8-8.8M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  sair: '<path d="M14 4.5h4.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14"/><path d="M10 16.5 5.5 12 10 7.5M5.5 12H16"/>',
+  escudo: '<path d="M12 2.8 4.5 5.8v5.7c0 4.6 3.2 8.3 7.5 9.7 4.3-1.4 7.5-5.1 7.5-9.7V5.8z"/><path d="m9 12 2.2 2.2L15.5 10"/>',
+  olhoFechado: '<path d="M3 3l18 18M10.6 5.1A10.5 10.5 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.5 4.5-1.2"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  visto: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  lapis: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  lixeira: '<path d="M4 7h16M10 11v6M14 11v6M5.5 7l1 13h11l1-13M9 7V4h6v3"/>',
   foguete:'<path d="M12 15c-2-2-3-5-1-9 2-3 6-3.5 9-3.5 0 3-.5 7-3.5 9-4 2-7 1-9-1"/><path d="M9 13 5 14l2-4M11 15l-1 4 4-2"/><circle cx="15.5" cy="8.5" r="1.4"/>',
 };
 
 export function icone(nome, classe = "") {
   return `<svg class="ic ${classe}" viewBox="0 0 24 24" aria-hidden="true">${ICONES[nome] || ""}</svg>`;
+}
+
+// Botão sol/lua do topo: alterna o tema e lembra a escolha neste navegador.
+export function ligarTema(btn) {
+  btn.addEventListener("click", () => {
+    const novo = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", novo);
+    try { localStorage.setItem("mv-tema", novo); } catch { /* sem armazenamento */ }
+    window.dispatchEvent(new Event("tema"));
+  });
 }
 
 export function preencherIcones(raiz = document) {
@@ -172,8 +190,9 @@ export function toast(msg, tipo = "ok") {
 }
 
 // ---------- API ----------
+// Sessão vencida ou encerrada: volta para o login (e depois para a mesma tela). semLogin desliga isso.
 export async function api(url, opcoes = {}) {
-  const init = { ...opcoes };
+  const { semLogin, ...init } = opcoes;
   if (opcoes.json !== undefined) {
     init.method = init.method || "POST";
     init.headers = { "Content-Type": "application/json" };
@@ -182,12 +201,21 @@ export async function api(url, opcoes = {}) {
   const r = await fetch(url, init);
   let dados = null;
   try { dados = await r.json(); } catch { /* corpo vazio */ }
+  if (r.status === 401 && !semLogin) {
+    irParaLogin();
+    return new Promise(() => {}); // a página vai trocar; nada mais deve rodar
+  }
   if (!r.ok) {
     const e = new Error((dados && dados.erro) || `erro ${r.status}`);
     e.status = r.status;
     throw e;
   }
   return dados;
+}
+
+export function irParaLogin() {
+  const volta = location.hash.startsWith("#/") ? "?volta=" + encodeURIComponent(location.hash) : "";
+  location.replace("/login" + volta);
 }
 
 export function guardar(chave, valor) { try { localStorage.setItem(chave, JSON.stringify(valor)); } catch { /* sem armazenamento */ } }

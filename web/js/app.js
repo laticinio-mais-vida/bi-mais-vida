@@ -1,21 +1,16 @@
-// Inicialização: tema, rotas (#/metas e #/configuracoes), estado dos dados e atualização da cópia do banco.
-import { api, esc, fmt, preencherIcones, toast } from "./util.js";
+// Inicialização: sessão, tema, rotas (#/metas, #/configuracoes e #/usuarios), estado dos dados e atualização
+// da cópia do banco. Configurações e Usuários só aparecem para administradores (o servidor também barra).
+import { api, esc, fmt, irParaLogin, ligarTema, preencherIcones, toast } from "./util.js";
 import { montarMetas, recarregarMetas } from "./metas.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
+import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
+import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 
-const app = { opcoes: null, estado: null, rota: null, montadas: new Set() };
-
-function tema() {
-  const btn = document.getElementById("btn-tema");
-  btn.addEventListener("click", () => {
-    const novo = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", novo);
-    try { localStorage.setItem("mv-tema", novo); } catch { /* sem armazenamento */ }
-    window.dispatchEvent(new Event("tema"));
-  });
-}
+const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), usuario: null };
+const ROTAS_ADMIN = ["configuracoes", "usuarios"];
 
 function subtituloMetas(d) {
+  app.dadosMetas = d;
   const sub = document.getElementById("subtitulo-pagina");
   sub.innerHTML = `<span>${esc(d.periodo.rotulo)} · ${esc(d.visao.titulo)}</span>
     <span class="ponto"><span class="pulso"></span>dados até ${fmt.semana(d.data_ref)}, ${fmt.dataCurta(d.data_ref)}</span>`;
@@ -31,28 +26,39 @@ function rodape() {
 }
 
 async function rotear() {
-  const rota = (location.hash.replace(/^#\/?/, "").split("?")[0] || "metas");
-  if (app.rota === "configuracoes" && rota !== "configuracoes" && configTemAlteracoes() &&
-      !confirm("Há alterações não salvas nas configurações. Sair mesmo assim?")) {
-    history.replaceState(null, "", "#/configuracoes");
+  const pedida = (location.hash.replace(/^#\/?/, "").split("?")[0] || "metas");
+  const rota = ROTAS_ADMIN.includes(pedida) && app.usuario.papel === "admin" ? pedida : "metas";
+  const pendente = { configuracoes: configTemAlteracoes, usuarios: usuariosTemAlteracoes }[app.rota];
+  if (app.rota !== rota && pendente && pendente() &&
+      !confirm("Há alterações não salvas nesta página. Sair mesmo assim?")) {
+    history.replaceState(null, "", "#/" + app.rota);
     return;
   }
-  app.rota = rota === "configuracoes" ? "configuracoes" : "metas";
+  if (rota !== pedida) history.replaceState(null, "", "#/metas");
+  app.rota = rota;
   document.querySelectorAll(".nav-pilula").forEach((a) => a.classList.toggle("ativa", a.dataset.rota === app.rota));
   const pMetas = document.getElementById("pagina-metas"), pConfig = document.getElementById("pagina-configuracoes");
+  const pUsuarios = document.getElementById("pagina-usuarios");
   pMetas.hidden = app.rota !== "metas";
   pConfig.hidden = app.rota !== "configuracoes";
+  pUsuarios.hidden = app.rota !== "usuarios";
   if (app.rota === "metas") {
     document.getElementById("titulo-pagina").textContent = "Acompanhamento de Metas";
     if (!app.montadas.has("metas") || app.precisaRecarregar) {
       app.montadas.add("metas");
       app.precisaRecarregar = false;
       montarMetas(pMetas, { opcoes: app.opcoes, subtitulo: subtituloMetas });
+    } else if (app.dadosMetas) {
+      subtituloMetas(app.dadosMetas); // volta o subtítulo de Metas depois de passar por outra página
     }
-  } else {
+  } else if (app.rota === "configuracoes") {
     document.getElementById("titulo-pagina").textContent = "Configurações das metas";
     document.getElementById("subtitulo-pagina").innerHTML = "<span>Produtos, vendedores, devoluções e dias úteis usados nos cálculos</span>";
     montarConfig(pConfig, { aoSalvar: () => { app.precisaRecarregar = true; } });
+  } else {
+    document.getElementById("titulo-pagina").textContent = "Usuários e acessos";
+    document.getElementById("subtitulo-pagina").innerHTML = "<span>Quem entra no painel e o que cada pessoa pode ver</span>";
+    montarUsuarios(pUsuarios, { eu: app.usuario, aoSalvarEu: (u) => { app.usuario = { ...app.usuario, ...u }; mostrarUsuario(app.usuario); } });
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -131,7 +137,12 @@ function vigiar() {
 
 async function iniciar() {
   preencherIcones(document);
-  tema();
+  ligarTema(document.getElementById("btn-tema"));
+  const sessao = await api("/api/sessao");
+  if (!sessao.usuario) return irParaLogin();
+  app.usuario = sessao.usuario;
+  mostrarUsuario(app.usuario);
+  ligarMenuUsuario();
   botaoAtualizar();
   await aguardarDados();
   app.opcoes = await api("/api/opcoes");
