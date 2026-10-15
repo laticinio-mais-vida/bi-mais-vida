@@ -121,6 +121,7 @@ h1, h2, h3, h4 { font-family: var(--f-titulo); margin: 0; letter-spacing: -.01em
 button, input, select { font: inherit; color: inherit; }
 a { color: inherit; }
 [hidden] { display: none !important; }
+body[data-modo="vps"] [data-so-local] { display: none !important; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :focus-visible { outline: 3px solid var(--azul); outline-offset: 2px; border-radius: 8px; }
 svg.ic { width: 1.15em; height: 1.15em; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.2em; }

@@ -109,12 +109,14 @@ function formPrimeiroAcesso() {
   document.getElementById("nome").focus();
 }
 
-function semUsuarios() {
+function semUsuarios(modo) {
+  const onde = modo === "vps"
+    ? `no servidor. Pelo terminal do VPS, na pasta do painel, rode <b>python3 app.py --senha SEU_LOGIN</b>.`
+    : `no computador onde o painel está instalado. Abra lá o endereço <b>http://127.0.0.1:${esc(location.port || "80")}</b>.`;
   corpo.innerHTML = `
     <span class="login-selo">${icone("escudo")}Primeiro acesso</span>
     <h1>Painel ainda sem usuários</h1>
-    <p class="login-sub">Por segurança, o primeiro administrador só pode ser criado no computador onde o painel está
-      instalado. Abra lá o endereço <b>http://127.0.0.1:${esc(location.port || "80")}</b>.</p>`;
+    <p class="login-sub">Por segurança, o primeiro administrador só pode ser criado ${onde}</p>`;
 }
 
 async function iniciar() {
@@ -130,7 +132,7 @@ async function iniciar() {
     return;
   }
   if (s.usuario) return entrar();
-  if (s.primeiro_acesso) return s.local ? formPrimeiroAcesso() : semUsuarios();
+  if (s.primeiro_acesso) return s.local ? formPrimeiroAcesso() : semUsuarios(s.modo);
   formLogin();
 }
 

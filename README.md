@@ -37,8 +37,8 @@ Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquin
 O sistema copia do banco só o que as metas usam (vendas, clientes atendidos, devoluções e cadastros, desde
 2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora.
 
-- **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto e atualiza o cache em segundo plano
-  (cerca de 15 segundos). O botão **Atualizar dados** força a leitura na hora.
+- **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
+  atualiza o cache em segundo plano (cerca de 15 segundos). O botão **Atualizar dados** força a leitura na hora.
 - **Planilhas de metas:** são relidas sempre que o arquivo muda. Se estiverem abertas e bloqueadas, vale a
   última leitura boa e aparece um aviso no painel.
 
@@ -121,9 +121,13 @@ No `config.ini`, em `[servidor]`, troque `endereco = 127.0.0.1` por `endereco = 
 novo. O terminal mostra o endereço para os outros computadores (ex.: `http://192.168.0.10:8050`). Na primeira
 vez, o Windows pergunta se libera o Python no firewall: libere em **rede privada**.
 
-O painel usa HTTP sem criptografia. Na rede interna da empresa isso basta. Para acesso pela internet, coloque um
-túnel ou proxy com HTTPS na frente (o primeiro administrador continua só podendo ser criado no computador do
-painel).
+O painel usa HTTP sem criptografia. Na rede interna da empresa isso basta.
+
+### Publicar na internet (VPS)
+
+O painel roda num VPS com HTTPS, e o banco do ERP continua na empresa. Este computador extrai o cache e manda ao
+VPS só ele e as planilhas (uns 3 MB compactados), sozinho, depois de cada cópia nova do banco. O passo a passo
+está em [docs/publicacao_vps.md](docs/publicacao_vps.md).
 
 ### Esqueci a senha do administrador
 
@@ -184,12 +188,15 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
 | `bi/planilhas.py` | leitura das planilhas de metas |
 | `bi/fb.py` | conexão somente leitura com o Firebird 2.1 (a mesma do Painel Comercial ES) |
+| `bi/publicacao.py` | envio do cache e das planilhas ao VPS (no PC) e recebimento com conferência (no VPS) |
 | `web/` | página: HTML, CSS (identidade do Guia da Marca 2026) e JavaScript |
 | `logs/bi.log` | registro de atualizações e erros |
 | `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
 | `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
 | `usuarios.json` | acessos do painel: senhas em hash e a chave das sessões (fica fora do repositório) |
 | `docs/analise_pbi_metas.md` | análise do Power BI original: tabelas, medidas DAX e divergências encontradas |
+| `docs/publicacao_vps.md` | como o painel está publicado no VPS e como mantê-lo |
+| `deploy/` | Dockerfile e docker-compose do painel no VPS |
 
 Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `dados/` (cache com as vendas), `logs/`,
 `marca/` (guia da marca em PDF) e a cópia `config_metas.anterior.json`.

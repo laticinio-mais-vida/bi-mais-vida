@@ -18,9 +18,16 @@ function subtituloMetas(d) {
 
 function rodape() {
   const e = app.estado || {};
+  // No VPS os dados chegam prontos do computador da empresa; no PC, o administrador vê se o envio ao VPS deu certo.
+  const origem = e.modo === "vps"
+    ? `<span>Recebidos no servidor em ${fmt.dataHora(e.recebido_em)}</span>`
+    : `<span>Cache local gerado em ${fmt.dataHora(e.extraido_em)}</span>`;
+  const envio = e.envio && app.usuario?.papel === "admin"
+    ? `<span>${e.envio.erro ? `Envio ao servidor falhou: ${esc(e.envio.erro)}` : `Enviado ao servidor em ${fmt.dataHora(e.envio.enviado_em)}`}</span>`
+    : "";
   document.getElementById("rodape").innerHTML = `
-    <span>Fonte: cópia do ERP de ${e.banco_copia ? fmt.dataHora(e.banco_copia) : "—"}</span>
-    <span>Cache local gerado em ${e.extraido_em ? fmt.dataHora(e.extraido_em) : "—"}</span>
+    <span>Fonte: cópia do ERP de ${fmt.dataHora(e.banco_copia)}</span>
+    ${origem}${envio}
     <span>Metas: METAS.xlsx e METAS PRODUTOS.xlsx</span>
     <span>Laticínio Mais Vida</span>`;
 }
@@ -131,6 +138,7 @@ function vigiar() {
       const e = await api("/api/estado");
       app.estado = e;
       if (!e.atualizacao.atualizando && e.extraido_em && e.extraido_em !== antes) aoTrocarDados();
+      else rodape(); // situação do envio ao VPS
     } catch { /* servidor fora do ar: tenta de novo no próximo ciclo */ }
   }, 60000);
 }
@@ -145,6 +153,7 @@ async function iniciar() {
   ligarMenuUsuario();
   botaoAtualizar();
   await aguardarDados();
+  document.body.dataset.modo = app.estado.modo; // no VPS some o que só existe no PC (Atualizar dados)
   app.opcoes = await api("/api/opcoes");
   rodape();
   window.addEventListener("hashchange", rotear);

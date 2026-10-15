@@ -18,8 +18,6 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from .fb import BancoSomenteLeitura
-
 log = logging.getLogger("bi.cache")
 SENHA_EXEMPLO = "COLOQUE_A_SENHA_AQUI"  # a de config.exemplo.ini
 
@@ -48,7 +46,8 @@ def _data(v):
 class Cache:
     def __init__(self, ini: configparser.ConfigParser, raiz: Path):
         self.ini = ini
-        self.arquivo = raiz / ini.get("cache", "arquivo", fallback=r"dados\cache.duckdb")
+        # "dados\cache.duckdb" no config: a barra invertida do Windows viraria parte do nome no Linux (VPS).
+        self.arquivo = raiz / ini.get("cache", "arquivo", fallback="dados/cache.duckdb").replace("\\", "/")
         self.arquivo.parent.mkdir(parents=True, exist_ok=True)
         self.inicio = dt.date.fromisoformat(ini.get("cache", "inicio", fallback="2024-01-01"))
         self.banco = Path(ini.get("banco", "arquivo"))
@@ -86,6 +85,37 @@ class Cache:
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
         return dt.date.fromisoformat(v) if v else None
+
+    def conteudo(self) -> bytes:
+        """O arquivo do cache inteiro (para enviar ao VPS), lido sem deixar uma troca acontecer no meio."""
+        with self._trava:
+            return self.arquivo.read_bytes()
+
+    @staticmethod
+    def conferir(arquivo: Path) -> dict[str, str]:
+        """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info."""
+        con = duckdb.connect(str(arquivo), read_only=True)
+        try:
+            for nome, colunas in TABELAS.items():
+                esperadas = [c.split()[0] for c in colunas.split(", ")]
+                existentes = [r[0] for r in con.execute(f"DESCRIBE {nome}").fetchall()]
+                if existentes != esperadas:
+                    raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
+            info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
+        finally:
+            con.close()
+        if not info.get("data_ref") or not info.get("extraido_em"):
+            raise ValueError("o cache recebido não diz de quando são os dados")
+        return info
+
+    def trocar(self, novo: Path) -> None:
+        """Põe `novo` no lugar do cache em uso. As consultas esperam a troca terminar."""
+        with self._trava:
+            if self._con is not None:
+                self._con.close()
+                self._con = None
+            os.replace(novo, self.arquivo)
+            self._abrir()
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache."""
@@ -127,12 +157,7 @@ class Cache:
             con.execute("CREATE INDEX ix_vc ON vendas_clientes (data)")
             con.execute("CREATE INDEX ix_di ON devolucoes_itens (data)")
             con.close()
-            with self._trava:
-                if self._con is not None:
-                    self._con.close()
-                    self._con = None
-                os.replace(novo, self.arquivo)
-                self._abrir()
+            self.trocar(novo)
             self.estado["duracao"] = round(time.time() - t0, 1)
             log.info("cache atualizado em %.1f s (dados até %s)", time.time() - t0, self.info.get("data_ref"))
         except Exception as e:
@@ -151,6 +176,8 @@ class Cache:
             self._trava_extracao.release()
 
     def _extrair(self) -> dict[str, list]:
+        from .fb import BancoSomenteLeitura  # só aqui: o VPS não tem Firebird (nem Windows)
+
         b = self.ini["banco"]
         if b.get("senha", SENHA_EXEMPLO) in ("", SENHA_EXEMPLO):
             raise SemSenhaDoBanco("falta a senha do banco: copie config.exemplo.ini para config.ini e "
@@ -158,7 +185,7 @@ class Cache:
         hoje = dt.date.today()
         de = dt.datetime.combine(self.inicio, dt.time())
         ate = dt.datetime.combine(hoje + dt.timedelta(days=1), dt.time())  # descarta datas digitadas erradas no futuro
-        banco_mtime = self.banco.stat().st_mtime
+        copia_mtime = self.banco.stat().st_mtime  # quando a cópia chegou (antes do Firebird mexer no arquivo)
         dados: dict[str, list] = {}
         with BancoSomenteLeitura(b["arquivo"], b["usuario"], b["senha"], b.get("host", "localhost"),
                                  b.get("fbclient"), b.get("codificacao", "cp1252")) as bd:
@@ -193,12 +220,15 @@ class Cache:
                 "SELECT v.ID_VENDEDOR, v.NOME, v.ID_SUPERVISOR, s.NOME, COALESCE(v.INATIVO, 0) "
                 "FROM VENDEDORES v LEFT JOIN SUPERVISOR s ON s.ID_SUPERVISOR = v.ID_SUPERVISOR")
             dados["motivos"] = bd.consulta("SELECT ID_MOTIVODEVOLUCAO, NOME FROM MOTIVODEVOLUCAO")
-        datas = [r[0] for r in dados["vendas_itens"] if r[0] <= hoje]
+        # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
+        # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
+        banco_mtime = self.banco.stat().st_mtime
+        datas =[r[0] for r in dados["vendas_itens"] if r[0] <= hoje]
         dados["info"] = [
             ("data_ref", max(datas).isoformat() if datas else hoje.isoformat()),
             ("extraido_em", dt.datetime.now().isoformat(timespec="seconds")),
             ("banco_mtime", str(banco_mtime)),
-            ("banco_copia", dt.datetime.fromtimestamp(banco_mtime).isoformat(timespec="minutes")),
+            ("banco_copia", dt.datetime.fromtimestamp(copia_mtime).isoformat(timespec="minutes")),
             ("inicio", self.inicio.isoformat()),
         ]
         return dados

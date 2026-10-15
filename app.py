@@ -5,9 +5,11 @@ Uso:
     python app.py --sem-navegador # só sobe o servidor
     python app.py --porta 8051
     python app.py --senha LOGIN   # define a senha de um usuário (cria um administrador se não existir)
+    python app.py --gerar-chave   # gera a chave de [publicacao], a mesma no PC e no VPS
 
 O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões desta máquina; com
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
+Com `modo = vps` em [publicacao], não lê o banco: recebe os dados do computador da empresa (bi/publicacao.py).
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
+from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
 
 log = logging.getLogger("bi")
 mimetypes.add_type("application/javascript", ".js")
@@ -65,14 +68,49 @@ def _json_padrao(o):
 class Aplicacao:
     def __init__(self, ini: configparser.ConfigParser):
         self.ini = ini
+        self.modo = ini.get("publicacao", "modo", fallback="local").strip().lower()
+        if self.modo not in ("local", "vps"):
+            raise SystemExit(f"[publicacao] modo = {self.modo!r} no config.ini: use local ou vps")
+        self.vps = self.modo == "vps"
         self.cache = Cache(ini, RAIZ)
-        self.metas = PlanilhaMonitorada(ini.get("planilhas", "metas"), ler_metas)
-        self.metas_produtos = PlanilhaMonitorada(ini.get("planilhas", "metas_produtos"), ler_metas_produtos)
+        if self.vps:  # as planilhas chegam junto com o cache e ficam ao lado dele
+            planilhas = {"metas": self.cache.arquivo.parent / "METAS.xlsx",
+                         "metas_produtos": self.cache.arquivo.parent / "METAS PRODUTOS.xlsx"}
+        else:
+            planilhas = {"metas": Path(ini.get("planilhas", "metas")),
+                         "metas_produtos": Path(ini.get("planilhas", "metas_produtos"))}
+        self.metas = PlanilhaMonitorada(planilhas["metas"], ler_metas)
+        self.metas_produtos = PlanilhaMonitorada(planilhas["metas_produtos"], ler_metas_produtos)
         self.configuracao = Configuracao(RAIZ / "config_metas.json")
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
         self.usuarios = Usuarios(RAIZ / "usuarios.json")
         self.tentativas = LimiteTentativas()
+        self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
+        self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
+                            if self.vps else None)
         self._ultima_verificacao = 0.0
+
+    def vigiar_em_segundo_plano(self) -> None:
+        """No PC: percebe a cópia nova do banco e envia ao VPS mesmo sem nenhum navegador aberto."""
+        if self.vps:
+            return
+
+        def laco():
+            while True:
+                try:
+                    self.verificar_copia_nova()
+                    self.envio.verificar()
+                except Exception:
+                    log.exception("falha na verificação em segundo plano")
+                time.sleep(30)
+
+        threading.Thread(target=laco, name="vigia", daemon=True).start()
+
+    def recebido_em(self) -> str | None:
+        try:
+            return dt.datetime.fromtimestamp(self.cache.arquivo.stat().st_mtime).isoformat(timespec="minutes")
+        except OSError:
+            return None
 
     def verificar_copia_nova(self) -> None:
         """Se a cópia do banco mudou desde a última extração, atualiza sozinho (no máximo a cada 60 s)."""
@@ -85,13 +123,21 @@ class Aplicacao:
             self.cache.atualizar_em_segundo_plano()
 
     def estado(self) -> dict:
-        self.verificar_copia_nova()
+        atualizacao = self.cache.estado
+        if self.vps:
+            if not self.cache.pronto():
+                atualizacao = {**atualizacao, "etapa": "Aguardando o primeiro envio do computador da empresa"}
+        else:
+            self.verificar_copia_nova()
         return {
+            "modo": self.modo,
             "pronto": self.cache.pronto(),
-            "atualizacao": self.cache.estado,
+            "atualizacao": atualizacao,
             "data_ref": self.cache.info.get("data_ref"),
             "extraido_em": self.cache.info.get("extraido_em"),
             "banco_copia": self.cache.info.get("banco_copia"),
+            "recebido_em": self.recebido_em() if self.vps else None,
+            "envio": self.envio.estado if self.envio and self.envio.ativo else None,
             "avisos": self.calc.avisos() if self.cache.pronto() else [],
         }
 
@@ -165,6 +211,13 @@ class Manipulador(BaseHTTPRequestHandler):
         return (self.client_address[0] in ("127.0.0.1", "::1")
                 and not any(self.headers.get(c) for c in CABECALHOS_PROXY))
 
+    def _ip(self) -> str:
+        """IP de quem pediu. No VPS tudo chega pelo Caddy; sem isto, 20 senhas erradas de qualquer pessoa
+        bloqueariam o login de todo mundo (todos teriam o IP do Caddy)."""
+        if self.app.vps and self.headers.get("X-Forwarded-For"):
+            return self.headers["X-Forwarded-For"].split(",")[-1].strip()
+        return self.client_address[0]
+
     def _mesma_origem(self) -> bool:
         """Barra POST vindo de outro site (o navegador manda Origin nesses pedidos)."""
         origem = self.headers.get("Origin")
@@ -186,11 +239,12 @@ class Manipulador(BaseHTTPRequestHandler):
     def _sessao(self, usuario: dict | None) -> dict:
         if usuario:
             usuario = {**usuario, "visoes": visoes_permitidas(usuario)}
-        return {"usuario": usuario, "primeiro_acesso": self.app.usuarios.vazio(), "local": self._local()}
+        return {"usuario": usuario, "primeiro_acesso": self.app.usuarios.vazio(), "local": self._local(),
+                "modo": self.app.modo}
 
     def _login(self, corpo: dict):
         login = str(corpo.get("login") or "").strip().lower()
-        ip = self.client_address[0]
+        ip = self._ip()
         espera = self.app.tentativas.espera(login, ip)
         if espera:
             return self._erro(f"muitas tentativas erradas; tente de novo em {math.ceil(espera / 60)} min",
@@ -224,6 +278,18 @@ class Manipulador(BaseHTTPRequestHandler):
         # Quem altera o próprio usuário (nome, login ou senha) continua conectado.
         cookie = self._cookie_login(u["login"], eu["lembrar"]) if original == eu["login"] else None
         return self._json({"ok": True, "usuario": u, "usuarios": self.app.usuarios.listar()}, cookie=cookie)
+
+    def _receber(self):
+        """VPS: pacote com o cache e as planilhas, assinado pelo computador da empresa (sem login)."""
+        if not self.app.recebimento:
+            return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
+        try:
+            r = self.app.recebimento.receber(self.rfile, int(self.headers.get("Content-Length") or 0),
+                                             self.headers.get("X-BI-Data"), self.headers.get("X-BI-Assinatura"))
+        except Recusado as e:
+            log.warning("pacote recusado de %s: %s", self._ip(), e)
+            return self._erro(str(e), HTTPStatus.FORBIDDEN)
+        return self._json(r)
 
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
@@ -287,6 +353,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._primeiro_acesso(self._corpo_json())
             if url.path == "/api/sair":
                 return self._json({"ok": True}, cookie=f"{COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+            if url.path == ROTA_RECEBER:
+                return self._receber()
             usuario = self._usuario()
             if not self._autorizado(usuario, url.path):
                 return
@@ -313,6 +381,9 @@ class Manipulador(BaseHTTPRequestHandler):
                 corpo = self._corpo_json()
                 return self._json(self.app.calc.calendario_ano(int(corpo["ano"]), corpo.get("config")))
             if url.path == "/api/atualizar":
+                if self.app.vps:
+                    raise ValueError("neste servidor os dados chegam do computador da empresa, depois de cada "
+                                     "cópia nova do banco")
                 iniciou = self.app.cache.atualizar_em_segundo_plano()
                 return self._json({"ok": True, "iniciou": iniciou})
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
@@ -354,9 +425,12 @@ def main() -> None:
     ap.add_argument("--endereco", help="127.0.0.1 = só esta máquina; 0.0.0.0 = toda a rede")
     ap.add_argument("--sem-navegador", action="store_true")
     ap.add_argument("--senha", metavar="LOGIN", help="define a senha do usuário (cria um administrador se não existir)")
+    ap.add_argument("--gerar-chave", action="store_true", help="gera uma chave para [publicacao] no config.ini")
     args = ap.parse_args()
     if args.senha:
         return definir_senha(args.senha)
+    if args.gerar_chave:
+        return print(f"Coloque esta linha em [publicacao] no config.ini do PC e do VPS:\nchave = {gerar_chave()}")
 
     # config.exemplo.ini traz os caminhos padrão; o config.ini (opcional, fora do repositório) sobrepõe o que
     # tiver, como a senha do banco. Sem ele o painel abre do mesmo jeito e avisa que falta a senha.
@@ -376,9 +450,15 @@ def main() -> None:
                     "config.ini tiver a senha do banco")
     app = Aplicacao(ini)
     Manipulador.app = app
-    if app.cache.desatualizado():
+    if app.vps:
+        log.info("modo VPS: os dados chegam do computador da empresa (%s)",
+                 f"dados até {app.cache.info.get('data_ref')}" if app.cache.pronto() else "nenhum envio recebido ainda")
+    elif app.cache.desatualizado():
         log.info("preparando os dados a partir da cópia do banco…")
         app.cache.atualizar_em_segundo_plano()
+    if app.envio and app.envio.ativo:
+        log.info("depois de cada atualização, os dados vão para %s", app.envio.destino)
+    app.vigiar_em_segundo_plano()
 
     servidor = ThreadingHTTPServer((endereco, porta), Manipulador)
     local = f"http://127.0.0.1:{porta}"

@@ -1,0 +1,27 @@
+# BI de Metas no VPS (config.ini com [publicacao] modo = vps). O projeto fica em /opt/bi-mais-vida.
+# Nenhuma porta é publicada: o Caddy do app-promotoria (rede app-promotoria_estoque_network) faz o HTTPS de
+# bi.maisvida.cloud e encaminha para bi_metas:8050.
+name: bi-mais-vida
+services:
+  bi:
+    build: .
+    image: bi-metas-mais-vida
+    container_name: bi_metas
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      TZ: America/Sao_Paulo  # o ritmo do mês depende da data de hoje; o servidor fica em UTC
+    volumes:
+      # A pasta inteira, e não arquivo por arquivo: usuarios.json e config_metas.json são gravados com troca
+      # atômica (os.replace), que não funciona num arquivo montado sozinho.
+      - ..:/app
+    mem_limit: 512m
+    networks: [edge]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+networks:
+  edge:
+    external: true
+    name: app-promotoria_estoque_network
