@@ -1,0 +1,22 @@
+# Conexão com o banco (tem a senha): cada máquina cria a sua a partir de config.exemplo.ini
+config.ini
+
+# Dados do ERP copiados para o cache local e registros de execução
+dados/
+*.duckdb
+*.duckdb.wal
+logs/
+
+# Cópia de segurança automática das regras e arquivos temporários
+config_metas.anterior.json
+*.tmp
+
+# Material da marca (guia em PDF, de uso interno)
+marca/
+
+# Python e ferramentas locais
+__pycache__/
+*.pyc
+.claude/
+.venv/
+venv/

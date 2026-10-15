@@ -1,0 +1,203 @@
+{
+  "versao": 1,
+  "categorias": [
+    "Manteigas",
+    "Bebidas",
+    "Queijos",
+    "Requeijões"
+  ],
+  "produtos": {
+    "21": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "24": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "25": {
+      "grupo": "outras",
+      "categoria": "Manteigas"
+    },
+    "26": {
+      "grupo": "outras",
+      "categoria": "Manteigas"
+    },
+    "27": {
+      "grupo": "outras",
+      "categoria": "Manteigas"
+    },
+    "32": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "541": {
+      "grupo": "outras",
+      "categoria": null
+    },
+    "2105": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "2270": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "3788": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "3790": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "3791": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "4046": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "4835": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "5413": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "5416": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "5417": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "5754": {
+      "grupo": "outras",
+      "categoria": "Manteigas"
+    },
+    "5973": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "8991": {
+      "grupo": "outras",
+      "categoria": "Requeijões"
+    },
+    "9616": {
+      "grupo": "outras",
+      "categoria": "Queijos"
+    },
+    "9776": {
+      "grupo": "outras",
+      "categoria": "Requeijões"
+    },
+    "10352": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "10353": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "10354": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "11098": {
+      "grupo": "outras",
+      "categoria": "Requeijões"
+    },
+    "11469": {
+      "grupo": "outras",
+      "categoria": "Bebidas"
+    },
+    "11928": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "11988": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "11989": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "12175": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "12189": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "12548": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "12551": {
+      "grupo": "mussarela",
+      "categoria": null
+    },
+    "12552": {
+      "grupo": "mussarela",
+      "categoria": null
+    }
+  },
+  "vendedores": {
+    "85": "EDIR",
+    "98": "BA",
+    "109": "BA",
+    "111": "BA",
+    "113": "BA",
+    "115": "BA",
+    "119": "ES",
+    "124": "ES",
+    "126": "ES",
+    "128": "ES",
+    "132": "ES",
+    "134": "ES",
+    "138": "ES",
+    "139": "OCULTO",
+    "140": "ES",
+    "141": "BA",
+    "143": "BA",
+    "145": "BA",
+    "146": "ES",
+    "147": "BA",
+    "149": "ES",
+    "150": "BA",
+    "151": "ES",
+    "152": "BA",
+    "153": "ES",
+    "154": "ES",
+    "156": "ES",
+    "157": "ES"
+  },
+  "devolucoes": {
+    "motivos": [
+      1,
+      2,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "ignorar_canceladas": true
+  },
+  "produtos_equivalentes": {
+    "3643": 11469
+  },
+  "calendario": {
+    "sabado": {
+      "ES": 0.0,
+      "BA": 0.0
+    },
+    "extras": []
+  }
+}
