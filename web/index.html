@@ -75,10 +75,14 @@
     <nav class="hero-acoes" aria-label="Navegação">
       <div class="nav-pilulas" role="tablist">
         <a href="#/metas" class="nav-pilula" data-rota="metas" role="tab"><span data-icone="alvo"></span>Metas</a>
-        <a href="#/configuracoes" class="nav-pilula" data-rota="configuracoes" role="tab"><span data-icone="engrenagem"></span>Configurações</a>
+        <a href="#/configuracoes" class="nav-pilula" data-rota="configuracoes" role="tab" data-admin hidden><span data-icone="engrenagem"></span>Configurações</a>
+        <a href="#/usuarios" class="nav-pilula" data-rota="usuarios" role="tab" data-admin hidden><span data-icone="escudo"></span>Usuários</a>
       </div>
-      <button class="btn-vidro" id="btn-atualizar" type="button" title="Ler de novo a cópia do banco">
+      <button class="btn-vidro" id="btn-atualizar" type="button" title="Ler de novo a cópia do banco" data-admin hidden>
         <span data-icone="atualizar"></span><span class="rotulo">Atualizar dados</span>
+      </button>
+      <button class="btn-vidro btn-usuario" id="btn-usuario" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-usuario">
+        <span class="avatar" id="avatar-usuario"></span><span class="rotulo" id="nome-usuario"></span>
       </button>
       <button class="tema-alternar" id="btn-tema" type="button" aria-label="Alternar tema claro e escuro">
         <span class="tema-trilho"><span class="tema-bola"><span data-icone="sol" class="ic-sol"></span><span data-icone="lua" class="ic-lua"></span></span></span>
@@ -90,9 +94,31 @@
 <main id="app" class="app" tabindex="-1">
   <section id="pagina-metas" class="pagina" hidden></section>
   <section id="pagina-configuracoes" class="pagina" hidden></section>
+  <section id="pagina-usuarios" class="pagina" hidden></section>
 </main>
 
 <footer class="rodape" id="rodape"></footer>
+
+<div class="menu-usuario" id="menu-usuario" role="menu" hidden>
+  <div class="menu-cab"><span class="avatar grande" id="menu-avatar"></span><div><b id="menu-nome"></b><small id="menu-papel"></small></div></div>
+  <button type="button" role="menuitem" id="btn-trocar-senha"><span data-icone="chave"></span>Trocar minha senha</button>
+  <button type="button" role="menuitem" id="btn-sair"><span data-icone="sair"></span>Sair</button>
+</div>
+
+<dialog class="dialogo" id="dlg-senha" aria-labelledby="dlg-senha-titulo">
+  <form method="dialog" id="form-senha" novalidate>
+    <h2 id="dlg-senha-titulo"><span data-icone="chave"></span>Trocar minha senha</h2>
+    <p class="sub">Os outros aparelhos em que você estiver conectado vão pedir a senha nova.</p>
+    <label class="campo-form"><span>Senha atual</span><input type="password" name="atual" autocomplete="current-password" required></label>
+    <label class="campo-form"><span>Nova senha (mínimo 6 caracteres)</span><input type="password" name="nova" autocomplete="new-password" required></label>
+    <label class="campo-form"><span>Repita a nova senha</span><input type="password" name="nova2" autocomplete="new-password" required></label>
+    <p class="form-erro" role="alert" hidden></p>
+    <div class="dialogo-acoes">
+      <button class="btn" type="button" value="cancelar" id="dlg-senha-cancelar">Cancelar</button>
+      <button class="btn primario" type="submit">Salvar senha</button>
+    </div>
+  </form>
+</dialog>
 
 <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>

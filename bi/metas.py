@@ -167,7 +167,9 @@ class Calculadora:
         return por_vendedor, total
 
     # --- visões --------------------------------------------------------------------------
-    def visao(self, visao: str, ano: int, mes: int, vendedor: int | None = None) -> dict:
+    def visao(self, visao: str, ano: int, mes: int, vendedor: int | None = None,
+              permitidos: set[int] | None = None) -> dict:
+        """permitidos: vendedores que o usuário pode ver (None = todos); os totais somam só esses."""
         if visao not in VISOES:
             raise ValueError(f"visão desconhecida: {visao}")
         if not self.cache.pronto():
@@ -188,11 +190,13 @@ class Calculadora:
             "avisos": self.avisos(),
         }
         if info["tipo"] == "produtos":
-            return {**base, **self._visao_produtos(regras, info, inicio, fim, cal, vendedor)}
-        return {**base, **self._visao_vendedores(regras, info, inicio, fim, cal, cal_obj, vendedor)}
+            return {**base, **self._visao_produtos(regras, info, inicio, fim, cal, vendedor, permitidos)}
+        return {**base, **self._visao_vendedores(regras, info, inicio, fim, cal, cal_obj, vendedor, permitidos)}
 
-    def _visao_vendedores(self, regras, info, inicio, fim, cal, cal_obj, vendedor):
+    def _visao_vendedores(self, regras, info, inicio, fim, cal, cal_obj, vendedor, permitidos):
         metas = self._metas_do_mes(regras, inicio, info["grupos"])
+        if permitidos is not None:
+            metas = {k: v for k, v in metas.items() if k in permitidos}
         nomes_erp = self.nomes_erp()
         lista = sorted(({"id": vid, "nome": nome_bonito(m["nome"]), "nome_erp": nomes_erp.get(vid, "")}
                         for vid, m in metas.items()), key=lambda x: x["nome"])
@@ -297,7 +301,7 @@ class Calculadora:
             "diario": diario,
         }
 
-    def _visao_produtos(self, regras, info, inicio, fim, cal, vendedor):
+    def _visao_produtos(self, regras, info, inicio, fim, cal, vendedor, permitidos):
         nomes_erp = self.nomes_erp()
         metas_prod = defaultdict(lambda: defaultdict(float))  # pid -> vid -> meta
         nomes_planilha: dict[int, str] = {}
@@ -306,7 +310,8 @@ class Calculadora:
                 continue
             metas_prod[regras.produto(m["id_produto"])][m["id_vendedor"]] += m["meta_volume"]
             nomes_planilha[m["id_vendedor"]] = m["vendedor"]
-        todos_ids = sorted({vid for por_v in metas_prod.values() for vid in por_v})
+        todos_ids = sorted({vid for por_v in metas_prod.values() for vid in por_v
+                            if permitidos is None or vid in permitidos})
         lista = sorted(({"id": vid, "nome": nome_bonito(nomes_planilha.get(vid) or nomes_erp.get(vid, str(vid))),
                          "nome_erp": nomes_erp.get(vid, "")} for vid in todos_ids), key=lambda x: x["nome"])
         ids = [v for v in todos_ids if vendedor is None or v == vendedor]
@@ -407,6 +412,17 @@ class Calculadora:
                 })
         produtos.sort(key=lambda p: -p["vendido_12m"])
 
+        valores_motivo = {m: (v, n) for m, v, n in self.cache.consulta(
+            "SELECT id_motivo, SUM(valor), COUNT(*) FROM devolucoes_itens WHERE data >= ? AND NOT cancelada GROUP BY 1", [desde])}
+        motivos = [{"id": mid, "nome": nome, "valor_12m": round(valores_motivo.get(mid, (0, 0))[0], 2)}
+                   for mid, nome in sorted(self.cache.consulta("SELECT id, nome FROM motivos"))]
+        return {"produtos": produtos, "vendedores": self.vendedores_catalogo(regras), "motivos": motivos,
+                "desde": desde.isoformat()}
+
+    def vendedores_catalogo(self, regras: Regras | None = None) -> list[dict]:
+        """Vendedores das planilhas de metas com o cadastro do ERP; os sem meta há mais de 2 meses vão para o fim."""
+        regras = regras or self.regras()
+        hoje = self.cache.data_ref() or dt.date.today()
         nomes_erp = {r[0]: r[1:] for r in self.cache.consulta("SELECT id, nome, id_supervisor, supervisor, inativo FROM vendedores")}
         ultimos: dict[int, tuple[dt.date, str]] = {}
         for m in self.metas.dados() + self.metas_produtos.dados():
@@ -421,12 +437,7 @@ class Calculadora:
                 "configurado": vid in regras.vendedores,
             })
         vendedores.sort(key=lambda v: (v["ultimo_mes"] < (hoje.replace(day=1) - dt.timedelta(days=62)).isoformat(), v["nome"]))
-
-        valores_motivo = {m: (v, n) for m, v, n in self.cache.consulta(
-            "SELECT id_motivo, SUM(valor), COUNT(*) FROM devolucoes_itens WHERE data >= ? AND NOT cancelada GROUP BY 1", [desde])}
-        motivos = [{"id": mid, "nome": nome, "valor_12m": round(valores_motivo.get(mid, (0, 0))[0], 2)}
-                   for mid, nome in sorted(self.cache.consulta("SELECT id, nome FROM motivos"))]
-        return {"produtos": produtos, "vendedores": vendedores, "motivos": motivos, "desde": desde.isoformat()}
+        return vendedores
 
     def calendario_ano(self, ano: int, cfg: dict | None = None) -> dict:
         regras_cfg = cfg or self.configuracao.atual()

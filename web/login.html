@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar · Metas Mais Vida</title>
+<link rel="icon" href="/img/logo-maisvida.png">
+<script>
+  // Aplica o tema antes de desenhar a página, para não piscar.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("mv-tema"); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="pagina-login">
+<!-- O mesmo grafismo do topo do painel, em tela cheia: céu, astro, nuvens e as colinas embaixo. -->
+<svg class="login-cena" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-ceu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" class="ceu-1"/>
+      <stop offset=".62" class="ceu-2"/>
+      <stop offset="1" class="ceu-3"/>
+    </linearGradient>
+    <radialGradient id="g-astro" cx=".5" cy=".5" r=".5">
+      <stop offset="0" class="astro-1"/>
+      <stop offset="1" class="astro-2"/>
+    </radialGradient>
+    <linearGradient id="g-colina-1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" class="colina-1a"/>
+      <stop offset="1" class="colina-1b"/>
+    </linearGradient>
+    <linearGradient id="g-colina-2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" class="colina-2a"/>
+      <stop offset="1" class="colina-2b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1440" height="900" fill="url(#g-ceu)"/>
+  <g class="estrelas">
+    <circle cx="140" cy="40" r="1.6"/><circle cx="260" cy="88" r="1.1"/><circle cx="420" cy="30" r="1.4"/>
+    <circle cx="560" cy="70" r="1"/><circle cx="700" cy="24" r="1.5"/><circle cx="820" cy="96" r="1.2"/>
+    <circle cx="930" cy="44" r="1"/><circle cx="1040" cy="78" r="1.6"/><circle cx="1180" cy="30" r="1.1"/>
+    <circle cx="1320" cy="64" r="1.3"/><circle cx="1390" cy="22" r="1"/><circle cx="60" cy="110" r="1.2"/>
+    <circle cx="340" cy="130" r="1"/><circle cx="640" cy="120" r="1.1"/><circle cx="1110" cy="124" r="1"/>
+    <circle cx="90" cy="260" r="1.3"/><circle cx="230" cy="380" r="1"/><circle cx="480" cy="240" r="1.2"/>
+    <circle cx="980" cy="300" r="1.1"/><circle cx="1250" cy="420" r="1.4"/><circle cx="1400" cy="320" r="1"/>
+    <circle cx="160" cy="520" r="1.1"/><circle cx="1300" cy="560" r="1.2"/><circle cx="760" cy="200" r="1"/>
+  </g>
+  <g class="astro">
+    <circle cx="1330" cy="176" r="78" fill="url(#g-astro)" class="astro-brilho"/>
+    <circle cx="1330" cy="176" r="32" class="astro-disco"/>
+    <circle cx="1344" cy="167" r="29" class="lua-sombra"/>
+  </g>
+  <g class="nuvens">
+    <g class="nuvem n1"><ellipse cx="0" cy="0" rx="58" ry="17"/><ellipse cx="-22" cy="-12" rx="28" ry="18"/><ellipse cx="18" cy="-15" rx="32" ry="21"/></g>
+    <g class="nuvem n2"><ellipse cx="0" cy="0" rx="44" ry="13"/><ellipse cx="-14" cy="-9" rx="22" ry="14"/><ellipse cx="14" cy="-11" rx="24" ry="16"/></g>
+    <g class="nuvem n3"><ellipse cx="0" cy="0" rx="70" ry="19"/><ellipse cx="-28" cy="-14" rx="32" ry="20"/><ellipse cx="22" cy="-18" rx="38" ry="24"/></g>
+  </g>
+  <g transform="translate(0 600)">
+    <path class="colina colina-fundo" fill="url(#g-colina-1)" d="M0 230 C 180 170, 360 168, 560 205 S 900 250, 1080 200 S 1320 150, 1440 175 L1440 300 L0 300 Z"/>
+    <path class="colina colina-frente" fill="url(#g-colina-2)" d="M0 262 C 220 236, 420 222, 640 246 S 1000 282, 1200 240 S 1380 222, 1440 230 L1440 300 L0 300 Z"/>
+    <rect class="faixa" x="0" y="290" width="1440" height="10"/>
+  </g>
+</svg>
+
+<button class="tema-alternar login-tema" id="btn-tema" type="button" aria-label="Alternar tema claro e escuro">
+  <span class="tema-trilho"><span class="tema-bola"><span data-icone="sol" class="ic-sol"></span><span data-icone="lua" class="ic-lua"></span></span></span>
+</button>
+
+<main class="login-palco">
+  <div class="login-cartao" id="login-cartao">
+    <img class="login-logo" src="/img/logo-maisvida.png" alt="Mais Vida" width="176" height="67">
+    <div id="login-corpo" aria-live="polite">
+      <div class="login-carregando"><span></span><span></span><span></span></div>
+    </div>
+  </div>
+  <p class="login-rodape">Laticínio Mais Vida · Acompanhamento de Metas</p>
+</main>
+
+<script type="module" src="/js/login.js"></script>
+</body>
+</html>

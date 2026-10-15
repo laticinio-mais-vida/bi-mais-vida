@@ -21,6 +21,11 @@ import pandas as pd
 from .fb import BancoSomenteLeitura
 
 log = logging.getLogger("bi.cache")
+SENHA_EXEMPLO = "COLOQUE_A_SENHA_AQUI"  # a de config.exemplo.ini
+
+
+class SemSenhaDoBanco(RuntimeError):
+    pass
 
 TABELAS = {
     "vendas_itens": "data DATE, id_vendedor INTEGER, id_produto INTEGER, valor DOUBLE, quantidade DOUBLE",
@@ -131,7 +136,10 @@ class Cache:
             self.estado["duracao"] = round(time.time() - t0, 1)
             log.info("cache atualizado em %.1f s (dados até %s)", time.time() - t0, self.info.get("data_ref"))
         except Exception as e:
-            log.exception("falha ao atualizar o cache")
+            if isinstance(e, SemSenhaDoBanco):
+                log.warning("%s", e)
+            else:
+                log.exception("falha ao atualizar o cache")
             self.estado["erro"] = str(e)
             if self._con is None and self.arquivo.exists():
                 try:
@@ -144,6 +152,9 @@ class Cache:
 
     def _extrair(self) -> dict[str, list]:
         b = self.ini["banco"]
+        if b.get("senha", SENHA_EXEMPLO) in ("", SENHA_EXEMPLO):
+            raise SemSenhaDoBanco("falta a senha do banco: copie config.exemplo.ini para config.ini e "
+                                  "preencha a senha em [banco]")
         hoje = dt.date.today()
         de = dt.datetime.combine(self.inicio, dt.time())
         ate = dt.datetime.combine(hoje + dt.timedelta(days=1), dt.time())  # descarta datas digitadas erradas no futuro
