@@ -189,8 +189,12 @@ ssh root@187.127.54.201 'cp -a /opt/bi-mais-vida /opt/bi-mais-vida.bak-$(date +%
 scp -r app.py bi web deploy root@187.127.54.201:/opt/bi-mais-vida/
 
 # 3. Acertar o dono dos arquivos e reiniciar
-ssh root@187.127.54.201 'chown -R 10001:10001 /opt/bi-mais-vida && cd /opt/bi-mais-vida/deploy && docker compose up -d --build'
+ssh root@187.127.54.201 'chown -R 10001:10001 /opt/bi-mais-vida && cd /opt/bi-mais-vida/deploy && docker compose up -d --build && docker compose restart'
 ```
+
+O código entra no container como volume (`..:/app`). Se só o código mudou, a imagem fica igual e o `up` não
+recria o container: é o `restart` que faz o painel carregar a versão nova (confira em `docker compose ps` que
+o tempo de "Up" voltou a poucos segundos).
 
 Depois, feche e abra o painel do PC (`iniciar.bat`).
 
