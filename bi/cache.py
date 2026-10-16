@@ -1,7 +1,7 @@
-"""Cache local (DuckDB) com os dados do ERP que as páginas de metas usam.
+"""Cache local (DuckDB) com os dados do ERP que as páginas do painel usam.
 
-A extração lê a cópia do Firebird numa transação somente leitura, agrega por dia/vendedor/produto e grava
-um arquivo novo; só depois troca o cache em uso. Enquanto atualiza, o painel continua respondendo com o
+A extração lê a cópia do Firebird numa transação somente leitura, agrega por dia/vendedor/produto (e, para o
+Assistente, também por cliente) e grava um arquivo novo; só depois troca o cache em uso. Enquanto atualiza, o painel continua respondendo com o
 cache anterior. As regras (grupos de produto, motivos de devolução, equivalências) NÃO são aplicadas aqui:
 ficam para a hora do cálculo, então mudar a configuração não exige extrair de novo.
 """
@@ -39,6 +39,19 @@ TABELAS = {
     "motivos": "id INTEGER, nome VARCHAR",
     "info": "chave VARCHAR, valor VARCHAR",
 }
+# Detalhe por cliente e por dia, para a página Assistente (venda líquida de cada cliente). Fica fora de TABELAS: um
+# cache sem estas tabelas continua valendo para Metas e Projeções, e o VPS com o código anterior aceita o pacote
+# novo (só confere as tabelas que conhece). Os totais batem com vendas_itens e devolucoes_itens.
+TABELAS_DETALHE = {
+    "vendas_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
+                              "id_produto INTEGER, valor DOUBLE, quantidade DOUBLE"),
+    "devolucoes_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
+                                  "id_produto INTEGER, id_motivo INTEGER, cancelada BOOLEAN, valor DOUBLE, "
+                                  "quantidade DOUBLE"),
+    # Sem CPF/CNPJ, telefone, endereço ou limite de crédito: estes dados vão para a IA do Assistente.
+    "clientes_detalhes": ("id INTEGER, razao_social VARCHAR, cidade VARCHAR, uf VARCHAR, id_area INTEGER, "
+                          "area VARCHAR, id_segmento INTEGER, segmento VARCHAR, inativo INTEGER, data_cadastro DATE"),
+}
 
 
 def _data(v):
@@ -47,14 +60,21 @@ def _data(v):
     return v
 
 
-def _tabela_diferente(con: duckdb.DuckDBPyConnection) -> str | None:
-    """A primeira tabela de TABELAS que falta no cache ou tem outras colunas (None = formato atual)."""
+def _colunas(colunas: str) -> list[str]:
+    return [c.split()[0] for c in colunas.split(", ")]
+
+
+def _tabela_diferente(con: duckdb.DuckDBPyConnection, tabelas: dict[str, str] = TABELAS,
+                      faltar_pode: bool = False) -> str | None:
+    """A primeira tabela de `tabelas` que falta no cache ou tem outras colunas (None = formato atual).
+    Com faltar_pode, só as que existem com outras colunas contam."""
     existentes = {r[0] for r in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
-    for nome, colunas in TABELAS.items():
+    for nome, colunas in tabelas.items():
         if nome not in existentes:
+            if faltar_pode:
+                continue
             return nome
-        esperadas = [c.split()[0] for c in colunas.split(", ")]
-        if [r[0] for r in con.execute(f"DESCRIBE {nome}").fetchall()] != esperadas:
+        if [r[0] for r in con.execute(f"DESCRIBE {nome}").fetchall()] != _colunas(colunas):
             return nome
     return None
 
@@ -73,6 +93,7 @@ class Cache:
         self.estado = {"atualizando": False, "etapa": None, "erro": None, "inicio": None, "duracao": None}
         self.info: dict[str, str] = {}
         self.antigo = False  # cache de uma versão anterior do painel (falta tabela): precisa extrair de novo
+        self.sem_detalhe = False  # falta o detalhe por cliente do Assistente (Metas e Projeções funcionam)
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -90,16 +111,25 @@ class Cache:
                 raise RuntimeError("os dados ainda estão sendo preparados")
             return self._con.execute(sql, list(params)).fetchall()
 
+    def df(self, sql: str, params: list | tuple = ()) -> pd.DataFrame:
+        """Como consulta(), mas em DataFrame (para copiar muitas linhas de uma vez)."""
+        with self._trava:
+            if self._con is None:
+                raise RuntimeError("os dados ainda estão sendo preparados")
+            return self._con.execute(sql, list(params)).df()
+
     def _abrir(self) -> None:
         con = duckdb.connect(str(self.arquivo), read_only=True)
         info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
         antigo = _tabela_diferente(con) is not None
+        sem_detalhe = _tabela_diferente(con, TABELAS_DETALHE) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
             self._con = con
             self.info = info
             self.antigo = antigo
+            self.sem_detalhe = sem_detalhe
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -112,10 +142,11 @@ class Cache:
 
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
-        """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info."""
+        """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
+        cliente pode faltar (pacote do PC com o código anterior), mas, se vier, tem de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
-            nome = _tabela_diferente(con)
+            nome = _tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -140,7 +171,8 @@ class Cache:
             mtime = self.banco.stat().st_mtime
         except OSError:
             return False
-        return self._con is None or self.antigo or float(self.info.get("banco_mtime", 0)) < mtime - 1
+        return (self._con is None or self.antigo or self.sem_detalhe
+                or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
     def atualizar_em_segundo_plano(self) -> bool:
@@ -161,18 +193,22 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            for nome, colunas in TABELAS.items():
+            for nome, colunas in {**TABELAS, **TABELAS_DETALHE}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
-                linhas = dados[nome]
+                linhas = dados.pop(nome)  # solta a lista assim que gravar (o detalhe tem ~1 milhão de linhas)
                 if linhas:
-                    nomes = [c.split()[0] for c in colunas.split(", ")]
-                    df = pd.DataFrame(linhas, columns=nomes)
+                    df = pd.DataFrame(linhas, columns=_colunas(colunas))
+                    del linhas
                     con.register("df_tmp", df)
                     con.execute(f"INSERT INTO {nome} SELECT * FROM df_tmp")
                     con.unregister("df_tmp")
+                    del df
             con.execute("CREATE INDEX ix_vi ON vendas_itens (data)")
             con.execute("CREATE INDEX ix_vc ON vendas_clientes (data)")
             con.execute("CREATE INDEX ix_di ON devolucoes_itens (data)")
+            con.execute("CREATE INDEX ix_vci ON vendas_clientes_itens (data)")
+            con.execute("CREATE INDEX ix_dci ON devolucoes_clientes_itens (data)")
+            self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
             self.estado["duracao"] = round(time.time() - t0, 1)
@@ -191,6 +227,14 @@ class Cache:
         finally:
             self.estado.update(atualizando=False, etapa=None)
             self._trava_extracao.release()
+
+    @staticmethod
+    def _conferir_detalhe(con: duckdb.DuckDBPyConnection) -> None:
+        """O detalhe por cliente agrupa as mesmas linhas do ERP de outro jeito: os totais têm de bater."""
+        for detalhe, base in (("vendas_clientes_itens", "vendas_itens"), ("devolucoes_clientes_itens", "devolucoes_itens")):
+            a, b = (con.execute(f"SELECT COALESCE(SUM(valor), 0) FROM {t}").fetchone()[0] for t in (detalhe, base))
+            if abs(a - b) > 1:
+                log.warning("o total de %s (%.2f) não bate com o de %s (%.2f)", detalhe, a, base, b)
 
     def _extrair(self) -> dict[str, list]:
         from .fb import BancoSomenteLeitura  # só aqui: o VPS não tem Firebird (nem Windows)
@@ -237,7 +281,32 @@ class Cache:
                     "SUM(l.VALORTOTALITEM), SUM(l.QUANTIDADE) "
                     "FROM DEVOLUCOESVENDA d JOIN LISTADEVOLUCAOVENDA l ON l.ID_DEVOLUCAO = d.ID_DEVOLUCAO "
                     "WHERE d.ENTRADA >= ? AND d.ENTRADA < ? GROUP BY 1, 2, 3, 4, 5", (de, ate))]
+            self.estado["etapa"] = "Lendo vendas por cliente e dia"
+            dados["vendas_clientes_itens"] = [
+                (_data(d), v, c, t, p, float(val or 0), float(q or 0)) for d, v, c, t, p, val, q in bd.consulta(
+                    "SELECT CAST(v.DATA AS DATE), COALESCE(v.ID_VENDEDOR, 0), v.ID_CLIENTE, v.TIPOCLIENTE, "
+                    "COALESCE(l.ID_ITEM, 0), SUM(l.VALORTOTALITEM), SUM(l.QUANTIDADE) "
+                    "FROM VENDAS v JOIN LISTAVENDA l ON l.ID_VENDA = v.ID_VENDA "
+                    "WHERE v.DATA >= ? AND v.DATA < ? AND v.DATACANCELAMENTO IS NULL "
+                    "GROUP BY 1, 2, 3, 4, 5", (de, ate))]
+            self.estado["etapa"] = "Lendo devoluções por cliente"
+            dados["devolucoes_clientes_itens"] = [
+                (_data(d), v, c, t, p, m, bool(cc), float(val or 0), float(q or 0))
+                for d, v, c, t, p, m, cc, val, q in bd.consulta(
+                    "SELECT CAST(d.ENTRADA AS DATE), COALESCE(d.ID_VENDEDOR, 0), d.ID_CLIENTE, d.TIPOCLIENTE, "
+                    "COALESCE(l.ID_ITEM, 0), COALESCE(l.ID_MOTIVODEVOLUCAO, 0), "
+                    "CASE WHEN d.DATACANCELAMENTO IS NULL THEN 0 ELSE 1 END, "
+                    "SUM(l.VALORTOTALITEM), SUM(l.QUANTIDADE) "
+                    "FROM DEVOLUCOESVENDA d JOIN LISTADEVOLUCAOVENDA l ON l.ID_DEVOLUCAO = d.ID_DEVOLUCAO "
+                    "WHERE d.ENTRADA >= ? AND d.ENTRADA < ? GROUP BY 1, 2, 3, 4, 5, 6, 7", (de, ate))]
             self.estado["etapa"] = "Lendo cadastros"
+            dados["clientes_detalhes"] = [
+                (i, rs, cid, uf, ar, nar, sg, nsg, int(ina or 0), _data(dc))
+                for i, rs, cid, uf, ar, nar, sg, nsg, ina, dc in bd.consulta(
+                    "SELECT c.ID_CLIENTE, c.RAZAOSOCIAL, c.CIDADE, c.ESTADO, c.ID_AREA, a.NOME, c.ID_SEGMENTO, s.NOME, "
+                    "c.INATIVO, c.DATACADASTRO FROM CLIENTES c "
+                    "LEFT JOIN AREASCOMERCIAIS a ON a.ID_AREA = c.ID_AREA "
+                    "LEFT JOIN SEGMENTO s ON s.ID_SEGMENTO = c.ID_SEGMENTO")]
             dados["produtos"] = bd.consulta(
                 "SELECT p.ID_PRODUTO, p.NOME, p.ID_LINHA, l.NOME, p.UNIDADE, COALESCE(p.INATIVO, 0) "
                 "FROM PRODUTOS p LEFT JOIN LINHASPRODUCAO l ON l.ID_LINHA = p.ID_LINHA")

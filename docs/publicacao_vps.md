@@ -16,12 +16,12 @@ dia. A primeira parte é para quem cuida dos dados no dia a dia e não exige sab
 ```
   1. Cópia do banco do ERP        2. Painel aberto no PC              3. Site
      (arquivo de ~7 GB)     ──►      lê o banco e resume       ──►     bi.maisvida.cloud
-                                     os números (~3 MB)                troca os números
+                                     os números (~10 MB)               troca os números
                                      e manda pela internet
 ```
 
 O banco inteiro não vai para o site: são 7 GB, e o painel só precisa do resumo de vendas, clientes e
-devoluções, que tem uns 3 MB. Isso também é mais seguro, porque o banco do ERP nunca sai da empresa.
+devoluções, que tem uns 10 MB compactado (com o detalhe por cliente do Assistente). Isso também é mais seguro, porque o banco do ERP nunca sai da empresa.
 
 | Termo | O que é |
 |---|---|
@@ -45,7 +45,7 @@ devoluções, que tem uns 3 MB. Isso também é mais seguro, porque o banco do E
    Ele também abre o painel no navegador, que você pode fechar. A janela preta precisa ficar aberta, mas pode
    ser minimizada.
 
-3. **Espere uns 2 minutos.** O painel percebe a cópia nova sozinho, lê o banco (uns 15 segundos) e manda os
+3. **Espere uns 2 minutos.** O painel percebe a cópia nova sozinho, lê o banco (uns 40 segundos) e manda os
    números para o site.
 
 4. **Confira no site**, como explicado em [Conferir se o site está em dia](#conferir-se-o-site-está-em-dia).
@@ -142,6 +142,7 @@ O site e o painel do PC têm **cadastros separados**. O que muda num não muda n
 | Dar acesso a alguém, mudar o que a pessoa vê ou bloquear um acesso | No site, página **Usuários** (só administradores) |
 | Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados | No site, página **Metas** › botão **Configurar** (só administradores) |
 | Escolher os vendedores das projeções e o que cada pessoa vê nelas | No site, página **Projeções** › botão **Configurar** (só administradores) |
+| Escolher quais vendedores cada pessoa consulta no assistente e ver o uso e o custo | No site, página **Assistente** › botão **Configurar** (só administradores) |
 | Trocar a minha senha | No site, menu com o seu nome (canto superior direito) › Trocar minha senha |
 
 Os acessos do site começaram, em 15/10/2026, como cópia dos do PC (mesmos logins e senhas).
@@ -158,7 +159,7 @@ outros sistemas dependem deles.
 
 | O quê | Onde |
 |---|---|
-| Painel: código, `config.ini` (modo vps e a chave), `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
+| Painel: código, `config.ini` (modo vps, a chave de envio e a chave da API do Assistente), `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
 | Container `bi_metas` (Python 3.12, usuário 10001, até 512 MB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
 | HTTPS de `bi.maisvida.cloud`, encaminhado para `bi_metas:8050` | bloco no fim de `/opt/app-promotoria/Caddyfile` (container `estoque_caddy`) |
 | Rede que liga o Caddy ao painel | `app-promotoria_estoque_network` |
@@ -209,6 +210,39 @@ cd /opt/bi-mais-vida/deploy && docker compose down
 rm -rf /opt/bi-mais-vida && mv /opt/bi-mais-vida.bak-AAAAMMDD-HHMM /opt/bi-mais-vida
 cd /opt/bi-mais-vida/deploy && docker compose up -d --build
 ```
+
+### Assistente (chave da API da Anthropic)
+
+O Assistente chama a API da Anthropic a partir do servidor. A chave é cobrada por uso (é separada da assinatura do
+Claude) e fica só no `config.ini` do servidor:
+
+1. No Console da Anthropic (platform.claude.com › API keys), crie uma chave para o painel. Ponha um limite de
+   gasto mensal na conta.
+2. No servidor, `nano /opt/bi-mais-vida/config.ini` e acrescente no fim:
+
+   ```ini
+   [ia]
+   chave = sk-ant-...
+   ```
+
+   Os outros ajustes (modelo, esforço, limites e preços) têm padrão em `config.exemplo.ini` e só precisam entrar
+   aqui se forem diferentes.
+3. `cd /opt/bi-mais-vida/deploy && docker compose restart`.
+
+O pacote `anthropic` vem na imagem (`deploy/Dockerfile`). Na primeira publicação desta versão, o
+`docker compose up -d --build` do passo 3 de [Publicar uma versão nova do código](#publicar-uma-versão-nova-do-código)
+refaz a imagem com ele.
+
+O que acompanhar:
+
+- **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente (uns 60 MB para quem vê tudo;
+  até 2 acessos ao mesmo tempo, `recortes` em `[ia]`). Confira com `docker stats bi_metas`; o limite do container é
+  512 MB. Se apertar, use `recortes = 1`.
+- **Perguntas longas:** uma pergunta pode levar até uns 100 s (`tempo_total`). O `reverse_proxy` do Caddy não tem
+  tempo limite de resposta por padrão, então o Caddyfile não precisa mudar. Mesmo assim, depois de publicar, faça
+  uma pergunta que exija várias consultas e confira que a resposta chega.
+- **Registro:** `logs/assistente-AAAA-MM.jsonl`, uma linha por pergunta, com tokens e custo estimado. A página
+  Assistente › Configurar › Uso e custo resume os últimos 30 dias.
 
 ### Esqueci a senha de administrador do site
 

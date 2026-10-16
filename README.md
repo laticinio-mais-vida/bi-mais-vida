@@ -4,13 +4,15 @@ Versão em Python das páginas de metas do Power BI (Metas ES, Metas BA, Metas E
 Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtros de vendedores, meses e anos
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
-faturamento bruto dos próximos 6 meses.
+faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
+(Claude).
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
 uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção Administração, que só o
 administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
-administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções.
+administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
+Assistente, o que cada pessoa consulta e o uso.
 
 ## Como abrir
 
@@ -32,7 +34,8 @@ no computador onde o painel está instalado. Depois, o administrador cadastra os
 **Usuários**.
 
 Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird),
-`duckdb`, `pandas` e `numpy` (que vem com o pandas), que já estão instalados.
+`duckdb`, `pandas` e `numpy` (que vem com o pandas), que já estão instalados. Só o Assistente precisa de um
+pacote a mais (`pip install anthropic`), e só onde ele for usado (no VPS, já vem na imagem).
 
 ## De onde vêm os dados
 
@@ -42,11 +45,13 @@ Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquin
 | Metas de faturamento, mussarela, outras linhas e clientes | `C:\Users\Micro\Documents\METAS.xlsx` |
 | Metas de volume por produto (BA) | `C:\Users\Micro\Documents\METAS PRODUTOS.xlsx` |
 
-O sistema copia do banco só o que as metas usam (vendas, clientes atendidos, devoluções e cadastros, desde
-2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora.
+O sistema copia do banco só o que as páginas usam (vendas, clientes atendidos, devoluções e cadastros, desde
+2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora. Para o Assistente, o
+cache também guarda as vendas e devoluções por cliente e por dia, e a cidade, a UF, a área e o segmento de cada
+cliente.
 
 - **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
-  atualiza o cache em segundo plano (cerca de 15 segundos). O botão **Atualizar dados** força a leitura na hora.
+  atualiza o cache em segundo plano (cerca de 40 segundos). O botão **Atualizar dados** força a leitura na hora.
 - **Planilhas de metas:** são relidas sempre que o arquivo muda. Se estiverem abertas e bloqueadas, vale a
   última leitura boa e aparece um aviso no painel.
 
@@ -173,6 +178,74 @@ Erro médio de 1 a 6 meses à frente, sem filtro: **faturamento 6,6%**, **mix 5,
 mussarela varia mais). Por vendedor o erro fica perto de 19% no mix e 26% na mussarela, e a faixa da página
 mostra isso. As constantes ficam no topo de `bi/projecoes.py`.
 
+## Página Assistente
+
+Um chat em que a pessoa pergunta sobre os dados em português e a IA responde com os números do painel. Exemplos:
+"quanto o Mercado do João comprou em setembro?", "quais clientes do Rubens compraram em agosto e não compraram em
+setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthropic.
+
+### Como responde
+
+- **Não é um RAG.** A IA não guarda os dados nem procura trechos parecidos com a pergunta. A cada pergunta ela pede
+  consultas ao servidor, o servidor executa no cache e devolve o resultado, e ela escreve a resposta. Todo número
+  da resposta sai de uma dessas consultas. As consultas que ela pode pedir são:
+  - buscar cliente, produto ou vendedor pelo nome;
+  - resumo de vendas por período, com filtros e agrupamentos;
+  - metas e realizado (os mesmos números da página Metas);
+  - para o resto, uma consulta SQL que só lê os dados.
+- **As regras são as das metas.**
+  - Faturamento líquido = vendas não canceladas − devoluções dos motivos marcados, pela data de entrada.
+  - Valem as equivalências de produto, e os produtos que "não contam" ficam de fora.
+  - Vendedor é o da venda, como em Metas. O da carteira aparece como "vendedor da carteira".
+- **Como cheguei nesse número:** embaixo de cada resposta mostra cada consulta feita, com o SQL e uma amostra do
+  resultado.
+- **A conversa fica só no navegador:** some ao fechar a aba ou em **Nova conversa**. A pergunta seguinte pode se
+  apoiar na anterior ("e em agosto?").
+- Cada pergunta leva de alguns segundos a um minuto, conforme o número de consultas.
+
+### O que cada pessoa consulta
+
+A IA só recebe as vendas, devoluções, clientes e metas dos vendedores do acesso de quem pergunta. Para cada acesso,
+o servidor monta na memória uma cópia dos dados só com essas linhas. A IA consulta apenas essa cópia, sem acesso a
+arquivos, ao resto do cache ou a configurações. Pedir "ignore as regras" não adianta, porque o que está fora do
+acesso não existe para ela.
+
+O botão **Configurar** da página (só administradores) tem duas seções:
+
+- **Acesso por usuário:** para cada visualizador, se usa o assistente e quais vendedores consulta. Os modos são:
+  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados lá;
+  - **Todos;**
+  - **Só alguns.**
+- **Uso e custo:** perguntas e custo estimado por pessoa nos últimos 30 dias, o gasto de hoje e as últimas
+  perguntas.
+
+### Chave, custo e limites
+
+- **Chave da API:** é cobrada por uso e é **separada da assinatura do Claude**. Crie em platform.claude.com
+  (API keys) e coloque só no `config.ini` do servidor, em `[ia]`: `chave = sk-ant-...`. Depois reinicie o painel.
+  Sem a chave, a página avisa que não está configurada. O painel precisa do pacote `anthropic`: no VPS ele já está
+  na imagem Docker; no PC, `pip install anthropic`.
+- **Modelo:** `claude-opus-5-5` é o padrão, o mais capaz. `claude-sonnet-5-5` custa cerca de metade; ao trocar,
+  ajuste também os preços em `[ia]`. `esforco = low` deixa as respostas mais rápidas e baratas.
+- **Custo estimado com o Opus 5.5:** de US$ 0,05 a 0,15 por pergunta. As instruções fixas ficam em cache e, na
+  repetição, custam 5% do preço normal.
+- **Limites em `[ia]`:**
+  - perguntas por pessoa por dia (`limite_diario`, 50; administradores sem limite);
+  - gasto do dia, para todos (`limite_custo_dia`, US$ 2);
+  - perguntas respondidas ao mesmo tempo (`simultaneos`, 2);
+  - consultas por pergunta (`max_passos`, 8).
+
+  Vale também pôr um limite de gasto mensal no Console da Anthropic.
+- **Recusas:** se o classificador de segurança da Anthropic recusar uma pergunta por engano, o próprio servidor
+  da Anthropic refaz a pergunta no modelo que ela recomenda (`fallbacks: "default"`).
+- **Registro:** `logs/assistente-AAAA-MM.jsonl` guarda uma linha por pergunta (quem, pergunta, resposta,
+  consultas, tokens e custo). Os limites do dia são refeitos a partir dele quando o painel reinicia.
+
+### Privacidade
+
+Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
+pela API para treinar modelos. CPF/CNPJ, telefone, endereço e limite de crédito não estão no cache e não vão.
+
 ## Login e acessos
 
 Todo mundo entra com usuário e senha. Há dois papéis:
@@ -184,7 +257,7 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
-abas e os vendedores; em Projeções, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
+abas e os vendedores; em Projeções e no Assistente, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
 antes da página Projeções existir continua só com Metas até o administrador marcar a página nova.
 
 Exemplos (em Metas › Configurar › Acesso por usuário):
@@ -201,7 +274,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Assistente). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -221,7 +294,7 @@ O painel usa HTTP sem criptografia. Na rede interna da empresa isso basta.
 ### Publicar na internet (VPS)
 
 O painel roda num VPS com HTTPS, e o banco do ERP continua na empresa. Este computador extrai o cache e manda ao
-VPS só ele e as planilhas (uns 3 MB compactados), sozinho, depois de cada cópia nova do banco. O passo a passo
+VPS só ele e as planilhas (uns 10 MB compactados), sozinho, depois de cada cópia nova do banco. O passo a passo
 está em [docs/publicacao_vps.md](docs/publicacao_vps.md).
 
 ### Esqueci a senha do administrador
@@ -284,6 +357,7 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/cache.py` | leitura do Firebird e cache DuckDB |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
+| `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |
 | `bi/configuracao.py` | regras editáveis e padrões do Power BI |
 | `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
@@ -292,6 +366,8 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/publicacao.py` | envio do cache e das planilhas ao VPS (no PC) e recebimento com conferência (no VPS) |
 | `web/` | página: HTML, CSS (identidade do Guia da Marca 2026) e JavaScript |
 | `logs/bi.log` | registro de atualizações e erros |
+| `logs/assistente-AAAA-MM.jsonl` | registro das perguntas do Assistente (quem, consultas, tokens e custo) |
+| `tests/` | testes automáticos: `python -m unittest discover -s tests -t .` |
 | `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
 | `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
 | `config_projecoes.json` | vendedores da página Projeções, salvos em Projeções › Configurar (só existe depois do primeiro Salvar) |
@@ -311,3 +387,10 @@ Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json`
 - **Outro computador não abre o painel:** confira `endereco = 0.0.0.0` no `config.ini` e se o firewall do
   Windows liberou o Python em rede privada.
 - **Números estranhos depois de mexer nas regras:** use "Restaurar padrão do Power BI" em Configurações.
+- **Assistente "não configurado":** falta a chave em `[ia]` no `config.ini` do servidor, ou o painel não foi
+  reiniciado depois de colocar a chave.
+- **Assistente "a chave da API não foi aceita" ou "a API recusou o pedido":** confira a chave e o crédito no
+  Console da Anthropic (platform.claude.com). O motivo exato fica em `logs/bi.log`.
+- **Assistente "os dados por cliente ainda não chegaram":** o site ainda tem o cache de antes desta versão. Ele
+  chega depois da próxima extração do PC, que já acontece sozinha uma vez quando o painel do PC abre com a versão
+  nova.

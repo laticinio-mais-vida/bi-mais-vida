@@ -36,8 +36,9 @@ from urllib.parse import parse_qs, urlparse
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
-from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_projecoes,  # noqa: E402
-                       paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
+                       escopo_projecoes, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
@@ -53,7 +54,7 @@ mimetypes.add_type("image/svg+xml", ".svg")
 CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
 # Só o administrador usa: regras de cálculo, atualização forçada e cadastro de acessos.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
-               "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config"}
+               "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config"}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
 
@@ -86,6 +87,7 @@ class Aplicacao:
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
         self.config_projecoes = ConfigProjecoes(RAIZ / "config_projecoes.json")
         self.projetor = Projetor(self.calc, self.config_projecoes)
+        self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RAIZ / "logs")
         self.usuarios = Usuarios(RAIZ / "usuarios.json")
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
@@ -293,6 +295,22 @@ class Manipulador(BaseHTTPRequestHandler):
         """Configuração da página Projeções: vendedores da página e o que cada visualizador vê nela."""
         return {**self.app.projetor.catalogo(), **self._visualizadores()}
 
+    def _config_assistente(self) -> dict:
+        """Configuração da página Assistente: o que cada visualizador consulta e o uso dos últimos 30 dias."""
+        return {"vendedores": self.app.assistente.catalogo_vendedores(), "uso": self.app.assistente.uso(),
+                "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
+
+    def _perguntar(self, usuario: dict, corpo: dict):
+        """Uma pergunta ao Assistente (espera a resposta inteira: costuma levar de 10 s a 1 min)."""
+        if "assistente" not in paginas_permitidas(usuario):
+            return self._erro("seu acesso não inclui o Assistente", HTTPStatus.FORBIDDEN)
+        vendedores, equipes = escopo_assistente(usuario)
+        try:
+            return self._json(self.app.assistente.responder(usuario, corpo.get("mensagens"), vendedores, equipes))
+        except ErroAssistente as e:
+            log.warning("Assistente (%s): %s", usuario["login"], e)
+            return self._erro(str(e), e.status)
+
     def _salvar_config_metas(self, eu: dict, corpo: dict):
         """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas e os vendedores que cada
         visualizador vê. Confere as duas partes antes de gravar qualquer uma."""
@@ -361,6 +379,12 @@ class Manipulador(BaseHTTPRequestHandler):
                     return self._erro(str(e), HTTPStatus.FORBIDDEN)
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
+            if url.path == "/api/assistente/info":
+                if "assistente" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui o Assistente", HTTPStatus.FORBIDDEN)
+                return self._json(self.app.assistente.info(usuario, *escopo_assistente(usuario)))
+            if url.path == "/api/assistente/config":
+                return self._json(self._config_assistente())
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
                                    **self._visualizadores()})
@@ -421,6 +445,12 @@ class Manipulador(BaseHTTPRequestHandler):
                 self.app.config_projecoes.salvar(corpo.get("vendedores") or {})
                 log.info("%s salvou a configuração das projeções", usuario["login"])
                 return self._json({"ok": True, **self._config_projecoes()})
+            if url.path == "/api/assistente":
+                return self._perguntar(usuario, self._corpo_json())
+            if url.path == "/api/assistente/config":
+                self.app.usuarios.definir_assistente(self._corpo_json().get("usuarios") or {})
+                log.info("%s salvou o acesso do Assistente", usuario["login"])
+                return self._json({"ok": True, **self._config_assistente()})
             if url.path == "/api/config/padrao":
                 return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao()})
             if url.path == "/api/calendario":

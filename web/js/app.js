@@ -6,6 +6,8 @@ import { montarMetas, recarregarMetas } from "./metas.js";
 import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
+import { montarAssistente } from "./assistente.js";
+import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
@@ -49,6 +51,20 @@ const PAGINAS = {
     pendente: configProjecoesTemAlteracoes,
     montar: (el) => montarConfigProjecoes(el, { aoSalvar: () => app.remontar.add("projecoes") }),
   },
+  assistente: {
+    nome: "Assistente",
+    titulo: "Assistente de dados",
+    montar: (el) => montarAssistente(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("assistente", d) }),
+  },
+  "config-assistente": {
+    titulo: "Configurações do assistente",
+    fixo: "O que cada pessoa consulta no assistente e quanto ele foi usado",
+    pai: "assistente",
+    admin: true,
+    sempreMonta: true,
+    pendente: configAssistenteTemAlteracoes,
+    montar: (el) => montarConfigAssistente(el),
+  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel e quais páginas cada pessoa vê",
@@ -65,6 +81,7 @@ const PAGINAS = {
 const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
+  assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

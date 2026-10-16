@@ -6,7 +6,7 @@
 - Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
   liberadas em Usuários. O que ele vê dentro de cada página fica na configuração da página: em Metas, as visões
   (abas) marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores (os totais também); em
-  Projeções, igual a Metas (padrão), todos os vendedores da página ou só alguns.
+  Projeções e no Assistente, igual a Metas (padrão), todos os vendedores ou só alguns.
 """
 from __future__ import annotations
 
@@ -27,9 +27,11 @@ from pathlib import Path
 from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
-PAGINAS = {"metas": "Metas", "projecoes": "Projeções"}
+PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "assistente": "Assistente"}
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
-MODOS_PROJECOES = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
+MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
+PAGINAS_COM_ESCOPO = ("projecoes", "assistente")  # páginas com essa escolha de vendedores na configuração
+ESCOPO_PADRAO = {"modo": "metas", "vendedores": None}
 COOKIE = "mv_sessao"
 DURACAO_SESSAO = 12 * 3600            # sem "manter conectado"
 DURACAO_LEMBRAR = 30 * 24 * 3600      # com "manter conectado"
@@ -93,7 +95,7 @@ def publico(login: str, u: dict) -> dict:
         "visoes": None if admin else list(u.get("visoes") or []),
         "vendedores": None if admin else u.get("vendedores"),
         "paginas": None if admin else _paginas_de(u),
-        "projecoes": None if u["papel"] == "admin" else (u.get("projecoes") or {"modo": "metas", "vendedores": None}),
+        **{p: None if admin else (u.get(p) or dict(ESCOPO_PADRAO)) for p in PAGINAS_COM_ESCOPO},
         "criado_em": u.get("criado_em"), "ultimo_acesso": u.get("ultimo_acesso"),
     }
 
@@ -247,8 +249,16 @@ class Usuarios:
                 self._grava()
 
     def definir_projecoes(self, mudancas: dict) -> None:
-        """Pela configuração da página Projeções: {login: {"ve": bool, "modo": ..., "vendedores": [ids]}}.
-        Confere tudo antes de gravar, para não salvar só metade."""
+        """Pela configuração da página Projeções: {login: {"ve": bool, "modo": ..., "vendedores": [ids]}}."""
+        self._definir_escopo("projecoes", mudancas)
+
+    def definir_assistente(self, mudancas: dict) -> None:
+        """Pela configuração da página Assistente, no mesmo formato de definir_projecoes."""
+        self._definir_escopo("assistente", mudancas)
+
+    def _definir_escopo(self, pagina: str, mudancas: dict) -> None:
+        """Vendedores que cada usuário vê numa página de PAGINAS_COM_ESCOPO. Confere tudo antes de gravar, para
+        não salvar só metade."""
         with self._trava:
             usuarios = self._dados["usuarios"]
             novos = {}
@@ -259,13 +269,13 @@ class Usuarios:
                 if u["papel"] == "admin":
                     continue  # administrador vê tudo
                 modo = m.get("modo", "metas")
-                if modo not in MODOS_PROJECOES:
+                if modo not in MODOS_ESCOPO:
                     raise ValueError(f"modo inválido para {login}: {modo}")
                 vendedores = sorted({int(v) for v in m.get("vendedores") or []}) if modo == "alguns" else None
                 if modo == "alguns" and not vendedores:
                     raise ValueError(f"escolha ao menos um vendedor para {u['nome']}, ou outra opção")
-                paginas = _com_pagina(u, "projecoes", bool(m["ve"])) if "ve" in m else _paginas_de(u)
-                novos[login] = {"projecoes": {"modo": modo, "vendedores": vendedores}, "paginas": paginas}
+                paginas = _com_pagina(u, pagina, bool(m["ve"])) if "ve" in m else _paginas_de(u)
+                novos[login] = {pagina: {"modo": modo, "vendedores": vendedores}, "paginas": paginas}
             for login, n in novos.items():
                 usuarios[login].update(n)
             if novos:
@@ -328,9 +338,18 @@ def equipes_permitidas(usuario: dict) -> set[str]:
 
 def escopo_projecoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
     """(vendedores, equipes) que o usuário vê em Projeções; None = sem limite além dos vendedores da página."""
+    return _escopo(usuario, "projecoes")
+
+
+def escopo_assistente(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) cujas vendas o usuário consulta no Assistente; None = sem limite."""
+    return _escopo(usuario, "assistente")
+
+
+def _escopo(usuario: dict, pagina: str) -> tuple[set[int] | None, set[str] | None]:
     if eh_admin(usuario):
         return None, None
-    p = usuario.get("projecoes") or {"modo": "metas"}
+    p = usuario.get(pagina) or ESCOPO_PADRAO
     if p["modo"] == "todos":
         return None, None
     if p["modo"] == "alguns":

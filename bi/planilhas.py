@@ -171,6 +171,7 @@ class PlanilhaMonitorada:
         self._assinatura = None
         self._dados: list[dict] | None = None
         self.aviso: str | None = None
+        self.versao = 0  # sobe a cada leitura nova (o Assistente refaz os dados dele quando muda)
         self._trava = threading.Lock()
 
     def dados(self) -> list[dict]:
@@ -187,6 +188,7 @@ class PlanilhaMonitorada:
                 try:
                     self._dados = self.leitor(self.arquivo)
                     self._assinatura = assinatura
+                    self.versao += 1
                     self.aviso = None
                 except (PermissionError, zipfile.BadZipFile, KeyError, ET.ParseError, ValueError) as e:
                     if self._dados is None:

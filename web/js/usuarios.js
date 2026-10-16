@@ -4,9 +4,13 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia" };
-const DESCRICAO_PAGINA = { metas: "Metas do mês por vendedor e produto", projecoes: "Faturamento previsto para 6 meses" };
-const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes" }; // rota do Configurar de cada página
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", assistente: "conversa" };
+const DESCRICAO_PAGINA = {
+  metas: "Metas do mês por vendedor e produto",
+  projecoes: "Faturamento previsto para 6 meses",
+  assistente: "Perguntas sobre os dados, respondidas por IA",
+};
+const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", assistente: "config-assistente" }; // rota do Configurar de cada página
 
 let ctx = null, raiz = null;
 let dados = null;     // { usuarios, paginas }
@@ -73,7 +77,7 @@ function dentroDaPagina(u, pagina) {
     const vend = u.vendedores ? plural(u.vendedores.length, "vendedor", "vendedores") : "todos os vendedores";
     return { texto: `${plural(u.visoes.length, "aba", "abas")} · ${vend}` };
   }
-  const p = u.projecoes || { modo: "metas" };
+  const p = u[pagina] || { modo: "metas" }; // Projeções e Assistente: igual a Metas, todos ou só alguns
   if (p.modo === "todos") return { texto: "todos os vendedores da página" };
   if (p.modo === "alguns") return { texto: plural(p.vendedores.length, "vendedor escolhido", "vendedores escolhidos") };
   const semAbas = !u.visoes?.length;
