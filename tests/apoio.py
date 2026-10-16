@@ -1,24 +1,58 @@
-"""Cache sintético e cliente falso da API para os testes (nada aqui lê o ERP ou chama a internet)."""
+"""Cache sintético, cliente falso da API e o banco de teste (nada aqui lê o ERP ou chama a internet).
+
+Os testes com o banco precisam de um PostgreSQL de teste; sem ele, são pulados. Por exemplo:
+    docker run --rm -e POSTGRES_PASSWORD=teste -p 5433:5432 postgres:18-alpine
+    $env:BI_TESTE_POSTGRES = "postgresql://postgres:teste@localhost:5433/postgres"   (PowerShell)
+    python -m unittest discover -s tests -t .
+No PC, serve o PostgreSQL instalado (um banco só para os testes, ex.: createdb -U postgres bi_teste). Cada teste usa
+um schema temporário, apagado no fim.
+"""
 from __future__ import annotations
 
+import collections
 import configparser
+import copy
 import datetime as dt
+import importlib.util
+import os
+import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import duckdb
 
 from bi.assistente import Assistente
-from bi.banco import BancoForaDoAr
+from bi.banco import Banco, BancoForaDoAr
 from bi.cache import TABELAS, TABELAS_DETALHE, Cache
-from bi.configuracao import Configuracao, padrao
+from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
+
+DSN = os.environ.get("BI_TESTE_POSTGRES")
+TEM_PSYCOPG = importlib.util.find_spec("psycopg") is not None and importlib.util.find_spec("psycopg_pool") is not None
 
 # Vendedores do padrão das metas: 124 = ES, 141 = BA, 85 = Edir.
 ES, BA, EDIR = 124, 141, 85
 NOMES = {ES: "Rubens", BA: "Thais", EDIR: "Edir"}
 D = dt.date
+
+
+class ConfiguracaoFixa:
+    """As regras de Metas em memória, com a mesma interface de bi/configuracao.py (sem o banco)."""
+
+    def __init__(self, cfg: dict | None = None):
+        self._cfg = _valida(cfg or padrao())
+
+    def atual(self) -> dict:
+        return copy.deepcopy(self._cfg)
+
+    def validar(self, novo: dict) -> dict:
+        return _valida(novo)
+
+    def salvar(self, novo: dict, autor=None) -> dict:
+        self._cfg = _valida(novo)
+        return self.atual()
 
 
 class PlanilhaFalsa:
@@ -87,8 +121,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = ()) -> Calculadora:
     cfg = padrao()
     for pid in fora:
         cfg["produtos"][str(pid)] = {"grupo": "fora", "categoria": None}
-    configuracao = Configuracao(pasta / "config_metas.json")
-    configuracao.salvar(cfg)
+    configuracao = ConfiguracaoFixa(cfg)
     metas = PlanilhaFalsa([
         {"mes": D(2026, 9, 1), "id_vendedor": ES, "vendedor": "RUBENS", "meta_fat": 2000.0, "meta_mus": 800.0,
          "meta_out": 1200.0, "meta_cli": 3.0},
@@ -107,15 +140,38 @@ def config_ia(**valores) -> configparser.ConfigParser:
     return ini
 
 
-def criar_assistente(pasta: Path, calc: Calculadora, cliente=None, conversas=None, **ia) -> Assistente:
-    return Assistente(config_ia(**ia), calc, lambda: dict(NOMES), pasta / "logs", cliente=cliente, conversas=conversas)
+def criar_assistente(pasta: Path, calc: Calculadora, cliente=None, conversas=None, registro=None, **ia) -> Assistente:
+    return Assistente(config_ia(**ia), calc, lambda: dict(NOMES), registro or RegistroFalso(), cliente=cliente,
+                      conversas=conversas)
+
+
+class RegistroFalso:
+    """Imita o registro de uso de bi/uso.py em memória."""
+
+    def __init__(self):
+        self.registros = []
+        self.fora_do_ar = False
+
+    def gravar(self, r):
+        if self.fora_do_ar:
+            raise BancoForaDoAr("banco de teste fora do ar")
+        self.registros.append({**r, "quando": dt.datetime.now()})
+
+    def do_dia(self, usuario):
+        hoje = [r for r in self.registros if r["quando"].date() == dt.date.today()]
+        return sum(r["usuario"] == usuario for r in hoje), sum(r["uso"]["custo"] for r in hoje)
+
+    def resumo(self, dias):
+        por = collections.Counter(r["login"] for r in self.registros)
+        return {"hoje": {"perguntas": len(self.registros), "custo": sum(r["uso"]["custo"] for r in self.registros)},
+                "por_usuario": [{"login": k, "perguntas": n} for k, n in por.most_common()], "ultimas": []}
 
 
 class ConversasFalsas:
     """Imita o histórico de bi/conversas.py em memória (os testes do Assistente não precisam do PostgreSQL)."""
 
     def __init__(self):
-        self.dados = {}  # id -> {"login", "titulo", "mensagens"}
+        self.dados = {}  # id -> {"usuario", "titulo", "mensagens"}
         self.fora_do_ar = False
 
     def _banco(self):
@@ -125,17 +181,17 @@ class ConversasFalsas:
     def verificar(self):
         self._banco()
 
-    def historico(self, login, id_):
+    def historico(self, usuario, id_):
         self._banco()
         c = self.dados.get(id_valido(id_))
-        if not c or c["login"] != login:
+        if not c or c["usuario"] != usuario:
             return None
         return [{"papel": m["papel"], "texto": m["texto"], **({"consultas": m["consultas"]} if m.get("consultas") else {})}
                 for m in c["mensagens"]]
 
-    def acrescentar(self, login, id_, pergunta, resposta):
+    def acrescentar(self, usuario, id_, pergunta, resposta):
         self._banco()
-        c = self.dados.setdefault(id_, {"login": login, "titulo": titulo_de(pergunta), "mensagens": []})
+        c = self.dados.setdefault(id_, {"usuario": usuario, "titulo": titulo_de(pergunta), "mensagens": []})
         c["mensagens"] += [{"papel": "usuario", "texto": pergunta},
                            {"papel": "assistente", "texto": resposta["texto"], **{k: resposta.get(k) for k in DETALHES}}]
         return {"id": id_, "titulo": c["titulo"]}
@@ -178,5 +234,47 @@ class ClienteFalso:
         return r(pedido) if callable(r) else r
 
 
-USUARIO_ADMIN = {"login": "admin", "nome": "Admin", "papel": "admin"}
-USUARIO_VIS = {"login": "vis", "nome": "Visualizador", "papel": "visualizador"}
+USUARIO_ADMIN = {"id": 1, "login": "admin", "nome": "Admin", "papel": "admin"}
+USUARIO_VIS = {"id": 2, "login": "vis", "nome": "Visualizador", "papel": "visualizador"}
+
+
+# --- banco de teste ---------------------------------------------------------------------
+def config_postgres(dsn: str) -> configparser.ConfigParser:
+    from psycopg.conninfo import conninfo_to_dict
+    p = conninfo_to_dict(dsn)
+    ini = configparser.ConfigParser()
+    ini.read_dict({"postgres": {"host": p.get("host") or "localhost", "porta": p.get("port") or "5432",
+                                "banco": p.get("dbname") or "postgres", "usuario": p.get("user") or "postgres",
+                                "senha": p.get("password") or ""}})
+    return ini
+
+
+@unittest.skipUnless(DSN and TEM_PSYCOPG, "defina BI_TESTE_POSTGRES para testar com um PostgreSQL")
+class BaseBanco(unittest.TestCase):
+    """Cada teste num schema temporário. raiz: pasta de onde a migração 005 importa os arquivos (None = nada)."""
+
+    raiz = None
+
+    def setUp(self):
+        self.schema = "teste_" + uuid.uuid4().hex[:10]
+        self.banco = self.novo_banco(self.raiz)
+
+    def novo_banco(self, raiz=None) -> Banco:
+        return Banco(config_postgres(DSN), schema=self.schema, raiz=raiz)
+
+    def tearDown(self):
+        with self.banco._conexao() as con:
+            con.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
+        self.banco.fechar()
+
+    def criar_usuario(self, login: str, papel: str = "visualizador") -> int:
+        """Direto na tabela (sem a conta demorada da senha): para testes que só precisam de um dono."""
+        with self.banco.conexao() as con:
+            return con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas) VALUES (%s, %s, %s, 'x', "
+                               "%s::text[]) RETURNING id", [login, login.title(), papel,
+                                                            None if papel == "admin" else ["metas", "assistente"]]
+                               ).fetchone()[0]
+
+    def contar(self, tabela: str, onde: str = "true") -> int:
+        with self.banco.conexao() as con:
+            return con.execute(f"SELECT count(*) FROM {tabela} WHERE {onde}").fetchone()[0]

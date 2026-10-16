@@ -1,8 +1,6 @@
 # Conexão com o banco (tem a senha): cada máquina cria a sua a partir de config.exemplo.ini
 config.ini
 
-# Usuários do painel (senhas em hash e a chave que assina as sessões)
-usuarios.json
 
 # Senha do banco PostgreSQL do VPS (lida pelo docker-compose)
 banco.env
@@ -13,9 +11,14 @@ dados/
 *.duckdb.wal
 logs/
 
-# Cópia de segurança automática das regras e arquivos temporários
+# Arquivos de antes do banco PostgreSQL: importados na primeira subida com o banco, ficam só como cópia
+usuarios.json
+config_metas.json
+config_projecoes.json
 config_metas.anterior.json
 config_projecoes.anterior.json
+
+# Arquivos temporários
 *.tmp
 
 # Material da marca (guia em PDF, de uso interno)

@@ -1,14 +1,14 @@
 """Histórico de conversas do Assistente, no PostgreSQL (bi/banco.py).
 
-- Cada pessoa vê só as próprias conversas: todo método recebe o login e filtra por ele, e a conversa de outra
-  pessoa é tratada como se não existisse.
+- Cada pessoa vê só as próprias conversas: todo método recebe o id do usuário e filtra por ele, e a conversa de
+  outra pessoa é tratada como se não existisse. Trocar o login leva as conversas junto, e excluir o usuário apaga as
+  dele (chave estrangeira com ON DELETE CASCADE, bi/migracoes/006_conversas_por_usuario.sql).
 - Uma conversa só é gravada depois da primeira resposta. Cada pergunta acrescenta a pergunta e a resposta (com as
   consultas feitas, para "Como cheguei nesse número"), sem regravar o que já estava lá.
 - O título é o começo da primeira pergunta; a pessoa pode renomear.
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import uuid
 
@@ -66,9 +66,9 @@ class Conversas:
         with self.banco.conexao() as con:
             con.execute("SELECT 1")
 
-    def listar(self, login: str, busca: str | None = None) -> list[dict]:
+    def listar(self, usuario: int, busca: str | None = None) -> list[dict]:
         """Conversas da pessoa, da mais recente para a mais antiga. A busca olha o título e as mensagens."""
-        sql, params = f"SELECT {_META} FROM conversas c WHERE login = %s", [login]
+        sql, params = f"SELECT {_META} FROM conversas c WHERE usuario = %s", [usuario]
         busca = " ".join(str(busca or "").split())[:100]
         if busca:
             sql += (" AND (sem_acento(titulo) ILIKE sem_acento(%s) OR EXISTS (SELECT 1 FROM mensagens m"
@@ -77,44 +77,46 @@ class Conversas:
         with self.banco.conexao() as con:
             return [_meta(r) for r in con.execute(sql + " ORDER BY atualizada_em DESC", params)]
 
-    def obter(self, login: str, id_) -> dict | None:
+    def obter(self, usuario: int, id_) -> dict | None:
         """A conversa com as mensagens, no formato que a página desenha."""
         id_ = id_valido(id_)
         if not id_:
             return None
         with self.banco.conexao() as con:
-            linha = con.execute(f"SELECT {_META} FROM conversas WHERE id = %s AND login = %s", [id_, login]).fetchone()
+            linha = con.execute(f"SELECT {_META} FROM conversas WHERE id = %s AND usuario = %s",
+                                [id_, usuario]).fetchone()
             if not linha:
                 return None
             mensagens = con.execute("SELECT papel, texto, detalhes FROM mensagens WHERE conversa = %s ORDER BY id",
                                     [id_]).fetchall()
         return {**_meta(linha), "mensagens": [{"papel": p, "texto": t, **(d or {})} for p, t, d in mensagens]}
 
-    def historico(self, login: str, id_) -> list[dict] | None:
+    def historico(self, usuario: int, id_) -> list[dict] | None:
         """As mensagens no formato que o Assistente manda à IA: só o texto e o resumo das consultas."""
         id_ = id_valido(id_)
         if not id_:
             return None
         with self.banco.conexao() as con:
-            if not con.execute("SELECT 1 FROM conversas WHERE id = %s AND login = %s", [id_, login]).fetchone():
+            if not con.execute("SELECT 1 FROM conversas WHERE id = %s AND usuario = %s", [id_, usuario]).fetchone():
                 return None
             linhas = con.execute("SELECT papel, texto, detalhes->>'consultas' FROM mensagens WHERE conversa = %s "
                                  "ORDER BY id", [id_]).fetchall()
         return [{"papel": p, "texto": t, **({"consultas": c} if c else {})} for p, t, c in linhas]
 
-    def acrescentar(self, login: str, id_, pergunta: str, resposta: dict) -> dict:
-        """Grava uma pergunta e a resposta ({"texto", e os DETALHES}); cria a conversa se ela ainda não existe."""
+    def acrescentar(self, usuario: int, id_, pergunta: str, resposta: dict) -> dict:
+        """Grava uma pergunta e a resposta ({"texto", e os DETALHES}); cria a conversa se ela ainda não existe.
+        Se o usuário foi excluído enquanto a pergunta era respondida, levanta NaoEncontrada."""
         id_ = id_valido(id_)
         if not id_:
             raise NaoEncontrada("conversa inválida")
         detalhes = json.dumps({k: resposta.get(k) for k in DETALHES}, ensure_ascii=False, default=str)
         with self.banco.conexao() as con:
-            dono = con.execute("SELECT login FROM conversas WHERE id = %s FOR UPDATE", [id_]).fetchone()
-            if dono and dono[0] != login:
+            dono = con.execute("SELECT usuario FROM conversas WHERE id = %s FOR UPDATE", [id_]).fetchone()
+            if dono and dono[0] != usuario:
                 raise NaoEncontrada("conversa não encontrada")
-            if not dono:
-                con.execute("INSERT INTO conversas (id, login, titulo) VALUES (%s, %s, %s)",
-                            [id_, login, titulo_de(pergunta)])
+            if not dono and not con.execute("INSERT INTO conversas (id, usuario, titulo) SELECT %s, id, %s FROM usuarios "
+                                            "WHERE id = %s", [id_, titulo_de(pergunta), usuario]).rowcount:
+                raise NaoEncontrada("seu usuário não existe mais")
             con.execute("INSERT INTO mensagens (conversa, papel, texto) VALUES (%s, 'usuario', %s)", [id_, pergunta])
             con.execute("INSERT INTO mensagens (conversa, papel, texto, detalhes) VALUES (%s, 'assistente', %s, "
                         "%s::jsonb)", [id_, resposta["texto"], detalhes])
@@ -122,7 +124,7 @@ class Conversas:
                                 [id_]).fetchone()
         return _meta(linha)
 
-    def renomear(self, login: str, id_, titulo) -> dict:
+    def renomear(self, usuario: int, id_, titulo) -> dict:
         titulo = " ".join(str(titulo or "").split())
         if not titulo:
             raise ValueError("escreva o nome da conversa")
@@ -130,30 +132,16 @@ class Conversas:
             raise ValueError(f"o nome da conversa pode ter até {MAX_TITULO} caracteres")
         id_ = id_valido(id_)
         with self.banco.conexao() as con:
-            linha = id_ and con.execute(f"UPDATE conversas SET titulo = %s WHERE id = %s AND login = %s "
-                                        f"RETURNING {_META}", [titulo, id_, login]).fetchone()
+            linha = id_ and con.execute(f"UPDATE conversas SET titulo = %s WHERE id = %s AND usuario = %s "
+                                        f"RETURNING {_META}", [titulo, id_, usuario]).fetchone()
         if not linha:
             raise NaoEncontrada("conversa não encontrada; ela pode ter sido excluída")
         return _meta(linha)
 
-    def excluir(self, login: str, id_) -> None:
+    def excluir(self, usuario: int, id_) -> None:
         id_ = id_valido(id_)
         with self.banco.conexao() as con:
-            apagou = id_ and con.execute("DELETE FROM conversas WHERE id = %s AND login = %s", [id_, login]).rowcount
+            apagou = id_ and con.execute("DELETE FROM conversas WHERE id = %s AND usuario = %s",
+                                         [id_, usuario]).rowcount
         if not apagou:
             raise NaoEncontrada("conversa não encontrada; ela pode ter sido excluída")
-
-    # --- acompanham o cadastro de usuários -------------------------------------------------
-    # As conversas mudam na mesma hora que usuarios.json: o commit só acontece se o bloco (a gravação do cadastro)
-    # der certo. Assim, um login reaproveitado depois nunca herda as conversas de outra pessoa.
-    @contextlib.contextmanager
-    def mudar_login(self, antigo: str, novo: str):
-        with self.banco.conexao() as con:
-            con.execute("UPDATE conversas SET login = %s WHERE login = %s", [novo, antigo])
-            yield
-
-    @contextlib.contextmanager
-    def apagar_login(self, login: str):
-        with self.banco.conexao() as con:
-            con.execute("DELETE FROM conversas WHERE login = %s", [login])
-            yield

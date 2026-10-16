@@ -1,12 +1,10 @@
 // Página Assistente: chat em que a pessoa pergunta sobre os dados e a IA (Claude) responde consultando o cache.
 // A conta é toda no servidor (bi/assistente.py): ele monta os dados do acesso da pessoa, chama a IA e devolve a
-// resposta com as consultas feitas. No site, as conversas ficam no servidor, como nos chats de IA: a lista ao lado
-// mostra as da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador. No PC, sem o
-// banco, a conversa fica só neste navegador (sessionStorage) e volta ao servidor como texto a cada pergunta.
+// resposta com as consultas feitas. As conversas ficam no servidor, como nos chats de IA: a lista ao lado mostra as
+// da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador.
 // A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
 import { MESES, api, esc, fmt, icone, toast } from "./util.js";
 
-const CHAVE = "mv-assistente";
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
 const SUGESTOES = [
@@ -27,7 +25,7 @@ const FERRAMENTA = {
 
 let ctx = null, raiz = null, info = null;
 let atual = { ...nova(), carregando: true }; // conversa aberta; id null = nova, ainda não gravada
-let conversas = [];     // lista ao lado (só com histórico): [{id, titulo, criada_em, atualizada_em}], mais recente antes
+let conversas = [];     // lista ao lado: [{id, titulo, criada_em, atualizada_em}], mais recente antes
 let esperando = null;   // {inicio, controle, conversa} enquanto a pergunta desta aba está no servidor
 let pendente = null;    // {conversa, nova, pergunta, inicio}: pergunta que o servidor ainda responde, feita em outra
                         // aba ou antes de recarregar a página
@@ -35,16 +33,8 @@ let busca = "", pedidoLista = 0, abrindo = 0, acompanhando = false;
 
 // mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?}]
 function nova() { return { id: null, titulo: "", mensagens: [] }; }
-const comHistorico = () => Boolean(info?.historico);
 const linkDe = (id) => `#/assistente?c=${encodeURIComponent(id)}`;
 const idDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("c");
-
-// Só no PC (sem histórico no servidor): a conversa fica nesta aba do navegador.
-function lerConversa() { try { return JSON.parse(sessionStorage.getItem(CHAVE)) || []; } catch { return []; } }
-function guardarConversa() {
-  if (comHistorico()) return;
-  try { sessionStorage.setItem(CHAVE, JSON.stringify(atual.mensagens)); } catch { /* sem armazenamento */ }
-}
 
 export async function montarAssistente(container, contexto) {
   ctx = contexto;
@@ -97,7 +87,8 @@ async function carregarInfo() {
   try {
     info = await api("/api/assistente/info");
   } catch (e) {
-    abrirLocal();
+    atual = nova();
+    desenharMensagens();
     avisos.innerHTML = `<div class="aviso">${icone("alerta")}<span>${esc(e.message)}</span></div>`;
     travar(true);
     return;
@@ -114,19 +105,8 @@ async function carregarInfo() {
   }
   avisos.innerHTML = msgs.map((m) => `<div class="aviso">${icone("alerta")}<span>${esc(m)}</span></div>`).join("");
   mostrarRestantes(info.restantes);
-  if (comHistorico()) await iniciarHistorico();
-  else abrirLocal();
+  await iniciarHistorico();
   travar(!info.configurado || !info.pronto);
-}
-
-function abrirLocal() {
-  atual = { ...nova(), mensagens: lerConversa() };
-  // Aba fechada ou recarregada no meio de uma pergunta: ela ficou sem resposta e volta para a caixa de texto.
-  if (!esperando && atual.mensagens.at(-1)?.papel === "usuario") {
-    raiz.querySelector("#a-texto").value = atual.mensagens.pop().texto;
-    guardarConversa();
-  }
-  desenharMensagens();
 }
 
 function travar(sim) {
@@ -147,9 +127,8 @@ function ajustarAltura(t) {
   t.style.overflowY = t.scrollHeight > 200 ? "auto" : "hidden"; // barra de rolagem só quando passa da altura máxima
 }
 
-// ---------- histórico (só no site) ----------
+// ---------- histórico ----------
 async function iniciarHistorico() {
-  try { sessionStorage.removeItem(CHAVE); } catch { /* sem armazenamento */ }
   raiz.querySelector("#a-grade").classList.add("com-historico");
   raiz.querySelector("#a-lista").hidden = false;
   raiz.querySelector("#a-abrir-lista").hidden = false;
@@ -204,7 +183,7 @@ async function abrir(id) {
 
 function aoMudarHash() {
   fecharLista();
-  if (!comHistorico() || !/^#\/assistente(\?|$)/.test(location.hash)) return;
+  if (!/^#\/assistente(\?|$)/.test(location.hash)) return;
   const id = idDoHash();
   if (id && id !== atual.id) abrir(id);
   else if (!id && atual.id) history.replaceState(null, "", linkDe(atual.id)); // voltou de outra página: segue na conversa
@@ -212,11 +191,9 @@ function aoMudarHash() {
 
 function novaConversa({ substituir = false } = {}) {
   if (atual.carregando && !info) return;
-  if (!comHistorico() && esperando) return toast("Espere a resposta antes de começar outra conversa", "erro");
   ++abrindo;
   atual = nova();
-  guardarConversa();
-  if (comHistorico() && location.hash !== "#/assistente") history[substituir ? "replaceState" : "pushState"](null, "", "#/assistente");
+  if (location.hash !== "#/assistente") history[substituir ? "replaceState" : "pushState"](null, "", "#/assistente");
   fecharLista();
   desenharMensagens();
   desenharLista();
@@ -371,7 +348,6 @@ function fecharLista() {
 }
 
 function desenharLista() {
-  if (!comHistorico()) return;
   const el = raiz.querySelector("#a-conversas");
   const itens = [...conversas];
   // Conversa nova com a primeira pergunta ainda no servidor: aparece no topo antes de ser gravada.
@@ -439,20 +415,16 @@ async function enviar(textoPronto) {
   ajustarAltura(caixa);
   const conversa = atual; // a resposta vale para esta conversa, mesmo se a pessoa abrir outra enquanto espera
   conversa.mensagens.push({ papel: "usuario", texto });
-  guardarConversa();
   const controle = new AbortController();
   const limite = setTimeout(() => controle.abort(), ESPERA_MAX);
   esperando = { inicio: Date.now(), controle, conversa };
   desenharMensagens();
   desenharLista();
   try {
-    // Com histórico, o servidor lê a conversa do banco; sem ele, ela vai inteira.
-    const corpo = comHistorico() ? { conversa: conversa.id, pergunta: texto }
-      : { mensagens: conversa.mensagens.map(({ papel, texto: t, consultas }) => ({ papel, texto: t, consultas })) };
-    const r = await api("/api/assistente", { json: corpo, signal: controle.signal });
+    // O servidor lê a conversa do banco: vai só a pergunta.
+    const r = await api("/api/assistente", { json: { conversa: conversa.id, pergunta: texto }, signal: controle.signal });
     conversa.mensagens.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
       data_ref: r.data_ref, aviso: r.aviso, uso: r.uso });
-    guardarConversa();
     if (r.conversa) gravada(conversa, r.conversa);
     if (r.restantes !== undefined) mostrarRestantes(r.restantes);
     pararEspera(limite);
@@ -461,7 +433,6 @@ async function enviar(textoPronto) {
   } catch (e) {
     // A pergunta não foi respondida: sai da conversa e volta para a caixa, para tentar de novo.
     conversa.mensagens.pop();
-    guardarConversa();
     pararEspera(limite);
     const msg = e.name === "AbortError" ? "A resposta demorou demais. Tente uma pergunta mais simples ou mais específica." : e.message;
     if (conversa === atual) {
@@ -473,7 +444,7 @@ async function enviar(textoPronto) {
       toast(msg, "erro");
     }
     desenharLista();
-    if (comHistorico()) carregarLista(); // se o tempo acabou só aqui, a pergunta pode seguir no servidor
+    carregarLista(); // se o tempo acabou só aqui, a pergunta pode seguir no servidor
   }
 }
 

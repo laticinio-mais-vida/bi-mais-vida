@@ -1,4 +1,4 @@
-"""Regras de negócio editáveis na página Configurações (gravadas em config_metas.json).
+"""Regras de negócio editáveis na página Metas › Configurar (gravadas na tabela regras do banco).
 
 Os valores padrão reproduzem as fórmulas DAX do Power BI, para os números baterem com ele até alguém mudar.
 """
@@ -7,9 +7,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
-import os
 import threading
-from pathlib import Path
 
 GRUPOS_PRODUTO = ("mussarela", "outras", "fora")
 GRUPOS_VENDEDOR = ("ES", "BA", "EDIR", "OCULTO")
@@ -120,40 +118,76 @@ def _valida(cfg: dict) -> dict:
     return saida
 
 
-class Configuracao:
-    def __init__(self, arquivo: str | Path):
-        self.arquivo = Path(arquivo)
+class RegrasNoBanco:
+    """Uma configuração salva pelos administradores, na tabela regras (bi/migracoes/003_regras.sql). Cada gravação é
+    uma versão nova, com quem salvou e quando, e vale a mais recente; sem nenhuma, vale o padrão.
+
+    Fica uma cópia em memória, porque ela é lida em todo cálculo: lida do banco no primeiro uso e trocada só depois
+    do commit de uma gravação, e só por uma versão mais nova. Se o banco cair depois, os cálculos seguem com ela.
+    """
+
+    nome = ""
+
+    def __init__(self, banco):
+        self.banco = banco
         self._trava = threading.Lock()
-        if not self.arquivo.exists():
-            self._grava(padrao())
-        self._cfg = _valida(json.loads(self.arquivo.read_text(encoding="utf-8")))
+        self._versao: int | None = None  # id da versão na memória (0 = o padrão); None = ainda não leu
+        self._cfg: dict | None = None
+
+    @staticmethod
+    def _valida(cfg: dict) -> dict:
+        raise NotImplementedError
+
+    def _padrao(self) -> dict:
+        raise NotImplementedError
 
     def atual(self) -> dict:
         with self._trava:
+            if self._versao is None:
+                with self.banco.conexao() as con:
+                    linha = con.execute("SELECT id, dados FROM regras WHERE nome = %s ORDER BY id DESC LIMIT 1",
+                                        [self.nome]).fetchone()
+                self._versao, self._cfg = (linha[0], self._valida(linha[1])) if linha else (0, self._valida(self._padrao()))
             return copy.deepcopy(self._cfg)
 
-    @staticmethod
-    def validar(novo: dict) -> dict:
+    def validar(self, novo: dict) -> dict:
         """Confere sem gravar (levanta ValueError com a explicação)."""
-        return _valida(novo)
+        return self._valida(novo)
 
-    def salvar(self, novo: dict) -> dict:
-        cfg = _valida(novo)
+    def gravar(self, novo: dict, autor: dict | None, con) -> tuple[int, dict]:
+        """Grava uma versão nova na transação de quem chama. A cópia em memória só muda com usar(), depois do
+        commit. autor: o usuário que salvou ({"id", "nome"}); None = o próprio painel."""
+        cfg = self._valida(novo)
+        versao = con.execute(
+            "INSERT INTO regras (nome, dados, salva_por, salva_por_nome) "
+            "VALUES (%s, %s::jsonb, (SELECT id FROM usuarios WHERE id = %s), %s) RETURNING id",
+            [self.nome, json.dumps(cfg, ensure_ascii=False), autor and autor["id"], autor and autor["nome"]]).fetchone()[0]
+        return versao, cfg
+
+    def usar(self, versao: int, cfg: dict) -> dict:
+        """Passa a usar uma versão já gravada (depois do commit)."""
         with self._trava:
-            if self.arquivo.exists():
-                anterior = self.arquivo.with_name(self.arquivo.stem + ".anterior.json")
-                anterior.write_text(self.arquivo.read_text(encoding="utf-8"), encoding="utf-8")
-            self._grava(cfg)
-            self._cfg = cfg
+            if self._versao is None or versao > self._versao:
+                self._versao, self._cfg = versao, copy.deepcopy(cfg)
         return copy.deepcopy(cfg)
 
-    def restaurar_padrao(self) -> dict:
-        return self.salvar(padrao())
+    def salvar(self, novo: dict, autor: dict | None = None) -> dict:
+        with self.banco.conexao() as con:
+            versao, cfg = self.gravar(novo, autor, con)
+        return self.usar(versao, cfg)
 
-    def _grava(self, cfg: dict) -> None:
-        tmp = self.arquivo.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.arquivo)
+
+class Configuracao(RegrasNoBanco):
+    """Regras de cálculo das metas (página Metas › Configurar)."""
+
+    nome = "metas"
+    _valida = staticmethod(_valida)
+
+    def _padrao(self) -> dict:
+        return padrao()
+
+    def restaurar_padrao(self, autor: dict | None = None) -> dict:
+        return self.salvar(padrao(), autor)
 
 
 class Regras:

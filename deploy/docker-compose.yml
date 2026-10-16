@@ -12,7 +12,7 @@ services:
     environment:
       TZ: America/Sao_Paulo  # o ritmo do mês depende da data de hoje; o servidor fica em UTC
     volumes:
-      # A pasta inteira, e não arquivo por arquivo: usuarios.json e config_metas.json são gravados com troca
+      # A pasta inteira, e não arquivo por arquivo: o cache e as planilhas recebidos do PC são trocados com troca
       # atômica (os.replace), que não funciona num arquivo montado sozinho.
       - ..:/app
     mem_limit: 512m
@@ -24,7 +24,8 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
-  # Dados que o próprio painel cria (histórico do Assistente; depois, usuários e gestão). Veja docs/publicacao_vps.md.
+  # Dados que o próprio painel cria (usuários, regras, conversas e uso do Assistente; depois, gestão).
+  # Veja docs/publicacao_vps.md.
   banco:
     image: postgres:18-alpine
     container_name: bi_banco

@@ -1,7 +1,7 @@
 """Projeção do faturamento bruto dos próximos meses (página Projeções).
 
 Base: vendas válidas (vendas_clientes_mes, sem as canceladas) SEM descontar devoluções, com as equivalências de
-produto, sem os produtos marcados como "não conta" e só com os vendedores da página (config_projecoes.json: as
+produto, sem os produtos marcados como "não conta" e só com os vendedores da página (configuração da página: as
 equipes ES, BA e Edir, menos os desmarcados, mais os incluídos à mão). Cada mês vira R$ por dia útil
 (calendário de ES e BA, com os feriados e extras das Configurações), para meses curtos ou com feriado não
 parecerem queda de venda.
@@ -24,18 +24,14 @@ Método (escolhido por backtest com o histórico de 2024 a 2026; os números est
 from __future__ import annotations
 
 import calendar
-import copy
 import datetime as dt
-import json
-import os
 import threading
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
 
 from .calendario import REGIOES
-from .configuracao import SUPERVISOR_GRUPO
+from .configuracao import SUPERVISOR_GRUPO, RegrasNoBanco
 from .metas import MESES, Calculadora, nome_bonito
 
 HORIZONTE = 6            # meses projetados depois do mês em andamento
@@ -60,20 +56,15 @@ class SemVendedores(Exception):
     """O acesso do usuário não tem nenhum vendedor da página."""
 
 
-class ConfigProjecoes:
-    """Vendedores da página Projeções, gravados em config_projecoes.json pela configuração da página.
+class ConfigProjecoes(RegrasNoBanco):
+    """Vendedores da página Projeções, gravados na tabela regras (nome "projecoes") pela configuração da página.
 
-    Sem o arquivo, entram os vendedores das equipes ES, BA e Edir (as de Configurações das metas). `excluir` tira
+    Sem nenhuma versão, entram os vendedores das equipes ES, BA e Edir (as de Configurações das metas). `excluir` tira
     vendedores dessas equipes (ex.: contas internas) e `incluir` traz vendedores de fora delas. Vendedor novo das
     equipes entra sozinho, para a projeção não perder faturamento sem ninguém perceber.
     """
 
-    def __init__(self, arquivo: str | Path):
-        self.arquivo = Path(arquivo)
-        self._trava = threading.Lock()
-        self._cfg = {"versao": 1, "incluir": [], "excluir": []}
-        if self.arquivo.exists():
-            self._cfg = self._valida(json.loads(self.arquivo.read_text(encoding="utf-8")))
+    nome = "projecoes"
 
     @staticmethod
     def _valida(cfg: dict) -> dict:
@@ -83,21 +74,8 @@ class ConfigProjecoes:
             raise ValueError("um vendedor não pode estar ao mesmo tempo incluído e excluído")
         return {"versao": 1, "incluir": incluir, "excluir": excluir}
 
-    def atual(self) -> dict:
-        with self._trava:
-            return copy.deepcopy(self._cfg)
-
-    def salvar(self, novo: dict) -> dict:
-        cfg = self._valida(novo)
-        with self._trava:
-            if self.arquivo.exists():
-                anterior = self.arquivo.with_name(self.arquivo.stem + ".anterior.json")
-                anterior.write_text(self.arquivo.read_text(encoding="utf-8"), encoding="utf-8")
-            tmp = self.arquivo.with_suffix(".tmp")
-            tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self.arquivo)
-            self._cfg = cfg
-        return copy.deepcopy(cfg)
+    def _padrao(self) -> dict:
+        return {"versao": 1, "incluir": [], "excluir": []}
 
     @staticmethod
     def na_pagina(cfg: dict, vid: int, equipe: str) -> bool:

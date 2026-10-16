@@ -33,9 +33,10 @@ Na primeira vez, a tela de login pede para criar o **administrador** (nome, usu�
 no computador onde o painel está instalado. Depois, o administrador cadastra os outros acessos na página
 **Usuários**.
 
-Não precisa instalar nada: o projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird),
-`duckdb`, `pandas` e `numpy` (que vem com o pandas), que já estão instalados. Só o Assistente precisa de um
-pacote a mais (`pip install anthropic`), e só onde ele for usado (no VPS, já vem na imagem).
+O projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird), `duckdb`, `pandas` e `numpy` (que vem
+com o pandas), que já estão instalados. Usuários, regras e o histórico do Assistente ficam num PostgreSQL instalado
+no próprio PC (veja [Banco de dados](#banco-de-dados)), que precisa de `pip install "psycopg[binary]" psycopg-pool`.
+O Assistente precisa também de `pip install anthropic`, só onde for usado. No VPS, tudo já vem na imagem.
 
 ## De onde vêm os dados
 
@@ -146,7 +147,7 @@ O botão **Configurar** da página Projeções (só administradores) abre duas s
   dessas equipes e deve entrar. A lista traz os vendedores com clientes que compraram desde 2024 e mostra, para
   cada um, a venda bruta da carteira nos últimos 12 meses, quantos clientes compraram e a última venda. Um aviso
   mostra quantos clientes estão sem vendedor no cadastro (e quanto venderam), porque ficam fora.
-  Fica gravado em `config_projecoes.json` (a versão anterior em `config_projecoes.anterior.json`).
+  Fica gravado no banco, com todas as versões anteriores (quem salvou e quando).
 - **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
   - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Metas › Configurar. Se o acesso
     de Metas mudar, este muda junto;
@@ -209,8 +210,7 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - Recarregar a página no meio de uma pergunta não perde a resposta: o servidor termina e grava, e ela aparece
     sozinha.
   - No celular, a lista abre pelo botão **Conversas**.
-  - O histórico fica no banco PostgreSQL do site (veja [Banco de dados](#banco-de-dados)). No painel do PC, que não
-    tem o banco, a conversa fica só no navegador e some ao fechar a aba.
+  - O histórico fica no banco PostgreSQL do painel (veja [Banco de dados](#banco-de-dados)).
 - Cada pergunta leva de alguns segundos a um minuto, conforme o número de consultas.
 
 ### O que cada pessoa consulta
@@ -248,8 +248,9 @@ O botão **Configurar** da página (só administradores) tem duas seções:
   Vale também pôr um limite de gasto mensal no Console da Anthropic.
 - **Recusas:** se o classificador de segurança da Anthropic recusar uma pergunta por engano, o próprio servidor
   da Anthropic refaz a pergunta no modelo que ela recomenda (`fallbacks: "default"`).
-- **Registro:** `logs/assistente-AAAA-MM.jsonl` guarda uma linha por pergunta (quem, pergunta, resposta,
-  consultas, tokens e custo). Os limites do dia são refeitos a partir dele quando o painel reinicia.
+- **Registro:** a tabela `assistente_perguntas` do banco guarda uma linha por pergunta (quem, pergunta, resposta,
+  consultas, tokens e custo). Os limites do dia são contados nela, então continuam valendo depois de reiniciar o
+  painel.
 
 ### Privacidade
 
@@ -262,17 +263,33 @@ O painel usa dois bancos, cada um para uma coisa:
 
 - **DuckDB** (`dados/cache.duckdb`): a cópia das vendas, devoluções e cadastros do ERP. É refeito a cada extração
   e só é lido.
-- **PostgreSQL** (só no site): o que as próprias pessoas criam no painel. Por enquanto, o histórico de conversas do
-  Assistente; o módulo de gestão e os usuários virão para cá depois.
+- **PostgreSQL:** o que as próprias pessoas criam no painel.
 
-O PostgreSQL roda no container `bi_banco`, ao lado do painel, sem porta aberta para a internet. Ele tem cópia de
-segurança diária. A instalação e a manutenção estão em
+| Tabela | O que guarda |
+|---|---|
+| `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
+| `regras` | as regras de Metas e os vendedores de Projeções; cada Salvar vira uma versão nova, com quem salvou e quando |
+| `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
+| `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
+| `parametros` | o segredo que assina os cookies de sessão |
+
+O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
+site, o container `bi_banco`, ao lado do painel, sem porta aberta para a internet. Os dois têm cópia de segurança
+diária. A instalação e a manutenção estão em
 [docs/publicacao_vps.md](docs/publicacao_vps.md#banco-de-dados-postgresql). O painel acha o banco pela seção
-`[postgres]` do `config.ini`; sem ela (como no PC), funciona sem banco. As tabelas são criadas e atualizadas
-sozinhas quando o painel sobe, pelos arquivos de `bi/migracoes/`.
+`[postgres]` do `config.ini`.
 
-Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `002_tarefas.sql`). Nunca
-edite uma migração que já foi aplicada no site: ela não roda de novo.
+Sem o banco (fora do ar ou sem configurar), ninguém entra no painel: a tela de login avisa. A extração do ERP e o
+envio dos dados ao site continuam funcionando, e o painel volta sozinho quando o banco responder.
+
+As tabelas são criadas e atualizadas sozinhas quando o painel sobe, pelos arquivos de `bi/migracoes/`. Na primeira
+subida com o banco, a migração `005_importar_arquivos.py` traz o que estava nos arquivos da pasta do painel
+(`usuarios.json`, `config_metas.json`, `config_projecoes.json` e `logs/assistente-*.jsonl`). Os arquivos ficam
+onde estão, só como cópia: o painel não os lê mais. Nessa subida todos entram de novo uma vez, porque o cookie de
+sessão mudou.
+
+Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `007_tarefas.sql`). Nunca
+edite uma migração que já foi aplicada: ela não roda de novo.
 
 ## Login e acessos
 
@@ -334,12 +351,15 @@ python app.py --senha LOGIN
 ```
 
 O comando pede a senha nova duas vezes, reativa o usuário e derruba as sessões abertas. Se o login não
-existir, ele cria um administrador com esse nome.
+existir, ele cria um administrador com esse nome. No site, o comando roda dentro do container (veja
+[docs/publicacao_vps.md](docs/publicacao_vps.md#esqueci-a-senha-de-administrador-do-site)).
 
 ## Página Configurações (das metas)
 
-Abre pelo botão **Configurar** da página Metas. Tudo é gravado em `config_metas.json`. A versão anterior fica em `config_metas.anterior.json`. O padrão
-reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Power BI" volta a ele.
+Abre pelo botão **Configurar** da página Metas. Tudo é gravado no banco: cada Salvar vira uma versão nova, com quem
+salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente as fórmulas do Power BI. O botão
+"Restaurar padrão do Power BI" volta a ele. Para voltar a uma versão anterior, veja
+[docs/publicacao_vps.md](docs/publicacao_vps.md#voltar-as-regras-para-uma-versão-anterior).
 
 - **Produtos:** cada produto conta como **Mussarela**, **Outras linhas** ou **Não conta**. Os de outras
   linhas podem ter uma categoria (Bebida Láctea, Manteiga etc.). Produto novo entra como outras linhas.
@@ -354,8 +374,8 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
   exceções (feriado local, meio expediente, dia trabalhado).
 - **Acesso por usuário:** para cada visualizador, se ele vê a página Metas, quais **abas** e quais
   **vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). O quadro azul resume
-  o que a pessoa vai ver. Fica gravado em `usuarios.json`, não em `config_metas.json`, e "Restaurar padrão do
-  Power BI" não mexe nele. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
+  o que a pessoa vai ver. Fica gravado no cadastro do usuário, não nas regras, e "Restaurar padrão do Power BI"
+  não mexe nele. As regras e os acessos são salvos juntos: se uma parte não puder ser gravada, nada é gravado. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
   para ele) até você escolher aqui.
 
 ## Regras de cálculo (iguais ao Power BI)
@@ -387,29 +407,26 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
-| `bi/banco.py` | conexão com o PostgreSQL do site e as migrações |
+| `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
+| `bi/banco.py` | conexão com o PostgreSQL e as migrações |
 | `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |
-| `bi/configuracao.py` | regras editáveis e padrões do Power BI |
-| `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
+| `bi/configuracao.py` | regras editáveis, padrões do Power BI e as versões das regras no banco |
+| `bi/acesso.py` | usuários (no PostgreSQL), senhas (PBKDF2), sessões assinadas e permissões |
 | `bi/planilhas.py` | leitura das planilhas de metas |
 | `bi/fb.py` | conexão somente leitura com o Firebird 2.1 (a mesma do Painel Comercial ES) |
 | `bi/publicacao.py` | envio do cache e das planilhas ao VPS (no PC) e recebimento com conferência (no VPS) |
 | `web/` | página: HTML, CSS (identidade do Guia da Marca 2026) e JavaScript |
 | `logs/bi.log` | registro de atualizações e erros |
-| `logs/assistente-AAAA-MM.jsonl` | registro das perguntas do Assistente (quem, consultas, tokens e custo) |
-| `tests/` | testes automáticos: `python -m unittest discover -s tests -t .` (os do PostgreSQL rodam só com `BI_TESTE_POSTGRES`; veja `tests/test_conversas.py`) |
-| `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
-| `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
-| `config_projecoes.json` | vendedores da página Projeções, salvos em Projeções › Configurar (só existe depois do primeiro Salvar) |
-| `usuarios.json` | acessos do painel: senhas em hash e a chave das sessões (fica fora do repositório) |
+| `tests/` | testes automáticos: `python -m unittest discover -s tests -t .` (os do PostgreSQL rodam só com `BI_TESTE_POSTGRES`; veja `tests/apoio.py`) |
+| `config.exemplo.ini` | modelo do `config.ini` (sem as senhas) |
 | `docs/analise_pbi_metas.md` | análise do Power BI original: tabelas, medidas DAX e divergências encontradas |
 | `docs/publicacao_vps.md` | como o painel está publicado no VPS e como mantê-lo |
-| `deploy/` | Dockerfile e docker-compose do painel e do banco no VPS, e a cópia de segurança do banco |
+| `deploy/` | Dockerfile e docker-compose do painel e do banco no VPS, e as cópias de segurança do banco (`backup_banco.sh` no VPS, `backup_banco_pc.ps1` no PC) |
 
-Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `banco.env` (senha do
-PostgreSQL no site), `dados/` (cache com as vendas), `logs/`, `marca/` (guia da marca em PDF) e as cópias
-`config_metas.anterior.json` e `config_projecoes.anterior.json`.
+Ficam fora do repositório (`.gitignore`): `config.ini` (senhas), `banco.env` (senha do PostgreSQL no site), `dados/`
+(cache com as vendas), `logs/`, `marca/` (guia da marca em PDF) e os arquivos de antes do banco (`usuarios.json`,
+`config_metas.json`, `config_projecoes.json` e as cópias `.anterior.json`), que ficam na pasta só como cópia.
 
 ## Se algo der errado
 
@@ -423,10 +440,17 @@ PostgreSQL no site), `dados/` (cache com as vendas), `logs/`, `marca/` (guia da 
   reiniciado depois de colocar a chave.
 - **Assistente "a chave da API não foi aceita" ou "a API recusou o pedido":** confira a chave e o crédito no
   Console da Anthropic (platform.claude.com). O motivo exato fica em `logs/bi.log`.
-- **Assistente "o histórico de conversas está fora do ar" ou "o banco de dados está fora do ar":** o container
-  `bi_banco` parou ou não responde. No servidor, `cd /opt/bi-mais-vida/deploy && docker compose ps` e
-  `docker compose logs banco --tail 50`. O resto do painel continua funcionando, e o histórico volta sozinho
-  quando o banco responder.
+- **Tela "Banco de dados fora do ar" ou "o banco de dados está fora do ar":** o PostgreSQL parou ou não responde.
+  - No PC: confira se o serviço *postgresql-x64-18* está em execução (Win + R, `services.msc`) e inicie se não
+    estiver.
+  - No site: `cd /opt/bi-mais-vida/deploy && docker compose ps` e `docker compose logs banco --tail 50`.
+
+  O painel volta sozinho quando o banco responder, e o envio dos dados ao site não para.
+- **Tela "o banco de dados não está configurado" ou "falta instalar o pacote do banco de dados":** falta a seção
+  `[postgres]` no `config.ini` (com a senha) ou o `pip install "psycopg[binary]" psycopg-pool`. Depois, reinicie o
+  painel.
+- **Tela "a atualização das tabelas do banco de dados falhou":** uma migração de `bi/migracoes/` deu erro. O motivo
+  está em `logs/bi.log`. Depois de resolver, reinicie o painel.
 - **Assistente "os dados por cliente ainda não chegaram":** o site ainda tem o cache de antes desta versão. Ele
   chega depois da próxima extração do PC, que já acontece sozinha uma vez quando o painel do PC abre com a versão
   nova.

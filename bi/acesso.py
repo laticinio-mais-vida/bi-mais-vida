@@ -1,29 +1,30 @@
-"""Usuários, senhas e sessões do painel (gravados em usuarios.json, fora do repositório).
+"""Usuários, senhas e sessões do painel (tabela usuarios no PostgreSQL, bi/migracoes/002_usuarios.sql).
 
-- Senha: PBKDF2-SHA256 com sal próprio; o arquivo nunca guarda a senha em si.
-- Sessão: cookie assinado (HMAC) com o login, a validade e o contador de sessão do usuário. Trocar a senha,
-  desativar ou excluir o usuário muda o contador e derruba as sessões abertas em outros aparelhos.
+- Senha: PBKDF2-SHA256 com sal próprio; o banco nunca guarda a senha em si.
+- Sessão: cookie assinado (HMAC, com o segredo da tabela parametros) com o id do usuário, a validade e o contador de
+  sessão do usuário. Trocar a senha, desativar ou excluir o usuário muda o contador (ou apaga o id) e derruba as
+  sessões abertas em outros aparelhos. Um login excluído e recriado ganha outro id: os cookies antigos não servem.
 - Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
   liberadas em Usuários. O que ele vê dentro de cada página fica na configuração da página: em Metas, as visões
   (abas) marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores (os totais também); em
   Projeções e no Assistente, igual a Metas (padrão), todos os vendedores ou só alguns.
+- Gravações: uma de cada vez (trava no banco), conferindo tudo antes de gravar. As da configuração de uma página
+  podem entrar na transação de quem chama (con), para gravar junto com as regras da página.
 """
 from __future__ import annotations
 
 import base64
 import collections
-import copy
-import datetime as dt
+import contextlib
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import threading
 import time
-from pathlib import Path
 
+from .banco import Banco, hora
 from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
@@ -37,7 +38,10 @@ DURACAO_SESSAO = 12 * 3600            # sem "manter conectado"
 DURACAO_LEMBRAR = 30 * 24 * 3600      # com "manter conectado"
 ITERACOES = 600_000
 SENHA_MINIMA = 6
+TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastro não se misturam
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
+_COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, escopo_projecoes, "
+            "escopo_assistente, criado_em, ultimo_acesso")
 
 
 # --- senhas ---------------------------------------------------------------------------------
@@ -75,6 +79,15 @@ def _de_b64(texto: str) -> bytes:
 
 
 # --- usuários -------------------------------------------------------------------------------
+def _usuario(linha) -> dict:
+    """Linha da tabela usuarios -> o dicionário que o resto do código usa (com a senha; para a página, publico())."""
+    (id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, projecoes, assistente,
+     criado, ultimo) = linha
+    return {"id": id_, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "senha": senha, "sessao": sessao,
+            "paginas": paginas, "visoes": visoes, "vendedores": vendedores, "projecoes": projecoes,
+            "assistente": assistente, "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
+
+
 def _paginas_de(u: dict) -> list[str]:
     return [p for p in PAGINAS if p in (u.get("paginas") or PAGINAS_PADRAO)]
 
@@ -87,11 +100,11 @@ def _com_pagina(u: dict, pagina: str, ve: bool) -> list[str]:
     return paginas
 
 
-def publico(login: str, u: dict) -> dict:
-    """O que a página pode ver de um usuário (sem a senha)."""
+def publico(u: dict) -> dict:
+    """O que a página pode ver de um usuário (sem a senha nem o contador de sessão)."""
     admin = u["papel"] == "admin"
     return {
-        "login": login, "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
+        "id": u["id"], "login": u["login"], "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
         "visoes": None if admin else list(u.get("visoes") or []),
         "vendedores": None if admin else u.get("vendedores"),
         "paginas": None if admin else _paginas_de(u),
@@ -101,77 +114,98 @@ def publico(login: str, u: dict) -> dict:
 
 
 class Usuarios:
-    def __init__(self, arquivo: str | Path):
-        self.arquivo = Path(arquivo)
-        self._trava = threading.Lock()
-        if self.arquivo.exists():
-            self._dados = json.loads(self.arquivo.read_text(encoding="utf-8"))
-        else:
-            self._dados = {"versao": 1, "segredo": secrets.token_hex(32), "usuarios": {}}
-        self._segredo = bytes.fromhex(self._dados["segredo"])
+    def __init__(self, banco: Banco):
+        self.banco = banco
+        self._segredo_lido: bytes | None = None
+
+    def _segredo(self) -> bytes:
+        """Chave que assina os cookies de sessão; criada no primeiro uso do banco."""
+        if self._segredo_lido is None:
+            with self.banco.conexao() as con:
+                con.execute("INSERT INTO parametros (chave, valor) VALUES ('segredo_sessao', %s) ON CONFLICT DO NOTHING",
+                            [secrets.token_hex(32)])
+                valor = con.execute("SELECT valor FROM parametros WHERE chave = 'segredo_sessao'").fetchone()[0]
+            self._segredo_lido = bytes.fromhex(valor)
+        return self._segredo_lido
+
+    @staticmethod
+    def _buscar(con, onde: str = "", parametros=()) -> list[dict]:
+        return [_usuario(r) for r in con.execute(f"SELECT {_COLUNAS} FROM usuarios {onde}", parametros)]
+
+    def _um(self, onde: str, parametros) -> dict | None:
+        with self.banco.conexao() as con:
+            achados = self._buscar(con, onde, parametros)
+        return achados[0] if achados else None
 
     # --- leitura ---------------------------------------------------------------------------
     def vazio(self) -> bool:
-        with self._trava:
-            return not self._dados["usuarios"]
+        with self.banco.conexao() as con:
+            return not con.execute("SELECT EXISTS (SELECT 1 FROM usuarios)").fetchone()[0]
 
     def listar(self) -> list[dict]:
-        with self._trava:
-            return sorted((publico(k, u) for k, u in self._dados["usuarios"].items()),
-                          key=lambda u: (u["papel"] != "admin", u["nome"].lower()))
+        with self.banco.conexao() as con:
+            usuarios = self._buscar(con)
+        return sorted((publico(u) for u in usuarios), key=lambda u: (u["papel"] != "admin", u["nome"].lower()))
 
     def obter(self, login: str) -> dict | None:
-        with self._trava:
-            u = self._dados["usuarios"].get(login)
-            return publico(login, u) if u else None
+        u = self._um("WHERE login = %s", [login])
+        return publico(u) if u else None
 
     # --- login e sessão --------------------------------------------------------------------
     def autenticar(self, login: str, senha: str) -> dict | None:
         login = (login or "").strip().lower()
-        with self._trava:
-            u = copy.deepcopy(self._dados["usuarios"].get(login))
+        u = self._um("WHERE login = %s", [login])
+        # A conta da senha é demorada de propósito: fica fora da transação.
         if not confere_senha(senha or "", u["senha"] if u else _HASH_FALSO) or not u or not u["ativo"]:
             return None
-        with self._trava:
-            atual = self._dados["usuarios"].get(login)
-            if atual:
-                atual["ultimo_acesso"] = dt.datetime.now().isoformat(timespec="seconds")
-                self._grava()
-        return publico(login, u)
+        with self.banco.conexao() as con:
+            linha = con.execute("UPDATE usuarios SET ultimo_acesso = now() WHERE id = %s RETURNING ultimo_acesso",
+                                [u["id"]]).fetchone()
+        return publico({**u, "ultimo_acesso": hora(linha[0]) if linha else u["ultimo_acesso"]})
 
-    def criar_sessao(self, login: str, lembrar: bool = False) -> tuple[str, int]:
+    def criar_sessao(self, id_: int, lembrar: bool = False) -> tuple[str, int]:
         """Devolve o valor do cookie e a validade em segundos."""
         duracao = DURACAO_LEMBRAR if lembrar else DURACAO_SESSAO
-        with self._trava:
-            sessao = self._dados["usuarios"][login]["sessao"]
-        corpo = _b64(json.dumps({"u": login, "s": sessao, "e": int(time.time()) + duracao, "l": lembrar}).encode())
-        assinatura = _b64(hmac.new(self._segredo, corpo.encode(), hashlib.sha256).digest())
+        u = self._um("WHERE id = %s", [id_])
+        if not u:
+            raise ValueError("usuário não encontrado")
+        corpo = _b64(json.dumps({"u": id_, "s": u["sessao"], "e": int(time.time()) + duracao, "l": lembrar}).encode())
+        assinatura = _b64(hmac.new(self._segredo(), corpo.encode(), hashlib.sha256).digest())
         return f"{corpo}.{assinatura}", duracao
 
     def da_sessao(self, cookie: str | None) -> dict | None:
         """Usuário dono do cookie, se a assinatura confere, não venceu e o usuário segue ativo."""
-        if not cookie or "." not in cookie:
+        if not cookie or "." not in cookie or not cookie.isascii():
             return None
         corpo, assinatura = cookie.rsplit(".", 1)
-        esperado = _b64(hmac.new(self._segredo, corpo.encode(), hashlib.sha256).digest())
+        esperado = _b64(hmac.new(self._segredo(), corpo.encode(), hashlib.sha256).digest())
         if not hmac.compare_digest(assinatura, esperado):
             return None
         try:
             d = json.loads(_de_b64(corpo))
         except ValueError:
             return None
-        if d.get("e", 0) < time.time():
+        id_ = d.get("u")
+        if d.get("e", 0) < time.time() or type(id_) is not int:  # os cookies de antes do banco levavam o login
             return None
-        with self._trava:
-            u = self._dados["usuarios"].get(d.get("u"))
-            if not u or not u["ativo"] or u["sessao"] != d.get("s"):
-                return None
-            return {**publico(d["u"], u), "lembrar": bool(d.get("l"))}
+        u = self._um("WHERE id = %s", [id_])
+        if not u or not u["ativo"] or u["sessao"] != d.get("s"):
+            return None
+        return {**publico(u), "lembrar": bool(d.get("l"))}
 
     # --- cadastro --------------------------------------------------------------------------
-    def salvar(self, dados: dict, login_original: str | None = None) -> dict:
+    @contextlib.contextmanager
+    def _cadastro(self, con=None):
+        """Transação para mudar o cadastro, com a trava (uma gravação de cada vez). Usa a de quem chamou, se vier:
+        aí o commit é dela."""
+        with (contextlib.nullcontext(con) if con is not None else self.banco.conexao()) as c:
+            c.execute("SELECT pg_advisory_xact_lock(%s)", [TRAVA_CADASTRO])
+            yield c
+
+    def salvar(self, dados: dict, login_original: str | None = None, primeiro: bool = False) -> dict:
         """Cria (login_original vazio) ou altera um usuário: nome, login, senha, papel e páginas. O que a pessoa
-        vê dentro de cada página fica como está (muda na configuração da página). Levanta ValueError."""
+        vê dentro de cada página fica como está (muda na configuração da página). primeiro: só cria se ainda não
+        existe nenhum usuário (o primeiro acesso). Levanta ValueError."""
         login = str(dados.get("login") or "").strip().lower()
         if not _LOGIN_VALIDO.match(login):
             raise ValueError("o usuário deve ter de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado, sem espaço nem acento")
@@ -188,9 +222,12 @@ class Usuarios:
             if not paginas:
                 raise ValueError("escolha ao menos uma página para o visualizador")
         senha = dados.get("senha") or None
+        hash_senha = gerar_hash(_valida_senha(senha)) if senha else None  # demorado: antes da trava
 
-        with self._trava:
-            usuarios = self._dados["usuarios"]
+        with self._cadastro() as con:
+            usuarios = {u["login"]: u for u in self._buscar(con)}
+            if primeiro and usuarios:
+                raise ValueError("o administrador já foi criado; entre com usuário e senha")
             if login_original:
                 if login_original not in usuarios:
                     raise ValueError("usuário não encontrado")
@@ -202,29 +239,33 @@ class Usuarios:
                     raise ValueError(f"já existe o usuário {login}")
                 if not senha:
                     raise ValueError("informe a senha do novo usuário")
-                # Sem abas de Metas até o administrador escolher em Metas › Configurar.
-                u = {"sessao": 0, "criado_em": dt.datetime.now().isoformat(timespec="seconds"), "ultimo_acesso": None,
-                     "visoes": [], "vendedores": None}
-            novo = {**u, "nome": nome, "papel": papel, "ativo": ativo, "paginas": paginas}
-            if senha:
-                novo["senha"] = gerar_hash(_valida_senha(senha))
+                u = {"sessao": 0}
+            novo = {**u, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "paginas": paginas}
+            if hash_senha:
+                novo["senha"] = hash_senha
             if login_original and (senha or (u["ativo"] and not ativo)):
                 novo["sessao"] = u["sessao"] + 1  # derruba as sessões abertas
-            outros = {k: v for k, v in usuarios.items() if k != login_original}
-            outros[login] = novo
-            if usuarios and not any(v["papel"] == "admin" and v["ativo"] for v in outros.values()):
+            outros = [v for k, v in usuarios.items() if k != login_original] + [novo]
+            if usuarios and not any(v["papel"] == "admin" and v["ativo"] for v in outros):
                 raise ValueError("precisa ficar pelo menos um administrador ativo")
-            if login_original and login != login_original:
-                del usuarios[login_original]
-            usuarios[login] = novo
-            self._grava()
-            return publico(login, novo)
+            if login_original:
+                linha = con.execute(
+                    f"UPDATE usuarios SET login = %s, nome = %s, papel = %s, ativo = %s, paginas = %s::text[], "
+                    f"senha = %s, sessao = %s WHERE id = %s RETURNING {_COLUNAS}",
+                    [login, nome, papel, ativo, paginas, novo["senha"], novo["sessao"], u["id"]]).fetchone()
+            else:
+                # Sem abas de Metas até o administrador escolher em Metas › Configurar.
+                linha = con.execute(
+                    f"INSERT INTO usuarios (login, nome, papel, ativo, senha, paginas, visoes) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s::text[], '{{}}') RETURNING {_COLUNAS}",
+                    [login, nome, papel, ativo, novo["senha"], paginas]).fetchone()
+        return publico(_usuario(linha))
 
-    def definir_metas(self, mudancas: dict) -> None:
+    def definir_metas(self, mudancas: dict, con=None) -> None:
         """Pela configuração da página Metas: {login: {"ve": bool, "visoes": [ids], "vendedores": [ids] | None}}
         (vendedores None = todos os das abas). Confere tudo antes de gravar, para não salvar só metade."""
-        with self._trava:
-            usuarios = self._dados["usuarios"]
+        with self._cadastro(con) as c:
+            usuarios = {u["login"]: u for u in self._buscar(c)}
             novos = {}
             for login, m in (mudancas or {}).items():
                 u = usuarios.get(login)
@@ -242,25 +283,24 @@ class Usuarios:
                         raise ValueError(f"marque ao menos uma aba para {u['nome']}, ou desligue a página")
                     if vendedores is not None and not vendedores:
                         raise ValueError(f"marque ao menos um vendedor para {u['nome']}, ou escolha todos das abas")
-                novos[login] = {"visoes": visoes, "vendedores": vendedores, "paginas": paginas}
-            for login, n in novos.items():
-                usuarios[login].update(n)
-            if novos:
-                self._grava()
+                novos[u["id"]] = [visoes, vendedores, paginas]
+            for id_, (visoes, vendedores, paginas) in novos.items():
+                c.execute("UPDATE usuarios SET visoes = %s::text[], vendedores = %s::int[], paginas = %s::text[] "
+                          "WHERE id = %s", [visoes, vendedores, paginas, id_])
 
-    def definir_projecoes(self, mudancas: dict) -> None:
+    def definir_projecoes(self, mudancas: dict, con=None) -> None:
         """Pela configuração da página Projeções: {login: {"ve": bool, "modo": ..., "vendedores": [ids]}}."""
-        self._definir_escopo("projecoes", mudancas)
+        self._definir_escopo("projecoes", mudancas, con)
 
-    def definir_assistente(self, mudancas: dict) -> None:
+    def definir_assistente(self, mudancas: dict, con=None) -> None:
         """Pela configuração da página Assistente, no mesmo formato de definir_projecoes."""
-        self._definir_escopo("assistente", mudancas)
+        self._definir_escopo("assistente", mudancas, con)
 
-    def _definir_escopo(self, pagina: str, mudancas: dict) -> None:
+    def _definir_escopo(self, pagina: str, mudancas: dict, con=None) -> None:
         """Vendedores que cada usuário vê numa página de PAGINAS_COM_ESCOPO. Confere tudo antes de gravar, para
         não salvar só metade."""
-        with self._trava:
-            usuarios = self._dados["usuarios"]
+        with self._cadastro(con) as c:
+            usuarios = {u["login"]: u for u in self._buscar(c)}
             novos = {}
             for login, m in (mudancas or {}).items():
                 u = usuarios.get(login)
@@ -275,25 +315,23 @@ class Usuarios:
                 if modo == "alguns" and not vendedores:
                     raise ValueError(f"escolha ao menos um vendedor para {u['nome']}, ou outra opção")
                 paginas = _com_pagina(u, pagina, bool(m["ve"])) if "ve" in m else _paginas_de(u)
-                novos[login] = {pagina: {"modo": modo, "vendedores": vendedores}, "paginas": paginas}
-            for login, n in novos.items():
-                usuarios[login].update(n)
-            if novos:
-                self._grava()
+                novos[u["id"]] = [json.dumps({"modo": modo, "vendedores": vendedores}), paginas]
+            for id_, (escopo, paginas) in novos.items():
+                c.execute(f"UPDATE usuarios SET escopo_{pagina} = %s::jsonb, paginas = %s::text[] WHERE id = %s",
+                          [escopo, paginas, id_])
 
     def excluir(self, login: str) -> None:
-        with self._trava:
-            usuarios = self._dados["usuarios"]
+        """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo)."""
+        with self._cadastro() as con:
+            usuarios = {u["login"]: u for u in self._buscar(con)}
             if login not in usuarios:
                 raise ValueError("usuário não encontrado")
             if not any(v["papel"] == "admin" and v["ativo"] for k, v in usuarios.items() if k != login):
                 raise ValueError("precisa ficar pelo menos um administrador ativo")
-            del usuarios[login]
-            self._grava()
+            con.execute("DELETE FROM usuarios WHERE id = %s", [usuarios[login]["id"]])
 
     def trocar_senha(self, login: str, atual: str, nova: str) -> None:
-        with self._trava:
-            u = self._dados["usuarios"].get(login)
+        u = self._um("WHERE login = %s", [login])
         if not u or not confere_senha(atual or "", u["senha"]):
             raise ValueError("a senha atual não confere")
         self.definir_senha(login, nova)
@@ -301,25 +339,14 @@ class Usuarios:
     def definir_senha(self, login: str, nova: str, nome: str | None = None) -> None:
         """Troca a senha (e reativa o usuário). Se o login não existe, cria um administrador."""
         h = gerar_hash(_valida_senha(nova))
-        with self._trava:
-            u = self._dados["usuarios"].get(login)
-            if u is None:
-                if not _LOGIN_VALIDO.match(login):
-                    raise ValueError("usuário inválido: use de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado")
-                self._dados["usuarios"][login] = {
-                    "nome": nome or login, "papel": "admin", "ativo": True, "visoes": None, "vendedores": None,
-                    "paginas": None,
-                    "senha": h, "sessao": 0, "criado_em": dt.datetime.now().isoformat(timespec="seconds"),
-                    "ultimo_acesso": None,
-                }
-            else:
-                u.update(senha=h, ativo=True, sessao=u["sessao"] + 1)
-            self._grava()
-
-    def _grava(self) -> None:
-        tmp = self.arquivo.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._dados, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.arquivo)
+        with self._cadastro() as con:
+            if con.execute("UPDATE usuarios SET senha = %s, ativo = true, sessao = sessao + 1 WHERE login = %s "
+                           "RETURNING id", [h, login]).fetchone():
+                return
+            if not _LOGIN_VALIDO.match(login):
+                raise ValueError("usuário inválido: use de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado")
+            con.execute("INSERT INTO usuarios (login, nome, papel, senha) VALUES (%s, %s, 'admin', %s)",
+                        [login, nome or login, h])
 
 
 # --- permissões -----------------------------------------------------------------------------

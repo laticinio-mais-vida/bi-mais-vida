@@ -1,16 +1,20 @@
-"""Banco PostgreSQL com os dados que o próprio painel cria (por enquanto, o histórico de conversas do Assistente).
+"""Banco PostgreSQL com os dados que o próprio painel cria: usuários, regras salvas pelos administradores, histórico
+de conversas e registro de uso do Assistente.
 
-- Só no site (VPS): a seção [postgres] do config.ini diz onde ele está. Sem host, o painel funciona sem banco (é o
-  caso do PC da empresa) e o que depende dele não aparece.
+- No site e no PC: a seção [postgres] do config.ini diz onde ele está (no PC, o PostgreSQL instalado no Windows).
 - O DuckDB continua sendo o cache dos dados do ERP; aqui fica só o que as pessoas criam no painel.
-- Migrações: arquivos bi/migracoes/NNN_nome.sql, aplicados em ordem, uma vez cada (tabela migracoes), na subida
-  do painel. Se o banco estava fora do ar, são aplicadas no primeiro uso depois que ele voltar.
-- Fora do ar: quem usa recebe BancoForaDoAr (o servidor responde 503) e o resto do painel segue funcionando.
+- Migrações: arquivos bi/migracoes/NNN_nome.sql (ou NNN_nome.py, com uma função aplicar(con, raiz), para trazer
+  dados de arquivos), aplicados em ordem, uma vez cada (tabela migracoes), todos numa transação, na subida do painel.
+  Se o banco estava fora do ar, são aplicadas no primeiro uso depois que ele voltar.
+- Fora do ar ou sem configurar: quem usa recebe BancoForaDoAr (o servidor responde 503). A extração e o envio dos
+  dados ao site não dependem do banco e seguem funcionando.
 """
 from __future__ import annotations
 
 import configparser
 import contextlib
+import datetime as dt
+import importlib.util
 import logging
 import threading
 from pathlib import Path
@@ -25,13 +29,36 @@ ESPERA = 5  # segundos para conectar ou conseguir uma conexão livre
 class BancoForaDoAr(Exception):
     """O banco está configurado, mas não respondeu."""
 
+    aviso = "o banco de dados está fora do ar agora; tente de novo em instantes"
+
+
+class BancoNaoPreparado(BancoForaDoAr):
+    """Falta configurar [postgres], falta o pacote psycopg ou a atualização das tabelas falhou: não adianta tentar
+    de novo em instantes, alguém precisa resolver (a mensagem diz o quê)."""
+
+    @property
+    def aviso(self) -> str:
+        return str(self)
+
+
+def hora(valor: dt.datetime | None) -> str | None:
+    """Data e hora no fuso deste computador, sem o fuso no texto (o formato que as páginas mostram)."""
+    return valor.astimezone().replace(tzinfo=None).isoformat(timespec="seconds") if valor else None
+
+
+def inicio_do_dia(dia: dt.date) -> dt.datetime:
+    """Meia-noite de `dia` no fuso deste computador (com o fuso, para o banco comparar com timestamptz)."""
+    return dt.datetime.combine(dia, dt.time()).astimezone()
+
 
 class Banco:
-    def __init__(self, ini: configparser.ConfigParser, schema: str | None = None):
-        """schema: tudo dentro desse schema (os testes usam um temporário)."""
+    def __init__(self, ini: configparser.ConfigParser, schema: str | None = None, raiz: str | Path | None = None):
+        """schema: tudo dentro desse schema (os testes usam um temporário).
+        raiz: pasta do painel, de onde as migrações em Python importam os arquivos antigos (None = não importa)."""
         g = lambda k, d="": ini.get("postgres", k, fallback=d).strip()  # noqa: E731
         self.host = g("host")
         self.schema = schema
+        self.raiz = Path(raiz) if raiz else None
         self._parametros = {
             "host": self.host, "port": ini.getint("postgres", "porta", fallback=5432), "dbname": g("banco", "bi"),
             "user": g("usuario", "bi"), "password": g("senha"), "connect_timeout": ESPERA,
@@ -42,6 +69,7 @@ class Banco:
         self._erros: tuple = ()
         self._trava = threading.Lock()
         self._migrado = False
+        self._falha: str | None = None  # a migração falhou nesta subida: não tenta de novo a cada pedido
 
     @property
     def configurado(self) -> bool:
@@ -53,10 +81,16 @@ class Banco:
 
     # --- conexões --------------------------------------------------------------------------
     def _abrir_pool(self):
+        if not self.configurado:
+            raise BancoNaoPreparado("o banco de dados não está configurado: preencha [postgres] no config.ini do painel")
         with self._trava:
             if self._pool is None:
-                import psycopg  # só aqui: sem o banco configurado, o painel abre sem o pacote
-                from psycopg_pool import ConnectionPool, PoolTimeout
+                try:
+                    import psycopg  # só aqui: o painel abre (e envia os dados ao site) mesmo sem o pacote
+                    from psycopg_pool import ConnectionPool, PoolTimeout
+                except ImportError:
+                    raise BancoNaoPreparado('falta instalar o pacote do banco de dados: pip install "psycopg[binary]" '
+                                            "psycopg-pool") from None
                 self._erros = (psycopg.OperationalError, PoolTimeout)
                 self._pool = ConnectionPool(kwargs=self._parametros, min_size=1, max_size=5, timeout=ESPERA,
                                             check=ConnectionPool.check_connection, name="bi", open=False)
@@ -76,7 +110,7 @@ class Banco:
     def conexao(self):
         """Uma conexão numa transação: commit no fim do bloco, rollback se der erro."""
         if not self._migrado:
-            self.migrar()
+            self._preparar()
         with self._conexao() as con:
             yield con
 
@@ -87,6 +121,24 @@ class Banco:
                 self._pool = None
 
     # --- migrações -------------------------------------------------------------------------
+    @staticmethod
+    def _arquivos_migracao() -> list[Path]:
+        arquivos = sorted([*MIGRACOES.glob("[0-9][0-9][0-9]_*.sql"), *MIGRACOES.glob("[0-9][0-9][0-9]_*.py")],
+                          key=lambda a: a.stem)
+        repetidas = {a.stem for a in arquivos if [b.stem for b in arquivos].count(a.stem) > 1}
+        if repetidas:
+            raise RuntimeError(f"migrações com o mesmo nome: {', '.join(sorted(repetidas))}")
+        return arquivos
+
+    def _aplicar(self, con, arquivo: Path) -> None:
+        if arquivo.suffix == ".sql":
+            con.execute(arquivo.read_text(encoding="utf-8"))  # sem parâmetros: aceita vários comandos
+            return
+        spec = importlib.util.spec_from_file_location(f"bi_migracao_{arquivo.stem}", arquivo)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        modulo.aplicar(con, self.raiz)
+
     def migrar(self) -> list[str]:
         """Aplica as migrações que faltam, todas numa transação. Devolve as que foram aplicadas agora."""
         feitas = []
@@ -97,23 +149,44 @@ class Banco:
             con.execute("CREATE TABLE IF NOT EXISTS migracoes ("
                         "versao text PRIMARY KEY, aplicada_em timestamptz NOT NULL DEFAULT now())")
             aplicadas = {r[0] for r in con.execute("SELECT versao FROM migracoes")}
-            for arquivo in sorted(MIGRACOES.glob("[0-9][0-9][0-9]_*.sql")):
-                if arquivo.stem not in aplicadas:
-                    con.execute(arquivo.read_text(encoding="utf-8"))  # sem parâmetros: aceita vários comandos
-                    con.execute("INSERT INTO migracoes (versao) VALUES (%s)", [arquivo.stem])
-                    feitas.append(arquivo.stem)
+            avisos = lambda n: log.warning("migração: %s", n.message_primary)  # noqa: E731  (RAISE NOTICE)
+            con.add_notice_handler(avisos)
+            try:
+                for arquivo in self._arquivos_migracao():
+                    if arquivo.stem not in aplicadas:
+                        self._aplicar(con, arquivo)
+                        con.execute("INSERT INTO migracoes (versao) VALUES (%s)", [arquivo.stem])
+                        feitas.append(arquivo.stem)
+            finally:
+                con.remove_notice_handler(avisos)
         self._migrado = True
         return feitas
+
+    def _preparar(self) -> list[str]:
+        """migrar(), mas uma migração que falha (erro nos dados, não o banco fora do ar) vira BancoNaoPreparado e
+        não é repetida a cada pedido: fica no log e espera alguém resolver e reiniciar o painel."""
+        if self._falha:
+            raise BancoNaoPreparado(self._falha)
+        try:
+            return self.migrar()
+        except BancoForaDoAr:
+            raise
+        except Exception as e:
+            log.exception("falha ao atualizar as tabelas do banco de dados %s", self.descricao())
+            self._falha = ("a atualização das tabelas do banco de dados falhou; o administrador precisa ver o "
+                           "logs/bi.log do painel")
+            raise BancoNaoPreparado(self._falha) from e
 
     def iniciar(self) -> None:
         """Na subida do painel: conecta e aplica as migrações. Se não der, só avisa; tenta de novo no uso."""
         try:
-            feitas = self.migrar()
+            feitas = self._preparar()
+        except BancoNaoPreparado as e:
+            if self._falha is None:  # a falha da migração já foi para o log, com os detalhes
+                log.error("%s: ninguém consegue entrar no painel até resolver (o envio dos dados ao site continua)", e)
         except BancoForaDoAr as e:
-            log.error("banco de dados %s fora do ar: o histórico do Assistente volta quando ele responder (%s)",
+            log.error("banco de dados %s fora do ar: o login e as páginas voltam quando ele responder (%s)",
                       self.descricao(), e.__cause__)
-        except Exception:
-            log.exception("falha ao preparar o banco de dados %s", self.descricao())
         else:
             log.info("banco de dados %s pronto%s", self.descricao(),
                      f" (migrações aplicadas agora: {', '.join(feitas)})" if feitas else "")

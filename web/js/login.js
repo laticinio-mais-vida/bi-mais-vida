@@ -111,7 +111,7 @@ function formPrimeiroAcesso() {
 
 function semUsuarios(modo) {
   const onde = modo === "vps"
-    ? `no servidor. Pelo terminal do VPS, na pasta do painel, rode <b>python3 app.py --senha SEU_LOGIN</b>.`
+    ? `no servidor. Pelo terminal do VPS, em /opt/bi-mais-vida/deploy, rode <b>docker compose exec bi python app.py --senha SEU_LOGIN</b>.`
     : `no computador onde o painel está instalado. Abra lá o endereço <b>http://127.0.0.1:${esc(location.port || "80")}</b>.`;
   corpo.innerHTML = `
     <span class="login-selo">${icone("escudo")}Primeiro acesso</span>
@@ -125,7 +125,12 @@ async function iniciar() {
   let s;
   try {
     s = await api("/api/sessao", { semLogin: true });
-  } catch {
+  } catch (e) {
+    if (e.status === 503) { // o painel respondeu, mas o banco de dados (usuários e senhas) não
+      corpo.innerHTML = `<h1>Banco de dados fora do ar</h1><p class="login-sub">${esc(e.message)}.</p>
+        <button class="btn primario login-entrar" type="button" onclick="location.reload()">Tentar de novo</button>`;
+      return;
+    }
     corpo.innerHTML = `<h1>Painel fora do ar</h1><p class="login-sub">Não foi possível falar com o servidor do painel.
       Confira se ele está aberto no computador principal e tente de novo.</p>
       <button class="btn primario login-entrar" type="button" onclick="location.reload()">Tentar de novo</button>`;

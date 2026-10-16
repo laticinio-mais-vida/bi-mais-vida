@@ -135,7 +135,8 @@ Da próxima vez que o Windows ligar, o painel abre sozinho.
 
 ## Usuários e configurações do site
 
-O site e o painel do PC têm **cadastros separados**. O que muda num não muda no outro.
+O site e o painel do PC têm **cadastros separados**, cada um no banco de dados da sua máquina. O que muda num não
+muda no outro.
 
 | Quero... | Onde fazer |
 |---|---|
@@ -159,9 +160,9 @@ outros sistemas dependem deles.
 
 | O quê | Onde |
 |---|---|
-| Painel: código, `config.ini` (modo vps, a chave de envio, a chave da API do Assistente e a senha do banco), `banco.env`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
+| Painel: código, `config.ini` (modo vps, a chave de envio, a chave da API do Assistente e a senha do banco), `banco.env`, `dados/`, `logs/` (e, só como cópia, `usuarios.json` e `config_*.json`, de antes do banco) | `/opt/bi-mais-vida` |
 | Container `bi_metas` (Python 3.12, usuário 10001, até 512 MB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
-| Container `bi_banco` (PostgreSQL 18, até 256 MB; só o painel enxerga). Os dados ficam no volume Docker `bi-mais-vida_bi_banco_dados` | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
+| Container `bi_banco` (PostgreSQL 18, até 256 MB; só o painel enxerga), com os usuários, as regras, as conversas e o uso do Assistente. Os dados ficam no volume Docker `bi-mais-vida_bi_banco_dados` | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
 | Cópias de segurança do banco (uma por dia, 14 dias) | `/opt/backups/bi-banco/` |
 | HTTPS de `bi.maisvida.cloud`, encaminhado para `bi_metas:8050` | bloco no fim de `/opt/app-promotoria/Caddyfile` (container `estoque_caddy`) |
 | Rede que liga o Caddy ao painel | `app-promotoria_estoque_network` |
@@ -186,8 +187,8 @@ O PC e o servidor rodam o mesmo código, então atualize os dois. No PC, abra o 
 (`C:\Users\Micro\Desktop\BI MAIS VIDA\bi-mais-vida`) e rode:
 
 ```powershell
-# 1. Cópia de segurança da pasta do servidor
-ssh root@187.127.54.201 'cp -a /opt/bi-mais-vida /opt/bi-mais-vida.bak-$(date +%Y%m%d-%H%M)'
+# 1. Cópia de segurança do banco e da pasta do servidor
+ssh root@187.127.54.201 'bash /opt/bi-mais-vida/deploy/backup_banco.sh && cp -a /opt/bi-mais-vida /opt/bi-mais-vida.bak-$(date +%Y%m%d-%H%M)'
 
 # 2. Enviar o código
 scp -r app.py bi web deploy root@187.127.54.201:/opt/bi-mais-vida/
@@ -202,23 +203,28 @@ o tempo de "Up" voltou a poucos segundos).
 
 Depois, feche e abra o painel do PC (`iniciar.bat`).
 
-**Não envie** `config.ini`, `banco.env`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/` nem `logs/`.
-No servidor, esses arquivos são diferentes dos do PC: lá estão as chaves, a senha do banco, os acessos e as regras
-salvas no site. Se uma versão nova
-mudar o `config_metas.json` do repositório, aplique a mudança pela página Configurações do site.
+**Não envie** `config.ini`, `banco.env`, `dados/` nem `logs/`. No servidor, esses arquivos são diferentes dos do PC:
+lá estão as chaves e a senha do banco. Os acessos e as regras salvas no site ficam no banco do site, que o envio do
+código não toca.
 
-A cópia do passo 1 não inclui o banco PostgreSQL: ele fica num volume do Docker, fora da pasta, e tem a sua própria
-cópia diária (veja [Banco de dados](#banco-de-dados-postgresql)). Se a versão nova mudar tabelas (arquivo novo em
-`bi/migracoes/`), faça antes uma cópia à mão: `bash /opt/bi-mais-vida/deploy/backup_banco.sh`.
+O passo 1 faz duas cópias: a do banco PostgreSQL (`backup_banco.sh`, em `/opt/backups/bi-banco/`, porque o banco
+fica num volume do Docker, fora da pasta) e a da pasta. Se a versão nova mudar tabelas (arquivo novo em
+`bi/migracoes/`), as mudanças são aplicadas quando o painel reinicia, e o log mostra `migrações aplicadas agora: ...`.
 
-Se algo der errado, volte para a cópia de segurança. O `docker compose down` não apaga o banco (só `down -v`
-apagaria; nunca use `-v`):
+Se algo der errado, volte para as duas cópias de segurança. O código antigo pode não entender as tabelas novas, então
+o banco volta junto. O `docker compose down` não apaga o banco (só `down -v` apagaria; nunca use `-v`):
 
 ```bash
 cd /opt/bi-mais-vida/deploy && docker compose down
 rm -rf /opt/bi-mais-vida && mv /opt/bi-mais-vida.bak-AAAAMMDD-HHMM /opt/bi-mais-vida
-cd /opt/bi-mais-vida/deploy && docker compose up -d --build
+cd /opt/bi-mais-vida/deploy && docker compose up -d banco
+docker exec -i bi_banco pg_restore -U bi -d bi --clean --if-exists < /opt/backups/bi-banco/bi-AAAA-MM-DD.dump
+docker compose up -d --build
 ```
+
+O dump do dia é o que o passo 1 acabou de gravar (se a cópia diária das 00:30 rodar depois da publicação, ela grava
+por cima no mesmo arquivo do dia: nesse caso use o do dia anterior, ou copie o dump para outro nome logo depois do
+passo 1).
 
 ### Assistente (chave da API da Anthropic)
 
@@ -250,13 +256,13 @@ O que acompanhar:
 - **Perguntas longas:** uma pergunta pode levar até uns 100 s (`tempo_total`). O `reverse_proxy` do Caddy não tem
   tempo limite de resposta por padrão, então o Caddyfile não precisa mudar. Mesmo assim, depois de publicar, faça
   uma pergunta que exija várias consultas e confira que a resposta chega.
-- **Registro:** `logs/assistente-AAAA-MM.jsonl`, uma linha por pergunta, com tokens e custo estimado. A página
-  Assistente › Configurar › Uso e custo resume os últimos 30 dias.
+- **Registro:** a tabela `assistente_perguntas` do banco, uma linha por pergunta, com tokens e custo estimado. A
+  página Assistente › Configurar › Uso e custo resume os últimos 30 dias.
 
 ### Banco de dados (PostgreSQL)
 
-O histórico de conversas do Assistente fica num PostgreSQL só do painel, o container `bi_banco`. Mais adiante, os
-usuários e o módulo de gestão também vão para ele.
+O que o painel cria fica num PostgreSQL só dele, o container `bi_banco`: usuários, regras salvas nas páginas,
+conversas e uso do Assistente. Mais adiante, o módulo de gestão também vai para ele.
 
 - **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
   a internet e não fala com o app de promotoria.
@@ -264,7 +270,8 @@ usuários e o módulo de gestão também vão para ele.
   e o rollback do deploy não mexem neles.
 - **Tabelas:** são criadas e atualizadas pelo próprio painel quando ele sobe, a partir de `bi/migracoes/`. Não é
   preciso rodar nada à mão.
-- **Se o banco cair:** o painel continua funcionando, só sem o histórico, que volta sozinho quando o banco responder.
+- **Se o banco cair:** ninguém entra no site (a tela de login avisa que o banco está fora do ar), mas os dados que o
+  PC manda continuam chegando. O painel volta sozinho quando o banco responder.
 
 #### Primeira instalação
 
@@ -330,6 +337,42 @@ docker exec -i bi_banco pg_restore -U bi -d bi --clean --if-exists < /opt/backup
 cd /opt/bi-mais-vida/deploy && docker compose restart bi
 ```
 
+#### Versão que trouxe os usuários e as regras para o banco
+
+Na primeira subida dessa versão, o painel cria as tabelas novas e importa os arquivos da pasta: `usuarios.json`,
+`config_metas.json`, `config_projecoes.json` e `logs/assistente-*.jsonl`. O log mostra, por exemplo:
+
+```
+migração: 5 usuários importados de usuarios.json
+migração: regras de metas importadas de config_metas.json
+banco de dados bi@bi_banco:5432/bi pronto (migrações aplicadas agora: 002_usuarios, …, 006_conversas_por_usuario)
+```
+
+Depois disso:
+
+- Todos entram de novo uma vez, porque o cookie de sessão mudou. As senhas são as mesmas.
+- As conversas do Assistente continuam com os mesmos donos. Conversas de logins que não existem mais são apagadas, e
+  o log diz quantas.
+- Os arquivos ficam na pasta só como cópia. Mudar um deles não muda mais nada.
+- Se o `usuarios.json` não estiver na pasta e já houver conversas, a migração para com
+  `nenhum usuário foi importado`, e o login mostra que a atualização das tabelas falhou. Nada é apagado. Ponha o
+  arquivo de volta e reinicie o painel.
+
+#### Voltar as regras para uma versão anterior
+
+Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a
+uma delas, no console SQL (`docker exec -it bi_banco psql -U bi -d bi`):
+
+```sql
+-- as versões, da mais nova para a mais antiga (nome = metas ou projecoes)
+SELECT id, nome, salva_em, salva_por_nome FROM regras ORDER BY id DESC LIMIT 20;
+-- copia a versão 12 como a mais nova (troque o 12)
+INSERT INTO regras (nome, dados, salva_por_nome) SELECT nome, dados, 'volta para a versão 12' FROM regras WHERE id = 12;
+```
+
+Depois, `docker compose restart bi`: o painel lê as regras do banco quando sobe. No PC, use o `psql` do PostgreSQL
+instalado (veja [Banco de dados no PC](#banco-de-dados-no-pc-postgresql)) e feche e abra o painel.
+
 #### Comandos úteis
 
 ```bash
@@ -344,16 +387,65 @@ arquivos muda entre versões principais. Para trocar, faça a cópia, suba o ban
 
 ### Esqueci a senha de administrador do site
 
-O painel lê os usuários só quando inicia, então pare o container antes:
+O banco só é visto de dentro do Docker, então o comando roda no container do painel, com ele no ar:
 
 ```bash
 cd /opt/bi-mais-vida/deploy
-docker compose stop
-docker compose run --rm bi python app.py --senha LOGIN   # pede a senha nova duas vezes
-docker compose start
+docker compose exec bi python app.py --senha LOGIN   # pede a senha nova duas vezes
 ```
 
-Se o login não existir, ele cria um administrador com esse nome.
+Se o login não existir, ele cria um administrador com esse nome. A senha vale na hora, sem reiniciar.
+
+### Banco de dados no PC (PostgreSQL)
+
+O painel do PC também guarda usuários, regras, conversas e uso do Assistente num PostgreSQL, instalado no próprio
+Windows. Sem ele, ninguém entra no painel do PC, mas a extração e o envio dos dados ao site continuam.
+
+#### Instalar (uma vez)
+
+1. Baixe o instalador do PostgreSQL 18 para Windows em postgresql.org/download/windows (o da EDB) e instale com as
+   opções padrão: porta 5432 e serviço `postgresql-x64-18`, que abre junto com o Windows. Anote a senha do
+   usuário `postgres`. O Stack Builder, no fim, não é necessário. O instalador só aceita conexões deste
+   computador. Não abra a porta 5432 no firewall.
+2. Crie o usuário e o banco do painel, no PowerShell (troque a senha; ele pede a senha do `postgres`):
+
+   ```powershell
+   & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -c "CREATE ROLE bi LOGIN PASSWORD 'UMA_SENHA_FORTE'" -c "CREATE DATABASE bi OWNER bi"
+   ```
+
+3. No `config.ini` do PC, acrescente:
+
+   ```ini
+   [postgres]
+   senha = UMA_SENHA_FORTE
+   ```
+
+   O resto (`host = localhost`, porta, banco e usuário `bi`) vem de `config.exemplo.ini`.
+4. Instale o pacote do banco: `pip install "psycopg[binary]==3.3.6" psycopg-pool==3.3.3`.
+5. Feche e abra o painel (`iniciar.bat`). Na janela preta aparecem as migrações e a importação dos arquivos do PC
+   (veja [Versão que trouxe os usuários e as regras para o banco](#versão-que-trouxe-os-usuários-e-as-regras-para-o-banco)).
+
+#### Cópia de segurança no PC
+
+O `deploy/backup_banco_pc.ps1` grava uma cópia (`pg_dump`) por dia em `Documentos\backups-bi-banco` e apaga as de
+mais de 14 dias. Para instalar:
+
+1. Crie o arquivo `%APPDATA%\postgresql\pgpass.conf` (a pasta `postgresql` pode não existir) com uma linha:
+   `localhost:5432:bi:bi:UMA_SENHA_FORTE`. É de onde o `pg_dump` lê a senha.
+2. Agende, no PowerShell (os comandos estão também no começo do script):
+
+   ```powershell
+   $acao = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Micro\Desktop\BI MAIS VIDA\bi-mais-vida\deploy\backup_banco_pc.ps1"'
+   Register-ScheduledTask -TaskName "BI Mais Vida - copia do banco" -Action $acao -Trigger (New-ScheduledTaskTrigger -Daily -At 12:30)
+   ```
+
+3. Rode uma vez à mão para conferir: `powershell -ExecutionPolicy Bypass -File deploy\backup_banco_pc.ps1`.
+
+Para voltar o banco do PC para uma cópia (perde o que foi gravado depois dela), feche o painel e rode:
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\pg_restore.exe" -U bi -h localhost -d bi --clean --if-exists "$env:USERPROFILE\Documents\backups-bi-banco\bi-AAAA-MM-DD.dump"
+```
 
 ### Trocar a chave de envio
 

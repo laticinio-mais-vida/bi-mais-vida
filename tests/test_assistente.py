@@ -11,8 +11,9 @@ import unittest
 from pathlib import Path
 
 from bi.assistente import ErroAssistente, Ferramentas
-from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, ClienteFalso, ConversasFalsas, bloco_ferramenta,
-                         bloco_pensamento, bloco_texto, criar_assistente, criar_calc, resposta)
+from bi.banco import BancoForaDoAr
+from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, ClienteFalso, ConversasFalsas, RegistroFalso,
+                         bloco_ferramenta, bloco_pensamento, bloco_texto, criar_assistente, criar_calc, resposta)
 
 
 class Base(unittest.TestCase):
@@ -183,9 +184,11 @@ class TestLaco(Base):
         # custo: 3 chamadas de 1000 de entrada + 100 de saída, mais cache
         esperado = (3000 * 4 + 300 * 20 + 6500 * 0.20 + 3000 * 5) / 1e6
         self.assertEqual(r["uso"], {"segundos": r["uso"]["segundos"]})  # visualizador não vê custo
-        registro = json.loads(next((self.pasta / "logs").glob("assistente-*.jsonl")).read_text(encoding="utf-8"))
+        registro, = a.registro.registros
         self.assertAlmostEqual(registro["uso"]["custo"], esperado, places=6)
         self.assertEqual(registro["pergunta"], "quanto o mercado do joão comprou em setembro?")
+        self.assertEqual((registro["usuario"], registro["login"], registro["conversa"]), (USUARIO_VIS["id"], "vis", None))
+        self.assertEqual([p["ferramenta"] for p in registro["passos"]], ["buscar_cliente", "resumo_vendas", "consultar_sql"])
         self.assertEqual(r["restantes"], 49)
 
     def test_historico_so_texto_com_consultas_anteriores(self):
@@ -233,11 +236,43 @@ class TestLaco(Base):
         with self.assertRaises(ErroAssistente) as e:
             a.responder(USUARIO_VIS, pergunta, None, None)
         self.assertEqual(e.exception.status, 429)
-        # o limite volta do registro quando o painel reinicia
-        b = criar_assistente(self.pasta, self.calc, cliente=api, limite_diario=2)
+        self.assertEqual(len(api.pedidos), 2)  # a terceira nem chamou a IA
+        # o limite vem do registro (no banco): continua valendo quando o painel reinicia
+        b = criar_assistente(self.pasta, self.calc, cliente=api, limite_diario=2, registro=a.registro)
         self.assertEqual(b.restantes(USUARIO_VIS), 0)
         self.assertIsNone(b.restantes(USUARIO_ADMIN))
         self.assertEqual(b.uso()["por_usuario"][0]["perguntas"], 2)
+        self.assertEqual(b.uso()["limite_diario"], 2)
+
+    def test_limite_de_gasto_do_dia(self):
+        api = ClienteFalso([resposta(bloco_texto("ok"))] * 2)
+        a = criar_assistente(self.pasta, self.calc, cliente=api, limite_custo_dia=0.001)
+        a.responder(USUARIO_ADMIN, [{"papel": "usuario", "texto": "x"}], None, None)  # 1000 de entrada: US$ 0,006
+        with self.assertRaises(ErroAssistente) as e:
+            a.responder(USUARIO_ADMIN, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertIn("limite de gasto", str(e.exception))
+
+    def test_registro_fora_do_ar_nao_perde_a_resposta(self):
+        registro = RegistroFalso()
+        a = criar_assistente(self.pasta, self.calc, cliente=ClienteFalso([resposta(bloco_texto("R$ 10,00."))]),
+                             registro=registro)
+        registro.do_dia = lambda usuario: (0, 0.0)  # a contagem antes da pergunta funcionou
+        registro.fora_do_ar = True                  # e o banco caiu durante a resposta
+        with self.assertLogs("bi.assistente", "ERROR") as logs:
+            r = a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertEqual(r["resposta"], "R$ 10,00.")
+        self.assertIn('"pergunta": "x"', logs.output[0])
+        self.assertIsNone(a.pendente(USUARIO_VIS["id"]))
+
+    def test_banco_fora_do_ar_antes_da_pergunta(self):
+        registro = RegistroFalso()
+        registro.do_dia = lambda usuario: (_ for _ in ()).throw(BancoForaDoAr("fora"))
+        api = ClienteFalso([])
+        a = criar_assistente(self.pasta, self.calc, cliente=api, registro=registro)
+        with self.assertRaises(BancoForaDoAr):
+            a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertEqual(api.pedidos, [])
+        self.assertIsNone(a.pendente(USUARIO_VIS["id"]))  # a reserva foi desfeita
 
     def test_acesso_sem_vendedores(self):
         a = criar_assistente(self.pasta, self.calc, cliente=ClienteFalso([]))
@@ -270,23 +305,23 @@ class TestHistorico(Base):
         visto = {}
 
         def durante(pedido):
-            visto["pendente"] = a.pendente(USUARIO_VIS["login"])
+            visto["pendente"] = a.pendente(USUARIO_VIS["id"])
             return resposta(bloco_texto("Em agosto foram R$ 4.000,00."))
         a = self.assistente([
             resposta(bloco_ferramenta("t1", "buscar_cliente", {"texto": "padaria"}), parada="tool_use"),
             resposta(bloco_texto("R$ 4.750,00.")),
             durante,
         ])
-        self.assertTrue(a.historico)
         r = a.perguntar(USUARIO_VIS, None, "  quanto a padaria da maria comprou em setembro?  ", None, None)
         id_ = r["conversa"]["id"]
         self.assertEqual(r["conversa"]["titulo"], "quanto a padaria da maria comprou em setembro?")
         guardada = self.conversas.dados[id_]
-        self.assertEqual(guardada["login"], "vis")
+        self.assertEqual(guardada["usuario"], USUARIO_VIS["id"])
         self.assertEqual([m["papel"] for m in guardada["mensagens"]], ["usuario", "assistente"])
         self.assertEqual(guardada["mensagens"][1]["texto"], "R$ 4.750,00.")
         self.assertEqual(guardada["mensagens"][1]["passos"][0]["ferramenta"], "buscar_cliente")
-        self.assertIsNone(a.pendente("vis"))
+        self.assertIsNone(a.pendente(USUARIO_VIS["id"]))
+        self.assertEqual(a.registro.registros[0]["conversa"], id_)  # o registro de uso aponta a conversa
 
         r = a.perguntar(USUARIO_VIS, id_, "e em agosto?", None, None)
         self.assertEqual(r["conversa"]["id"], id_)
@@ -299,7 +334,7 @@ class TestHistorico(Base):
         # enquanto responde, a pergunta aparece como pendente (para outra aba ou depois de recarregar)
         self.assertEqual({k: v for k, v in visto["pendente"].items() if k != "segundos"},
                          {"conversa": id_, "nova": False, "pergunta": "e em agosto?"})
-        self.assertIsNone(a.pendente("vis"))
+        self.assertIsNone(a.pendente(USUARIO_VIS["id"]))
 
     def test_erro_nao_grava(self):
         def falha(pedido):
@@ -308,7 +343,7 @@ class TestHistorico(Base):
         with self.assertRaises(Exception):
             a.perguntar(USUARIO_VIS, None, "x", None, None)
         self.assertEqual(self.conversas.dados, {})
-        self.assertIsNone(a.pendente("vis"))
+        self.assertIsNone(a.pendente(USUARIO_VIS["id"]))
 
     def test_conversa_de_outra_pessoa_ou_inexistente(self):
         a = self.assistente([resposta(bloco_texto("ok"))])
@@ -333,7 +368,7 @@ class TestHistorico(Base):
         a = self.assistente([])
         id_ = "11111111-1111-1111-1111-111111111111"
         par = [{"papel": "usuario", "texto": "x"}, {"papel": "assistente", "texto": "y"}]
-        self.conversas.dados[id_] = {"login": "vis", "titulo": "x", "mensagens": par * 100}
+        self.conversas.dados[id_] = {"usuario": USUARIO_VIS["id"], "titulo": "x", "mensagens": par * 100}
         with self.assertRaises(ErroAssistente) as e:
             a.perguntar(USUARIO_VIS, id_, "mais uma", None, None)
         self.assertIn("limite de 100 perguntas", str(e.exception))
@@ -341,16 +376,6 @@ class TestHistorico(Base):
             with self.assertRaises(ErroAssistente):
                 a.perguntar(USUARIO_VIS, None, pergunta, None, None)
         self.assertEqual(self.api.pedidos, [])
-
-    def test_sem_banco_continua_com_a_conversa_do_navegador(self):
-        a = criar_assistente(self.pasta, self.calc, cliente=ClienteFalso([resposta(bloco_texto("ok"))]))
-        self.assertFalse(a.historico)
-        with self.assertRaises(ErroAssistente) as e:
-            a.perguntar(USUARIO_VIS, None, "x", None, None)
-        self.assertEqual(e.exception.status, 404)
-        r = a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
-        self.assertNotIn("conversa", r)
-
 
 if __name__ == "__main__":
     unittest.main()

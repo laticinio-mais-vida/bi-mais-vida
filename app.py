@@ -4,18 +4,19 @@ Uso:
     python app.py                 # abre o painel no navegador
     python app.py --sem-navegador # só sobe o servidor
     python app.py --porta 8051
-    python app.py --senha LOGIN   # define a senha de um usuário (cria um administrador se não existir)
+    python app.py --senha LOGIN   # define a senha de um usuário (cria um administrador se não existir); no
+                                  # VPS: docker compose exec bi python app.py --senha LOGIN
     python app.py --gerar-chave   # gera a chave de [publicacao], a mesma no PC e no VPS
 
 O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões desta máquina; com
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
-Com `modo = vps` em [publicacao], não lê o banco: recebe os dados do computador da empresa (bi/publicacao.py).
+Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
+Usuários, regras, conversas e o uso do Assistente ficam no PostgreSQL de [postgres] (bi/banco.py), no PC e no VPS.
 """
 from __future__ import annotations
 
 import argparse
 import configparser
-import contextlib
 import datetime as dt
 import getpass
 import json
@@ -48,6 +49,7 @@ from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
+from bi.uso import RegistroUso  # noqa: E402
 
 log = logging.getLogger("bi")
 mimetypes.add_type("application/javascript", ".js")
@@ -60,6 +62,7 @@ ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atu
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config"}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
+PAGINAS_HTML = ("/", "/index.html", "/login", "/login.html")
 
 
 def _json_padrao(o):
@@ -86,16 +89,17 @@ class Aplicacao:
                          "metas_produtos": Path(ini.get("planilhas", "metas_produtos"))}
         self.metas = PlanilhaMonitorada(planilhas["metas"], ler_metas)
         self.metas_produtos = PlanilhaMonitorada(planilhas["metas_produtos"], ler_metas_produtos)
-        self.configuracao = Configuracao(RAIZ / "config_metas.json")
+        # Banco PostgreSQL ([postgres] no config.ini): usuários, regras, conversas e uso do Assistente. Nada aqui
+        # conecta: a extração e o envio ao VPS (vigiar_em_segundo_plano) seguem mesmo com o banco fora do ar.
+        self.banco = Banco(ini, raiz=RAIZ)
+        self.usuarios = Usuarios(self.banco)
+        self.configuracao = Configuracao(self.banco)
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
-        self.config_projecoes = ConfigProjecoes(RAIZ / "config_projecoes.json")
+        self.config_projecoes = ConfigProjecoes(self.banco)
         self.projetor = Projetor(self.calc, self.config_projecoes)
-        # Banco PostgreSQL ([postgres] no config.ini): só no site. Sem ele, o Assistente funciona sem histórico.
-        self.banco = Banco(ini)
-        self.conversas = Conversas(self.banco) if self.banco.configurado else None
-        self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RAIZ / "logs",
+        self.conversas = Conversas(self.banco)
+        self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas)
-        self.usuarios = Usuarios(RAIZ / "usuarios.json")
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
@@ -185,8 +189,7 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _banco_fora_do_ar(self, e: BancoForaDoAr):
         log.warning("banco de dados fora do ar em %s: %s", self.path, e)
-        return self._erro("o banco de dados está fora do ar agora; tente de novo em instantes",
-                          HTTPStatus.SERVICE_UNAVAILABLE)
+        return self._erro(e.aviso, HTTPStatus.SERVICE_UNAVAILABLE)
 
     def _arquivo(self, caminho: Path):
         try:
@@ -240,8 +243,8 @@ class Manipulador(BaseHTTPRequestHandler):
         origem = self.headers.get("Origin")
         return not origem or urlparse(origem).netloc == self.headers.get("Host")
 
-    def _cookie_login(self, login: str, lembrar: bool) -> str:
-        valor, duracao = self.app.usuarios.criar_sessao(login, lembrar)
+    def _cookie_login(self, id_: int, lembrar: bool) -> str:
+        valor, duracao = self.app.usuarios.criar_sessao(id_, lembrar)
         return f"{COOKIE}={valor}; Path=/; HttpOnly; SameSite=Lax" + (f"; Max-Age={duracao}" if lembrar else "")
 
     def _autorizado(self, usuario: dict | None, caminho: str) -> bool:
@@ -273,7 +276,7 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._erro("usuário ou senha incorretos", HTTPStatus.UNAUTHORIZED)
         self.app.tentativas.acertou(login)
         log.info("login de %s (%s)", login, ip)
-        return self._json({"ok": True}, cookie=self._cookie_login(login, bool(corpo.get("lembrar"))))
+        return self._json({"ok": True}, cookie=self._cookie_login(usuario["id"], bool(corpo.get("lembrar"))))
 
     def _primeiro_acesso(self, corpo: dict):
         if not self.app.usuarios.vazio():
@@ -281,23 +284,19 @@ class Manipulador(BaseHTTPRequestHandler):
         if not self._local():
             return self._erro("o primeiro acesso só pode ser criado no computador onde o painel está instalado",
                               HTTPStatus.FORBIDDEN)
-        u = self.app.usuarios.salvar({**corpo, "papel": "admin", "ativo": True})
+        u = self.app.usuarios.salvar({**corpo, "papel": "admin", "ativo": True}, primeiro=True)
         log.info("administrador %s criado no primeiro acesso", u["login"])
-        return self._json({"ok": True}, cookie=self._cookie_login(u["login"], False))
+        return self._json({"ok": True}, cookie=self._cookie_login(u["id"], False))
 
     def _salvar_usuario(self, eu: dict, corpo: dict):
         original = corpo.get("login_original") or None
         dados = corpo.get("usuario") or {}
         if original == eu["login"] and (dados.get("papel") != "admin" or not dados.get("ativo", True)):
             raise ValueError("você não pode tirar o próprio acesso de administrador; peça a outro administrador")
-        novo = str(dados.get("login") or "").strip().lower()
-        # Login trocado: as conversas do Assistente vão junto (e voltam atrás se o cadastro recusar a mudança).
-        muda = self.app.conversas is not None and original and novo != original
-        with self.app.conversas.mudar_login(original, novo) if muda else contextlib.nullcontext():
-            u = self.app.usuarios.salvar(dados, original)
+        u = self.app.usuarios.salvar(dados, original)
         log.info("%s %s o acesso de %s", eu["login"], "alterou" if original else "criou", u["login"])
         # Quem altera o próprio usuário (nome, login ou senha) continua conectado.
-        cookie = self._cookie_login(u["login"], eu["lembrar"]) if original == eu["login"] else None
+        cookie = self._cookie_login(u["id"], eu["lembrar"]) if original == eu["login"] else None
         return self._json({"ok": True, "usuario": u, "usuarios": self.app.usuarios.listar()}, cookie=cookie)
 
     def _visualizadores(self) -> dict:
@@ -323,68 +322,74 @@ class Manipulador(BaseHTTPRequestHandler):
         return False
 
     def _perguntar(self, usuario: dict, corpo: dict):
-        """Uma pergunta ao Assistente (espera a resposta inteira: costuma levar de 10 s a 1 min). Com o histórico,
-        vem {conversa, pergunta} e o servidor lê a conversa do banco; sem ele (PC), vem a conversa inteira."""
+        """Uma pergunta ao Assistente, {conversa, pergunta} (espera a resposta inteira: costuma levar de 10 s a
+        1 min). O servidor lê a conversa do banco; sem conversa, começa uma nova."""
         if not self._pode_assistente(usuario):
             return
         vendedores, equipes = escopo_assistente(usuario)
-        a = self.app.assistente
         try:
-            if a.historico:
-                return self._json(a.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"), vendedores, equipes))
-            return self._json(a.responder(usuario, corpo.get("mensagens"), vendedores, equipes))
+            return self._json(self.app.assistente.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"),
+                                                            vendedores, equipes))
         except ErroAssistente as e:
             log.warning("Assistente (%s): %s", usuario["login"], e)
             return self._erro(str(e), e.status)
 
-    def _historico(self, usuario: dict) -> Conversas | None:
-        """O histórico de conversas do Assistente; None quando já respondeu o erro (sem acesso ou sem banco)."""
-        if not self._pode_assistente(usuario):
-            return None
-        if self.app.conversas is None:
-            self._erro("o histórico de conversas fica só no site", HTTPStatus.NOT_FOUND)
-        return self.app.conversas
-
     def _ler_historico(self, usuario: dict, caminho: str, q: dict):
-        conversas = self._historico(usuario)
-        if conversas is None:
+        if not self._pode_assistente(usuario):
             return
-        login = usuario["login"]
+        conversas, dono = self.app.conversas, usuario["id"]
         # A pergunta em andamento é lida antes da conversa: ela só sai daqui depois de a resposta estar gravada.
-        pendente = self.app.assistente.pendente(login)
+        pendente = self.app.assistente.pendente(dono)
         if caminho == "/api/assistente/conversas":
-            return self._json({"conversas": conversas.listar(login, q.get("busca")), "pendente": pendente})
+            return self._json({"conversas": conversas.listar(dono, q.get("busca")), "pendente": pendente})
         id_ = id_valido(q.get("id"))
         pendente = pendente if pendente and pendente["conversa"] == id_ else None
-        conversa = conversas.obter(login, id_) if id_ else None
+        conversa = conversas.obter(dono, id_) if id_ else None
         if conversa is None and pendente is None:
             raise NaoEncontrada("conversa não encontrada; ela pode ter sido excluída")
         return self._json({"conversa": conversa, "pendente": pendente})
 
     def _mudar_historico(self, usuario: dict, caminho: str, corpo: dict):
-        conversas = self._historico(usuario)
-        if conversas is None:
+        if not self._pode_assistente(usuario):
             return
+        conversas, dono = self.app.conversas, usuario["id"]
         if caminho == "/api/assistente/conversa/renomear":
-            return self._json({"ok": True, "conversa": conversas.renomear(usuario["login"], corpo.get("id"),
-                                                                        corpo.get("titulo"))})
-        pendente = self.app.assistente.pendente(usuario["login"])
+            return self._json({"ok": True, "conversa": conversas.renomear(dono, corpo.get("id"), corpo.get("titulo"))})
+        pendente = self.app.assistente.pendente(dono)
         if pendente and pendente["conversa"] == id_valido(corpo.get("id")):
             raise ValueError("espere a resposta antes de excluir esta conversa")
-        conversas.excluir(usuario["login"], corpo.get("id"))
+        conversas.excluir(dono, corpo.get("id"))
         return self._json({"ok": True})
 
     def _salvar_config_metas(self, eu: dict, corpo: dict):
         """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas e os vendedores que cada
-        visualizador vê. Confere as duas partes antes de gravar qualquer uma."""
+        visualizador vê. As duas partes vão numa transação só: ou grava tudo, ou nada."""
         acessos = corpo.pop("usuarios", None)
+        configuracao = self.app.configuracao
         if corpo:
-            self.app.configuracao.validar(corpo)
+            configuracao.validar(corpo)  # antes de abrir a transação
+        versao = None
+        with self.app.banco.conexao() as con:
+            if acessos:
+                self.app.usuarios.definir_metas(acessos, con)
+            if corpo:
+                versao = configuracao.gravar(corpo, eu, con)
+        if versao:
+            configuracao.usar(*versao)
+            log.info("%s salvou as regras de Metas (versão %s)", eu["login"], versao[0])
         if acessos:
-            self.app.usuarios.definir_metas(acessos)
             log.info("%s alterou o acesso de Metas de %s", eu["login"], ", ".join(acessos))
-        cfg = self.app.configuracao.salvar(corpo) if corpo else self.app.configuracao.atual()
-        return self._json({"ok": True, "config": cfg, **self._visualizadores()})
+        return self._json({"ok": True, "config": configuracao.atual(), **self._visualizadores()})
+
+    def _salvar_config_projecoes(self, eu: dict, corpo: dict):
+        """Configuração da página Projeções: os vendedores da página e o que cada visualizador vê, juntos."""
+        config = self.app.config_projecoes
+        with self.app.banco.conexao() as con:
+            self.app.usuarios.definir_projecoes(corpo.get("usuarios") or {}, con)
+            versao = config.gravar(corpo.get("vendedores") or {}, eu, con)
+        config.usar(*versao)
+        log.info("%s salvou a configuração das projeções (versão %s)", eu["login"], versao[0])
+        return self._json({"ok": True, **self._config_projecoes()})
 
     def _receber(self):
         """VPS: pacote com o cache e as planilhas, assinado pelo computador da empresa (sem login)."""
@@ -398,20 +403,29 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._erro(str(e), HTTPStatus.FORBIDDEN)
         return self._json(r)
 
+    def _pagina(self, caminho: str):
+        """index.html para quem está conectado, login.html para os outros. Com o banco fora do ar, a tela de login
+        abre e mostra o aviso que /api/sessao devolve."""
+        try:
+            usuario = self._usuario()
+        except BancoForaDoAr:
+            usuario = None
+        if caminho in ("/login", "/login.html"):
+            return self._redireciona("/") if usuario else self._arquivo(WEB / "login.html")
+        return self._arquivo(WEB / "index.html") if usuario else self._redireciona("/login")
+
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
         url = urlparse(self.path)
         q = {k: v[-1] for k, v in parse_qs(url.query).items()}
         try:
+            if not url.path.startswith("/api/") and url.path not in PAGINAS_HTML:
+                return self._arquivo(WEB / url.path.lstrip("/"))  # CSS, JS e imagens: sem dados nem banco
+            if url.path in PAGINAS_HTML:
+                return self._pagina(url.path)
             usuario = self._usuario()
             if url.path == "/api/sessao":
                 return self._json(self._sessao(usuario))
-            if url.path in ("/login", "/login.html"):
-                return self._redireciona("/") if usuario else self._arquivo(WEB / "login.html")
-            if url.path in ("/", "/index.html"):
-                return self._arquivo(WEB / "index.html") if usuario else self._redireciona("/login")
-            if not url.path.startswith("/api/"):
-                return self._arquivo(WEB / url.path.lstrip("/"))  # CSS, JS e imagens: sem dados
             if not self._autorizado(usuario, url.path):
                 return
             if url.path == "/api/estado":
@@ -495,28 +509,20 @@ class Manipulador(BaseHTTPRequestHandler):
                 corpo = self._corpo_json()
                 self.app.usuarios.trocar_senha(usuario["login"], corpo.get("atual"), corpo.get("nova"))
                 log.info("%s trocou a própria senha", usuario["login"])
-                return self._json({"ok": True}, cookie=self._cookie_login(usuario["login"], usuario["lembrar"]))
+                return self._json({"ok": True}, cookie=self._cookie_login(usuario["id"], usuario["lembrar"]))
             if url.path == "/api/usuarios":
                 return self._salvar_usuario(usuario, self._corpo_json())
             if url.path == "/api/usuarios/excluir":
                 login = str(self._corpo_json().get("login") or "")
                 if login == usuario["login"]:
                     raise ValueError("você não pode excluir o próprio acesso")
-                # As conversas do Assistente saem junto, para um login reaproveitado não herdá-las.
-                with (self.app.conversas.apagar_login(login) if self.app.conversas is not None
-                      else contextlib.nullcontext()):
-                    self.app.usuarios.excluir(login)
+                self.app.usuarios.excluir(login)  # as conversas do Assistente saem junto
                 log.info("%s excluiu o acesso de %s", usuario["login"], login)
                 return self._json({"ok": True, "usuarios": self.app.usuarios.listar()})
             if url.path == "/api/config":
                 return self._salvar_config_metas(usuario, self._corpo_json())
             if url.path == "/api/projecoes/config":
-                corpo = self._corpo_json()
-                ConfigProjecoes._valida(corpo.get("vendedores") or {})  # erro aqui não deixa gravar só os acessos
-                self.app.usuarios.definir_projecoes(corpo.get("usuarios") or {})
-                self.app.config_projecoes.salvar(corpo.get("vendedores") or {})
-                log.info("%s salvou a configuração das projeções", usuario["login"])
-                return self._json({"ok": True, **self._config_projecoes()})
+                return self._salvar_config_projecoes(usuario, self._corpo_json())
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):
@@ -526,7 +532,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s salvou o acesso do Assistente", usuario["login"])
                 return self._json({"ok": True, **self._config_assistente()})
             if url.path == "/api/config/padrao":
-                return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao()})
+                log.info("%s restaurou o padrão das regras de Metas", usuario["login"])
+                return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao(usuario)})
             if url.path == "/api/calendario":
                 corpo = self._corpo_json()
                 return self._json(self.app.calc.calendario_ano(int(corpo["ano"]), corpo.get("config")))
@@ -550,19 +557,25 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._erro(f"erro interno: {e}", HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
-def definir_senha(login: str) -> None:
-    """Uso pelo terminal: recupera o acesso quando ninguém lembra a senha de administrador."""
+def definir_senha(ini: configparser.ConfigParser, login: str) -> None:
+    """Uso pelo terminal: recupera o acesso quando ninguém lembra a senha de administrador. No VPS o banco só é
+    visto de dentro do Docker: docker compose exec bi python app.py --senha LOGIN."""
     login = login.strip().lower()
-    usuarios = Usuarios(RAIZ / "usuarios.json")
-    existe = usuarios.obter(login) is not None
-    print(f"{'Nova senha para' if existe else 'Criando o administrador'} {login}")
-    senha = getpass.getpass("Senha: ")
-    if senha != getpass.getpass("Repita a senha: "):
-        sys.exit("As senhas não conferem.")
+    banco = Banco(ini, raiz=RAIZ)
     try:
+        usuarios = Usuarios(banco)
+        existe = usuarios.obter(login) is not None
+        print(f"{'Nova senha para' if existe else 'Criando o administrador'} {login}")
+        senha = getpass.getpass("Senha: ")
+        if senha != getpass.getpass("Repita a senha: "):
+            sys.exit("As senhas não conferem.")
         usuarios.definir_senha(login, senha)
+    except BancoForaDoAr as e:
+        sys.exit(f"Não foi possível: {e.aviso}.")
     except ValueError as e:
         sys.exit(f"Não foi possível: {e}.")
+    finally:
+        banco.fechar()
     print("Pronto. As sessões abertas desse usuário foram encerradas." if existe else "Administrador criado.")
 
 
@@ -581,8 +594,6 @@ def main() -> None:
     ap.add_argument("--senha", metavar="LOGIN", help="define a senha do usuário (cria um administrador se não existir)")
     ap.add_argument("--gerar-chave", action="store_true", help="gera uma chave para [publicacao] no config.ini")
     args = ap.parse_args()
-    if args.senha:
-        return definir_senha(args.senha)
     if args.gerar_chave:
         return print(f"Coloque esta linha em [publicacao] no config.ini do PC e do VPS:\nchave = {gerar_chave()}")
 
@@ -590,6 +601,8 @@ def main() -> None:
     # tiver, como a senha do banco. Sem ele o painel abre do mesmo jeito e avisa que falta a senha.
     ini = configparser.ConfigParser()
     ini.read([RAIZ / "config.exemplo.ini", RAIZ / "config.ini"], encoding="utf-8")
+    if args.senha:
+        return definir_senha(ini, args.senha)
     porta = args.porta or ini.getint("servidor", "porta", fallback=8050)
     endereco = args.endereco or ini.get("servidor", "endereco", fallback="127.0.0.1")
 
@@ -612,8 +625,7 @@ def main() -> None:
         app.cache.atualizar_em_segundo_plano()
     if app.envio and app.envio.ativo:
         log.info("depois de cada atualização, os dados vão para %s", app.envio.destino)
-    if app.banco.configurado:
-        app.banco.iniciar()
+    app.banco.iniciar()  # se não der, só avisa no log: o envio ao VPS (logo abaixo) não depende do banco
     app.vigiar_em_segundo_plano()
 
     servidor = ThreadingHTTPServer((endereco, porta), Manipulador)
@@ -622,8 +634,11 @@ def main() -> None:
     if endereco not in ("127.0.0.1", "localhost"):
         for ip in enderecos_na_rede():
             log.info("outros computadores da rede: http://%s:%s", ip, porta)
-    if app.usuarios.vazio():
-        log.info("nenhum usuário cadastrado: abra %s neste computador para criar o administrador", local)
+    try:
+        if app.usuarios.vazio():
+            log.info("nenhum usuário cadastrado: abra %s neste computador para criar o administrador", local)
+    except BancoForaDoAr:
+        pass  # banco.iniciar() já avisou
     if not args.sem_navegador:
         threading.Timer(1.0, lambda: webbrowser.open(local)).start()
     try:
