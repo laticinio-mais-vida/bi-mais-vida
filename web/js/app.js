@@ -33,7 +33,7 @@ const PAGINAS = {
   },
   configuracoes: {
     titulo: "Configurações das metas",
-    fixo: "Produtos, vendedores, devoluções e dias úteis usados nos cálculos",
+    fixo: "Produtos, vendedores, devoluções e dias úteis usados nos cálculos, e o que cada pessoa vê na página",
     pai: "metas",
     admin: true,
     sempreMonta: true,
@@ -51,7 +51,7 @@ const PAGINAS = {
   },
   usuarios: {
     titulo: "Usuários e acessos",
-    fixo: "Quem entra no painel e o que cada pessoa pode ver",
+    fixo: "Quem entra no painel e quais páginas cada pessoa vê",
     admin: true,
     sempreMonta: true,
     pendente: usuariosTemAlteracoes,

@@ -273,7 +273,8 @@ function secaoUsuarios(alvo) {
         <p class="sub">Quem vê a página e quais vendedores aparecem para cada um</p></div></div>
       <label class="campo sem-seta cp-busca-u"><span class="ic-campo">${icone("busca")}</span><input id="cp-busca-u" type="search" placeholder="Buscar pessoa" value="${esc(buscaUsuario)}"></label>
       <div class="usu-itens" id="cp-itens"></div>
-      <div class="dica">${icone("info")}<span>Páginas, senha e abas de Metas ficam em <a href="#/usuarios">Usuários</a>.</span></div>
+      <div class="dica">${icone("info")}<span>Nome, senha e páginas ficam em <a href="#/usuarios">Usuários</a>; as abas e os
+        vendedores de Metas, em <a href="#/configuracoes?secao=usuarios">Metas › Configurar</a>.</span></div>
     </aside>
     <div id="cp-editor"></div>
   </div>`;
@@ -354,12 +355,13 @@ function desenharModo(u) {
   const vendo = vendedoresDoUsuario(u, r);
   if (r.modo === "metas") {
     const abas = dados.visoes.filter((v) => (u.visoes || []).includes(v.id));
+    const link = `<a href="#/configuracoes?u=${encodeURIComponent(u.login)}">Metas › Configurar</a>`;
     if (!abas.length) {
-      alvo.innerHTML = `<p class="usu-nota aviso-nota">${icone("alerta")}Esta pessoa não tem abas de Metas, então não veria nenhum vendedor. Escolha "Todos da página" ou "Só alguns".</p>`;
+      alvo.innerHTML = `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Esta pessoa não tem abas de Metas (${link}), então não veria nenhum vendedor. Escolha "Todos da página" ou "Só alguns".</span></p>`;
     } else {
       const equipes = [...new Set(abas.flatMap((v) => v.grupos))].map((g) => (g === "EDIR" ? "Edir" : g));
       const vend = u.vendedores ? `só os ${u.vendedores.length} vendedores marcados lá` : "todos os vendedores dessas equipes";
-      alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Segue o cadastro em Usuários: abas ${esc(emLista(abas.map((a) => a.titulo)))}
+      alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Segue o acesso de Metas (${link}): abas ${esc(emLista(abas.map((a) => a.titulo)))}
         (equipes ${esc(emLista(equipes))}) e ${vend}. Se o acesso de Metas mudar, este muda junto.</span></p>`;
     }
   } else if (r.modo === "todos") {

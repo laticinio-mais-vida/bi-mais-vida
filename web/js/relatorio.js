@@ -1,5 +1,6 @@
 // "Detalhamento por vendedor" no mesmo formato das matrizes do Power BI (indicadores nas linhas, vendedores
-// nas colunas, Total no fim), pronto para virar imagem e ser enviado no WhatsApp.
+// nas colunas, Total no fim), pronto para virar imagem e ser enviado no WhatsApp. Em Outras Linhas ES, a
+// tabela "Dentro da meta?" é um cartão à parte, com a própria imagem (vai separada no WhatsApp).
 import { esc, fmt, icone, toast, STATUS } from "./util.js";
 
 const NF2 = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -13,7 +14,8 @@ const vazio = (v) => v == null || isNaN(v) || Math.abs(v) < 0.005;
 
 function cabecalho(d, titulo) {
   const c = d.calendario;
-  const ritmo = c.situacao === "fechado" ? "mês fechado" : `${fmt.dias(c.dias_decorridos)} de ${fmt.dias(c.dias_uteis)} dias úteis · ritmo esperado ${fmt.pct(c.ritmo)}`;
+  const ritmo = c.situacao === "fechado" ? (c.meses.length > 1 ? "período fechado" : "mês fechado")
+    : `${fmt.dias(c.dias_decorridos)} de ${fmt.dias(c.dias_uteis)} dias úteis · ritmo esperado ${fmt.pct(c.ritmo)}`;
   return `
     <div class="relatorio-cab">
       <img src="/img/logo-maisvida.png" alt="Mais Vida">
@@ -25,11 +27,11 @@ function cabecalho(d, titulo) {
     </div>`;
 }
 
-function cartao(d, i, titulo, sub, corpo, arquivo) {
+function cartao(d, i, titulo, sub, corpo, arquivo, ic = "ranking") {
   return `
   <section class="cartao secao entra" style="--i:${i}">
     <div class="cartao-cab">
-      <div><h3>${icone("ranking")}${esc(titulo)}</h3><p class="sub">${sub}</p></div>
+      <div><h3>${icone(ic)}${esc(titulo)}</h3><p class="sub">${sub}</p></div>
       <div class="acoes-relatorio">
         <button class="btn" data-captura="copiar" data-arquivo="${esc(arquivo)}" title="Copia a tabela como imagem para colar no WhatsApp">${icone("disco")}Copiar imagem</button>
         <button class="btn icone" data-captura="baixar" data-arquivo="${esc(arquivo)}" title="Baixar a tabela como imagem (PNG)">${icone("abaixo")}</button>
@@ -101,13 +103,17 @@ export function relatorioVendedores(d, i) {
         <td class="rotulo">${esc(r.rotulo)}</td>${colunas.map((c) => `<td>${celula(r, c)}</td>`).join("")}<td class="total">${celula(r, total)}</td>
       </tr>`).join("")}</tbody>
     </table>`;
-  let corpo = cabecalho(d, d.visao.titulo) + tabela;
-  if (d.visao.tipo === "outras") corpo += tabelaDentroDaMeta(d, colunas);
   const sub = "Mesmo formato da matriz do Power BI · clique no nome do vendedor para filtrar";
-  return cartao(d, i, "Detalhamento por vendedor", sub, corpo, `metas-${d.visao.id}-${d.periodo.ano}-${String(d.periodo.mes).padStart(2, "0")}`);
+  let h = cartao(d, i, "Detalhamento por vendedor", sub, cabecalho(d, d.visao.titulo) + tabela, `metas-${d.visao.id}-${d.periodo.arquivo}`);
+  if (d.visao.tipo === "outras") {
+    h += cartao(d, i + 1, "Dentro da meta?", "Quanto falta de outras linhas para cada vendedor e quem está dentro da meta",
+      cabecalho(d, `${d.visao.titulo} · Dentro da meta`) + tabelaDentroDaMeta(colunas),
+      `metas-${d.visao.id}-dentro-da-meta-${d.periodo.arquivo}`, "estrela");
+  }
+  return h;
 }
 
-function tabelaDentroDaMeta(d, colunas) {
+function tabelaDentroDaMeta(colunas) {
   return `
     <table class="relatorio-tabela dentro">
       <thead><tr><th>Vendedor</th><th>Falta Outras Linhas</th><th>Dentro da meta?</th></tr></thead>
@@ -143,7 +149,7 @@ export function relatorioProdutos(d, i) {
     </table>`;
   const corpo = cabecalho(d, "Metas Produtos BA") + tabela;
   const sub = "Mesmo formato da matriz do Power BI: meta de volume e volume vendido (líquido das devoluções que descontam)";
-  return cartao(d, i, "Metas de volume por produto", sub, corpo, `metas-produtos-ba-${d.periodo.ano}-${String(d.periodo.mes).padStart(2, "0")}`);
+  return cartao(d, i, "Metas de volume por produto", sub, corpo, `metas-produtos-ba-${d.periodo.arquivo}`);
 }
 
 // ---------- imagem para o WhatsApp ----------

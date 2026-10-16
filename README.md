@@ -1,8 +1,9 @@
 # BI de Metas Mais Vida
 
 Versão em Python das páginas de metas do Power BI (Metas ES, Metas BA, Metas Edir, Metas Produtos BA e
-Metas Outras Linhas ES), reunidas numa página só, com filtros de visão, vendedor, mês e ano, e uma página
-de Configurações para as regras que antes ficavam dentro das fórmulas DAX. A página **Projeções** prevê o
+Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtros de vendedores, meses e anos
+(todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
+fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
@@ -61,17 +62,30 @@ As abas no topo substituem as páginas do Power BI:
 | Outras Linhas ES | Metas Outras Linhas ES | grupo ES |
 | Produtos BA | Metas Produtos BA | grupos BA e Edir |
 
+Filtros (todos de seleção múltipla, com Aplicar; nada marcado é todos):
+
+- **Vendedores:** um ou vários. Clicar num vendedor no ranking, no nome dele na tabela ou no cartão de
+  Produtos BA mostra só ele; clicar de novo volta para todos. Com Ctrl (Cmd no Mac) o clique soma ou tira o
+  vendedor dos já marcados.
+- **Meses** e **Anos:** os meses marcados dos anos marcados, por exemplo setembro e outubro, ou todos os
+  meses de 2026. Com vários meses, metas e realizados somam os meses (como uma segmentação do Power BI), a
+  meta de clientes soma os atendidos de cada mês e o ritmo junta os dias úteis de todos os meses. O padrão é o
+  mês dos dados.
+- O filtro fica no endereço da página, então dá para mandar o link.
+
 Em cada aba:
 
 - **Ritmo do mês:** dias úteis do mês, quantos já passaram e o ritmo esperado (% mínimo da meta para hoje).
-  Feriados aparecem marcados. É o antigo quadro "Dias úteis", agora calculado sozinho.
+  Feriados aparecem marcados. É o antigo quadro "Dias úteis", agora calculado sozinho. Com vários meses vira
+  **Ritmo do período**, com um bloco por mês.
 - **Indicadores:** realizado contra a meta, situação (meta batida, no ritmo, atenção ou abaixo), projeção
   do mês e quanto falta por dia útil.
 - **Corrida da meta:** acumulado do mês contra o ritmo esperado de cada dia, com a projeção.
 - **Ranking** dos vendedores. Clicar num vendedor filtra a página por ele.
 - **Detalhamento por vendedor** no mesmo formato das matrizes do Power BI: indicadores nas linhas,
   vendedores nas colunas (ordem alfabética) e Total no fim. Metas em azul e categorias em amarelo.
-  - Em Outras Linhas ES vem também a tabela "Falta Outras Linhas / Dentro da meta?".
+  - Em Outras Linhas ES, a tabela "Falta Outras Linhas / Dentro da meta?" fica num cartão separado, com o
+    próprio Copiar imagem, para mandar as duas imagens separadas no WhatsApp.
   - Em Produtos BA a tabela traz Meta e Realizado por vendedor, com os produtos em ordem alfabética.
   - As linhas de categoria seguem as categorias definidas em Configurações.
 - **Tela cheia:** todo cartão tem um botão de tela cheia no canto superior direito (aparece ao passar o
@@ -120,7 +134,7 @@ O botão **Configurar** da página Projeções (só administradores) abre duas s
   equipes e deve entrar. A lista mostra a venda bruta dos últimos 12 meses e a última venda de cada um.
   Fica gravado em `config_projecoes.json` (a versão anterior em `config_projecoes.anterior.json`).
 - **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
-  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Usuários. Se o acesso
+  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Metas › Configurar. Se o acesso
     de Metas mudar, este muda junto;
   - **Todos da página;**
   - **Só alguns:** a lista que você marcar.
@@ -159,16 +173,16 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 | **Administrador** | todas as páginas, abas e vendedores | Configurações, Usuários e o botão Atualizar dados |
 | **Visualizador** | só as páginas e abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
 
-Em Usuários ficam as páginas de cada pessoa e, para Metas, as abas e os vendedores. Os vendedores que a
-pessoa vê em Projeções ficam na configuração da página Projeções (o padrão é igual ao acesso de Metas). Quem
-foi cadastrado antes da página Projeções existir continua só com Metas até o administrador marcar a página
-nova.
+Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
+dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
+abas e os vendedores; em Projeções, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
+antes da página Projeções existir continua só com Metas até o administrador marcar a página nova.
 
-Exemplos:
+Exemplos (em Metas › Configurar › Acesso por usuário):
 
-- **Supervisor da BA:** visualizador com as abas Metas BA e Produtos BA e "Todos dessas abas" em Vendedores.
-- **Vendedor:** visualizador com a aba dele e só ele marcado em Vendedores. Indicadores, ranking, corrida e
-  tabelas mostram só os números dele.
+- **Supervisor da BA:** abas Metas BA e Produtos BA e "Todos dessas abas" em Vendedores.
+- **Vendedor:** a aba dele e só ele marcado em Vendedores. Indicadores, ranking, corrida e tabelas mostram só
+  os números dele.
 
 Quem barra é o servidor: o visualizador recebe só os números liberados, mesmo se mexer no endereço da página.
 Mudanças de abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
@@ -178,10 +192,9 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções). Com Metas marcada aparecem as **abas** e os **vendedores** de
-  Metas ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). Com Projeções marcada
-  aparece um resumo e o link para a configuração das projeções. O quadro azul no fim resume o que a pessoa vai
-  ver.
+- **Páginas que pode ver** (Metas, Projeções). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+  página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
+  pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
 
 Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura
@@ -229,6 +242,11 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
   as devoluções canceladas são ignoradas.
 - **Dias úteis e feriados:** feriados nacionais e estaduais automáticos, peso do sábado por estado e
   exceções (feriado local, meio expediente, dia trabalhado).
+- **Acesso por usuário:** para cada visualizador, se ele vê a página Metas, quais **abas** e quais
+  **vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). O quadro azul resume
+  o que a pessoa vai ver. Fica gravado em `usuarios.json`, não em `config_metas.json`, e "Restaurar padrão do
+  Power BI" não mexe nele. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
+  para ele) até você escolher aqui.
 
 ## Regras de cálculo (iguais ao Power BI)
 

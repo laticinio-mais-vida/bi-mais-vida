@@ -1,5 +1,7 @@
 // Lista suspensa de seleção múltipla com busca e grupos (ex.: vendedores por equipe, produtos por categoria).
 // Nada marcado = todos. As marcações só valem ao clicar em Aplicar ou fora da lista; Esc desfaz.
+// Opções além do básico: semBusca (listas curtas, como meses e anos), nomesAte (até quantos marcados o botão
+// mostra os nomes, usando `curto` de cada item quando houver) e classe (largura do botão).
 import { esc, icone } from "./util.js";
 
 export function multiSelecao(el, op) {
@@ -8,6 +10,7 @@ export function multiSelecao(el, op) {
   let rascunho = new Set();
 
   el.classList.add("multi");
+  if (op.classe) el.classList.add(op.classe);
   el.innerHTML = `
     <button class="multi-botao" type="button" aria-haspopup="dialog" aria-expanded="false">
       <span class="ic-campo">${icone(op.icone || "funil")}</span>
@@ -16,7 +19,7 @@ export function multiSelecao(el, op) {
     <div class="multi-painel" role="dialog" aria-label="${esc(op.rotulo)}" hidden>
       <div class="multi-topo">
         <b>${esc(op.rotulo)}</b>
-        <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span>
+        <label class="campo sem-seta" ${op.semBusca ? "hidden" : ""}><span class="ic-campo">${icone("busca")}</span>
           <input type="search" placeholder="${esc(op.busca || "Buscar")}" aria-label="${esc(op.busca || "Buscar")}"></label>
       </div>
       <div class="multi-lista"></div>
@@ -35,7 +38,9 @@ export function multiSelecao(el, op) {
 
   function textoBotao() {
     const n = selecionados.size;
-    const t = n === 0 ? op.todos : n === 1 ? nomeDe([...selecionados][0]) : `${n} ${op.plural}`;
+    const t = n === 0 ? op.todos : n === 1 ? nomeDe([...selecionados][0])
+      : n <= (op.nomesAte || 1) ? itens.filter((i) => selecionados.has(i.id)).map((i) => i.curto || i.nome).join(", ")
+      : `${n} ${op.plural}`;
     el.querySelector(".multi-texto").textContent = t;
     botao.classList.toggle("com-filtro", n > 0);
     botao.title = n > 1 ? [...selecionados].map(nomeDe).join(", ") : t;
@@ -95,7 +100,7 @@ export function multiSelecao(el, op) {
     painel.classList.remove("a-direita");
     if (painel.getBoundingClientRect().right > window.innerWidth - 8) painel.classList.add("a-direita");
     botao.setAttribute("aria-expanded", "true");
-    busca.focus({ preventScroll: true });
+    (op.semBusca ? lista.querySelector("input") : busca)?.focus({ preventScroll: true });
     document.addEventListener("pointerdown", fora, true);
     document.addEventListener("keydown", tecla);
   }
@@ -121,7 +126,7 @@ export function multiSelecao(el, op) {
 
   botao.addEventListener("click", () => (painel.hidden ? abrir() : fechar(true)));
   busca.addEventListener("input", filtrar);
-  el.querySelector("[data-acao=limpar]").addEventListener("click", () => { rascunho.clear(); marcar(); busca.focus(); });
+  el.querySelector("[data-acao=limpar]").addEventListener("click", () => { rascunho.clear(); marcar(); if (!op.semBusca) busca.focus(); });
   el.querySelector("[data-acao=aplicar]").addEventListener("click", () => { fechar(true); botao.focus(); });
   textoBotao();
 

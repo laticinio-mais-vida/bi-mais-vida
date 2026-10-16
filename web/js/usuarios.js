@@ -1,20 +1,17 @@
-// Página Usuários (só administradores): quem entra no painel e quais páginas cada um vê.
-// Em Metas, o visualizador vê só as abas marcadas e, se a lista de vendedores estiver preenchida, só esses
-// vendedores. Os vendedores de Projeções ficam na configuração da própria página (aqui só aparece o resumo).
-// Quem barra é o servidor, a página só monta o cadastro.
+// Página Usuários (só administradores): quem entra no painel (nome, usuário, senha, papel) e quais páginas cada
+// um vê. O que a pessoa vê dentro de cada página (abas, vendedores) fica no botão Configurar da própria página;
+// aqui aparece só o resumo, com o link para lá. Quem barra é o servidor, a página só monta o cadastro.
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa" };
 const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia" };
 const DESCRICAO_PAGINA = { metas: "Metas do mês por vendedor e produto", projecoes: "Faturamento previsto para 6 meses" };
+const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes" }; // rota do Configurar de cada página
 
 let ctx = null, raiz = null;
-let dados = null;     // { usuarios, visoes, paginas, vendedores }
+let dados = null;     // { usuarios, paginas }
 let sel = null;       // login em edição; "" = novo acesso; null = nenhum
 let form = null, base = null;
-let busca = "";
-let ultimosAlguns = [];
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const sujo = () => !!form && JSON.stringify(form) !== JSON.stringify(base);
@@ -38,10 +35,8 @@ export async function montarUsuarios(container, contexto) {
 
 // ---------- apoio ----------
 function rascunho(u) {
-  if (!u) return { login: "", nome: "", senha: "", papel: "visualizador", ativo: true, paginas: ["metas"], visoes: [], vendedores: null };
-  return { login: u.login, nome: u.nome, senha: "", papel: u.papel, ativo: u.ativo,
-           paginas: u.paginas ? [...u.paginas] : ["metas"],
-           visoes: u.visoes ? [...u.visoes] : [], vendedores: u.vendedores ? [...u.vendedores] : null };
+  if (!u) return { login: "", nome: "", senha: "", papel: "visualizador", ativo: true, paginas: ["metas"] };
+  return { login: u.login, nome: u.nome, senha: "", papel: u.papel, ativo: u.ativo, paginas: u.paginas ? [...u.paginas] : ["metas"] };
 }
 
 function abrir(login) {
@@ -49,8 +44,6 @@ function abrir(login) {
   const u = login ? dados.usuarios.find((x) => x.login === login) : null;
   form = login === null ? null : rascunho(u);
   base = form && clone(form);
-  ultimosAlguns = form?.vendedores || [];
-  busca = "";
 }
 
 function trocarPara(login) {
@@ -61,9 +54,8 @@ function trocarPara(login) {
 }
 
 const ehEu = (login) => login && login === ctx.eu.login;
-const tituloVisao = (id) => dados.visoes.find((v) => v.id === id)?.titulo || id;
 const tituloPagina = (id) => dados.paginas.find((p) => p.id === id)?.titulo || id;
-const nomeVendedor = (id) => dados.vendedores.find((v) => v.id === id)?.nome || `Vendedor ${id}`;
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
 function emLista(itens) {
   if (itens.length <= 1) return itens.join("");
@@ -71,43 +63,31 @@ function emLista(itens) {
 }
 
 function resumoCurto(u) {
-  if (u.papel === "admin") return "vê tudo";
-  const partes = [emLista((u.paginas || []).map(tituloPagina))];
-  if ((u.paginas || []).includes("metas")) {
-    const n = u.vendedores?.length;
-    partes.push(`${u.visoes.length} aba${u.visoes.length === 1 ? "" : "s"}`, n ? `${n} vendedor${n === 1 ? "" : "es"}` : "todos os vendedores");
-  }
-  return partes.join(" · ");
+  return u.papel === "admin" ? "vê tudo" : emLista((u.paginas || []).map(tituloPagina));
 }
 
-// Como a pessoa vê Projeções (definido na configuração da página Projeções).
-function modoProjecoes(login) {
-  const p = dados.usuarios.find((x) => x.login === login)?.projecoes || { modo: "metas" };
-  if (p.modo === "todos") return "todos os vendedores da página";
-  if (p.modo === "alguns") return `${p.vendedores.length} vendedor${p.vendedores.length === 1 ? "" : "es"} escolhido${p.vendedores.length === 1 ? "" : "s"}`;
-  return "igual ao acesso de Metas";
+// O que a pessoa vê dentro de cada página, como está salvo na configuração da página (só leitura aqui).
+function dentroDaPagina(u, pagina) {
+  if (pagina === "metas") {
+    if (!u.visoes?.length) return { texto: "ainda sem abas: a página fica vazia até você escolher", aviso: true };
+    const vend = u.vendedores ? plural(u.vendedores.length, "vendedor", "vendedores") : "todos os vendedores";
+    return { texto: `${plural(u.visoes.length, "aba", "abas")} · ${vend}` };
+  }
+  const p = u.projecoes || { modo: "metas" };
+  if (p.modo === "todos") return { texto: "todos os vendedores da página" };
+  if (p.modo === "alguns") return { texto: plural(p.vendedores.length, "vendedor escolhido", "vendedores escolhidos") };
+  const semAbas = !u.visoes?.length;
+  return { texto: semAbas ? "igual a Metas, que ainda não tem abas: nenhum vendedor" : "igual ao acesso de Metas", aviso: semAbas };
 }
 
 function resumoCompleto(f) {
   const quem = esc(f.nome.trim() || "Esta pessoa");
   if (f.papel === "admin") {
-    return `<b>${quem}</b> vê todas as páginas, abas e vendedores, e pode mudar as Configurações e os acessos.`;
+    return `<b>${quem}</b> vê todas as páginas, abas e vendedores, e pode mudar as configurações e os acessos.`;
   }
   if (!f.paginas.length) return "Marque ao menos uma página para este acesso.";
-  const metas = f.paginas.includes("metas");
-  if (metas && !f.visoes.length) return "Marque ao menos uma aba de Metas para este acesso.";
   const paginas = emLista(f.paginas.map((p) => `<b>${esc(tituloPagina(p))}</b>`));
-  let txt = `<b>${quem}</b> vai ver a${f.paginas.length > 1 ? "s páginas" : " página"} ${paginas}.`;
-  if (metas) {
-    const abas = emLista(f.visoes.map((v) => `<b>${esc(tituloVisao(v))}</b>`));
-    let vend;
-    if (f.vendedores === null) vend = "com todos os vendedores dessas abas";
-    else if (!f.vendedores.length) vend = "mas falta marcar os vendedores";
-    else if (f.vendedores.length <= 3) vend = `só com ${emLista(f.vendedores.map((v) => `<b>${esc(nomeVendedor(v))}</b>`))}; os totais somam só ${f.vendedores.length === 1 ? "esse vendedor" : "esses vendedores"}`;
-    else vend = `só com os <b>${f.vendedores.length} vendedores</b> marcados; os totais somam só esses vendedores`;
-    txt += ` Em Metas: abas ${abas}, ${vend}.`;
-  }
-  if (f.paginas.includes("projecoes")) txt += ` Em Projeções: ${esc(modoProjecoes(sel))}.`;
+  const txt = `<b>${quem}</b> vai ver a${f.paginas.length > 1 ? "s páginas" : " página"} ${paginas}.`;
   return txt + (f.ativo ? "" : " <b>O acesso está desativado:</b> a pessoa não consegue entrar.");
 }
 
@@ -159,8 +139,8 @@ function desenharEditor(primeira = false) {
     <section class="cartao usu-editor usu-vazio ${classe}" style="--i:1">
       <div class="usu-vazio-ic">${icone("escudo")}</div>
       <h3>Escolha um acesso ou crie um novo</h3>
-      <p>Exemplos: o <b>supervisor da BA</b> é um visualizador com as abas Metas BA e Produtos BA.
-        Um <b>vendedor</b> é um visualizador com a aba dele e só ele marcado em Vendedores.</p>
+      <p>Aqui ficam o nome, o usuário, a senha e as <b>páginas</b> de cada pessoa. As abas e os vendedores que ela
+        vê ficam no botão <b>Configurar</b> de cada página, em "Acesso por usuário".</p>
       <button class="btn primario" id="u-novo2" type="button">${icone("mais")}Novo acesso</button>
     </section>`;
     alvo.querySelector("#u-novo2").addEventListener("click", () => trocarPara(""));
@@ -194,8 +174,8 @@ function desenharEditor(primeira = false) {
 
     <h3 class="usu-titulo">Papel</h3>
     <div class="papeis">
-      ${[["visualizador", "olho", "Vê só as páginas, abas e vendedores que você liberar."],
-         ["admin", "escudo", "Vê tudo, muda as Configurações e cadastra acessos."]].map(([p, ic, txt]) => `
+      ${[["visualizador", "olho", "Vê só as páginas que você liberar e, nelas, o que a configuração da página permitir."],
+         ["admin", "escudo", "Vê tudo, muda as configurações das páginas e cadastra acessos."]].map(([p, ic, txt]) => `
         <button type="button" class="papel-op ${form.papel === p ? "ativo" : ""}" data-papel="${p}" aria-pressed="${form.papel === p}" ${eu ? "disabled" : ""}>
           <span class="papel-ic">${icone(ic)}</span><span><b>${PAPEL[p]}</b><small>${txt}</small></span>
         </button>`).join("")}
@@ -263,9 +243,14 @@ function desenharEditor(primeira = false) {
 function desenharPermissoes() {
   const alvo = raiz.querySelector("#u-permissoes");
   if (form.papel === "admin") { alvo.innerHTML = ""; atualizarResumo(); return; }
-  const alguns = form.vendedores !== null;
-  const metas = form.paginas.includes("metas"), projecoes = form.paginas.includes("projecoes");
-  const semAbas = (dados.usuarios.find((x) => x.login === sel)?.projecoes?.modo || "metas") === "metas" && !form.visoes.length;
+  const u = dados.usuarios.find((x) => x.login === sel);
+  // Resumo do que está salvo na configuração de cada página marcada (para quem já tem cadastro).
+  const dentro = u && u.papel !== "admin" ? form.paginas.map((p) => {
+    const d = dentroDaPagina(u, p);
+    return `<li class="${d.aviso ? "aviso-nota" : ""}">${icone(d.aviso ? "alerta" : ICONE_PAGINA[p] || "alvo")}
+      <span><b>${esc(tituloPagina(p))}:</b> ${esc(d.texto)}</span>
+      <a href="#/${CONFIG_PAGINA[p]}?u=${encodeURIComponent(u.login)}">${icone("ajustes")}Configurar</a></li>`;
+  }).join("") : "";
   alvo.innerHTML = `
     <h3 class="usu-titulo">Páginas que pode ver</h3>
     <div class="visoes-escolha paginas-escolha">
@@ -277,117 +262,16 @@ function desenharPermissoes() {
         </button>`;
       }).join("")}
     </div>
-    ${metas ? `<h3 class="usu-titulo">Metas: abas que pode ver</h3>
-    <div class="visoes-escolha">
-      ${dados.visoes.map((v) => {
-        const on = form.visoes.includes(v.id);
-        return `<button type="button" class="visao-op ${on ? "ativo" : ""}" data-visao="${v.id}" aria-pressed="${on}">
-          <span class="marca-caixa">${icone("visto")}</span>${icone(ICONE_VISAO[v.id] || "alvo")}
-          <span><b>${esc(v.titulo)}</b><small>vendedores ${esc(emLista(v.grupos.map((g) => (g === "EDIR" ? "Edir" : g))))}</small></span>
-        </button>`;
-      }).join("")}
-    </div>
-    <h3 class="usu-titulo">Metas: vendedores</h3>
-    <div class="seletor v2 usu-modo" data-v="${alguns ? 1 : 0}"><span class="marcador"></span>
-      <button type="button" data-modo="todos" class="${alguns ? "" : "ativo"}">${icone("pessoas")}Todos dessas abas</button>
-      <button type="button" data-modo="alguns" class="${alguns ? "ativo" : ""}">${icone("usuario")}Só alguns vendedores</button>
-    </div>
-    <div id="u-vendedores"></div>` : ""}
-    ${projecoes ? `<h3 class="usu-titulo">Projeções: vendedores</h3>
-    <p class="usu-nota">${icone("tendencia")}<span>Ficam na configuração da página Projeções. Hoje: <b>${esc(modoProjecoes(sel))}</b>.
-      ${sel ? `<a href="#/config-projecoes?u=${encodeURIComponent(sel)}">Abrir a configuração das projeções</a>` : "Depois de criar o acesso, ajuste lá."}</span></p>
-    ${semAbas ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Sem abas de Metas, "igual ao acesso de Metas" não mostra nenhum vendedor: escolha os vendedores na configuração das projeções.</span></p>` : ""}` : ""}`;
+    <p class="usu-nota">${icone("info")}<span>As abas e os vendedores que a pessoa vê dentro de cada página ficam no botão
+      <b>Configurar</b> da página, em "Acesso por usuário".${u ? "" : " Depois de criar o acesso, escolha lá as abas de Metas: até isso, a página fica vazia para ela."}</span></p>
+    ${dentro ? `<ul class="usu-dentro">${dentro}</ul>` : ""}`;
   alvo.querySelectorAll(".visao-op[data-pagina]").forEach((b) => b.addEventListener("click", () => {
     const marcadas = new Set(form.paginas);
     marcadas.has(b.dataset.pagina) ? marcadas.delete(b.dataset.pagina) : marcadas.add(b.dataset.pagina);
     form.paginas = dados.paginas.map((p) => p.id).filter((id) => marcadas.has(id));
-    desenharPermissoes(); // mostra ou esconde o que é de cada página
+    desenharPermissoes();
   }));
-  alvo.querySelectorAll(".visao-op[data-visao]").forEach((b) => b.addEventListener("click", () => {
-    const marcadas = new Set(form.visoes);
-    marcadas.has(b.dataset.visao) ? marcadas.delete(b.dataset.visao) : marcadas.add(b.dataset.visao);
-    form.visoes = dados.visoes.map((v) => v.id).filter((id) => marcadas.has(id));
-    b.classList.toggle("ativo", marcadas.has(b.dataset.visao));
-    b.setAttribute("aria-pressed", marcadas.has(b.dataset.visao));
-    desenharVendedores();
-  }));
-  alvo.querySelectorAll(".usu-modo button").forEach((b) => b.addEventListener("click", () => {
-    const querAlguns = b.dataset.modo === "alguns";
-    if (querAlguns === (form.vendedores !== null)) return;
-    if (querAlguns) form.vendedores = [...ultimosAlguns];
-    else { ultimosAlguns = form.vendedores; form.vendedores = null; }
-    const seletor = alvo.querySelector(".usu-modo");
-    seletor.dataset.v = querAlguns ? 1 : 0;
-    seletor.querySelectorAll("button").forEach((x) => x.classList.toggle("ativo", x === b));
-    desenharVendedores();
-  }));
-  desenharVendedores();
-}
-
-function desenharVendedores() {
-  const alvo = raiz.querySelector("#u-vendedores");
-  if (!alvo) { atualizarResumo(); return; } // sem a página Metas
-  if (form.vendedores === null) {
-    alvo.innerHTML = `<p class="usu-nota">${icone("info")}Vê todos os vendedores que aparecem nas abas marcadas, inclusive os que entrarem depois.</p>`;
-    atualizarResumo();
-    return;
-  }
-  if (!dados.vendedores.length) {
-    alvo.innerHTML = `<p class="usu-nota">${icone("alerta")}A lista de vendedores aparece quando os dados terminarem de carregar.</p>`;
-    atualizarResumo();
-    return;
-  }
-  const grupos = new Set(dados.visoes.filter((v) => form.visoes.includes(v.id)).flatMap((v) => v.grupos));
-  const marcados = new Set(form.vendedores);
-  const limite = new Date(); limite.setMonth(limite.getMonth() - 3);
-  const lista = dados.vendedores.filter((v) => grupos.has(v.grupo) || marcados.has(v.id));
-  alvo.innerHTML = `
-    <div class="barra-ferramentas usu-busca">
-      <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span>
-        <input id="u-busca" type="search" placeholder="Buscar vendedor ou código" value="${esc(busca)}"></label>
-      <span class="usu-cont" id="u-cont"></span>
-      <button class="btn" type="button" id="u-todos">Marcar os da lista</button>
-      <button class="btn" type="button" id="u-nenhum">Desmarcar todos</button>
-    </div>
-    ${grupos.size ? "" : `<p class="usu-nota">${icone("info")}Marque as abas primeiro: a lista mostra os vendedores delas.</p>`}
-    <div class="vend-escolha" id="u-vend-lista">
-      ${lista.map((v) => {
-        const antigo = new Date(v.ultimo_mes + "T12:00") < limite;
-        const fora = !grupos.has(v.grupo);
-        return `<label class="vend-op ${antigo ? "antigo" : ""}" data-busca="${esc((v.nome + " " + v.nome_erp + " " + v.id).toLowerCase())}">
-          <input type="checkbox" data-id="${v.id}" ${marcados.has(v.id) ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
-          <span class="n">${esc(v.nome)}<small>código ${v.id} · ${esc(v.grupo === "EDIR" ? "Edir" : v.grupo)}${v.supervisor ? ` · sup. ${esc(v.supervisor)}` : ""}${fora ? " · fora das abas marcadas" : ""}</small></span>
-        </label>`;
-      }).join("")}
-    </div>`;
-  const filtrar = () => {
-    const termo = busca.trim().toLowerCase();
-    alvo.querySelectorAll(".vend-op").forEach((el) => { el.hidden = termo && !el.dataset.busca.includes(termo); });
-  };
-  const contar = () => {
-    const n = form.vendedores.length;
-    alvo.querySelector("#u-cont").textContent = n ? `${n} marcado${n === 1 ? "" : "s"}` : "nenhum marcado";
-    atualizarResumo();
-  };
-  const definir = (ids) => {
-    form.vendedores = [...ids].sort((a, b) => a - b);
-    alvo.querySelectorAll(".vend-op input").forEach((c) => { c.checked = ids.has(Number(c.dataset.id)); });
-    contar();
-  };
-  alvo.querySelector("#u-busca").addEventListener("input", (e) => { busca = e.target.value; filtrar(); });
-  alvo.querySelectorAll(".vend-op input").forEach((c) => c.addEventListener("change", () => {
-    const ids = new Set(form.vendedores);
-    c.checked ? ids.add(Number(c.dataset.id)) : ids.delete(Number(c.dataset.id));
-    definir(ids);
-  }));
-  alvo.querySelector("#u-todos").addEventListener("click", () => {
-    const ids = new Set(form.vendedores);
-    alvo.querySelectorAll(".vend-op:not([hidden]) input").forEach((c) => ids.add(Number(c.dataset.id)));
-    definir(ids);
-  });
-  alvo.querySelector("#u-nenhum").addEventListener("click", () => definir(new Set()));
-  filtrar();
-  contar();
+  atualizarResumo();
 }
 
 function atualizarResumo() {
@@ -406,9 +290,6 @@ async function salvar() {
   const btn = raiz.querySelector("#u-salvar");
   mostrarErro("");
   if (form.papel === "visualizador" && !form.paginas.length) return mostrarErro("marque ao menos uma página");
-  const temMetas = form.paginas.includes("metas");
-  if (form.papel === "visualizador" && temMetas && !form.visoes.length) return mostrarErro("marque ao menos uma aba de Metas");
-  if (form.papel === "visualizador" && temMetas && form.vendedores && !form.vendedores.length) return mostrarErro("marque ao menos um vendedor de Metas, ou escolha todos dessas abas");
   btn.disabled = true;
   try {
     const original = sel || null;
@@ -418,7 +299,9 @@ async function salvar() {
       ctx.eu = { ...ctx.eu, ...r.usuario };
       ctx.aoSalvarEu && ctx.aoSalvarEu(r.usuario);
     }
-    toast(original ? `Acesso de ${r.usuario.nome} salvo` : `Acesso de ${r.usuario.nome} criado`);
+    const semAbas = r.usuario.papel !== "admin" && r.usuario.paginas.includes("metas") && !r.usuario.visoes.length;
+    toast(original ? `Acesso de ${r.usuario.nome} salvo` :
+      `Acesso de ${r.usuario.nome} criado${semAbas ? ". Agora escolha as abas dela em Metas › Configurar" : ""}`);
     abrir(r.usuario.login);
     render();
   } catch (e) {

@@ -1,5 +1,6 @@
 // Página Metas: uma página só, com as visões do Power BI (ES, BA, Edir, Outras Linhas ES, Produtos BA)
-// como abas, mais os filtros de vendedor, mês e ano.
+// como abas, mais os filtros de vendedores, meses e anos, todos de seleção múltipla (nada marcado = todos).
+// Vários meses somam metas e realizados, como uma segmentação do Power BI; a conta fica em bi/metas.py.
 import {
   api, esc, fmt, icone, chipStatus, STATUS, corStatus, MESES, animarContadores, animarEntradas,
   ligarTooltips, linhaTT, guardar, ler, toast,
@@ -7,25 +8,41 @@ import {
 import { anel, corrida, ranking, barras } from "./graficos.js";
 import { relatorioVendedores, relatorioProdutos, ligarCaptura } from "./relatorio.js";
 import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
+import { multiSelecao } from "./multiselecao.js";
 
 const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa" };
 const COR = { fat: "var(--s-fat)", mus: "var(--s-mus)", out: "var(--s-out)", cli: "var(--k-cli)", vm: "var(--k-vm)" };
 const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
+const nomeMes = (m) => MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1);
 
 let ctx = null;
-const estado = { visao: "es", ano: null, mes: null, vendedor: null, dados: null, metricaCorrida: null, pedido: 0 };
+let filtroV = null, filtroM = null, filtroA = null;
+// anos e meses: os marcados nos filtros ([] = todos); null = página ainda não aberta.
+const estado = { visao: "es", anos: null, meses: null, vendedores: [], dados: null, metricaCorrida: null, pedido: 0 };
 
 export function montarMetas(container, contexto) {
   ctx = contexto;
   const op = ctx.opcoes;
+  if (!op.visoes.length) {
+    container.innerHTML = `<div class="cartao secao vazio">${icone("cadeado")}<p>Seu acesso ainda não tem nenhuma aba de Metas liberada. Fale com o administrador.</p></div>`;
+    document.getElementById("subtitulo-pagina").innerHTML = "<span>Nenhuma aba liberada</span>";
+    return;
+  }
   const salvo = ler("mv-filtros", {});
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const nums = (t) => (t || "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const padrao = (k) => (op.padrao ? [op.padrao[k]] : []);
   const temFiltroNaUrl = q.has("visao");
-  estado.visao = q.get("visao") || (estado.ano ? estado.visao : salvo.visao) || "es";
-  if (!op.visoes.some((v) => v.id === estado.visao)) estado.visao = op.visoes[0]?.id; // só as visões do acesso
-  estado.ano = Number(q.get("ano")) || estado.ano || op.padrao?.ano;
-  estado.mes = Number(q.get("mes")) || estado.mes || op.padrao?.mes;
-  estado.vendedor = temFiltroNaUrl ? (q.get("v") ? Number(q.get("v")) : null) : estado.vendedor;
+  estado.visao = q.get("visao") || (estado.anos ? estado.visao : salvo.visao) || "es";
+  if (!op.visoes.some((v) => v.id === estado.visao)) estado.visao = op.visoes[0].id; // só as visões do acesso
+  if (temFiltroNaUrl) { // aceita também o endereço antigo (ano, mes e um vendedor só)
+    estado.anos = q.has("anos") ? nums(q.get("anos")) : q.has("ano") ? nums(q.get("ano")) : padrao("ano");
+    estado.meses = q.has("meses") ? nums(q.get("meses")) : q.has("mes") ? nums(q.get("mes")) : padrao("mes");
+    estado.vendedores = nums(q.get("v"));
+  } else if (!estado.anos) {
+    estado.anos = padrao("ano");
+    estado.meses = padrao("mes");
+  }
   estado.dados = null;
 
   container.innerHTML = `
@@ -35,10 +52,10 @@ export function montarMetas(container, contexto) {
         ${op.visoes.map((v) => `<button class="visao" role="tab" data-visao="${v.id}">${icone(ICONE_VISAO[v.id] || "alvo")}${esc(v.titulo)}</button>`).join("")}
       </div>
       <div class="filtros">
-        <label class="campo vendedor"><span class="ic-campo">${icone("usuario")}</span><span class="sr">Vendedor</span><select id="f-vendedor"></select></label>
-        <label class="campo mes"><span class="ic-campo">${icone("calendario")}</span><span class="sr">Mês</span><select id="f-mes"></select></label>
-        <label class="campo ano"><span class="sr">Ano</span><select id="f-ano" style="padding-left:14px"></select></label>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/configuracoes" title="Configurações das metas: produtos, vendedores, devoluções e dias úteis">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        <div id="f-vendedores"></div>
+        <div id="f-meses"></div>
+        <div id="f-anos"></div>
+        ${ctx.admin ? `<a class="btn btn-config" href="#/configuracoes" title="Configurações das metas: produtos, vendedores, devoluções, dias úteis e acesso por usuário">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="m-avisos"></div>
@@ -48,59 +65,96 @@ export function montarMetas(container, contexto) {
       <div class="esqueleto" style="height:360px"></div></div>
     </div>`;
 
+  filtroV = multiSelecao(container.querySelector("#f-vendedores"), {
+    rotulo: "Vendedores", icone: "usuario", todos: "Todos os vendedores", plural: "vendedores",
+    busca: "Buscar vendedor ou código", itens: [], selecionados: estado.vendedores,
+    aoAplicar: (lista) => { estado.vendedores = lista; carregar(); },
+  });
+  const aoMudarPeriodo = () => { ajustarPeriodo(); preencherPeriodo(); carregar(); };
+  filtroM = multiSelecao(container.querySelector("#f-meses"), {
+    rotulo: "Meses", icone: "calendario", todos: "Todos os meses", plural: "meses", semBusca: true, nomesAte: 3,
+    classe: "curto", itens: [], selecionados: estado.meses,
+    aoAplicar: (lista) => { estado.meses = lista; aoMudarPeriodo(); },
+  });
+  filtroA = multiSelecao(container.querySelector("#f-anos"), {
+    rotulo: "Anos", icone: "funil", todos: "Todos os anos", plural: "anos", semBusca: true, nomesAte: 3,
+    classe: "curto", itens: [], selecionados: estado.anos,
+    aoAplicar: (lista) => { estado.anos = lista; aoMudarPeriodo(); },
+  });
+
   container.querySelectorAll(".visao").forEach((b) => b.addEventListener("click", () => {
     if (estado.visao === b.dataset.visao) return;
     estado.visao = b.dataset.visao;
-    estado.vendedor = null;
+    estado.vendedores = [];
+    filtroV.limpar();
     estado.metricaCorrida = null;
-    ajustarMesDisponivel();
-    preencherFiltros();
+    ajustarPeriodo();
+    preencherPeriodo();
     carregar();
   }));
-  container.querySelector("#f-vendedor").addEventListener("change", (e) => { estado.vendedor = e.target.value ? Number(e.target.value) : null; carregar(); });
-  container.querySelector("#f-mes").addEventListener("change", (e) => { estado.mes = Number(e.target.value); carregar(); });
-  container.querySelector("#f-ano").addEventListener("change", (e) => { estado.ano = Number(e.target.value); ajustarMesDisponivel(); preencherFiltros(); carregar(); });
   window.addEventListener("resize", posicionarIndicador);
 
-  ajustarMesDisponivel();
-  preencherFiltros();
+  ajustarPeriodo();
+  preencherPeriodo();
   carregar();
 }
 
-export function recarregarMetas() { if (ctx) carregar(true); }
+export function recarregarMetas() { if (ctx && filtroV) carregar(true); }
 
 function mesesDaVisao() {
   return estado.visao === "produtos_ba" ? ctx.opcoes.meses_produtos : ctx.opcoes.meses;
 }
 
-function ajustarMesDisponivel() {
-  const meses = mesesDaVisao();
-  if (!meses.length) return;
-  const anos = [...new Set(meses.map((m) => m.ano))];
-  if (!anos.includes(estado.ano)) estado.ano = anos[anos.length - 1];
-  const doAno = meses.filter((m) => m.ano === estado.ano).map((m) => m.mes);
-  if (!doAno.includes(estado.mes)) {
-    const p = ctx.opcoes.padrao;
-    estado.mes = p && p.ano === estado.ano && doAno.includes(p.mes) ? p.mes : doAno[doAno.length - 1];
+// Meses com metas que entram no filtro: os anos marcados × os meses marcados (vazio = todos).
+function periodos() {
+  return mesesDaVisao().filter((m) => (!estado.anos.length || estado.anos.includes(m.ano)) &&
+                                      (!estado.meses.length || estado.meses.includes(m.mes)));
+}
+
+// Tira do filtro o que não existe nesta aba. Se um filtro com marcação ficar vazio (que seria "todos"), volta
+// para o mês padrão (o dos dados) ou o último com metas.
+function ajustarPeriodo() {
+  const disp = mesesDaVisao();
+  if (!disp.length) return;
+  const p = ctx.opcoes.padrao;
+  const anosDisp = [...new Set(disp.map((m) => m.ano))];
+  const tinhaAnos = estado.anos.length > 0, tinhaMeses = estado.meses.length > 0;
+  estado.anos = estado.anos.filter((a) => anosDisp.includes(a));
+  if (tinhaAnos && !estado.anos.length) estado.anos = [p && anosDisp.includes(p.ano) ? p.ano : anosDisp[anosDisp.length - 1]];
+  const doAno = [...new Set(disp.filter((m) => !estado.anos.length || estado.anos.includes(m.ano)).map((m) => m.mes))];
+  estado.meses = estado.meses.filter((m) => doAno.includes(m));
+  if (tinhaMeses && !estado.meses.length) {
+    const padraoServe = p && doAno.includes(p.mes) && (!estado.anos.length || estado.anos.includes(p.ano));
+    estado.meses = [padraoServe ? p.mes : Math.max(...disp.filter((m) => !estado.anos.length || estado.anos.includes(m.ano)).map((m) => m.mes))];
   }
 }
 
-function preencherFiltros() {
-  const meses = mesesDaVisao();
-  const anos = [...new Set(meses.map((m) => m.ano))].sort((a, b) => b - a);
-  const selAno = document.getElementById("f-ano");
-  selAno.innerHTML = anos.map((a) => `<option value="${a}" ${a === estado.ano ? "selected" : ""}>${a}</option>`).join("");
-  const selMes = document.getElementById("f-mes");
-  selMes.innerHTML = meses.filter((m) => m.ano === estado.ano)
-    .map((m) => `<option value="${m.mes}" ${m.mes === estado.mes ? "selected" : ""}>${MESES[m.mes - 1][0].toUpperCase() + MESES[m.mes - 1].slice(1)}</option>`).join("");
+function preencherPeriodo() {
+  const disp = mesesDaVisao();
+  const anos = [...new Set(disp.map((m) => m.ano))].sort((a, b) => b - a);
+  filtroA.definir(anos.map((a) => ({ id: a, nome: String(a) })), estado.anos);
+  const meses = [...new Set(disp.filter((m) => !estado.anos.length || estado.anos.includes(m.ano)).map((m) => m.mes))].sort((a, b) => a - b);
+  filtroM.definir(meses.map((m) => ({ id: m, nome: nomeMes(m), curto: MESES[m - 1].slice(0, 3) })), estado.meses);
   document.querySelectorAll(".visao").forEach((b) => b.classList.toggle("ativa", b.dataset.visao === estado.visao));
   posicionarIndicador();
 }
 
 function preencherVendedores(lista) {
-  const sel = document.getElementById("f-vendedor");
-  sel.innerHTML = `<option value="">Todos os vendedores</option>` +
-    lista.map((v) => `<option value="${v.id}" ${v.id === estado.vendedor ? "selected" : ""}>${esc(v.nome)}</option>`).join("");
+  filtroV.definir(lista.map((v) => ({
+    id: v.id, nome: v.nome,
+    detalhe: `código ${v.id}${v.nome_erp && v.nome_erp.toLowerCase() !== v.nome.toLowerCase() ? ` · ERP: ${v.nome_erp}` : ""}`,
+  })), estado.vendedores);
+}
+
+// Clique num vendedor (ranking, tabela, cartões): mostra só ele; de novo, volta para todos.
+// Com Ctrl (ou Cmd no Mac), soma ou tira o vendedor dos que já estão marcados.
+function escolherVendedor(id, ev) {
+  const atual = new Set(estado.vendedores);
+  if (ev && (ev.ctrlKey || ev.metaKey)) atual.has(id) ? atual.delete(id) : atual.add(id);
+  else if (atual.size === 1 && atual.has(id)) atual.clear();
+  else { atual.clear(); atual.add(id); }
+  estado.vendedores = [...atual];
+  carregar();
 }
 
 function posicionarIndicador() {
@@ -116,8 +170,8 @@ function posicionarIndicador() {
 }
 
 function atualizarUrl() {
-  const p = new URLSearchParams({ visao: estado.visao, ano: estado.ano, mes: estado.mes });
-  if (estado.vendedor) p.set("v", estado.vendedor);
+  const p = new URLSearchParams({ visao: estado.visao, anos: estado.anos.join(","), meses: estado.meses.join(",") });
+  if (estado.vendedores.length) p.set("v", estado.vendedores.join(","));
   history.replaceState(null, "", `#/metas?${p}`);
   guardar("mv-filtros", { visao: estado.visao });
 }
@@ -130,13 +184,16 @@ async function carregar(silencioso = false) {
   if (estado.dados) conteudo.classList.add("recarregando");
   atualizarUrl();
   try {
-    const p = new URLSearchParams({ visao: estado.visao, ano: estado.ano, mes: estado.mes });
-    if (estado.vendedor) p.set("vendedor", estado.vendedor);
+    const lista = periodos();
+    if (!lista.length) throw new Error("não há metas cadastradas para esta aba");
+    const p = new URLSearchParams({ visao: estado.visao, meses: lista.map((m) => `${m.ano}-${m.mes}`).join(",") });
+    if (estado.vendedores.length) p.set("vendedores", estado.vendedores.join(","));
     const d = await api(`/api/visao?${p}`);
     if (pedido !== estado.pedido) return;
     estado.dados = d;
-    if (estado.vendedor && !d.vendedores.some((v) => v.id === estado.vendedor)) {
-      estado.vendedor = null;
+    const validos = estado.vendedores.filter((id) => d.vendedores.some((v) => v.id === id));
+    if (validos.length !== estado.vendedores.length) { // vendedor sem meta nos meses escolhidos
+      estado.vendedores = validos;
       return carregar(silencioso);
     }
     preencherVendedores(d.vendedores);
@@ -170,8 +227,7 @@ function posRender(raiz, d) {
     if (el) {
       const chave = d.visao.tipo === "outras" ? "outras" : "faturamento";
       ranking(el, d.linhas.map((l) => ({ id: l.id, nome: l.nome, ...l[chave] })), {
-        ritmo: d.calendario.ritmo, situacao: d.calendario.situacao, selecionado: estado.vendedor,
-        aoClicar: (id) => { estado.vendedor = estado.vendedor === id ? null : id; carregar(); },
+        ritmo: d.calendario.ritmo, situacao: d.calendario.situacao, aoClicar: escolherVendedor,
       });
       animarEntradas(el);
       ligarTooltips(el);
@@ -184,36 +240,53 @@ function posRender(raiz, d) {
       desenharCorrida(d);
     }));
   }
-  raiz.querySelectorAll("[data-vendedor]").forEach((el) => el.addEventListener("click", () => {
-    const id = Number(el.dataset.vendedor);
-    estado.vendedor = estado.vendedor === id ? null : id;
-    carregar();
+  raiz.querySelectorAll("[data-vendedor]").forEach((el) => el.addEventListener("click", (ev) => {
+    escolherVendedor(Number(el.dataset.vendedor), ev);
   }));
 }
+
+const variosMeses = (d) => d.calendario.meses.length > 1;
 
 // ======================================================================================
 // Ritmo do mês (substitui o quadro "Dias úteis" do Power BI; calcula feriados sozinho)
 // ======================================================================================
+function faixaMeses(c) {
+  const SITUACAO = { aberto: "em andamento", fechado: "encerrado", futuro: "ainda não começou" };
+  return `<div class="faixa-meses" aria-label="Meses do período">
+    ${c.meses.map((m, n) => {
+      const pct = m.dias_uteis ? m.dias_decorridos / m.dias_uteis : 0;
+      const tt = `<div class='tt-t'>${nomeMes(m.mes)} de ${m.ano} · ${SITUACAO[m.situacao]}</div>` +
+        linhaTT("Dias úteis", fmt.dias(m.dias_uteis)) + linhaTT("Já passaram", fmt.dias(m.dias_decorridos));
+      return `<div class="mes-r ${m.situacao} ${pct > 0.55 ? "cheio" : ""}" style="--i:${n}" data-tt="${esc(tt)}">
+        <i style="height:${(pct * 100).toFixed(1)}%"></i><b>${MESES[m.mes - 1].slice(0, 3)}</b><small>${String(m.ano).slice(2)}</small></div>`;
+    }).join("")}
+  </div>`;
+}
+
 function renderRitmo(d, i = 0) {
   const c = d.calendario;
+  const varios = variosMeses(d);
   const feriados = c.dias.filter((x) => x.tipo === "feriado" || x.tipo === "meio");
   const textos = {
-    aberto: `Hoje cada meta precisa estar em pelo menos <b>${fmt.pct(c.ritmo)}</b> para estar no ritmo.`,
-    fechado: "Mês encerrado: o ritmo esperado agora é 100% da meta.",
-    futuro: "Este mês ainda não começou.",
+    aberto: `Hoje cada meta${varios ? " do período" : ""} precisa estar em pelo menos <b>${fmt.pct(c.ritmo)}</b> para estar no ritmo.`,
+    fechado: `${varios ? "Período encerrado" : "Mês encerrado"}: o ritmo esperado agora é 100% da meta.`,
+    futuro: varios ? "Este período ainda não começou." : "Este mês ainda não começou.",
   };
+  const MAX_FERIADOS = 4;
+  const chipsFeriados = feriados.slice(0, MAX_FERIADOS).map((f) => `<span class="chip laranja">★ ${fmt.dataCurta(f.data)} · ${esc(f.motivo)}</span>`).join("") +
+    (feriados.length > MAX_FERIADOS ? `<span class="chip laranja">+${feriados.length - MAX_FERIADOS} feriados</span>` : "");
   return `
   <section class="cartao ritmo secao entra" style="--i:${i}">
     <div>
       <div class="cartao-cab"><div>
-        <h2>${icone("calendario")}Ritmo do mês</h2>
+        <h2>${icone("calendario")}Ritmo do ${varios ? "período" : "mês"}</h2>
         <p class="sub">${esc(d.periodo.rotulo)} · calendário ${c.regiao === "ES" ? "do Espírito Santo" : "da Bahia"}</p>
       </div></div>
       <div class="ritmo-numero"><span class="grande" data-contar="${c.dias_decorridos}" data-fmt="dias">0</span><span class="de">de ${fmt.dias(c.dias_uteis)} dias úteis</span></div>
       <div class="ritmo-legenda">${textos[c.situacao]}</div>
       <div class="ritmo-barra"><span data-largura="${c.ritmo * 100}%"></span></div>
     </div>
-    <div class="faixa-dias" aria-label="Dias do mês">
+    ${varios ? faixaMeses(c) : `<div class="faixa-dias" aria-label="Dias do mês">
       ${c.dias.map((x, n) => {
         const dia = Number(x.data.slice(8));
         const dow = new Date(x.data + "T12:00").getDay();
@@ -225,14 +298,14 @@ function renderRitmo(d, i = 0) {
           linhaTT("Conta como", x.peso === 1 ? "1 dia útil" : x.peso ? `${fmt.dias(x.peso)} dia útil` : "não conta");
         return `<div class="dia ${classes}" style="--i:${n}${col}" data-tt="${esc(tt)}">${dia}<span class="sem">${sem}</span></div>`;
       }).join("")}
-    </div>
+    </div>`}
     <div>
       <div class="ritmo-stats">
         <div class="mini-stat"><div class="r">Ritmo esperado</div><div class="v">${fmt.pct(c.ritmo)}</div></div>
         <div class="mini-stat"><div class="r">Dias úteis restantes</div><div class="v">${fmt.dias(c.dias_restantes)}</div></div>
       </div>
       <div class="feriados-lista">
-        ${feriados.length ? feriados.map((f) => `<span class="chip laranja">★ ${fmt.dataCurta(f.data)} · ${esc(f.motivo)}</span>`).join("") : `<span class="chip">Sem feriados neste mês</span>`}
+        ${feriados.length ? chipsFeriados : `<span class="chip">Sem feriados neste ${varios ? "período" : "mês"}</span>`}
         <span class="chip">Dados até ${fmt.dataCurta(d.data_ref)}</span>
       </div>
     </div>
@@ -247,7 +320,7 @@ function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
   const v = tipo === "moeda" ? fmt.moedaC : fmt.num;
   const linhas = [];
   if (ind.meta && cal.situacao === "aberto") linhas.push(["Esperado até hoje", v(ind.esperado)]);
-  if (tipo === "moeda" && ind.projecao != null && cal.situacao === "aberto") linhas.push(["Projeção do mês", `${v(ind.projecao)} <span style="color:var(--tinta-3)">(${fmt.pct(ind.projecao_pct, 0)})</span>`]);
+  if (tipo === "moeda" && ind.projecao != null && cal.situacao === "aberto") linhas.push([cal.meses.length > 1 ? "Projeção do período" : "Projeção do mês", `${v(ind.projecao)} <span style="color:var(--tinta-3)">(${fmt.pct(ind.projecao_pct, 0)})</span>`]);
   if (ind.falta != null) {
     linhas.push([ind.falta > 0 ? "Falta para a meta" : "Meta", ind.falta > 0 ? v(ind.falta) : "alcançada"]);
     if (ind.falta_por_dia) linhas.push(["Necessário por dia útil", v(ind.falta_por_dia)]);
@@ -379,7 +452,7 @@ function renderVendedores(d) {
   h += `<section class="duas-colunas secao">
     <article class="cartao entra" style="--i:6">
       <div class="cartao-cab">
-        <div><h3>${icone("grafico")}Corrida da meta</h3><p class="sub">Acumulado no mês comparado ao ritmo esperado de cada dia útil</p></div>
+        <div><h3>${icone("grafico")}Corrida da meta</h3><p class="sub">Acumulado no ${variosMeses(d) ? "período (os meses um depois do outro)" : "mês"} comparado ao ritmo esperado de cada dia útil</p></div>
         ${metricas.length > 1 ? `<div class="seg-mini">${metricas.map(([k, n]) => `<button data-m="${k}" class="${k === estado.metricaCorrida ? "ativo" : ""}">${n}</button>`).join("")}</div>` : ""}
       </div>
       <div class="legenda" id="leg-corrida"></div>
@@ -390,7 +463,7 @@ function renderVendedores(d) {
     const itens = [{ nome: "Mussarela", valor: l.mussarela.realizado, cor: COR.mus, icone: "queijo" }, { nome: "Outras linhas", valor: l.outras.realizado, cor: COR.out, icone: "leite" }];
     const cats = d.categorias.lista.map((c) => ({ nome: c, valor: l.categorias[c] })).concat([{ nome: "Demais produtos", valor: l.demais }]).filter((c) => c.valor);
     h += `<article class="cartao entra" style="--i:7">
-      <div class="cartao-cab"><div><h3>${icone("queijo")}Composição de ${esc(l.nome)}</h3><p class="sub">Faturamento líquido no mês</p></div></div>
+      <div class="cartao-cab"><div><h3>${icone("queijo")}Composição de ${esc(l.nome)}</h3><p class="sub">Faturamento líquido no ${variosMeses(d) ? "período" : "mês"}</p></div></div>
       ${barras(itens, { total: l.faturamento.realizado })}
       <h4 style="margin:20px 0 10px;font-size:14px;color:var(--tinta-2)">Outras linhas por categoria</h4>
       ${barras(cats.sort((a, b) => b.valor - a.valor), { total: l.outras.realizado })}
@@ -483,13 +556,14 @@ function renderProdutos(d) {
     ${simples(4, "Abaixo do ritmo", "abaixo", "var(--ruim-forte)", ind.abaixo, "mais de 10% abaixo do ritmo", "abaixo")}
   </section>`;
 
-  if (d.resumo_vendedores.length > 1 || estado.vendedor) {
+  const filtrado = estado.vendedores.length > 0;
+  if (d.resumo_vendedores.length > 1 || filtrado) {
     h += `<section class="cartao secao entra" style="--i:5">
-      <div class="cartao-cab"><div><h3>${icone("pessoas")}Vendedores</h3><p class="sub">Média de atingimento das metas de produto · clique para detalhar</p></div></div>
-      <div class="vend-cards">${(estado.vendedor ? d.vendedores.map((v) => d.resumo_vendedores.find((r) => r.id === v.id) || { ...v, produtos: 0 }) : d.resumo_vendedores)
+      <div class="cartao-cab"><div><h3>${icone("pessoas")}Vendedores</h3><p class="sub">Média de atingimento das metas de produto · clique para detalhar, Ctrl+clique para somar outro</p></div></div>
+      <div class="vend-cards">${(filtrado ? d.vendedores.map((v) => d.resumo_vendedores.find((r) => r.id === v.id) || { ...v, produtos: 0 }) : d.resumo_vendedores)
         .filter((v) => v.produtos !== undefined).map((v) => {
           const ok = v.no_ritmo || 0, at = v.atencao || 0, tot = v.produtos || 0, ru = tot - ok - at;
-          return `<div class="vend-card ${estado.vendedor === v.id ? "selecionada" : ""}" data-vendedor="${v.id}" tabindex="0">
+          return `<div class="vend-card ${estado.vendedores.includes(v.id) ? "selecionada" : ""}" data-vendedor="${v.id}" tabindex="0">
             <div class="n">${esc(v.nome)}</div>
             <div class="p">${v.atingimento != null ? fmt.pct(v.atingimento, 0) : "—"}</div>
             <div class="d">${tot ? `${ok} de ${tot} produtos no ritmo` : "clique para ver"}</div>
@@ -511,7 +585,7 @@ function renderBullets(d, i) {
   const linhas = d.produtos.map((p) => ({ p, c: p.por_vendedor[vid] })).filter((x) => x.c);
   return `<section class="cartao secao entra" style="--i:${i}">
     <div class="cartao-cab"><div><h3>${icone("caixa")}Produtos de ${esc(d.colunas[0].nome)}</h3>
-    <p class="sub">Barra = volume vendido líquido · traço = meta do mês · ritmo esperado ${fmt.pct(alvo)}</p></div></div>
+    <p class="sub">Barra = volume vendido líquido · traço = meta do ${variosMeses(d) ? "período" : "mês"} · ritmo esperado ${fmt.pct(alvo)}</p></div></div>
     <div class="bullets">${linhas.map(({ p, c }) => {
       const escala = Math.max(1.15, (c.pct || 0) * 1.05);
       const larg = c.meta ? (Math.min(c.pct || 0, escala) / escala) * 100 : 100;

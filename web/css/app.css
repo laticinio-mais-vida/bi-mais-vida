@@ -384,8 +384,6 @@ body.com-lateral.lateral-pronta { transition: padding-left .35s var(--suave), ba
 }
 .campo.sem-seta::after { display: none; }
 .campo select option { background: var(--surface); color: var(--tinta); }
-.campo.vendedor select { min-width: 210px; }
-.campo.mes select { min-width: 150px; }
 
 /* ---------- avisos ---------- */
 .aviso {
@@ -427,6 +425,22 @@ body.com-lateral.lateral-pronta { transition: padding-left .35s var(--suave), ba
 .dia.feriado::before { content: "★"; position: absolute; top: 5px; font-size: 12px; color: var(--laranja); }
 .dia.hoje::after { content: ""; position: absolute; top: -9px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--acento); animation: quica 1.4s ease-in-out infinite; }
 @keyframes quica { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+/* vários meses no filtro: um bloco por mês, cheio até a parte dos dias úteis que já passou */
+.faixa-meses { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 64px); justify-content: center; gap: 6px; align-items: end; }
+.mes-r {
+  position: relative; overflow: hidden; height: 64px; border-radius: 10px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 6px;
+  background: color-mix(in srgb, var(--s-fat) 16%, var(--surface)); color: var(--tinta-2);
+  font-size: 11px; line-height: 1.15; cursor: default;
+  transform-origin: bottom; animation: dia-cresce .5s var(--mola) both; animation-delay: calc(var(--i) * 30ms);
+}
+.mes-r i { position: absolute; inset: auto 0 0 0; background: var(--s-fat); }
+.mes-r b, .mes-r small { position: relative; text-transform: capitalize; }
+.mes-r small { font-size: 9.5px; opacity: .8; }
+.mes-r.cheio { color: #fff; }
+.mes-r.futuro { opacity: .6; }
+.mes-r.aberto { box-shadow: inset 0 0 0 2px var(--acento); }
+.divisa-mes { stroke-dasharray: 3 4; }
 .ritmo-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .mini-stat { padding: 10px 12px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--linha); }
 .mini-stat .r { font-size: 12px; color: var(--tinta-3); font-weight: 600; }
@@ -649,7 +663,7 @@ table.relatorio-tabela { border-collapse: collapse; font-size: 12px; font-varian
 .relatorio-tabela.produtos td.m { color: var(--tinta-2); }
 .relatorio-tabela.produtos tbody tr:nth-child(even) td:not(.produto) { background: var(--rel-real); }
 .relatorio-tabela.produtos td.total + td.total { border-left: 1px solid var(--rel-borda); }
-.relatorio-tabela.dentro { margin-top: 18px; }
+.relatorio-tabela.dentro { min-width: 520px; }
 .relatorio-tabela.dentro thead th { background: var(--rel-cat); }
 .relatorio-tabela.dentro td.msg { text-align: left; min-width: 220px; }
 .relatorio-tabela.dentro td.rotulo { width: auto; max-width: none; min-width: 150px; }
@@ -794,6 +808,7 @@ body.sem-rolagem { overflow: hidden; }
 .config-menu button.ativa { background: var(--acento-suave); color: var(--acento-tinta); }
 .config-menu button .cont { margin-left: auto; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--tinta-3); }
 .config-menu .dica { font-size: 12.5px; color: var(--tinta-3); padding: 10px 12px 4px; border-top: 1px solid var(--linha); margin-top: 6px; }
+.config-menu .btn { white-space: normal; height: auto; min-height: 40px; padding-top: 8px; padding-bottom: 8px; text-align: left; }
 .resumo-grupos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
 .resumo-grupo { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--linha); background: var(--surface-2); position: relative; overflow: hidden; }
 .resumo-grupo::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c); }
@@ -1180,6 +1195,17 @@ body.sem-rolagem { overflow: hidden; }
 .multi-rodape .btn { height: 36px; padding: 0 12px; font-size: 13px; }
 .multi-resumo { margin-right: auto; font-size: 12.5px; font-weight: 700; color: var(--acento-tinta); }
 .btn-limpar { height: 42px; border-radius: 14px; color: var(--tinta-2); }
+.multi.curto .multi-botao { min-width: 150px; max-width: 220px; }
+.multi.curto .multi-painel { width: 260px; }
+
+/* Usuários: o que a pessoa vê dentro de cada página (só leitura, com o link para a configuração da página) */
+.usu-dentro { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.usu-dentro li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--linha); font-size: 13px; color: var(--tinta-2); }
+.usu-dentro li .ic { flex: none; color: var(--acento); }
+.usu-dentro li.aviso-nota .ic { color: var(--atencao); }
+.usu-dentro li span { flex: 1; min-width: 0; }
+.usu-dentro li a { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--acento-tinta); font-weight: 700; text-decoration: none; }
+.usu-dentro li a:hover { text-decoration: underline; }
 
 .proj-titulo { display: flex; align-items: center; gap: 12px; padding: 4px 8px 4px 4px; }
 .proj-icone { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--laranja), #FF9F43); box-shadow: 0 8px 18px -8px rgba(245, 130, 32, .8); }
@@ -1300,7 +1326,7 @@ body.sem-rolagem { overflow: hidden; }
   body.lateral-gaveta { overflow: hidden; }
   .btn-menu { display: inline-flex; position: absolute; top: 16px; right: 16px; z-index: 3; }
   .hero-conteudo { position: relative; }
-  .controles .filtros, .multi, .multi-botao { width: 100%; max-width: none; }
+  .controles .filtros, .multi, .multi-botao, .multi.curto .multi-botao { width: 100%; max-width: none; }
   .proj-titulo { width: 100%; }
   .mini-barras { height: 58px; }
   .hero { height: auto; min-height: 300px; padding-bottom: 64px; }
@@ -1325,6 +1351,8 @@ body.sem-rolagem { overflow: hidden; }
   .kpis.n5, .kpis.n4, .kpis.n3, .kpis.n2 { grid-template-columns: 1fr; }
   .faixa-dias { grid-auto-flow: row; grid-template-columns: repeat(7, 1fr); }
   .faixa-dias .dia:first-child { grid-column-start: var(--col, 1); }
+  .faixa-meses { grid-auto-flow: row; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .mes-r { height: 52px; }
   .dia, .dia.fds, .dia.sabado { height: 42px; }
   .hero-titulo h1 { font-size: 24px; }
   .cartao-cab { flex-wrap: wrap; }

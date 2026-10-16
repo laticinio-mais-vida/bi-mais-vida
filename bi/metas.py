@@ -7,6 +7,9 @@ Regras (as mesmas do Power BI, com os parâmetros vindos da página Configuraç�
 - faturamento = mussarela + outras linhas (produtos marcados como "não conta" ficam fora de tudo);
 - clientes = clientes distintos com venda válida no mês (o total não repete cliente atendido por dois vendedores);
 - ritmo esperado = dias úteis já passados / dias úteis do mês, até o último dia com venda na cópia do banco.
+
+Com vários meses escolhidos no filtro, metas e realizados somam os meses (como uma segmentação do Power BI),
+clientes somam os atendidos de cada mês (a meta de clientes é mensal) e o ritmo junta os dias úteis de todos.
 """
 from __future__ import annotations
 
@@ -33,6 +36,45 @@ def nome_bonito(nome: str) -> str:
 
 def _div(a: float, b: float) -> float | None:
     return a / b if b else None
+
+
+def _em_lista(itens: list[str]) -> str:
+    return itens[0] if len(itens) == 1 else ", ".join(itens[:-1]) + " e " + itens[-1]
+
+
+def _fim_do_mes(mes: dt.date) -> dt.date:
+    return mes.replace(day=calendar.monthrange(mes.year, mes.month)[1])
+
+
+def _seguidos(a: dt.date, b: dt.date) -> bool:
+    return (b.year * 12 + b.month) - (a.year * 12 + a.month) == 1
+
+
+def rotulo_periodo(meses: list[dt.date]) -> str:
+    """'Outubro de 2026', 'Janeiro a outubro de 2026', 'Setembro e novembro de 2026'..."""
+    nome = lambda m: MESES[m.month - 1]  # noqa: E731
+    a, b = meses[0], meses[-1]
+    if len(meses) == 1:
+        texto = f"{nome(a)} de {a.year}"
+    elif all(_seguidos(x, y) for x, y in zip(meses, meses[1:])):
+        texto = f"{nome(a)} a {nome(b)} de {a.year}" if a.year == b.year else f"{nome(a)} de {a.year} a {nome(b)} de {b.year}"
+    elif len(meses) <= 6:
+        anos = sorted({m.year for m in meses})
+        texto = ", ".join(f"{_em_lista([nome(m) for m in meses if m.year == ano])} de {ano}" for ano in anos)
+    else:
+        texto = f"{len(meses)} meses entre {nome(a)[:3]}/{a.year} e {nome(b)[:3]}/{b.year}"
+    return texto[0].upper() + texto[1:]
+
+
+def filtro_meses(meses: list[dt.date]) -> tuple[str, list]:
+    """Trecho SQL "data nos meses escolhidos", juntando meses seguidos num intervalo só."""
+    faixas = []
+    for m in meses:
+        if faixas and _seguidos(faixas[-1][2], m):
+            faixas[-1][1], faixas[-1][2] = _fim_do_mes(m), m
+        else:
+            faixas.append([m, _fim_do_mes(m), m])
+    return "(" + " OR ".join("data BETWEEN ? AND ?" for _ in faixas) + ")", [d for f in faixas for d in f[:2]]
 
 
 def status(realizado: float, meta: float, ritmo: float, situacao: str) -> str:
@@ -114,38 +156,46 @@ class Calculadora:
             "nomes_meses": MESES,
         }
 
-    def _metas_do_mes(self, regras: Regras, mes: dt.date, grupos: list[str]) -> dict[int, dict]:
-        """Metas por vendedor no mês, para os grupos da visão (soma se o ID aparecer duas vezes)."""
+    def _metas(self, regras: Regras, meses: set[dt.date], grupos: list[str]) -> dict[int, dict]:
+        """Metas por vendedor nos meses escolhidos, para os grupos da visão (soma os meses e o ID repetido).
+        O nome é o da planilha do mês mais recente."""
         saida: dict[int, dict] = {}
+        mes_do_nome: dict[int, dt.date] = {}
         for m in self.metas.dados():
-            if m["mes"] != mes or regras.grupo_vendedor(m["id_vendedor"]) not in grupos:
+            vid = m["id_vendedor"]
+            if m["mes"] not in meses or regras.grupo_vendedor(vid) not in grupos:
                 continue
-            atual = saida.setdefault(m["id_vendedor"], {"nome": m["vendedor"], "fat": 0.0, "mus": 0.0, "out": 0.0, "cli": 0.0})
+            atual = saida.setdefault(vid, {"nome": m["vendedor"], "fat": 0.0, "mus": 0.0, "out": 0.0, "cli": 0.0})
+            if m["mes"] > mes_do_nome.setdefault(vid, m["mes"]):
+                atual["nome"], mes_do_nome[vid] = m["vendedor"], m["mes"]
             atual["fat"] += m["meta_fat"]
             atual["mus"] += m["meta_mus"]
             atual["out"] += m["meta_out"]
             atual["cli"] += m["meta_cli"]
         return saida
 
-    def _movimento(self, regras: Regras, ids: list[int], inicio: dt.date, fim: dt.date):
+    def _movimento(self, regras: Regras, ids: list[int], meses: list[dt.date], com_dias: bool = True):
         """Vendas e devoluções (que descontam) por vendedor/produto e por dia/produto, já com equivalências."""
         por_vendedor = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))  # vid -> pid -> [valor, qtd]
         por_dia = defaultdict(lambda: defaultdict(float))                     # data -> pid -> valor
         if not ids:
             return por_vendedor, por_dia
         marcas = ",".join("?" * len(ids))
-        for d, vid, pid, valor, qtd in self.cache.consulta(
-                f"SELECT data, id_vendedor, id_produto, SUM(valor), SUM(quantidade) FROM vendas_itens "
-                f"WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas}) GROUP BY 1, 2, 3",
-                [inicio, fim, *ids]):
+        periodo, params = filtro_meses(meses)
+        filtro = f"WHERE {periodo} AND id_vendedor IN ({marcas})"
+        for vid, pid, valor, qtd in self.cache.consulta(
+                f"SELECT id_vendedor, id_produto, SUM(valor), SUM(quantidade) FROM vendas_itens {filtro} GROUP BY 1, 2",
+                [*params, *ids]):
             p = regras.produto(pid)
             por_vendedor[vid][p][0] += valor
             por_vendedor[vid][p][1] += qtd
-            por_dia[d][p] += valor
+        if com_dias:
+            for d, pid, valor in self.cache.consulta(
+                    f"SELECT data, id_produto, SUM(valor) FROM vendas_itens {filtro} GROUP BY 1, 2", [*params, *ids]):
+                por_dia[d][regras.produto(pid)] += valor
         for d, vid, pid, motivo, cancelada, valor, qtd in self.cache.consulta(
                 f"SELECT data, id_vendedor, id_produto, id_motivo, cancelada, SUM(valor), SUM(quantidade) "
-                f"FROM devolucoes_itens WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas}) "
-                f"GROUP BY 1, 2, 3, 4, 5", [inicio, fim, *ids]):
+                f"FROM devolucoes_itens {filtro} GROUP BY 1, 2, 3, 4, 5", [*params, *ids]):
             if motivo not in regras.motivos or (cancelada and regras.ignorar_canceladas):
                 continue
             p = regras.produto(pid)
@@ -154,57 +204,89 @@ class Calculadora:
             por_dia[d][p] -= valor
         return por_vendedor, por_dia
 
-    def _clientes(self, ids: list[int], inicio: dt.date, fim: dt.date) -> tuple[dict[int, int], int]:
+    def _clientes(self, ids: list[int], meses: list[dt.date]) -> tuple[dict[int, int], int]:
+        """Clientes distintos de cada mês, somados nos meses (a meta de clientes é mensal)."""
         if not ids:
             return {}, 0
         marcas = ",".join("?" * len(ids))
-        por_vendedor = dict(self.cache.consulta(
-            f"SELECT id_vendedor, COUNT(DISTINCT id_cliente) FROM vendas_clientes "
-            f"WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas}) GROUP BY 1", [inicio, fim, *ids]))
-        total = self.cache.consulta(
-            f"SELECT COUNT(DISTINCT id_cliente) FROM vendas_clientes "
-            f"WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas})", [inicio, fim, *ids])[0][0]
-        return por_vendedor, total
+        periodo, params = filtro_meses(meses)
+        filtro = f"WHERE {periodo} AND id_vendedor IN ({marcas})"
+        por_vendedor: dict[int, int] = defaultdict(int)
+        for vid, n in self.cache.consulta(
+                f"SELECT id_vendedor, COUNT(DISTINCT id_cliente) FROM vendas_clientes {filtro} "
+                f"GROUP BY id_vendedor, year(data), month(data)", [*params, *ids]):
+            por_vendedor[vid] += n
+        total = sum(n for (n,) in self.cache.consulta(
+            f"SELECT COUNT(DISTINCT id_cliente) FROM vendas_clientes {filtro} GROUP BY year(data), month(data)",
+            [*params, *ids]))
+        return dict(por_vendedor), total
+
+    def _calendario_periodo(self, cal_obj: Calendario, meses: list[dt.date], regiao: str, data_ref: dt.date) -> dict:
+        """Calendário dos meses escolhidos: dias úteis somados e ritmo = dias passados ÷ dias úteis de todos."""
+        resumos = [cal_obj.resumo(m.year, m.month, regiao, data_ref) for m in meses]
+        if len(resumos) == 1:
+            cal = resumos[0]
+        else:
+            total = sum(r["dias_uteis"] for r in resumos)
+            decorridos = sum(r["dias_decorridos"] for r in resumos)
+            situacoes = {r["situacao"] for r in resumos}
+            cal = {
+                "regiao": regiao, "dias_uteis": total, "dias_decorridos": decorridos,
+                "dias_restantes": total - decorridos, "ritmo": (decorridos / total) if total else 0.0,
+                "situacao": situacoes.pop() if len(situacoes) == 1 else "aberto",
+                "dias": [d for r in resumos for d in r["dias"]],
+            }
+        cal["meses"] = [{"ano": m.year, "mes": m.month, "dias_uteis": r["dias_uteis"],
+                         "dias_decorridos": r["dias_decorridos"], "situacao": r["situacao"]}
+                        for m, r in zip(meses, resumos)]
+        return cal
 
     # --- visões --------------------------------------------------------------------------
-    def visao(self, visao: str, ano: int, mes: int, vendedor: int | None = None,
+    def visao(self, visao: str, periodos: list[tuple[int, int]], vendedores: list[int] | None = None,
               permitidos: set[int] | None = None) -> dict:
-        """permitidos: vendedores que o usuário pode ver (None = todos); os totais somam só esses."""
+        """periodos: (ano, mês) escolhidos no filtro; vendedores: filtro (None ou vazio = todos);
+        permitidos: vendedores que o usuário pode ver (None = todos). Os totais somam só esses."""
         if visao not in VISOES:
             raise ValueError(f"visão desconhecida: {visao}")
         if not self.cache.pronto():
             raise RuntimeError("os dados ainda estão sendo preparados")
+        meses = sorted({dt.date(int(a), int(m), 1) for a, m in periodos})
+        if not meses:
+            raise ValueError("escolha ao menos um mês")
+        if len(meses) > 60:
+            raise ValueError("escolha no máximo 60 meses")
         info = VISOES[visao]
         regras = self.regras()
         cal_obj = self.calendario(regras)
         data_ref = self.cache.data_ref()
-        inicio = dt.date(ano, mes, 1)
-        fim = dt.date(ano, mes, calendar.monthrange(ano, mes)[1])
-        cal = cal_obj.resumo(ano, mes, info["regiao"], data_ref)
+        cal = self._calendario_periodo(cal_obj, meses, info["regiao"], data_ref)
+        fim = _fim_do_mes(meses[-1])
+        arquivo = meses[0].strftime("%Y-%m") + ("" if len(meses) == 1 else "-a-" + meses[-1].strftime("%Y-%m"))
         base = {
             "visao": {"id": visao, **info},
-            "periodo": {"ano": ano, "mes": mes, "inicio": inicio.isoformat(), "fim": fim.isoformat(),
-                        "rotulo": f"{MESES[mes - 1].capitalize()} de {ano}"},
+            "periodo": {"meses": [{"ano": m.year, "mes": m.month} for m in meses], "inicio": meses[0].isoformat(),
+                        "fim": fim.isoformat(), "rotulo": rotulo_periodo(meses), "arquivo": arquivo},
             "data_ref": data_ref.isoformat(),
             "calendario": cal,
             "avisos": self.avisos(),
         }
+        filtro = set(vendedores) if vendedores else None
         if info["tipo"] == "produtos":
-            return {**base, **self._visao_produtos(regras, info, inicio, fim, cal, vendedor, permitidos)}
-        return {**base, **self._visao_vendedores(regras, info, inicio, fim, cal, cal_obj, vendedor, permitidos)}
+            return {**base, **self._visao_produtos(regras, info, meses, cal, filtro, permitidos)}
+        return {**base, **self._visao_vendedores(regras, info, meses, cal, filtro, permitidos)}
 
-    def _visao_vendedores(self, regras, info, inicio, fim, cal, cal_obj, vendedor, permitidos):
-        metas = self._metas_do_mes(regras, inicio, info["grupos"])
+    def _visao_vendedores(self, regras, info, meses, cal, filtro, permitidos):
+        metas = self._metas(regras, set(meses), info["grupos"])
         if permitidos is not None:
             metas = {k: v for k, v in metas.items() if k in permitidos}
         nomes_erp = self.nomes_erp()
         lista = sorted(({"id": vid, "nome": nome_bonito(m["nome"]), "nome_erp": nomes_erp.get(vid, "")}
                         for vid, m in metas.items()), key=lambda x: x["nome"])
-        if vendedor is not None:
-            metas = {k: v for k, v in metas.items() if k == vendedor}
+        if filtro is not None:
+            metas = {k: v for k, v in metas.items() if k in filtro}
         ids = sorted(metas)
-        mov, por_dia = self._movimento(regras, ids, inicio, fim)
-        cli_vend, cli_total = self._clientes(ids, inicio, fim)
+        mov, por_dia = self._movimento(regras, ids, meses)
+        cli_vend, cli_total = self._clientes(ids, meses)
         categorias = regras.categorias
 
         def soma(produtos: dict) -> dict:
@@ -265,12 +347,11 @@ class Calculadora:
         for linha in linhas:
             contagem[linha[chave]["status"]] += 1
 
-        # Série diária acumulada para a "corrida da meta"
-        ritmo = dict(cal_obj.ritmo_ate(inicio.year, inicio.month, info["regiao"]))
-        data_ref = self.cache.data_ref()
-        diario, acum = [], {"fat": 0.0, "mus": 0.0, "out": 0.0}
-        d = inicio
-        while d <= fim:
+        # Série diária acumulada para a "corrida da meta" (com vários meses, um seguido do outro)
+        peso_total = sum(x["peso"] for x in cal["dias"]) or 1.0
+        diario, acum, peso_acum = [], {"fat": 0.0, "mus": 0.0, "out": 0.0}, 0.0
+        for x in cal["dias"]:
+            d = dt.date.fromisoformat(x["data"])
             dia = {"fat": 0.0, "mus": 0.0, "out": 0.0}
             for pid, valor in por_dia.get(d, {}).items():
                 grupo = regras.grupo_produto(pid)
@@ -280,20 +361,20 @@ class Calculadora:
                 dia["mus" if grupo == "mussarela" else "out"] += valor
             for k in acum:
                 acum[k] += dia[k]
-            passou = d <= data_ref
+            peso_acum += x["peso"]
+            passou = x["passou"]
             diario.append({
-                "data": d.isoformat(),
-                "ritmo": ritmo[d],
+                "data": x["data"],
+                "ritmo": peso_acum / peso_total,
                 "fat": round(dia["fat"], 2) if passou else None,
                 "fat_acum": round(acum["fat"], 2) if passou else None,
                 "mus_acum": round(acum["mus"], 2) if passou else None,
                 "out_acum": round(acum["out"], 2) if passou else None,
             })
-            d += dt.timedelta(days=1)
 
         return {
             "vendedores": lista,
-            "vendedor": vendedor,
+            "selecionados": sorted(filtro) if filtro else [],
             "indicadores": indicadores,
             "linhas": linhas,
             "contagem_status": dict(contagem),
@@ -301,21 +382,23 @@ class Calculadora:
             "diario": diario,
         }
 
-    def _visao_produtos(self, regras, info, inicio, fim, cal, vendedor, permitidos):
+    def _visao_produtos(self, regras, info, meses, cal, filtro, permitidos):
         nomes_erp = self.nomes_erp()
         metas_prod = defaultdict(lambda: defaultdict(float))  # pid -> vid -> meta
-        nomes_planilha: dict[int, str] = {}
+        nomes_planilha: dict[int, tuple[dt.date, str]] = {}   # nome da planilha do mês mais recente
+        escolhidos = set(meses)
         for m in self.metas_produtos.dados():
-            if m["mes"] != inicio or regras.grupo_vendedor(m["id_vendedor"]) not in info["grupos"]:
+            if m["mes"] not in escolhidos or regras.grupo_vendedor(m["id_vendedor"]) not in info["grupos"]:
                 continue
             metas_prod[regras.produto(m["id_produto"])][m["id_vendedor"]] += m["meta_volume"]
-            nomes_planilha[m["id_vendedor"]] = m["vendedor"]
+            if m["mes"] >= nomes_planilha.get(m["id_vendedor"], (m["mes"], ""))[0]:
+                nomes_planilha[m["id_vendedor"]] = (m["mes"], m["vendedor"])
         todos_ids = sorted({vid for por_v in metas_prod.values() for vid in por_v
                             if permitidos is None or vid in permitidos})
-        lista = sorted(({"id": vid, "nome": nome_bonito(nomes_planilha.get(vid) or nomes_erp.get(vid, str(vid))),
+        lista = sorted(({"id": vid, "nome": nome_bonito(nomes_planilha.get(vid, (None, ""))[1] or nomes_erp.get(vid, str(vid))),
                          "nome_erp": nomes_erp.get(vid, "")} for vid in todos_ids), key=lambda x: x["nome"])
-        ids = [v for v in todos_ids if vendedor is None or v == vendedor]
-        mov, _ = self._movimento(regras, ids, inicio, fim)
+        ids = [v for v in todos_ids if filtro is None or v in filtro]
+        mov, _ = self._movimento(regras, ids, meses, com_dias=False)
         produtos_info = {}
         pids = set(metas_prod)
         for vid in ids:
@@ -369,7 +452,7 @@ class Calculadora:
             })
         return {
             "vendedores": lista,
-            "vendedor": vendedor,
+            "selecionados": sorted(filtro) if filtro else [],
             "colunas": [v for v in lista if v["id"] in ids],
             "produtos": linhas,
             "resumo_vendedores": resumo_vend,

@@ -1,6 +1,6 @@
 // Gráficos em SVG desenhados à mão (sem bibliotecas): anel de progresso, corrida da meta, ranking, barras e
 // histórico com projeção.
-import { esc, fmt, icone, STATUS, corStatus, mostrarTooltip, esconderTooltip, linhaTT, reduzMovimento } from "./util.js";
+import { esc, fmt, icone, MESES, STATUS, corStatus, mostrarTooltip, esconderTooltip, linhaTT, reduzMovimento } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -49,6 +49,7 @@ function ticks(max, n = 4) {
 }
 
 // ---------- corrida da meta (acumulado do mês x ritmo esperado) ----------
+// Com vários meses, os dias vêm um mês depois do outro: o eixo mostra o nome de cada mês e uma divisa.
 export function corrida(el, { diario, dias, meta, chave = "fat_acum", cor = "var(--s-fat)", projecao = null, situacao = "aberto", nome = "Faturamento" }) {
   let w = 0;
   const desenhar = () => {
@@ -78,10 +79,19 @@ export function corrida(el, { diario, dias, meta, chave = "fat_acum", cor = "var
       s += `<line class="grade-l" x1="${m.e}" x2="${W - m.d}" y1="${y(v)}" y2="${y(v)}"/>`;
       s += `<text class="eixo-t" x="${m.e - 10}" y="${y(v) + 4}" text-anchor="end">${fmt.eixo(v)}</text>`;
     });
-    diario.forEach((d, i) => {
-      const dia = Number(d.data.slice(8));
-      if (dia === 1 || dia % 5 === 0 || i === n - 1) s += `<text class="eixo-t" x="${x(i)}" y="${H - 8}" text-anchor="middle">${dia}</text>`;
-    });
+    const inicios = diario.map((d, i) => [i, d]).filter(([, d]) => d.data.endsWith("-01"));
+    if (inicios.length > 1) {
+      const passo = Math.ceil(inicios.length / Math.max(2, Math.floor((W - m.e - m.d) / 46)));
+      inicios.forEach(([i, d], k) => {
+        if (i > 0) s += `<line class="grade-l divisa-mes" x1="${x(i) - larg / 2}" x2="${x(i) - larg / 2}" y1="${m.t}" y2="${H - m.b}"/>`;
+        if (k % passo === 0) s += `<text class="eixo-t" x="${x(i)}" y="${H - 8}" text-anchor="start">${MESES[Number(d.data.slice(5, 7)) - 1].slice(0, 3)}/${d.data.slice(2, 4)}</text>`;
+      });
+    } else {
+      diario.forEach((d, i) => {
+        const dia = Number(d.data.slice(8));
+        if (dia === 1 || dia % 5 === 0 || i === n - 1) s += `<text class="eixo-t" x="${x(i)}" y="${H - 8}" text-anchor="middle">${dia}</text>`;
+      });
+    }
     const temProj = projecao != null && situacao === "aberto" && ultimo >= 0 && ultimo < n - 1;
     // rótulos à direita: se meta e projeção ficarem perto, um vai para cima e o outro para baixo
     let yMeta = meta ? y(meta) + 4 : 0, yProj = temProj ? y(projecao) + 4 : 0;
@@ -182,9 +192,9 @@ export function ranking(el, itens, { ritmo, situacao, selecionado, aoClicar }) {
   el.innerHTML = h;
   el.querySelectorAll(".rank-val .ic").forEach((s, i) => { s.style.color = corStatus(ord[i].status); s.style.width = "14px"; s.style.height = "14px"; });
   el.querySelectorAll(".rank-linha").forEach((linha) => {
-    const ir = () => aoClicar && aoClicar(Number(linha.dataset.id));
+    const ir = (e) => aoClicar && aoClicar(Number(linha.dataset.id), e);
     linha.addEventListener("click", ir);
-    linha.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ir(); } });
+    linha.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ir(e); } });
   });
 }
 

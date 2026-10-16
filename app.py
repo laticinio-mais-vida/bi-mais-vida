@@ -282,13 +282,28 @@ class Manipulador(BaseHTTPRequestHandler):
         cookie = self._cookie_login(u["login"], eu["lembrar"]) if original == eu["login"] else None
         return self._json({"ok": True, "usuario": u, "usuarios": self.app.usuarios.listar()}, cookie=cookie)
 
-    def _config_projecoes(self) -> dict:
-        """Configuração da página Projeções: vendedores da página e o que cada visualizador vê nela."""
+    def _visualizadores(self) -> dict:
+        """Quem a configuração de uma página lista em "Acesso por usuário" (administrador vê tudo)."""
         return {
-            **self.app.projetor.catalogo(),
             "usuarios": [u for u in self.app.usuarios.listar() if u["papel"] != "admin"],
             "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
         }
+
+    def _config_projecoes(self) -> dict:
+        """Configuração da página Projeções: vendedores da página e o que cada visualizador vê nela."""
+        return {**self.app.projetor.catalogo(), **self._visualizadores()}
+
+    def _salvar_config_metas(self, eu: dict, corpo: dict):
+        """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas e os vendedores que cada
+        visualizador vê. Confere as duas partes antes de gravar qualquer uma."""
+        acessos = corpo.pop("usuarios", None)
+        if corpo:
+            self.app.configuracao.validar(corpo)
+        if acessos:
+            self.app.usuarios.definir_metas(acessos)
+            log.info("%s alterou o acesso de Metas de %s", eu["login"], ", ".join(acessos))
+        cfg = self.app.configuracao.salvar(corpo) if corpo else self.app.configuracao.atual()
+        return self._json({"ok": True, "config": cfg, **self._visualizadores()})
 
     def _receber(self):
         """VPS: pacote com o cache e as planilhas, assinado pelo computador da empresa (sem login)."""
@@ -325,19 +340,19 @@ class Manipulador(BaseHTTPRequestHandler):
                 permitidas = visoes_permitidas(usuario)
                 opcoes["visoes"] = [v for v in opcoes["visoes"] if v["id"] in permitidas]
                 return self._json(opcoes)
+            lista = lambda k: [int(x) for x in q[k].split(",") if x.strip()] if q.get(k) else None  # noqa: E731
             if url.path == "/api/visao":
                 if "metas" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Metas", HTTPStatus.FORBIDDEN)
                 visao = q.get("visao", "es")
                 if visao not in visoes_permitidas(usuario):
                     return self._erro("seu acesso não inclui esta visão", HTTPStatus.FORBIDDEN)
-                vendedor = int(q["vendedor"]) if q.get("vendedor") else None
-                return self._json(self.app.calc.visao(visao, int(q["ano"]), int(q["mes"]), vendedor,
-                                                      vendedores_permitidos(usuario)))
+                # meses=2026-09,2026-10 (vários meses somados); vendedores=12,15 (vazio = todos do acesso)
+                meses = [tuple(int(p) for p in m.split("-")) for m in (q.get("meses") or "").split(",") if m.strip()]
+                return self._json(self.app.calc.visao(visao, meses, lista("vendedores"), vendedores_permitidos(usuario)))
             if url.path == "/api/projecoes":
                 if "projecoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Projeções", HTTPStatus.FORBIDDEN)
-                lista = lambda k: [int(x) for x in q[k].split(",") if x.strip()] if q.get(k) else None  # noqa: E731
                 permitidos, equipes = escopo_projecoes(usuario)
                 try:
                     return self._json(self.app.projetor.calcular(lista("vendedores"), lista("produtos"),
@@ -347,15 +362,14 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/config":
-                return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo()})
+                return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
+                                   **self._visualizadores()})
             if url.path == "/api/calendario":
                 return self._json(self.app.calc.calendario_ano(int(q.get("ano", dt.date.today().year))))
             if url.path == "/api/usuarios":
                 return self._json({
                     "usuarios": self.app.usuarios.listar(),
-                    "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
                     "paginas": [{"id": k, "titulo": v} for k, v in PAGINAS.items()],
-                    "vendedores": self.app.calc.vendedores_catalogo() if self.app.cache.pronto() else [],
                 })
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
         except CONEXAO_PERDIDA:
@@ -399,8 +413,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s excluiu o acesso de %s", usuario["login"], login)
                 return self._json({"ok": True, "usuarios": self.app.usuarios.listar()})
             if url.path == "/api/config":
-                cfg = self.app.configuracao.salvar(self._corpo_json())
-                return self._json({"ok": True, "config": cfg})
+                return self._salvar_config_metas(usuario, self._corpo_json())
             if url.path == "/api/projecoes/config":
                 corpo = self._corpo_json()
                 ConfigProjecoes._valida(corpo.get("vendedores") or {})  # erro aqui não deixa gravar só os acessos

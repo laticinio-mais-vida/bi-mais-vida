@@ -132,6 +132,11 @@ class Configuracao:
         with self._trava:
             return copy.deepcopy(self._cfg)
 
+    @staticmethod
+    def validar(novo: dict) -> dict:
+        """Confere sem gravar (levanta ValueError com a explicação)."""
+        return _valida(novo)
+
     def salvar(self, novo: dict) -> dict:
         cfg = _valida(novo)
         with self._trava:
