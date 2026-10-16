@@ -110,9 +110,16 @@ Em mês fechado, o ritmo esperado é 100%.
 Previsão do **faturamento bruto** dos próximos 6 meses, separado em **Mussarela** e **Mix** (outras linhas),
 com o total. Bruto quer dizer todas as vendas válidas **sem descontar as devoluções**, por isso os valores ficam
 acima do realizado da página de Metas. Valem as equivalências de produto, os produtos "não conta" ficam fora e
-entram os vendedores escolhidos na configuração da página (por padrão, todas as equipes ES, BA e Edir,
-inclusive vendedores sem meta na planilha).
+entram as carteiras dos vendedores escolhidos na configuração da página (por padrão, todas as equipes ES, BA e
+Edir, inclusive vendedores sem meta na planilha).
 
+- **Vendedor do cliente:** nas Projeções, cada venda conta para o vendedor que tem o cliente na carteira hoje
+  (o vendedor do cliente no cadastro do ERP, na cópia mais recente do banco), não para quem fez a venda. Se em
+  fevereiro os clientes do vendedor A passaram para o B, filtrar o B em janeiro já mostra as vendas desses
+  clientes. O histórico acompanha o cliente, e vendedor que saiu e não tem mais clientes some do filtro e da
+  configuração. Clientes sem vendedor no cadastro ficam fora, assim como as vendas a funcionários, fornecedores e
+  produtores (não são clientes e não têm carteira). Se um vendedor que saiu ainda aparece, faltou repassar os
+  clientes dele no ERP. A página de Metas continua com o vendedor da venda.
 - **Filtros de vendedores e produtos:** seleção múltipla com busca. Vendedores vêm agrupados por equipe e
   produtos por Mussarela e pelas categorias do mix. Marcar o nome do grupo marca todos dele. Nada marcado é
   todos. O filtro fica no endereço da página (dá para mandar o link) e é lembrado neste navegador.
@@ -128,17 +135,19 @@ inclusive vendedores sem meta na planilha).
 O botão **Configurar** da página Projeções (só administradores) abre duas seções. Tudo vale depois de
 **Salvar alterações**, e nada muda nas metas nem no ERP.
 
-- **Vendedores da página:** quem entra nos totais, nos gráficos e no filtro. Vendedores novos das equipes ES,
-  BA e Edir entram sozinhos, para a projeção não perder faturamento sem ninguém perceber. Desmarque contas
-  internas (Venda interna, Funcionário, Produtor...) ou quem não deve contar, e marque quem é de fora dessas
-  equipes e deve entrar. A lista mostra a venda bruta dos últimos 12 meses e a última venda de cada um.
+- **Vendedores da página:** de quem a carteira entra nos totais, nos gráficos e no filtro. Vendedores novos das
+  equipes ES, BA e Edir entram sozinhos, para a projeção não perder faturamento sem ninguém perceber. Desmarque
+  contas internas (Venda interna, Funcionário, Produtor...) ou quem não deve contar, e marque quem é de fora
+  dessas equipes e deve entrar. A lista traz os vendedores com clientes que compraram desde 2024 e mostra, para
+  cada um, a venda bruta da carteira nos últimos 12 meses, quantos clientes compraram e a última venda. Um aviso
+  mostra quantos clientes estão sem vendedor no cadastro (e quanto venderam), porque ficam fora.
   Fica gravado em `config_projecoes.json` (a versão anterior em `config_projecoes.anterior.json`).
 - **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
   - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Metas › Configurar. Se o acesso
     de Metas mudar, este muda junto;
   - **Todos da página;**
   - **Só alguns:** a lista que você marcar.
-  Os totais somam só os vendedores que a pessoa vê. Administradores veem todos os vendedores da página.
+  Os totais somam só as carteiras dos vendedores que a pessoa vê. Administradores veem todos os vendedores da página.
 
 ### Como a projeção é calculada
 

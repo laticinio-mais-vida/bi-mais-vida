@@ -1,6 +1,7 @@
 // Configuração da página Projeções (só administradores): quais vendedores entram na página e quais vendedores
-// cada visualizador vê nela. Vendedores novos das equipes ES, BA e Edir entram sozinhos; a lista guarda só quem
-// foi desmarcado dessas equipes ou incluído de fora delas. Tudo vale depois de Salvar.
+// cada visualizador vê nela. Vendedor é o vendedor do cliente: cada um entra com a carteira inteira. Vendedores
+// novos das equipes ES, BA e Edir entram sozinhos; a lista guarda só quem foi desmarcado dessas equipes ou
+// incluído de fora delas. Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { iniciais } from "./conta.js";
 
@@ -142,15 +143,21 @@ function atualizarBarra() {
 function secaoVendedores(alvo) {
   const equipes = dados.equipes.filter((e) => dados.vendedores.some((v) => v.equipe === e.id));
   const automaticas = emLista(dados.equipes.filter((e) => e.padrao).map((e) => e.nome));
+  const sem = dados.sem_vendedor || { clientes: 0, venda_12m: 0 };
   alvo.innerHTML = `
   <section class="cartao entra" style="--i:1">
     <div class="cartao-cab"><div>
       <h2>${icone("pessoas")}Vendedores que entram nas projeções</h2>
-      <p class="sub">Os marcados entram nos totais, nos gráficos e no filtro da página. Vendedores novos das equipes
-        ${esc(automaticas)} entram sozinhos; desmarque contas internas ou quem não deve contar. As equipes vêm de
-        Configurações das metas. Lista: todos os vendedores com venda desde 2024.</p>
+      <p class="sub">Cada vendedor entra com as vendas de todos os clientes da carteira dele (o vendedor do cliente no
+        cadastro do ERP), inclusive as de antes de o cliente ser repassado a ele. Os marcados entram nos totais, nos
+        gráficos e no filtro da página. Vendedores novos das equipes ${esc(automaticas)} entram sozinhos; desmarque
+        contas internas ou quem não deve contar. As equipes vêm de Configurações das metas. Lista: vendedores com
+        clientes que compraram desde 2024.</p>
     </div></div>
     <div class="resumo-grupos" id="cp-resumo"></div>
+    ${sem.clientes ? `<p class="usu-nota aviso-nota" style="margin:0 0 14px">${icone("alerta")}<span>${sem.clientes}
+      cliente${sem.clientes === 1 ? "" : "s"} sem vendedor no cadastro do ERP (${fmt.moedaC(sem.venda_12m)} em 12 meses)
+      fica${sem.clientes === 1 ? "" : "m"} fora das projeções.</span></p>` : ""}
     <div class="barra-ferramentas">
       <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span><input id="cp-busca" type="search" placeholder="Buscar vendedor ou código" value="${esc(filtro.busca)}"></label>
       <div class="filtro-chips" id="cp-chips"></div>
@@ -232,7 +239,7 @@ function desenharVendedores() {
       <button class="chave ${on ? "ligada" : ""}" type="button" role="switch" aria-checked="${on}" data-id="${v.id}" aria-label="${esc(v.nome)} entra na página"></button>
       <div class="prod-nome">${esc(v.nome)}<small>${esc(detalhe)}</small>${nota ? `<span class="alerta">${icone("info")}${nota}</span>` : ""}</div>
       <span class="chip-equipe e-${esc(v.equipe)}">${esc(v.rotulo_equipe)}</span>
-      <div class="prod-vendido">${v.venda_12m ? fmt.moedaC(v.venda_12m) : "—"}<small>${v.ultima_venda ? `última venda ${fmt.data(v.ultima_venda)}` : "sem venda"}</small></div>
+      <div class="prod-vendido">${v.venda_12m ? fmt.moedaC(v.venda_12m) : "—"}<small>${v.clientes} cliente${v.clientes === 1 ? "" : "s"} · ${v.ultima_venda ? `última venda ${fmt.data(v.ultima_venda)}` : "sem venda"}</small></div>
     </div>`;
   }).join("");
   el.querySelectorAll(".chave[data-id]").forEach((b) => b.addEventListener("click", () => {

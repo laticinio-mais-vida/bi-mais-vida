@@ -1,10 +1,15 @@
 """Projeção do faturamento bruto dos próximos meses (página Projeções).
 
-Base: vendas válidas (vendas_itens, sem as canceladas) SEM descontar devoluções, com as equivalências de produto,
-sem os produtos marcados como "não conta" e só com os vendedores da página (config_projecoes.json: as equipes
-ES, BA e Edir, menos os desmarcados, mais os incluídos à mão). Cada mês vira R$ por dia útil
+Base: vendas válidas (vendas_clientes_mes, sem as canceladas) SEM descontar devoluções, com as equivalências de
+produto, sem os produtos marcados como "não conta" e só com os vendedores da página (config_projecoes.json: as
+equipes ES, BA e Edir, menos os desmarcados, mais os incluídos à mão). Cada mês vira R$ por dia útil
 (calendário de ES e BA, com os feriados e extras das Configurações), para meses curtos ou com feriado não
 parecerem queda de venda.
+
+Vendedor aqui é o vendedor do cliente (a carteira no cadastro do ERP na cópia mais recente), não o da venda: o
+cliente repassado leva o histórico inteiro para a carteira nova, e vendedor que saiu sem clientes some da página.
+Cliente sem vendedor no cadastro fica fora, e venda a funcionário, fornecedor ou produtor também (não tem carteira;
+antes já ficava fora pelas contas internas desmarcadas). A página de Metas continua com o vendedor da venda.
 
 Método (escolhido por backtest com o histórico de 2024 a 2026; os números estão no README):
 - modelo = média de dois métodos simples, em R$ por dia útil:
@@ -44,6 +49,11 @@ EQUIPES = ("ES", "BA", "EDIR")       # entram na página sozinhas (vendedor novo
 ORDEM_EQUIPES = (*EQUIPES, "OCULTO")
 REGIAO_EQUIPE = {"ES": "ES", "BA": "BA", "EDIR": "BA"}
 NOME_EQUIPE = {"ES": "ES", "BA": "BA", "EDIR": "Edir", "OCULTO": "Outros"}
+# Venda (i) com o vendedor do cliente (c.id_vendedor); cliente sem vendedor no cadastro não entra. Venda a
+# funcionário, fornecedor ou produtor não tem carteira: o código é de outro cadastro e pode coincidir com o de
+# um cliente.
+SO_CLIENTES = "i.tipocliente = 'CLIENTE'"
+CARTEIRA = f"vendas_clientes_mes i JOIN clientes c ON c.id = i.id_cliente AND {SO_CLIENTES} AND c.id_vendedor > 0"
 
 
 class SemVendedores(Exception):
@@ -164,15 +174,22 @@ class Projetor:
         self._trava = threading.Lock()
         self._linhas_cache: tuple = (None, [])
 
+    def _conferir_cache(self) -> None:
+        cache = self.calc.cache
+        if not cache.pronto():
+            raise RuntimeError("os dados ainda estão sendo preparados")
+        if cache.antigo:  # cache de antes da carteira: o PC extrai de novo e envia
+            raise RuntimeError("os dados por cliente ainda estão sendo preparados")
+
     def _linhas(self) -> list[tuple]:
-        """(ano, mês, vendedor, produto, valor) do cache inteiro; só consulta de novo quando o cache muda."""
+        """(ano, mês, vendedor do cliente, produto, valor) do cache inteiro; só consulta de novo quando o cache muda."""
         cache = self.calc.cache
         carimbo = (cache.info.get("extraido_em"), cache.info.get("data_ref"))
         with self._trava:
             if self._linhas_cache[0] == carimbo:
                 return self._linhas_cache[1]
         linhas = cache.consulta(
-            "SELECT year(data), month(data), id_vendedor, id_produto, SUM(valor) FROM vendas_itens GROUP BY ALL")
+            f"SELECT year(i.mes), month(i.mes), c.id_vendedor, i.id_produto, SUM(i.valor) FROM {CARTEIRA} GROUP BY ALL")
         with self._trava:
             self._linhas_cache = (carimbo, linhas)
         return linhas
@@ -190,9 +207,8 @@ class Projetor:
     def calcular(self, vendedores: list[int] | None = None, produtos: list[int] | None = None,
                  permitidos: set[int] | None = None, equipes: set[str] | None = None) -> dict:
         """vendedores/produtos: filtros (None = todos). permitidos/equipes: o que o usuário pode ver
-        (None = sem limite além dos vendedores da página)."""
-        if not self.calc.cache.pronto():
-            raise RuntimeError("os dados ainda estão sendo preparados")
+        (None = sem limite além dos vendedores da página). Vendedor é sempre o vendedor do cliente."""
+        self._conferir_cache()
         regras = self.calc.regras()
         cfg = self.config.atual()
         cal = self.calc.calendario(regras)
@@ -221,7 +237,7 @@ class Projetor:
         mes_cal = np.array([m for _, m in meses])
         dias_regiao = {r: np.array([sum(d["peso"] for d in cal.dias_do_mes(a, m, r)) for a, m in meses]) for r in REGIOES}
 
-        # --- vendas por vendedor e produto, só dos vendedores da página ---
+        # --- vendas por vendedor do cliente e produto, só dos vendedores da página ---
         # O total da página é só a referência da participação. Para quem vê parte dos vendedores, o acesso
         # funciona como um filtro: a projeção de um vendedor é a mesma para ele e para o administrador.
         equipe_de: dict[int, str] = {}
@@ -465,33 +481,43 @@ class Projetor:
 
     # --- configuração da página ------------------------------------------------------------
     def catalogo(self) -> dict:
-        """Todos os vendedores com venda no cache, para a configuração da página escolher quem entra."""
-        if not self.calc.cache.pronto():
-            raise RuntimeError("os dados ainda estão sendo preparados")
+        """Os vendedores com carteira (clientes que compraram desde o início do cache), para a configuração da
+        página escolher quem entra; e o que fica fora por cliente sem vendedor no cadastro."""
+        self._conferir_cache()
         regras = self.calc.regras()
         cfg = self.config.atual()
         cache = self.calc.cache
         data_ref = cache.data_ref()
         desde = (data_ref.replace(day=1) - dt.timedelta(days=365)).replace(day=1)
         fora = [pid for pid, r in regras.produtos.items() if r.get("grupo") == "fora"]
-        sem_fora = f"AND id_produto NOT IN ({','.join('?' * len(fora))})" if fora else ""
+        sem_fora = f"AND i.id_produto NOT IN ({','.join('?' * len(fora))})" if fora else ""
         vendas = cache.consulta(
-            f"SELECT id_vendedor, SUM(CASE WHEN data >= ? THEN valor ELSE 0 END), MAX(data) FROM vendas_itens "
-            f"WHERE TRUE {sem_fora} GROUP BY 1", [desde, *fora])
+            f"SELECT c.id_vendedor, SUM(CASE WHEN i.mes >= ? THEN i.valor ELSE 0 END), "
+            f"COUNT(DISTINCT CASE WHEN i.mes >= ? AND i.valor > 0 THEN i.id_cliente END) FROM {CARTEIRA} "
+            f"WHERE TRUE {sem_fora} GROUP BY 1", [desde, desde, *fora])
+        ultimas = dict(cache.consulta(
+            f"SELECT c.id_vendedor, MAX(i.data) FROM vendas_clientes i "
+            f"JOIN clientes c ON c.id = i.id_cliente AND {SO_CLIENTES} AND c.id_vendedor > 0 GROUP BY 1"))
+        sem_clientes, sem_venda = cache.consulta(
+            f"SELECT COUNT(DISTINCT CASE WHEN i.valor > 0 THEN i.id_cliente END), SUM(i.valor) "
+            f"FROM vendas_clientes_mes i LEFT JOIN clientes c ON c.id = i.id_cliente "
+            f"WHERE {SO_CLIENTES} AND COALESCE(c.id_vendedor, 0) <= 0 AND i.mes >= ? {sem_fora}", [desde, *fora])[0]
         erp = {r[0]: r[1:] for r in cache.consulta("SELECT id, nome, supervisor, inativo FROM vendedores")}
         nomes = self._nomes_vendedores()
         ordem = {e: i for i, e in enumerate(ORDEM_EQUIPES)}
         lista = []
-        for vid, venda, ultima in vendas:
+        for vid, venda, clientes in vendas:
             equipe = regras.grupo_vendedor(vid)
             nome_erp, supervisor, inativo = erp.get(vid, ("", "", 0))
+            ultima = ultimas.get(vid)
             lista.append({
                 "id": vid, "nome": nomes.get(vid, f"Vendedor {vid}"), "nome_erp": nome_erp or "",
                 "equipe": equipe, "rotulo_equipe": NOME_EQUIPE.get(equipe, equipe), "supervisor": supervisor or "",
-                "inativo": bool(inativo), "venda_12m": round(venda or 0.0, 2),
+                "inativo": bool(inativo), "venda_12m": round(venda or 0.0, 2), "clientes": clientes,
                 "ultima_venda": ultima.isoformat() if ultima else None,
                 "padrao": equipe in EQUIPES, "na_pagina": ConfigProjecoes.na_pagina(cfg, vid, equipe),
             })
         lista.sort(key=lambda v: (ordem.get(v["equipe"], 9), -v["venda_12m"], v["nome"]))
         return {"config": cfg, "vendedores": lista, "desde": desde.isoformat(), "data_ref": data_ref.isoformat(),
+                "sem_vendedor": {"clientes": sem_clientes, "venda_12m": round(sem_venda or 0.0, 2)},
                 "equipes": [{"id": e, "nome": NOME_EQUIPE[e], "padrao": e in EQUIPES} for e in ORDEM_EQUIPES]}

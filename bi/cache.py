@@ -28,10 +28,14 @@ class SemSenhaDoBanco(RuntimeError):
 TABELAS = {
     "vendas_itens": "data DATE, id_vendedor INTEGER, id_produto INTEGER, valor DOUBLE, quantidade DOUBLE",
     "vendas_clientes": "data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, vendas INTEGER",
+    # venda bruta por mês, cliente e produto: as Projeções somam pelo vendedor do cliente (a carteira). Venda a
+    # funcionário, fornecedor ou produtor (tipocliente) usa o código do cadastro deles, não o de CLIENTES.
+    "vendas_clientes_mes": "mes DATE, id_cliente INTEGER, tipocliente VARCHAR, id_produto INTEGER, valor DOUBLE",
     "devolucoes_itens": ("data DATE, id_vendedor INTEGER, id_produto INTEGER, id_motivo INTEGER, "
                          "cancelada BOOLEAN, valor DOUBLE, quantidade DOUBLE"),
     "produtos": "id INTEGER, nome VARCHAR, id_linha INTEGER, linha VARCHAR, unidade VARCHAR, inativo INTEGER",
     "vendedores": "id INTEGER, nome VARCHAR, id_supervisor INTEGER, supervisor VARCHAR, inativo INTEGER",
+    "clientes": "id INTEGER, nome VARCHAR, id_vendedor INTEGER",
     "motivos": "id INTEGER, nome VARCHAR",
     "info": "chave VARCHAR, valor VARCHAR",
 }
@@ -41,6 +45,18 @@ def _data(v):
     if isinstance(v, dt.datetime):
         return v.date()
     return v
+
+
+def _tabela_diferente(con: duckdb.DuckDBPyConnection) -> str | None:
+    """A primeira tabela de TABELAS que falta no cache ou tem outras colunas (None = formato atual)."""
+    existentes = {r[0] for r in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
+    for nome, colunas in TABELAS.items():
+        if nome not in existentes:
+            return nome
+        esperadas = [c.split()[0] for c in colunas.split(", ")]
+        if [r[0] for r in con.execute(f"DESCRIBE {nome}").fetchall()] != esperadas:
+            return nome
+    return None
 
 
 class Cache:
@@ -56,6 +72,7 @@ class Cache:
         self._trava_extracao = threading.Lock()
         self.estado = {"atualizando": False, "etapa": None, "erro": None, "inicio": None, "duracao": None}
         self.info: dict[str, str] = {}
+        self.antigo = False  # cache de uma versão anterior do painel (falta tabela): precisa extrair de novo
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -76,11 +93,13 @@ class Cache:
     def _abrir(self) -> None:
         con = duckdb.connect(str(self.arquivo), read_only=True)
         info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
+        antigo = _tabela_diferente(con) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
             self._con = con
             self.info = info
+            self.antigo = antigo
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -96,11 +115,9 @@ class Cache:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
-            for nome, colunas in TABELAS.items():
-                esperadas = [c.split()[0] for c in colunas.split(", ")]
-                existentes = [r[0] for r in con.execute(f"DESCRIBE {nome}").fetchall()]
-                if existentes != esperadas:
-                    raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
+            nome = _tabela_diferente(con)
+            if nome:
+                raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
         finally:
             con.close()
@@ -118,12 +135,12 @@ class Cache:
             self._abrir()
 
     def desatualizado(self) -> bool:
-        """True se a cópia do banco é mais nova que a usada no cache."""
+        """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
             return False
-        return self._con is None or float(self.info.get("banco_mtime", 0)) < mtime - 1
+        return self._con is None or self.antigo or float(self.info.get("banco_mtime", 0)) < mtime - 1
 
     # --- extração ------------------------------------------------------------------------
     def atualizar_em_segundo_plano(self) -> bool:
@@ -203,6 +220,14 @@ class Cache:
                     "SELECT v.DATA, COALESCE(v.ID_VENDEDOR, 0), v.ID_CLIENTE, MAX(v.TIPOCLIENTE), COUNT(*) "
                     "FROM VENDAS v WHERE v.DATA >= ? AND v.DATA < ? AND v.DATACANCELAMENTO IS NULL "
                     "GROUP BY 1, 2, 3", (de, ate))]
+            self.estado["etapa"] = "Lendo vendas por cliente"
+            dados["vendas_clientes_mes"] = [
+                (dt.date(int(a), int(m), 1), c, t, p, float(val or 0)) for a, m, c, t, p, val in bd.consulta(
+                    "SELECT EXTRACT(YEAR FROM v.DATA), EXTRACT(MONTH FROM v.DATA), v.ID_CLIENTE, v.TIPOCLIENTE, "
+                    "COALESCE(l.ID_ITEM, 0), SUM(l.VALORTOTALITEM) "
+                    "FROM VENDAS v JOIN LISTAVENDA l ON l.ID_VENDA = v.ID_VENDA "
+                    "WHERE v.DATA >= ? AND v.DATA < ? AND v.DATACANCELAMENTO IS NULL "
+                    "GROUP BY 1, 2, 3, 4, 5", (de, ate))]
             self.estado["etapa"] = "Lendo devoluções"
             dados["devolucoes_itens"] = [
                 (_data(d), v, p, m, bool(c), float(val or 0), float(q or 0)) for d, v, p, m, c, val, q in bd.consulta(
@@ -219,6 +244,7 @@ class Cache:
             dados["vendedores"] = bd.consulta(
                 "SELECT v.ID_VENDEDOR, v.NOME, v.ID_SUPERVISOR, s.NOME, COALESCE(v.INATIVO, 0) "
                 "FROM VENDEDORES v LEFT JOIN SUPERVISOR s ON s.ID_SUPERVISOR = v.ID_SUPERVISOR")
+            dados["clientes"] = bd.consulta("SELECT ID_CLIENTE, NOME, COALESCE(ID_VENDEDOR, 0) FROM CLIENTES")
             dados["motivos"] = bd.consulta("SELECT ID_MOTIVODEVOLUCAO, NOME FROM MOTIVODEVOLUCAO")
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.

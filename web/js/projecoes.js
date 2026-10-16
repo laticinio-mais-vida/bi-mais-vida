@@ -328,6 +328,10 @@ function comoCalcula(d, i) {
             válidas <b>sem descontar as devoluções</b> (por isso fica acima do realizado da página de Metas). Valem as
             equivalências de produto das Configurações, os produtos marcados como "não conta" ficam fora e entram as
             equipes ES, BA e Edir.</li>
+          <li><b>Vendedor do cliente:</b> cada venda conta para o vendedor que tem o cliente na carteira hoje (cadastro do
+            ERP), não para quem fez a venda. Se os clientes de A passaram para B em fevereiro, filtrar B em janeiro já
+            mostra as vendas desses clientes. Clientes sem vendedor no cadastro e vendas a funcionários, fornecedores e
+            produtores ficam fora.</li>
           <li><b>Por dia útil:</b> cada mês é dividido pelos dias úteis do calendário (feriados de ES e BA e os extras das
             Configurações), para meses curtos ou com feriado não parecerem queda de venda.</li>
           <li><b>Dois métodos, e a média deles:</b> (a) o mesmo mês do ano anterior × o crescimento dos últimos 12 meses
