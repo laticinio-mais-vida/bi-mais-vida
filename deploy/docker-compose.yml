@@ -1,6 +1,6 @@
 # BI de Metas no VPS (config.ini com [publicacao] modo = vps). O projeto fica em /opt/bi-mais-vida.
 # Nenhuma porta é publicada: o Caddy do app-promotoria (rede app-promotoria_estoque_network) faz o HTTPS de
-# bi.maisvida.cloud e encaminha para bi_metas:8050.
+# bi.maisvida.cloud e encaminha para bi_metas:8050. O banco (bi_banco) só é visto pelo painel, na rede interno.
 name: bi-mais-vida
 services:
   bi:
@@ -16,12 +16,44 @@ services:
       # atômica (os.replace), que não funciona num arquivo montado sozinho.
       - ..:/app
     mem_limit: 512m
-    networks: [edge]
-    logging:
+    depends_on:
+      banco:
+        condition: service_healthy
+    networks: [edge, interno]
+    logging: &log
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
+  # Dados que o próprio painel cria (histórico do Assistente; depois, usuários e gestão). Veja docs/publicacao_vps.md.
+  banco:
+    image: postgres:18-alpine
+    container_name: bi_banco
+    restart: unless-stopped
+    env_file: ../banco.env  # POSTGRES_PASSWORD; fora de deploy/ porque o scp do deploy envia esta pasta inteira
+    environment:
+      POSTGRES_DB: bi
+      POSTGRES_USER: bi
+      TZ: America/Sao_Paulo
+    command: postgres -c shared_buffers=64MB -c max_connections=20
+    volumes:
+      # Volume do Docker, e não uma pasta do projeto: o chown -R 10001 do deploy estragaria os arquivos do banco.
+      # Na imagem 18 o volume é /var/lib/postgresql (os dados ficam em 18/docker dentro dele).
+      - bi_banco_dados:/var/lib/postgresql
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bi -d bi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [interno]
+    logging: *log
+
+volumes:
+  bi_banco_dados:
 
 networks:
   edge:
     external: true
     name: app-promotoria_estoque_network
+  interno:
+    internal: true

@@ -307,7 +307,10 @@ body.com-lateral.lateral-pronta { transition: padding-left .35s var(--suave), ba
 
 /* ---------- layout ---------- */
 .app { max-width: 1440px; margin: -78px auto 0; padding: 0 28px 40px; position: relative; z-index: 2; outline: none; }
-.pagina { animation: entrar .5s var(--suave) both; }
+/* backwards, e não both: terminada a animação a página fica sem transform. Com transform (mesmo o neutro que o
+   both deixa), os elementos fixos de dentro dela (barra Salvar, gaveta de conversas) se posicionariam pela página,
+   e não pela tela. */
+.pagina { animation: entrar .5s var(--suave) backwards; }
 @keyframes entrar { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 .grade { display: grid; gap: 18px; }
 .secao { margin-top: 18px; }
@@ -1360,9 +1363,11 @@ body.sem-rolagem { overflow: hidden; }
 }
 
 /* ---------- Assistente (chat) ---------- */
-.cartao.chat { margin-top: 18px; padding: 0; }
+.assistente { margin-top: 18px; }
+.assistente.com-historico { display: grid; grid-template-columns: minmax(240px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.cartao.chat { padding: 0; }
 .chat-mensagens { display: flex; flex-direction: column; gap: 18px; padding: 22px 22px 8px; min-height: 340px; }
-.chat-msg { display: flex; gap: 12px; align-items: flex-start; min-width: 0; animation: subir .45s var(--suave) both; }
+.chat-msg { display: flex; gap: 12px; align-items: flex-start; min-width: 0; animation: subir .45s var(--suave) both; scroll-margin-bottom: 100px; /* a caixa de texto fixa cobre o fim da tela */ }
 .chat-msg.usuario { justify-content: flex-end; }
 .chat-avatar { flex: none; width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--laranja), #FF9F43); box-shadow: 0 6px 16px -8px rgba(245, 130, 32, .8); }
 .chat-corpo { flex: 1; min-width: 0; max-width: 980px; }
@@ -1423,6 +1428,42 @@ body.sem-rolagem { overflow: hidden; }
 .chat-sugestao { padding: 9px 15px; border: 1px solid var(--linha); border-radius: 999px; background: var(--surface); color: var(--tinta-2); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: transform .25s var(--mola), border-color .2s, color .2s; }
 .chat-sugestao:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--acento); color: var(--acento-tinta); }
 .chat-sugestao:disabled { opacity: .55; cursor: not-allowed; }
+.chat-carregando { display: flex; flex-direction: column; gap: 18px; }
+.chat-carregando .esqueleto { height: 72px; width: min(640px, 80%); }
+.chat-carregando .esqueleto:nth-child(2) { height: 46px; width: min(360px, 55%); align-self: flex-end; }
+.chat-carregando .esqueleto:nth-child(3) { height: 130px; }
+/* lista de conversas (histórico, só no site); no celular vira gaveta */
+.chat-lista { position: sticky; top: 86px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 100px); padding: 14px 10px 10px; }
+.chat-lista-cab { display: flex; align-items: center; justify-content: space-between; min-height: 28px; padding: 0 6px; font-family: var(--f-titulo); font-size: 15px; }
+.chat-lista-fechar { display: none; }
+.chat-busca { display: flex; }
+.chat-busca input { width: 100%; height: 38px; font-weight: 500; }
+.chat-itens { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px 4px; }
+.chat-grupo { margin: 14px 8px 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tinta-3); }
+.chat-grupo:first-child { margin-top: 2px; }
+.chat-item { display: flex; align-items: center; gap: 2px; padding-right: 4px; border: 1px solid transparent; border-radius: 12px; transition: background .2s, border-color .2s; }
+.chat-item:hover { background: var(--surface-2); }
+.chat-item.selecionado { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 40%, transparent); }
+.chat-item-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 11px; color: var(--tinta); text-decoration: none; font-size: 13.5px; font-weight: 600; }
+.chat-item-link:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }
+.chat-item-link .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-item-acao { flex: none; display: none; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--tinta-3); cursor: pointer; }
+.chat-item-acao .ic { width: 15px; height: 15px; }
+.chat-item:hover .chat-item-acao, .chat-item:focus-within .chat-item-acao, .chat-item.selecionado .chat-item-acao { display: grid; }
+.chat-item-acao:hover { background: var(--surface-3); color: var(--tinta); }
+.chat-item-acao[data-excluir]:hover { color: var(--ruim); }
+.chat-item-sinal { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--laranja); animation: chat-sinal 1.2s ease-in-out infinite; }
+@keyframes chat-sinal { 50% { opacity: .35; transform: scale(.7); } }
+.chat-item.editando { padding: 3px; background: var(--surface-2); }
+.chat-item-campo { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--acento); border-radius: 9px; background: var(--surface); color: var(--tinta); font: inherit; font-size: 13.5px; font-weight: 600; box-shadow: 0 0 0 3px var(--acento-suave); }
+.chat-item-campo:focus { outline: none; }
+.chat-item-esqueleto { height: 36px; margin: 6px 4px; border-radius: 12px; }
+.chat-lista-vazio { margin: 12px 8px; font-size: 13px; color: var(--tinta-3); }
+.chat-lista-vazio.erro { display: flex; gap: 8px; color: var(--ruim); }
+.chat-lista-vazio .ic { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.btn-conversas { display: none; }
+.chat-lista-fundo { z-index: 85; }
+@media (hover: none) { .chat-item-acao { display: grid; } }
 .ca-ultimas td:first-child { white-space: normal; min-width: 280px; max-width: 520px; }
 .ca-erro { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; color: var(--ruim); }
 .ca-erro .ic { width: 14px; height: 14px; }
@@ -1434,6 +1475,16 @@ body.sem-rolagem { overflow: hidden; }
   .chat-entrada .btn span { display: none; }
   .chat-entrada .btn { width: 44px; padding: 0; justify-content: center; }
   .chat-rodape { margin: 10px 12px 16px; }
+  .assistente.com-historico { display: block; }
+  .btn-conversas:not([hidden]) { display: inline-flex; }
+  .chat-lista, .chat-lista.entra {
+    position: fixed; inset: 0 auto 0 0; z-index: 86; width: min(320px, 86vw); max-height: none;
+    border-radius: 0 var(--raio) var(--raio) 0; opacity: 1; animation: none;
+    transform: translateX(-105%); box-shadow: none; transition: transform .3s var(--suave), box-shadow .3s;
+  }
+  .chat-lista.aberta { transform: none; box-shadow: 0 0 60px rgba(0, 0, 0, .45); }
+  .chat-lista-fechar { display: inline-flex; }
+  body.chat-gaveta { overflow: hidden; }
 }
 
 @media (prefers-reduced-motion: reduce) {

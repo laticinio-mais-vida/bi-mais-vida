@@ -1,11 +1,14 @@
 // Página Assistente: chat em que a pessoa pergunta sobre os dados e a IA (Claude) responde consultando o cache.
 // A conta é toda no servidor (bi/assistente.py): ele monta os dados do acesso da pessoa, chama a IA e devolve a
-// resposta com as consultas feitas. A conversa fica só neste navegador (sessionStorage) e volta ao servidor como
-// texto a cada pergunta. A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
-import { api, esc, fmt, icone, toast } from "./util.js";
+// resposta com as consultas feitas. No site, as conversas ficam no servidor, como nos chats de IA: a lista ao lado
+// mostra as da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador. No PC, sem o
+// banco, a conversa fica só neste navegador (sessionStorage) e volta ao servidor como texto a cada pergunta.
+// A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
+import { MESES, api, esc, fmt, icone, toast } from "./util.js";
 
 const CHAVE = "mv-assistente";
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
+const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
 const SUGESTOES = [
   "Quanto vendemos este mês, por equipe?",
   "Quais os 10 clientes que mais compraram no mês passado?",
@@ -23,52 +26,68 @@ const FERRAMENTA = {
 };
 
 let ctx = null, raiz = null, info = null;
-let conversa = [];      // [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?}]
-let esperando = null;   // {inicio, relogio, controle} enquanto a pergunta está no servidor
+let atual = { ...nova(), carregando: true }; // conversa aberta; id null = nova, ainda não gravada
+let conversas = [];     // lista ao lado (só com histórico): [{id, titulo, criada_em, atualizada_em}], mais recente antes
+let esperando = null;   // {inicio, controle, conversa} enquanto a pergunta desta aba está no servidor
+let pendente = null;    // {conversa, nova, pergunta, inicio}: pergunta que o servidor ainda responde, feita em outra
+                        // aba ou antes de recarregar a página
+let busca = "", pedidoLista = 0, abrindo = 0, acompanhando = false;
 
+// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?}]
+function nova() { return { id: null, titulo: "", mensagens: [] }; }
+const comHistorico = () => Boolean(info?.historico);
+const linkDe = (id) => `#/assistente?c=${encodeURIComponent(id)}`;
+const idDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("c");
+
+// Só no PC (sem histórico no servidor): a conversa fica nesta aba do navegador.
 function lerConversa() { try { return JSON.parse(sessionStorage.getItem(CHAVE)) || []; } catch { return []; } }
-function guardarConversa() { try { sessionStorage.setItem(CHAVE, JSON.stringify(conversa)); } catch { /* sem armazenamento */ } }
+function guardarConversa() {
+  if (comHistorico()) return;
+  try { sessionStorage.setItem(CHAVE, JSON.stringify(atual.mensagens)); } catch { /* sem armazenamento */ }
+}
 
 export async function montarAssistente(container, contexto) {
   ctx = contexto;
   raiz = container;
-  conversa = lerConversa();
   container.innerHTML = `
     <div class="controles entra" style="--i:0">
       <div class="proj-titulo"><span class="proj-icone">${icone("conversa")}</span>
         <div><b>Assistente de dados</b><small id="a-escopo">respostas com os dados do painel</small></div></div>
       <div class="filtros">
+        <button class="btn btn-limpar btn-conversas" type="button" id="a-abrir-lista" aria-controls="a-lista" aria-expanded="false" hidden>${icone("menu")}Conversas</button>
         <button class="btn btn-limpar" type="button" id="a-nova">${icone("mais")}Nova conversa</button>
         ${ctx.admin ? `<a class="btn btn-config" href="#/config-assistente" title="Configurações do assistente: o que cada pessoa consulta e o uso">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="a-avisos"></div>
-    <section class="cartao chat entra" style="--i:1">
-      <div class="chat-mensagens" id="a-msgs" aria-live="polite"></div>
-      <form class="chat-entrada" id="a-form">
-        <textarea id="a-texto" rows="1" maxlength="4000" placeholder="Faça uma pergunta sobre os dados…" aria-label="Sua pergunta"></textarea>
-        <button class="btn primario" type="submit" id="a-enviar">${icone("enviar")}<span>Enviar</span></button>
-      </form>
-      <p class="chat-rodape" id="a-rodape">As respostas são geradas por IA com os dados do painel. Confira os números importantes em “Como cheguei nesse número”.</p>
-    </section>`;
+    <div class="assistente" id="a-grade">
+      <aside class="cartao chat-lista entra" style="--i:1" id="a-lista" aria-label="Conversas" hidden>
+        <div class="chat-lista-cab"><b>Conversas</b>
+          <button type="button" class="chat-acao chat-lista-fechar" id="a-fechar-lista" aria-label="Fechar a lista de conversas">${icone("x")}</button></div>
+        <label class="campo sem-seta chat-busca">${icone("busca", "ic-campo")}
+          <input type="search" id="a-busca" placeholder="Buscar nas conversas" aria-label="Buscar nas conversas" autocomplete="off" maxlength="100"></label>
+        <nav class="chat-itens" id="a-conversas"></nav>
+      </aside>
+      <section class="cartao chat entra" style="--i:1">
+        <div class="chat-mensagens" id="a-msgs" aria-live="polite"></div>
+        <form class="chat-entrada" id="a-form">
+          <textarea id="a-texto" rows="1" maxlength="4000" placeholder="Faça uma pergunta sobre os dados…" aria-label="Sua pergunta"></textarea>
+          <button class="btn primario" type="submit" id="a-enviar">${icone("enviar")}<span>Enviar</span></button>
+        </form>
+        <p class="chat-rodape" id="a-rodape">As respostas são geradas por IA com os dados do painel. Confira os números importantes em “Como cheguei nesse número”.</p>
+      </section>
+    </div>
+    <div class="lateral-fundo chat-lista-fundo" id="a-fundo" hidden></div>`;
   const texto = container.querySelector("#a-texto");
-  // Aba fechada ou recarregada no meio de uma pergunta: ela ficou sem resposta e volta para a caixa de texto.
-  if (!esperando && conversa.at(-1)?.papel === "usuario") {
-    texto.value = conversa.pop().texto;
-    guardarConversa();
-  }
   texto.addEventListener("input", () => ajustarAltura(texto));
   texto.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); enviar(); }
   });
   container.querySelector("#a-form").addEventListener("submit", (e) => { e.preventDefault(); enviar(); });
-  container.querySelector("#a-nova").addEventListener("click", () => {
-    if (esperando) return toast("Espere a resposta antes de começar outra conversa", "erro");
-    conversa = [];
-    guardarConversa();
-    desenharMensagens();
-    texto.focus();
-  });
+  container.querySelector("#a-nova").addEventListener("click", () => novaConversa());
+  ligarLista();
+  window.addEventListener("hashchange", aoMudarHash);
+  setInterval(atualizarPensando, 1000);
   desenharMensagens();
   await carregarInfo();
 }
@@ -78,6 +97,7 @@ async function carregarInfo() {
   try {
     info = await api("/api/assistente/info");
   } catch (e) {
+    abrirLocal();
     avisos.innerHTML = `<div class="aviso">${icone("alerta")}<span>${esc(e.message)}</span></div>`;
     travar(true);
     return;
@@ -93,8 +113,20 @@ async function carregarInfo() {
     msgs.push("Os dados por cliente ainda não chegaram do computador da empresa. O assistente funciona depois da próxima atualização dos dados.");
   }
   avisos.innerHTML = msgs.map((m) => `<div class="aviso">${icone("alerta")}<span>${esc(m)}</span></div>`).join("");
-  travar(!info.configurado || !info.pronto);
   mostrarRestantes(info.restantes);
+  if (comHistorico()) await iniciarHistorico();
+  else abrirLocal();
+  travar(!info.configurado || !info.pronto);
+}
+
+function abrirLocal() {
+  atual = { ...nova(), mensagens: lerConversa() };
+  // Aba fechada ou recarregada no meio de uma pergunta: ela ficou sem resposta e volta para a caixa de texto.
+  if (!esperando && atual.mensagens.at(-1)?.papel === "usuario") {
+    raiz.querySelector("#a-texto").value = atual.mensagens.pop().texto;
+    guardarConversa();
+  }
+  desenharMensagens();
 }
 
 function travar(sim) {
@@ -115,58 +147,363 @@ function ajustarAltura(t) {
   t.style.overflowY = t.scrollHeight > 200 ? "auto" : "hidden"; // barra de rolagem só quando passa da altura máxima
 }
 
+// ---------- histórico (só no site) ----------
+async function iniciarHistorico() {
+  try { sessionStorage.removeItem(CHAVE); } catch { /* sem armazenamento */ }
+  raiz.querySelector("#a-grade").classList.add("com-historico");
+  raiz.querySelector("#a-lista").hidden = false;
+  raiz.querySelector("#a-abrir-lista").hidden = false;
+  raiz.querySelector("#a-conversas").innerHTML = '<div class="esqueleto chat-item-esqueleto"></div>'.repeat(4);
+  await carregarLista();
+  // Recarregou no meio da primeira pergunta de uma conversa: ela abre e mostra a resposta quando ficar pronta.
+  await abrir(idDoHash() || (pendente?.nova ? pendente.conversa : null));
+}
+
+const urlLista = () => `/api/assistente/conversas${busca ? `?busca=${encodeURIComponent(busca)}` : ""}`;
+
+async function carregarLista() {
+  const vez = ++pedidoLista;
+  try {
+    const r = await api(urlLista());
+    if (vez !== pedidoLista) return; // a busca mudou enquanto esta lista vinha
+    conversas = r.conversas;
+    if (r.pendente) marcarPendente(r.pendente);
+    desenharLista();
+  } catch (e) {
+    if (vez === pedidoLista) {
+      raiz.querySelector("#a-conversas").innerHTML = `<p class="chat-lista-vazio erro">${icone("alerta")}<span>${esc(e.message)}</span></p>`;
+    }
+  }
+}
+
+async function abrir(id) {
+  const vez = ++abrindo;
+  fecharLista();
+  if (!id) {
+    atual = nova();
+  } else {
+    atual = { ...nova(), id, titulo: conversas.find((c) => c.id === id)?.titulo || "", carregando: true };
+    desenharMensagens();
+    desenharLista();
+    try {
+      const r = await api(`/api/assistente/conversa?id=${encodeURIComponent(id)}`);
+      if (vez !== abrindo) return; // abriu outra enquanto esta carregava
+      atual = r.conversa || { ...nova(), id, titulo: tituloDe(r.pendente.pergunta) };
+      if (r.pendente) marcarPendente(r.pendente);
+      if (idDoHash() !== id) history.replaceState(null, "", linkDe(id));
+    } catch (e) {
+      if (vez !== abrindo) return;
+      toast(e.message, "erro");
+      atual = nova();
+      history.replaceState(null, "", "#/assistente");
+    }
+  }
+  desenharMensagens();
+  desenharLista();
+}
+
+function aoMudarHash() {
+  fecharLista();
+  if (!comHistorico() || !/^#\/assistente(\?|$)/.test(location.hash)) return;
+  const id = idDoHash();
+  if (id && id !== atual.id) abrir(id);
+  else if (!id && atual.id) history.replaceState(null, "", linkDe(atual.id)); // voltou de outra página: segue na conversa
+}
+
+function novaConversa({ substituir = false } = {}) {
+  if (atual.carregando && !info) return;
+  if (!comHistorico() && esperando) return toast("Espere a resposta antes de começar outra conversa", "erro");
+  ++abrindo;
+  atual = nova();
+  guardarConversa();
+  if (comHistorico() && location.hash !== "#/assistente") history[substituir ? "replaceState" : "pushState"](null, "", "#/assistente");
+  fecharLista();
+  desenharMensagens();
+  desenharLista();
+  raiz.querySelector("#a-texto").focus();
+}
+
+// A conversa recebeu a primeira resposta (ganhou id) ou mais uma: sobe para o topo da lista.
+function gravada(conversa, meta) {
+  const eraNova = !conversa.id;
+  conversa.id = meta.id;
+  conversa.titulo = meta.titulo;
+  conversas = [meta, ...conversas.filter((c) => c.id !== meta.id)];
+  if (eraNova && conversa === atual) history.replaceState(null, "", linkDe(meta.id));
+}
+
+function marcarPendente(p) {
+  if (esperando) return; // é a pergunta desta própria aba
+  pendente = { ...p, inicio: Date.now() - (p.segundos || 0) * 1000 };
+  acompanhar();
+}
+
+// Pergunta que o servidor ainda responde (feita em outra aba ou antes de recarregar): a lista e a conversa mostram
+// "Consultando…" e a página confere de tempos em tempos até a resposta estar gravada.
+async function acompanhar() {
+  if (acompanhando) return;
+  acompanhando = true;
+  try {
+    while (pendente) {
+      await new Promise((r) => setTimeout(r, CONFERIR_PENDENTE));
+      let r;
+      try { r = await api(urlLista()); } catch { continue; }
+      if (r.pendente?.conversa === pendente.conversa) continue;
+      const feita = pendente;
+      pendente = null;
+      conversas = r.conversas;
+      desenharLista();
+      if (atual.id === feita.conversa) await recarregar(feita);
+      if (r.pendente) marcarPendente(r.pendente); // outra pergunta já começou
+    }
+  } finally {
+    acompanhando = false;
+  }
+}
+
+async function recarregar(feita) {
+  const antes = atual.mensagens.length;
+  let conversa = null;
+  try {
+    conversa = (await api(`/api/assistente/conversa?id=${encodeURIComponent(feita.conversa)}`)).conversa;
+  } catch { /* conversa nova que não chegou a ser gravada */ }
+  if (atual.id !== feita.conversa) return;
+  atual = conversa || nova();
+  if (!conversa) history.replaceState(null, "", "#/assistente");
+  desenharMensagens();
+  desenharLista();
+  if (!conversa || conversa.mensagens.length < antes + 2) {
+    const caixa = raiz.querySelector("#a-texto");
+    if (!caixa.value.trim()) { caixa.value = feita.pergunta; ajustarAltura(caixa); }
+    desenharErro("A pergunta anterior não chegou a ser respondida.");
+  }
+}
+
+async function excluir(id) {
+  const c = conversas.find((x) => x.id === id);
+  if (!c) return;
+  if (esperando?.conversa.id === id || pendente?.conversa === id) {
+    return toast("Espere a resposta antes de excluir esta conversa", "erro");
+  }
+  if (!confirm(`Excluir a conversa “${c.titulo}”? Não dá para desfazer.`)) return;
+  try {
+    await api("/api/assistente/conversa/excluir", { json: { id } });
+  } catch (e) {
+    return toast(e.message, "erro");
+  }
+  conversas = conversas.filter((x) => x.id !== id);
+  toast("Conversa excluída");
+  if (atual.id === id) novaConversa({ substituir: true });
+  else desenharLista();
+}
+
+// Renomear no próprio item: Enter (ou sair do campo) salva, Esc desiste.
+function editarTitulo(item) {
+  const id = item.dataset.id;
+  const c = conversas.find((x) => x.id === id);
+  if (!c) return;
+  item.classList.add("editando");
+  item.innerHTML = `<input class="chat-item-campo" maxlength="80" value="${esc(c.titulo)}" aria-label="Nome da conversa">`;
+  const campo = item.querySelector("input");
+  campo.focus();
+  campo.select();
+  let feito = false;
+  const terminar = async (salvar) => {
+    if (feito) return;
+    feito = true;
+    const titulo = campo.value.trim();
+    if (salvar && titulo && titulo !== c.titulo) {
+      try {
+        const r = await api("/api/assistente/conversa/renomear", { json: { id, titulo } });
+        c.titulo = r.conversa.titulo;
+        if (atual.id === id) atual.titulo = c.titulo;
+      } catch (e) {
+        toast(e.message, "erro");
+      }
+    }
+    desenharLista();
+  };
+  campo.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); terminar(true); }
+    if (e.key === "Escape") { e.stopPropagation(); terminar(false); }
+  });
+  campo.addEventListener("blur", () => terminar(true));
+}
+
+// Lista ao lado; no celular, uma gaveta que abre pelo botão Conversas e fecha ao escolher, tocar fora ou com Esc.
+function ligarLista() {
+  const lista = raiz.querySelector("#a-conversas");
+  lista.addEventListener("click", (e) => {
+    const item = e.target.closest(".chat-item[data-id]");
+    if (!item || item.classList.contains("editando")) return;
+    if (e.target.closest("[data-renomear]")) return editarTitulo(item);
+    if (e.target.closest("[data-excluir]")) return excluir(item.dataset.id);
+    if (e.target.closest(".chat-item-link")) fecharLista(); // o link troca o endereço e a conversa abre
+  });
+  let relogio = null;
+  raiz.querySelector("#a-busca").addEventListener("input", (e) => {
+    clearTimeout(relogio);
+    relogio = setTimeout(() => { busca = e.target.value.trim(); carregarLista(); }, 250);
+  });
+  const botao = raiz.querySelector("#a-abrir-lista");
+  botao.addEventListener("click", () => {
+    raiz.querySelector("#a-lista").classList.add("aberta");
+    raiz.querySelector("#a-fundo").hidden = false;
+    botao.setAttribute("aria-expanded", "true");
+    document.body.classList.add("chat-gaveta");
+    (raiz.querySelector(".chat-item.selecionado .chat-item-link") || raiz.querySelector(".chat-item-link"))?.focus();
+  });
+  raiz.querySelector("#a-fechar-lista").addEventListener("click", () => { fecharLista(); botao.focus(); });
+  raiz.querySelector("#a-fundo").addEventListener("click", fecharLista);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && raiz.querySelector("#a-lista").classList.contains("aberta")) { fecharLista(); botao.focus(); }
+  });
+  window.matchMedia("(max-width: 860px)").addEventListener("change", fecharLista);
+}
+
+function fecharLista() {
+  const lista = raiz?.querySelector("#a-lista");
+  if (!lista?.classList.contains("aberta")) return;
+  lista.classList.remove("aberta");
+  raiz.querySelector("#a-fundo").hidden = true;
+  raiz.querySelector("#a-abrir-lista").setAttribute("aria-expanded", "false");
+  document.body.classList.remove("chat-gaveta");
+}
+
+function desenharLista() {
+  if (!comHistorico()) return;
+  const el = raiz.querySelector("#a-conversas");
+  const itens = [...conversas];
+  // Conversa nova com a primeira pergunta ainda no servidor: aparece no topo antes de ser gravada.
+  if (pendente?.nova && !conversas.some((c) => c.id === pendente.conversa)) {
+    itens.unshift({ id: pendente.conversa, titulo: tituloDe(pendente.pergunta), provisoria: true });
+  }
+  if (esperando && !esperando.conversa.id) {
+    itens.unshift({ id: null, titulo: tituloDe(esperando.conversa.mensagens[0]?.texto), provisoria: true,
+      aberta: esperando.conversa === atual });
+  }
+  if (!itens.length) {
+    el.innerHTML = `<p class="chat-lista-vazio">${busca ? "Nenhuma conversa encontrada." : "Suas conversas aparecem aqui depois da primeira pergunta."}</p>`;
+    return;
+  }
+  let grupo = null;
+  el.innerHTML = itens.map((c) => {
+    const g = c.provisoria ? "Hoje" : grupoDe(c.atualizada_em);
+    const titulo = g !== grupo ? `<h3 class="chat-grupo">${esc(g)}</h3>` : "";
+    grupo = g;
+    return titulo + itemConversa(c);
+  }).join("");
+}
+
+function itemConversa(c) {
+  const aberta = c.id ? c.id === atual.id : c.aberta;
+  const respondendo = c.provisoria || pendente?.conversa === c.id || (esperando && esperando.conversa.id === c.id);
+  const sinal = respondendo ? '<span class="chat-item-sinal" title="Respondendo…"></span>' : "";
+  const classe = `chat-item${aberta ? " selecionado" : ""}`;
+  if (!c.id) return `<div class="${classe}"><span class="chat-item-link">${sinal}<span class="t">${esc(c.titulo)}</span></span></div>`;
+  const acoes = c.provisoria ? "" : `
+    <button type="button" class="chat-item-acao" data-renomear title="Renomear" aria-label="Renomear a conversa “${esc(c.titulo)}”">${icone("lapis")}</button>
+    <button type="button" class="chat-item-acao" data-excluir title="Excluir" aria-label="Excluir a conversa “${esc(c.titulo)}”">${icone("lixeira")}</button>`;
+  return `<div class="${classe}" data-id="${esc(c.id)}">
+    <a class="chat-item-link" href="${linkDe(c.id)}" title="${esc(c.titulo)}"${aberta ? ' aria-current="page"' : ""}>${sinal}<span class="t">${esc(c.titulo)}</span></a>${acoes}
+  </div>`;
+}
+
+// Hoje, Ontem, Últimos 7 dias, Últimos 30 dias e, antes disso, o mês.
+function grupoDe(iso) {
+  const d = new Date(iso);
+  const dia = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const dias = Math.round((dia(new Date()) - dia(d)) / 864e5);
+  if (dias <= 0) return "Hoje";
+  if (dias === 1) return "Ontem";
+  if (dias < 7) return "Últimos 7 dias";
+  if (dias < 30) return "Últimos 30 dias";
+  const mes = MESES[d.getMonth()].replace(/^./, (l) => l.toUpperCase());
+  return d.getFullYear() === new Date().getFullYear() ? mes : `${mes} de ${d.getFullYear()}`;
+}
+
+// Igual ao título que o servidor dá: a primeira linha da pergunta, cortada no fim de uma palavra.
+function tituloDe(pergunta) {
+  const linha = (String(pergunta || "").split("\n").find((l) => l.trim()) || "").trim().replace(/\s+/g, " ");
+  if (linha.length <= 60) return linha || "Nova conversa";
+  return linha.slice(0, 61).replace(/\s+\S*$/, "").replace(/[\s,.;:-]+$/, "") + "…";
+}
+
 // ---------- envio ----------
 async function enviar(textoPronto) {
-  if (esperando) return;
   const caixa = raiz.querySelector("#a-texto");
   const texto = (textoPronto ?? caixa.value).trim();
-  if (!texto || caixa.disabled) return;
+  if (!texto || caixa.disabled || atual.carregando) return;
+  if (esperando || pendente) return toast("Espere a resposta da pergunta anterior", "erro");
   caixa.value = "";
   ajustarAltura(caixa);
-  conversa.push({ papel: "usuario", texto });
+  const conversa = atual; // a resposta vale para esta conversa, mesmo se a pessoa abrir outra enquanto espera
+  conversa.mensagens.push({ papel: "usuario", texto });
   guardarConversa();
   const controle = new AbortController();
   const limite = setTimeout(() => controle.abort(), ESPERA_MAX);
-  esperando = { inicio: Date.now(), controle };
+  esperando = { inicio: Date.now(), controle, conversa };
   desenharMensagens();
-  esperando.relogio = setInterval(atualizarPensando, 1000);
+  desenharLista();
   try {
-    const mensagens = conversa.map(({ papel, texto: t, consultas }) => ({ papel, texto: t, consultas }));
-    const r = await api("/api/assistente", { json: { mensagens }, signal: controle.signal });
-    conversa.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
+    // Com histórico, o servidor lê a conversa do banco; sem ele, ela vai inteira.
+    const corpo = comHistorico() ? { conversa: conversa.id, pergunta: texto }
+      : { mensagens: conversa.mensagens.map(({ papel, texto: t, consultas }) => ({ papel, texto: t, consultas })) };
+    const r = await api("/api/assistente", { json: corpo, signal: controle.signal });
+    conversa.mensagens.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
       data_ref: r.data_ref, aviso: r.aviso, uso: r.uso });
     guardarConversa();
+    if (r.conversa) gravada(conversa, r.conversa);
     if (r.restantes !== undefined) mostrarRestantes(r.restantes);
     pararEspera(limite);
-    desenharMensagens();
+    if (conversa === atual) desenharMensagens();
+    desenharLista();
   } catch (e) {
     // A pergunta não foi respondida: sai da conversa e volta para a caixa, para tentar de novo.
-    conversa.pop();
+    conversa.mensagens.pop();
     guardarConversa();
     pararEspera(limite);
-    desenharMensagens();
-    caixa.value = texto;
-    ajustarAltura(caixa);
     const msg = e.name === "AbortError" ? "A resposta demorou demais. Tente uma pergunta mais simples ou mais específica." : e.message;
-    desenharErro(msg);
+    if (conversa === atual) {
+      desenharMensagens();
+      caixa.value = texto;
+      ajustarAltura(caixa);
+      desenharErro(msg);
+    } else {
+      toast(msg, "erro");
+    }
+    desenharLista();
+    if (comHistorico()) carregarLista(); // se o tempo acabou só aqui, a pergunta pode seguir no servidor
   }
 }
 
 function pararEspera(limite) {
   clearTimeout(limite);
-  if (esperando) clearInterval(esperando.relogio);
   esperando = null;
 }
 
+function inicioDaEspera() {
+  if (esperando) return esperando.conversa === atual ? esperando.inicio : null;
+  return pendente && pendente.conversa === atual.id ? pendente.inicio : null;
+}
+
 function atualizarPensando() {
-  const el = raiz.querySelector("#a-pensando-s");
-  if (el && esperando) el.textContent = `${Math.round((Date.now() - esperando.inicio) / 1000)} s`;
+  const el = raiz?.querySelector("#a-pensando-s");
+  const inicio = inicioDaEspera();
+  if (el && inicio) el.textContent = `${Math.round((Date.now() - inicio) / 1000)} s`;
 }
 
 // ---------- desenho ----------
 function desenharMensagens() {
   const el = raiz.querySelector("#a-msgs");
-  if (!conversa.length && !esperando) {
+  if (atual.carregando) {
+    el.innerHTML = '<div class="chat-carregando"><div class="esqueleto"></div><div class="esqueleto"></div><div class="esqueleto"></div></div>';
+    return;
+  }
+  const inicio = inicioDaEspera();
+  // pergunta feita em outra aba (ou antes de recarregar): ainda não está nas mensagens da conversa
+  const deFora = inicio && !esperando ? balaoUsuario({ texto: pendente.pergunta }) : "";
+  if (!atual.mensagens.length && !inicio) {
     el.innerHTML = `
       <div class="chat-inicio">
         <span class="chat-avatar grande">${icone("conversa")}</span>
@@ -179,14 +516,14 @@ function desenharMensagens() {
     if (info) travar(!info.configurado || !info.pronto);
     return;
   }
-  el.innerHTML = conversa.map((m, i) => (m.papel === "usuario" ? balaoUsuario(m) : balaoIA(m, i))).join("") +
-    (esperando ? `<div class="chat-msg ia"><span class="chat-avatar">${icone("conversa")}</span>
+  el.innerHTML = atual.mensagens.map((m, i) => (m.papel === "usuario" ? balaoUsuario(m) : balaoIA(m, i))).join("") + deFora +
+    (inicio ? `<div class="chat-msg ia"><span class="chat-avatar">${icone("conversa")}</span>
       <div class="chat-corpo"><div class="chat-balao"><span class="chat-pensando">
-        <span class="chat-pontos"><i></i><i></i><i></i></span>Consultando os dados… <span id="a-pensando-s">0 s</span>
+        <span class="chat-pontos"><i></i><i></i><i></i></span>Consultando os dados… <span id="a-pensando-s">${Math.round((Date.now() - inicio) / 1000)} s</span>
       </span></div></div></div>` : "");
   el.querySelectorAll("[data-copiar]").forEach((b) => b.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(conversa[Number(b.dataset.copiar)].texto);
+      await navigator.clipboard.writeText(atual.mensagens[Number(b.dataset.copiar)].texto);
       toast("Resposta copiada");
     } catch { toast("Não foi possível copiar", "erro"); }
   }));

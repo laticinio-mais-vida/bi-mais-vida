@@ -1,0 +1,2 @@
+# Scripts que rodam no servidor Linux: sempre com quebra de linha LF, mesmo com core.autocrlf no Windows.
+*.sh text eol=lf

@@ -8,9 +8,10 @@ Como funciona:
   o SQL. Arquivos, extensões e configurações ficam travados, e cada consulta tem tempo e linhas limitados.
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
-- Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas, que o
-  navegador guarda). Dentro de uma pergunta, cada resposta da API volta inteira e sem mudança (com os blocos de
-  raciocínio), como a API exige.
+- Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). No site,
+  as conversas ficam no PostgreSQL (bi/conversas.py) e o servidor as lê de lá; no PC, sem banco, o navegador guarda
+  a conversa e a manda inteira a cada pergunta. Dentro de uma pergunta, cada resposta da API volta inteira e sem
+  mudança (com os blocos de raciocínio), como a API exige.
 - Registro: cada pergunta vai para logs/assistente-AAAA-MM.jsonl (quem, o quê, consultas, tokens e custo); os
   limites do dia (perguntas por pessoa e custo total) são refeitos a partir dele quando o painel sobe.
 """
@@ -31,7 +32,9 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from .banco import BancoForaDoAr
 from .configuracao import VISOES
+from .conversas import MAX_MENSAGENS_CONVERSA, id_valido, novo_id
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
 
@@ -720,18 +723,20 @@ escreva esse bloco."""
 # ============================================================================================
 class Assistente:
     def __init__(self, ini: configparser.ConfigParser, calc: Calculadora, nomes_vendedores, pasta_logs: Path,
-                 cliente=None):
+                 cliente=None, conversas=None):
         """nomes_vendedores: função que devolve {id: nome} (o da planilha de metas mais recente, senão o do ERP).
-        cliente: cliente da API já pronto (os testes passam um falso)."""
+        cliente: cliente da API já pronto (os testes passam um falso).
+        conversas: o histórico (bi/conversas.py); None = sem banco, o navegador guarda a conversa."""
         self.cfg = ConfigIA(ini)
         self.calc = calc
         self.nomes_vendedores = nomes_vendedores
         self.pasta_logs = Path(pasta_logs)
         self._cliente = cliente
+        self.conversas = conversas
         self._recortes: collections.OrderedDict = collections.OrderedDict()
         self._trava_recortes = threading.Lock()
         self._vagas = threading.BoundedSemaphore(max(1, self.cfg.simultaneos))
-        self._ocupados: set[str] = set()
+        self._ocupados: dict[str, dict] = {}  # login -> a pergunta que está sendo respondida
         self._trava = threading.Lock()
         self._dia = {"data": None, "por_login": collections.Counter(), "custo": 0.0}
         self._ler_uso_do_dia()
@@ -739,6 +744,10 @@ class Assistente:
     @property
     def configurado(self) -> bool:
         return self.cfg.configurado
+
+    @property
+    def historico(self) -> bool:
+        return self.conversas is not None
 
     # --- acesso --------------------------------------------------------------------------
     def ids_do_escopo(self, vendedores: set[int] | None, equipes: set[str] | None) -> frozenset[int] | None:
@@ -794,6 +803,7 @@ class Assistente:
         return {
             "configurado": self.configurado, "pronto": pronto, "data_ref": cache.info.get("data_ref"),
             "escopo": escopo, "restantes": self.restantes(usuario), "limite_diario": self.cfg.limite_diario,
+            "historico": self.historico,
             **({"modelo": self.cfg.modelo, "esforco": self.cfg.esforco} if admin else {}),
         }
 
@@ -948,7 +958,57 @@ class Assistente:
             raise ErroAssistente("a última mensagem tem de ser a pergunta")
         return saida
 
-    def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None) -> dict:
+    def perguntar(self, usuario: dict, conversa_id, pergunta, vendedores: set[int] | None,
+                  equipes: set[str] | None) -> dict:
+        """Pergunta numa conversa do histórico (sem conversa_id, começa uma nova). A pergunta e a resposta são
+        gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas."""
+        if not self.historico:
+            raise ErroAssistente("o histórico de conversas fica só no site", 404)
+        pergunta = str(pergunta or "").strip()
+        if not pergunta:
+            raise ErroAssistente("escreva uma pergunta")
+        if len(pergunta) > MAX_TEXTO["usuario"]:
+            raise ErroAssistente("mensagem longa demais")
+        login = usuario["login"]
+        try:
+            if conversa_id:
+                anteriores = self.conversas.historico(login, conversa_id)
+            else:
+                self.conversas.verificar()
+                anteriores = []
+        except BancoForaDoAr as e:  # sem o banco a resposta não seria gravada: nem chama a IA
+            raise ErroAssistente("o histórico de conversas está fora do ar agora; tente de novo em instantes", 503) from e
+        if anteriores is None:
+            raise ErroAssistente("conversa não encontrada; ela pode ter sido excluída", 404)
+        if len(anteriores) >= MAX_MENSAGENS_CONVERSA:
+            raise ErroAssistente(f"esta conversa chegou ao limite de {MAX_MENSAGENS_CONVERSA // 2} perguntas; "
+                                 "comece uma nova")
+        conversa_id = id_valido(conversa_id) if conversa_id else novo_id()
+
+        def guardar(r: dict) -> dict:
+            try:
+                return self.conversas.acrescentar(login, conversa_id, pergunta, {**r, "texto": r["resposta"]})
+            except BancoForaDoAr as e:
+                raise ErroAssistente("a resposta ficou pronta, mas não deu para gravar a conversa; tente de novo",
+                                     503) from e
+
+        return self.responder(usuario, anteriores + [{"papel": "usuario", "texto": pergunta}], vendedores, equipes,
+                              pendente={"conversa": conversa_id, "nova": not anteriores, "pergunta": pergunta},
+                              guardar=guardar)
+
+    def pendente(self, login: str) -> dict | None:
+        """A pergunta do histórico que ainda está sendo respondida para esta pessoa (de outra aba ou de antes de
+        recarregar a página): {conversa, nova, pergunta, segundos}."""
+        with self._trava:
+            p = self._ocupados.get(login)
+            if not p or "conversa" not in p:
+                return None
+            return {**{k: p[k] for k in ("conversa", "nova", "pergunta")}, "segundos": round(time.time() - p["inicio"])}
+
+    def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None,
+                  pendente: dict | None = None, guardar=None) -> dict:
+        """mensagens: a conversa inteira, terminando na pergunta. pendente: o que pendente() mostra enquanto a
+        pergunta roda. guardar(resultado): grava a resposta antes de liberar a pessoa; devolve o "conversa"."""
         if not self.configurado:
             raise ErroAssistente("o Assistente ainda não foi configurado: falta a chave da API em [ia] no config.ini", 503)
         cache = self.calc.cache
@@ -968,17 +1028,20 @@ class Assistente:
                 raise ErroAssistente("o Assistente chegou ao limite de gasto do dia; fale com o administrador", 429)
             if login in self._ocupados:
                 raise ErroAssistente("espere a resposta da pergunta anterior", 429)
-            self._ocupados.add(login)
+            self._ocupados[login] = {**(pendente or {}), "inicio": time.time()}
         try:
             if not self._vagas.acquire(timeout=20):
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
-                return self._responder(usuario, api_mensagens, vendedores, equipes)
+                r = self._responder(usuario, api_mensagens, vendedores, equipes)
             finally:
                 self._vagas.release()
+            if guardar:
+                r["conversa"] = guardar(r)
+            return r
         finally:
             with self._trava:
-                self._ocupados.discard(login)
+                self._ocupados.pop(login, None)
 
     def _responder(self, usuario, api_mensagens, vendedores, equipes) -> dict:
         t0 = time.time()

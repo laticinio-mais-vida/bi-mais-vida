@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import contextlib
 import datetime as dt
 import getpass
 import json
@@ -39,8 +40,10 @@ WEB = RAIZ / "web"
 from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
                        escopo_projecoes, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
+from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
+from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
@@ -87,7 +90,11 @@ class Aplicacao:
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
         self.config_projecoes = ConfigProjecoes(RAIZ / "config_projecoes.json")
         self.projetor = Projetor(self.calc, self.config_projecoes)
-        self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RAIZ / "logs")
+        # Banco PostgreSQL ([postgres] no config.ini): só no site. Sem ele, o Assistente funciona sem histórico.
+        self.banco = Banco(ini)
+        self.conversas = Conversas(self.banco) if self.banco.configurado else None
+        self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RAIZ / "logs",
+                                     conversas=self.conversas)
         self.usuarios = Usuarios(RAIZ / "usuarios.json")
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
@@ -175,6 +182,11 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _erro(self, mensagem, status=HTTPStatus.BAD_REQUEST):
         self._json({"erro": mensagem}, status)
+
+    def _banco_fora_do_ar(self, e: BancoForaDoAr):
+        log.warning("banco de dados fora do ar em %s: %s", self.path, e)
+        return self._erro("o banco de dados está fora do ar agora; tente de novo em instantes",
+                          HTTPStatus.SERVICE_UNAVAILABLE)
 
     def _arquivo(self, caminho: Path):
         try:
@@ -278,7 +290,11 @@ class Manipulador(BaseHTTPRequestHandler):
         dados = corpo.get("usuario") or {}
         if original == eu["login"] and (dados.get("papel") != "admin" or not dados.get("ativo", True)):
             raise ValueError("você não pode tirar o próprio acesso de administrador; peça a outro administrador")
-        u = self.app.usuarios.salvar(dados, original)
+        novo = str(dados.get("login") or "").strip().lower()
+        # Login trocado: as conversas do Assistente vão junto (e voltam atrás se o cadastro recusar a mudança).
+        muda = self.app.conversas is not None and original and novo != original
+        with self.app.conversas.mudar_login(original, novo) if muda else contextlib.nullcontext():
+            u = self.app.usuarios.salvar(dados, original)
         log.info("%s %s o acesso de %s", eu["login"], "alterou" if original else "criou", u["login"])
         # Quem altera o próprio usuário (nome, login ou senha) continua conectado.
         cookie = self._cookie_login(u["login"], eu["lembrar"]) if original == eu["login"] else None
@@ -300,16 +316,63 @@ class Manipulador(BaseHTTPRequestHandler):
         return {"vendedores": self.app.assistente.catalogo_vendedores(), "uso": self.app.assistente.uso(),
                 "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
 
+    def _pode_assistente(self, usuario: dict) -> bool:
+        if "assistente" in paginas_permitidas(usuario):
+            return True
+        self._erro("seu acesso não inclui o Assistente", HTTPStatus.FORBIDDEN)
+        return False
+
     def _perguntar(self, usuario: dict, corpo: dict):
-        """Uma pergunta ao Assistente (espera a resposta inteira: costuma levar de 10 s a 1 min)."""
-        if "assistente" not in paginas_permitidas(usuario):
-            return self._erro("seu acesso não inclui o Assistente", HTTPStatus.FORBIDDEN)
+        """Uma pergunta ao Assistente (espera a resposta inteira: costuma levar de 10 s a 1 min). Com o histórico,
+        vem {conversa, pergunta} e o servidor lê a conversa do banco; sem ele (PC), vem a conversa inteira."""
+        if not self._pode_assistente(usuario):
+            return
         vendedores, equipes = escopo_assistente(usuario)
+        a = self.app.assistente
         try:
-            return self._json(self.app.assistente.responder(usuario, corpo.get("mensagens"), vendedores, equipes))
+            if a.historico:
+                return self._json(a.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"), vendedores, equipes))
+            return self._json(a.responder(usuario, corpo.get("mensagens"), vendedores, equipes))
         except ErroAssistente as e:
             log.warning("Assistente (%s): %s", usuario["login"], e)
             return self._erro(str(e), e.status)
+
+    def _historico(self, usuario: dict) -> Conversas | None:
+        """O histórico de conversas do Assistente; None quando já respondeu o erro (sem acesso ou sem banco)."""
+        if not self._pode_assistente(usuario):
+            return None
+        if self.app.conversas is None:
+            self._erro("o histórico de conversas fica só no site", HTTPStatus.NOT_FOUND)
+        return self.app.conversas
+
+    def _ler_historico(self, usuario: dict, caminho: str, q: dict):
+        conversas = self._historico(usuario)
+        if conversas is None:
+            return
+        login = usuario["login"]
+        # A pergunta em andamento é lida antes da conversa: ela só sai daqui depois de a resposta estar gravada.
+        pendente = self.app.assistente.pendente(login)
+        if caminho == "/api/assistente/conversas":
+            return self._json({"conversas": conversas.listar(login, q.get("busca")), "pendente": pendente})
+        id_ = id_valido(q.get("id"))
+        pendente = pendente if pendente and pendente["conversa"] == id_ else None
+        conversa = conversas.obter(login, id_) if id_ else None
+        if conversa is None and pendente is None:
+            raise NaoEncontrada("conversa não encontrada; ela pode ter sido excluída")
+        return self._json({"conversa": conversa, "pendente": pendente})
+
+    def _mudar_historico(self, usuario: dict, caminho: str, corpo: dict):
+        conversas = self._historico(usuario)
+        if conversas is None:
+            return
+        if caminho == "/api/assistente/conversa/renomear":
+            return self._json({"ok": True, "conversa": conversas.renomear(usuario["login"], corpo.get("id"),
+                                                                        corpo.get("titulo"))})
+        pendente = self.app.assistente.pendente(usuario["login"])
+        if pendente and pendente["conversa"] == id_valido(corpo.get("id")):
+            raise ValueError("espere a resposta antes de excluir esta conversa")
+        conversas.excluir(usuario["login"], corpo.get("id"))
+        return self._json({"ok": True})
 
     def _salvar_config_metas(self, eu: dict, corpo: dict):
         """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas e os vendedores que cada
@@ -380,9 +443,11 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":
-                if "assistente" not in paginas_permitidas(usuario):
-                    return self._erro("seu acesso não inclui o Assistente", HTTPStatus.FORBIDDEN)
+                if not self._pode_assistente(usuario):
+                    return
                 return self._json(self.app.assistente.info(usuario, *escopo_assistente(usuario)))
+            if url.path in ("/api/assistente/conversas", "/api/assistente/conversa"):
+                return self._ler_historico(usuario, url.path, q)
             if url.path == "/api/assistente/config":
                 return self._json(self._config_assistente())
             if url.path == "/api/config":
@@ -398,6 +463,10 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
         except CONEXAO_PERDIDA:
             return
+        except BancoForaDoAr as e:
+            return self._banco_fora_do_ar(e)
+        except NaoEncontrada as e:
+            return self._erro(str(e), HTTPStatus.NOT_FOUND)
         except RuntimeError as e:
             return self._erro(str(e), HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, KeyError) as e:
@@ -433,7 +502,10 @@ class Manipulador(BaseHTTPRequestHandler):
                 login = str(self._corpo_json().get("login") or "")
                 if login == usuario["login"]:
                     raise ValueError("você não pode excluir o próprio acesso")
-                self.app.usuarios.excluir(login)
+                # As conversas do Assistente saem junto, para um login reaproveitado não herdá-las.
+                with (self.app.conversas.apagar_login(login) if self.app.conversas is not None
+                      else contextlib.nullcontext()):
+                    self.app.usuarios.excluir(login)
                 log.info("%s excluiu o acesso de %s", usuario["login"], login)
                 return self._json({"ok": True, "usuarios": self.app.usuarios.listar()})
             if url.path == "/api/config":
@@ -447,6 +519,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json({"ok": True, **self._config_projecoes()})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
+            if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):
+                return self._mudar_historico(usuario, url.path, self._corpo_json())
             if url.path == "/api/assistente/config":
                 self.app.usuarios.definir_assistente(self._corpo_json().get("usuarios") or {})
                 log.info("%s salvou o acesso do Assistente", usuario["login"])
@@ -465,6 +539,10 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
         except CONEXAO_PERDIDA:
             return
+        except BancoForaDoAr as e:
+            return self._banco_fora_do_ar(e)
+        except NaoEncontrada as e:
+            return self._erro(str(e), HTTPStatus.NOT_FOUND)
         except (ValueError, KeyError) as e:
             return self._erro(str(e))
         except Exception as e:
@@ -534,6 +612,8 @@ def main() -> None:
         app.cache.atualizar_em_segundo_plano()
     if app.envio and app.envio.ativo:
         log.info("depois de cada atualização, os dados vão para %s", app.envio.destino)
+    if app.banco.configurado:
+        app.banco.iniciar()
     app.vigiar_em_segundo_plano()
 
     servidor = ThreadingHTTPServer((endereco, porta), Manipulador)

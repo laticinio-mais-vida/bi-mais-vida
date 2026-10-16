@@ -9,8 +9,10 @@ from types import SimpleNamespace
 import duckdb
 
 from bi.assistente import Assistente
+from bi.banco import BancoForaDoAr
 from bi.cache import TABELAS, TABELAS_DETALHE, Cache
 from bi.configuracao import Configuracao, padrao
+from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
 
 # Vendedores do padrão das metas: 124 = ES, 141 = BA, 85 = Edir.
@@ -105,8 +107,38 @@ def config_ia(**valores) -> configparser.ConfigParser:
     return ini
 
 
-def criar_assistente(pasta: Path, calc: Calculadora, cliente=None, **ia) -> Assistente:
-    return Assistente(config_ia(**ia), calc, lambda: dict(NOMES), pasta / "logs", cliente=cliente)
+def criar_assistente(pasta: Path, calc: Calculadora, cliente=None, conversas=None, **ia) -> Assistente:
+    return Assistente(config_ia(**ia), calc, lambda: dict(NOMES), pasta / "logs", cliente=cliente, conversas=conversas)
+
+
+class ConversasFalsas:
+    """Imita o histórico de bi/conversas.py em memória (os testes do Assistente não precisam do PostgreSQL)."""
+
+    def __init__(self):
+        self.dados = {}  # id -> {"login", "titulo", "mensagens"}
+        self.fora_do_ar = False
+
+    def _banco(self):
+        if self.fora_do_ar:
+            raise BancoForaDoAr("banco de teste fora do ar")
+
+    def verificar(self):
+        self._banco()
+
+    def historico(self, login, id_):
+        self._banco()
+        c = self.dados.get(id_valido(id_))
+        if not c or c["login"] != login:
+            return None
+        return [{"papel": m["papel"], "texto": m["texto"], **({"consultas": m["consultas"]} if m.get("consultas") else {})}
+                for m in c["mensagens"]]
+
+    def acrescentar(self, login, id_, pergunta, resposta):
+        self._banco()
+        c = self.dados.setdefault(id_, {"login": login, "titulo": titulo_de(pergunta), "mensagens": []})
+        c["mensagens"] += [{"papel": "usuario", "texto": pergunta},
+                           {"papel": "assistente", "texto": resposta["texto"], **{k: resposta.get(k) for k in DETALHES}}]
+        return {"id": id_, "titulo": c["titulo"]}
 
 
 # --- cliente falso da API ---------------------------------------------------------------

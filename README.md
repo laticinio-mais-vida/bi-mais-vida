@@ -199,8 +199,18 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - Vendedor é o da venda, como em Metas. O da carteira aparece como "vendedor da carteira".
 - **Como cheguei nesse número:** embaixo de cada resposta mostra cada consulta feita, com o SQL e uma amostra do
   resultado.
-- **A conversa fica só no navegador:** some ao fechar a aba ou em **Nova conversa**. A pergunta seguinte pode se
-  apoiar na anterior ("e em agosto?").
+- **Histórico de conversas (no site):** como nos chats de IA, a lista ao lado mostra as conversas da pessoa,
+  agrupadas por data (Hoje, Ontem, Últimos 7 dias…).
+  - Dá para voltar a qualquer conversa e continuar. A pergunta seguinte pode se apoiar na anterior ("e em agosto?").
+  - A busca procura no título e no texto das mensagens, sem diferenciar acentos.
+  - Cada conversa pode ser renomeada ou excluída. O título começa como o início da primeira pergunta.
+  - Cada conversa tem o seu link e abre em qualquer computador ou celular com o mesmo login. Cada pessoa vê só as
+    próprias conversas.
+  - Recarregar a página no meio de uma pergunta não perde a resposta: o servidor termina e grava, e ela aparece
+    sozinha.
+  - No celular, a lista abre pelo botão **Conversas**.
+  - O histórico fica no banco PostgreSQL do site (veja [Banco de dados](#banco-de-dados)). No painel do PC, que não
+    tem o banco, a conversa fica só no navegador e some ao fechar a aba.
 - Cada pergunta leva de alguns segundos a um minuto, conforme o número de consultas.
 
 ### O que cada pessoa consulta
@@ -245,6 +255,24 @@ O botão **Configurar** da página (só administradores) tem duas seções:
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
 pela API para treinar modelos. CPF/CNPJ, telefone, endereço e limite de crédito não estão no cache e não vão.
+
+## Banco de dados
+
+O painel usa dois bancos, cada um para uma coisa:
+
+- **DuckDB** (`dados/cache.duckdb`): a cópia das vendas, devoluções e cadastros do ERP. É refeito a cada extração
+  e só é lido.
+- **PostgreSQL** (só no site): o que as próprias pessoas criam no painel. Por enquanto, o histórico de conversas do
+  Assistente; o módulo de gestão e os usuários virão para cá depois.
+
+O PostgreSQL roda no container `bi_banco`, ao lado do painel, sem porta aberta para a internet. Ele tem cópia de
+segurança diária. A instalação e a manutenção estão em
+[docs/publicacao_vps.md](docs/publicacao_vps.md#banco-de-dados-postgresql). O painel acha o banco pela seção
+`[postgres]` do `config.ini`; sem ela (como no PC), funciona sem banco. As tabelas são criadas e atualizadas
+sozinhas quando o painel sobe, pelos arquivos de `bi/migracoes/`.
+
+Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `002_tarefas.sql`). Nunca
+edite uma migração que já foi aplicada no site: ela não roda de novo.
 
 ## Login e acessos
 
@@ -358,6 +386,9 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
+| `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
+| `bi/banco.py` | conexão com o PostgreSQL do site e as migrações |
+| `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |
 | `bi/configuracao.py` | regras editáveis e padrões do Power BI |
 | `bi/acesso.py` | usuários, senhas (PBKDF2), sessões assinadas e permissões |
@@ -367,17 +398,18 @@ reproduz exatamente as fórmulas do Power BI. O botão "Restaurar padrão do Pow
 | `web/` | página: HTML, CSS (identidade do Guia da Marca 2026) e JavaScript |
 | `logs/bi.log` | registro de atualizações e erros |
 | `logs/assistente-AAAA-MM.jsonl` | registro das perguntas do Assistente (quem, consultas, tokens e custo) |
-| `tests/` | testes automáticos: `python -m unittest discover -s tests -t .` |
+| `tests/` | testes automáticos: `python -m unittest discover -s tests -t .` (os do PostgreSQL rodam só com `BI_TESTE_POSTGRES`; veja `tests/test_conversas.py`) |
 | `config.exemplo.ini` | modelo do `config.ini` (sem a senha) |
 | `config_metas.json` | regras salvas pela página Configurações (vai para o repositório, então as mudanças ficam no histórico) |
 | `config_projecoes.json` | vendedores da página Projeções, salvos em Projeções › Configurar (só existe depois do primeiro Salvar) |
 | `usuarios.json` | acessos do painel: senhas em hash e a chave das sessões (fica fora do repositório) |
 | `docs/analise_pbi_metas.md` | análise do Power BI original: tabelas, medidas DAX e divergências encontradas |
 | `docs/publicacao_vps.md` | como o painel está publicado no VPS e como mantê-lo |
-| `deploy/` | Dockerfile e docker-compose do painel no VPS |
+| `deploy/` | Dockerfile e docker-compose do painel e do banco no VPS, e a cópia de segurança do banco |
 
-Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `dados/` (cache com as vendas), `logs/`,
-`marca/` (guia da marca em PDF) e as cópias `config_metas.anterior.json` e `config_projecoes.anterior.json`.
+Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json` (acessos), `banco.env` (senha do
+PostgreSQL no site), `dados/` (cache com as vendas), `logs/`, `marca/` (guia da marca em PDF) e as cópias
+`config_metas.anterior.json` e `config_projecoes.anterior.json`.
 
 ## Se algo der errado
 
@@ -391,6 +423,10 @@ Ficam fora do repositório (`.gitignore`): `config.ini` (senha), `usuarios.json`
   reiniciado depois de colocar a chave.
 - **Assistente "a chave da API não foi aceita" ou "a API recusou o pedido":** confira a chave e o crédito no
   Console da Anthropic (platform.claude.com). O motivo exato fica em `logs/bi.log`.
+- **Assistente "o histórico de conversas está fora do ar" ou "o banco de dados está fora do ar":** o container
+  `bi_banco` parou ou não responde. No servidor, `cd /opt/bi-mais-vida/deploy && docker compose ps` e
+  `docker compose logs banco --tail 50`. O resto do painel continua funcionando, e o histórico volta sozinho
+  quando o banco responder.
 - **Assistente "os dados por cliente ainda não chegaram":** o site ainda tem o cache de antes desta versão. Ele
   chega depois da próxima extração do PC, que já acontece sozinha uma vez quando o painel do PC abre com a versão
   nova.

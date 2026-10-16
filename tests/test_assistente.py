@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 from bi.assistente import ErroAssistente, Ferramentas
-from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, ClienteFalso, bloco_ferramenta, bloco_pensamento,
-                         bloco_texto, criar_assistente, criar_calc, resposta)
+from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, ClienteFalso, ConversasFalsas, bloco_ferramenta,
+                         bloco_pensamento, bloco_texto, criar_assistente, criar_calc, resposta)
 
 
 class Base(unittest.TestCase):
@@ -256,6 +256,100 @@ class TestLaco(Base):
         with self.assertRaises(ErroAssistente) as e:
             b.responder(USUARIO_ADMIN, [{"papel": "usuario", "texto": "x"}], None, None)
         self.assertIn("por cliente", str(e.exception))
+
+
+class TestHistorico(Base):
+    """Conversas guardadas no servidor (no site): o Assistente lê a conversa do histórico e grava cada resposta."""
+
+    def assistente(self, roteiro):
+        self.conversas = ConversasFalsas()
+        self.api = ClienteFalso(roteiro)
+        return criar_assistente(self.pasta, self.calc, cliente=self.api, conversas=self.conversas)
+
+    def test_conversa_nova_e_continuacao(self):
+        visto = {}
+
+        def durante(pedido):
+            visto["pendente"] = a.pendente(USUARIO_VIS["login"])
+            return resposta(bloco_texto("Em agosto foram R$ 4.000,00."))
+        a = self.assistente([
+            resposta(bloco_ferramenta("t1", "buscar_cliente", {"texto": "padaria"}), parada="tool_use"),
+            resposta(bloco_texto("R$ 4.750,00.")),
+            durante,
+        ])
+        self.assertTrue(a.historico)
+        r = a.perguntar(USUARIO_VIS, None, "  quanto a padaria da maria comprou em setembro?  ", None, None)
+        id_ = r["conversa"]["id"]
+        self.assertEqual(r["conversa"]["titulo"], "quanto a padaria da maria comprou em setembro?")
+        guardada = self.conversas.dados[id_]
+        self.assertEqual(guardada["login"], "vis")
+        self.assertEqual([m["papel"] for m in guardada["mensagens"]], ["usuario", "assistente"])
+        self.assertEqual(guardada["mensagens"][1]["texto"], "R$ 4.750,00.")
+        self.assertEqual(guardada["mensagens"][1]["passos"][0]["ferramenta"], "buscar_cliente")
+        self.assertIsNone(a.pendente("vis"))
+
+        r = a.perguntar(USUARIO_VIS, id_, "e em agosto?", None, None)
+        self.assertEqual(r["conversa"]["id"], id_)
+        # a pergunta seguinte leva a conversa gravada, com o resumo das consultas anteriores
+        msgs = self.api.pedidos[-1]["messages"]
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user"])
+        self.assertEqual(msgs[1]["content"], "R$ 4.750,00.")
+        self.assertTrue(msgs[2]["content"].startswith("<consultas_anteriores>\nbuscar_cliente"))
+        self.assertEqual(len(guardada["mensagens"]), 4)
+        # enquanto responde, a pergunta aparece como pendente (para outra aba ou depois de recarregar)
+        self.assertEqual({k: v for k, v in visto["pendente"].items() if k != "segundos"},
+                         {"conversa": id_, "nova": False, "pergunta": "e em agosto?"})
+        self.assertIsNone(a.pendente("vis"))
+
+    def test_erro_nao_grava(self):
+        def falha(pedido):
+            raise RuntimeError("a API caiu")
+        a = self.assistente([falha])
+        with self.assertRaises(Exception):
+            a.perguntar(USUARIO_VIS, None, "x", None, None)
+        self.assertEqual(self.conversas.dados, {})
+        self.assertIsNone(a.pendente("vis"))
+
+    def test_conversa_de_outra_pessoa_ou_inexistente(self):
+        a = self.assistente([resposta(bloco_texto("ok"))])
+        id_ = a.perguntar(USUARIO_VIS, None, "x", None, None)["conversa"]["id"]
+        for conversa in (id_, "nao-e-um-id", "00000000-0000-0000-0000-000000000000"):
+            with self.assertRaises(ErroAssistente) as e:
+                a.perguntar(USUARIO_ADMIN, conversa, "e agora?", None, None)
+            self.assertEqual(e.exception.status, 404)
+        self.assertEqual(len(self.api.pedidos), 1)
+
+    def test_banco_fora_do_ar_nem_chama_a_ia(self):
+        a = self.assistente([resposta(bloco_texto("ok"))])
+        id_ = a.perguntar(USUARIO_VIS, None, "x", None, None)["conversa"]["id"]
+        self.conversas.fora_do_ar = True
+        for conversa in (None, id_):
+            with self.assertRaises(ErroAssistente) as e:
+                a.perguntar(USUARIO_VIS, conversa, "e agora?", None, None)
+            self.assertEqual(e.exception.status, 503)
+        self.assertEqual(len(self.api.pedidos), 1)
+
+    def test_limites_da_conversa(self):
+        a = self.assistente([])
+        id_ = "11111111-1111-1111-1111-111111111111"
+        par = [{"papel": "usuario", "texto": "x"}, {"papel": "assistente", "texto": "y"}]
+        self.conversas.dados[id_] = {"login": "vis", "titulo": "x", "mensagens": par * 100}
+        with self.assertRaises(ErroAssistente) as e:
+            a.perguntar(USUARIO_VIS, id_, "mais uma", None, None)
+        self.assertIn("limite de 100 perguntas", str(e.exception))
+        for pergunta in ("", "   ", "x" * 4001):
+            with self.assertRaises(ErroAssistente):
+                a.perguntar(USUARIO_VIS, None, pergunta, None, None)
+        self.assertEqual(self.api.pedidos, [])
+
+    def test_sem_banco_continua_com_a_conversa_do_navegador(self):
+        a = criar_assistente(self.pasta, self.calc, cliente=ClienteFalso([resposta(bloco_texto("ok"))]))
+        self.assertFalse(a.historico)
+        with self.assertRaises(ErroAssistente) as e:
+            a.perguntar(USUARIO_VIS, None, "x", None, None)
+        self.assertEqual(e.exception.status, 404)
+        r = a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertNotIn("conversa", r)
 
 
 if __name__ == "__main__":

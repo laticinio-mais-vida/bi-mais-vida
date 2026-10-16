@@ -159,12 +159,15 @@ outros sistemas dependem deles.
 
 | O quê | Onde |
 |---|---|
-| Painel: código, `config.ini` (modo vps, a chave de envio e a chave da API do Assistente), `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
+| Painel: código, `config.ini` (modo vps, a chave de envio, a chave da API do Assistente e a senha do banco), `banco.env`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/`, `logs/` | `/opt/bi-mais-vida` |
 | Container `bi_metas` (Python 3.12, usuário 10001, até 512 MB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
+| Container `bi_banco` (PostgreSQL 18, até 256 MB; só o painel enxerga). Os dados ficam no volume Docker `bi-mais-vida_bi_banco_dados` | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
+| Cópias de segurança do banco (uma por dia, 14 dias) | `/opt/backups/bi-banco/` |
 | HTTPS de `bi.maisvida.cloud`, encaminhado para `bi_metas:8050` | bloco no fim de `/opt/app-promotoria/Caddyfile` (container `estoque_caddy`) |
 | Rede que liga o Caddy ao painel | `app-promotoria_estoque_network` |
 
-O painel não abre porta para a internet: só o Caddy fala com ele, pela rede Docker.
+O painel não abre porta para a internet: só o Caddy fala com ele, pela rede Docker. O banco também não: só o
+painel fala com ele, por uma rede Docker interna.
 
 ### Comandos do dia a dia
 
@@ -199,11 +202,17 @@ o tempo de "Up" voltou a poucos segundos).
 
 Depois, feche e abra o painel do PC (`iniciar.bat`).
 
-**Não envie** `config.ini`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/` nem `logs/`. No servidor, esses
-arquivos são diferentes dos do PC: lá estão a chave, os acessos e as regras salvas no site. Se uma versão nova
+**Não envie** `config.ini`, `banco.env`, `usuarios.json`, `config_metas.json`, `config_projecoes.json`, `dados/` nem `logs/`.
+No servidor, esses arquivos são diferentes dos do PC: lá estão as chaves, a senha do banco, os acessos e as regras
+salvas no site. Se uma versão nova
 mudar o `config_metas.json` do repositório, aplique a mudança pela página Configurações do site.
 
-Se algo der errado, volte para a cópia de segurança:
+A cópia do passo 1 não inclui o banco PostgreSQL: ele fica num volume do Docker, fora da pasta, e tem a sua própria
+cópia diária (veja [Banco de dados](#banco-de-dados-postgresql)). Se a versão nova mudar tabelas (arquivo novo em
+`bi/migracoes/`), faça antes uma cópia à mão: `bash /opt/bi-mais-vida/deploy/backup_banco.sh`.
+
+Se algo der errado, volte para a cópia de segurança. O `docker compose down` não apaga o banco (só `down -v`
+apagaria; nunca use `-v`):
 
 ```bash
 cd /opt/bi-mais-vida/deploy && docker compose down
@@ -243,6 +252,95 @@ O que acompanhar:
   uma pergunta que exija várias consultas e confira que a resposta chega.
 - **Registro:** `logs/assistente-AAAA-MM.jsonl`, uma linha por pergunta, com tokens e custo estimado. A página
   Assistente › Configurar › Uso e custo resume os últimos 30 dias.
+
+### Banco de dados (PostgreSQL)
+
+O histórico de conversas do Assistente fica num PostgreSQL só do painel, o container `bi_banco`. Mais adiante, os
+usuários e o módulo de gestão também vão para ele.
+
+- **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
+  a internet e não fala com o app de promotoria.
+- **Dados:** ficam no volume Docker `bi-mais-vida_bi_banco_dados`, fora de `/opt/bi-mais-vida`. Por isso o `chown`
+  e o rollback do deploy não mexem neles.
+- **Tabelas:** são criadas e atualizadas pelo próprio painel quando ele sobe, a partir de `bi/migracoes/`. Não é
+  preciso rodar nada à mão.
+- **Se o banco cair:** o painel continua funcionando, só sem o histórico, que volta sozinho quando o banco responder.
+
+#### Primeira instalação
+
+Faça uma vez, antes de publicar a primeira versão que traz o banco:
+
+1. Criar a senha do banco, no servidor:
+
+   ```bash
+   cd /opt/bi-mais-vida
+   echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" > banco.env
+   chmod 600 banco.env
+   cat banco.env    # copie a senha para o passo 2
+   ```
+
+2. `nano /opt/bi-mais-vida/config.ini` e acrescentar no fim (porta, banco e usuário têm padrão: 5432, bi, bi):
+
+   ```ini
+   [postgres]
+   host = bi_banco
+   senha = A_MESMA_SENHA_DO_BANCO_ENV
+   ```
+
+3. Publicar o código como em [Publicar uma versão nova do código](#publicar-uma-versão-nova-do-código). O
+   `docker compose up -d --build` faz três coisas:
+   - cria o `bi_banco`;
+   - refaz a imagem do painel com o pacote `psycopg`;
+   - sobe o painel depois que o banco estiver pronto.
+4. Conferir:
+   - `docker compose ps` mostra o `bi_banco` como `healthy`;
+   - `docker compose logs bi --tail 30` tem a linha `banco de dados bi@bi_banco:5432/bi pronto (migrações aplicadas agora: 001_conversas)`;
+   - no site, faça uma pergunta no Assistente, recarregue a página e veja a conversa na lista.
+5. Instalar a cópia de segurança diária (abaixo).
+
+A senha só é lida pelo Postgres na primeira vez, quando ele cria o banco. Para trocá-la depois, troque no banco
+(`docker exec -it bi_banco psql -U bi -d bi -c "ALTER USER bi PASSWORD 'nova'"`), no `banco.env` e no `config.ini`,
+e reinicie o painel.
+
+#### Cópia de segurança
+
+O `deploy/backup_banco.sh` grava uma cópia (`pg_dump`) por dia em `/opt/backups/bi-banco/` e apaga as de mais de
+14 dias. Para instalar, rode `crontab -e` e acrescente a linha abaixo (03:30 no horário do servidor, que é UTC;
+00:30 em Brasília):
+
+```
+30 3 * * * bash /opt/bi-mais-vida/deploy/backup_banco.sh >> /var/log/bi-banco-backup.log 2>&1
+```
+
+Rode uma vez à mão para conferir: `bash /opt/bi-mais-vida/deploy/backup_banco.sh`.
+
+Para conferir se uma cópia abre, sem mexer no banco do site:
+
+```bash
+docker exec bi_banco createdb -U bi teste_restauracao
+docker exec -i bi_banco pg_restore -U bi -d teste_restauracao < /opt/backups/bi-banco/bi-AAAA-MM-DD.dump
+docker exec bi_banco psql -U bi -d teste_restauracao -c "select count(*) from conversas"
+docker exec bi_banco dropdb -U bi teste_restauracao
+```
+
+Para voltar o banco do site para uma cópia (perde o que foi gravado depois dela):
+
+```bash
+docker exec -i bi_banco pg_restore -U bi -d bi --clean --if-exists < /opt/backups/bi-banco/bi-AAAA-MM-DD.dump
+cd /opt/bi-mais-vida/deploy && docker compose restart bi
+```
+
+#### Comandos úteis
+
+```bash
+cd /opt/bi-mais-vida/deploy
+docker compose logs banco --tail 50              # mensagens do banco
+docker exec -it bi_banco psql -U bi -d bi        # console SQL (\dt lista as tabelas, \q sai)
+docker stats bi_banco                            # memória em uso
+```
+
+Não troque a imagem para outra versão principal do Postgres (por exemplo, 19) só mudando o número: o formato dos
+arquivos muda entre versões principais. Para trocar, faça a cópia, suba o banco novo vazio e restaure nele.
 
 ### Esqueci a senha de administrador do site
 
