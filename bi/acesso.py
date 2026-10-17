@@ -28,10 +28,10 @@ from .banco import Banco, hora
 from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
-PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "assistente": "Assistente"}
+PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "assistente": "Assistente", "gestao": "Gestão"}
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
-PAGINAS_COM_ESCOPO = ("projecoes", "assistente")  # páginas com essa escolha de vendedores na configuração
+PAGINAS_COM_ESCOPO = ("projecoes", "assistente", "gestao")  # páginas com essa escolha de vendedores na configuração
 ESCOPO_PADRAO = {"modo": "metas", "vendedores": None}
 COOKIE = "mv_sessao"
 DURACAO_SESSAO = 12 * 3600            # sem "manter conectado"
@@ -41,7 +41,7 @@ SENHA_MINIMA = 6
 TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastro não se misturam
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
 _COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, escopo_projecoes, "
-            "escopo_assistente, criado_em, ultimo_acesso")
+            "escopo_assistente, escopo_gestao, criado_em, ultimo_acesso")
 
 
 # --- senhas ---------------------------------------------------------------------------------
@@ -81,11 +81,11 @@ def _de_b64(texto: str) -> bytes:
 # --- usuários -------------------------------------------------------------------------------
 def _usuario(linha) -> dict:
     """Linha da tabela usuarios -> o dicionário que o resto do código usa (com a senha; para a página, publico())."""
-    (id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, projecoes, assistente,
+    (id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, projecoes, assistente, gestao,
      criado, ultimo) = linha
     return {"id": id_, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "senha": senha, "sessao": sessao,
             "paginas": paginas, "visoes": visoes, "vendedores": vendedores, "projecoes": projecoes,
-            "assistente": assistente, "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
+            "assistente": assistente, "gestao": gestao, "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
 
 
 def _paginas_de(u: dict) -> list[str]:
@@ -296,6 +296,10 @@ class Usuarios:
         """Pela configuração da página Assistente, no mesmo formato de definir_projecoes."""
         self._definir_escopo("assistente", mudancas, con)
 
+    def definir_gestao(self, mudancas: dict, con=None) -> None:
+        """Pela configuração da página Gestão (os vendedores que a pessoa pode pôr nas campanhas), no mesmo formato."""
+        self._definir_escopo("gestao", mudancas, con)
+
     def _definir_escopo(self, pagina: str, mudancas: dict, con=None) -> None:
         """Vendedores que cada usuário vê numa página de PAGINAS_COM_ESCOPO. Confere tudo antes de gravar, para
         não salvar só metade."""
@@ -321,7 +325,8 @@ class Usuarios:
                           [escopo, paginas, id_])
 
     def excluir(self, login: str) -> None:
-        """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo)."""
+        """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo). As
+        campanhas que ele criou na Gestão ficam, sem dono: só os administradores passam a vê-las."""
         with self._cadastro() as con:
             usuarios = {u["login"]: u for u in self._buscar(con)}
             if login not in usuarios:
@@ -371,6 +376,11 @@ def escopo_projecoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
 def escopo_assistente(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
     """(vendedores, equipes) cujas vendas o usuário consulta no Assistente; None = sem limite."""
     return _escopo(usuario, "assistente")
+
+
+def escopo_gestao(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) que o usuário pode pôr nas campanhas da Gestão e ver no andamento; None = sem limite."""
+    return _escopo(usuario, "gestao")
 
 
 def _escopo(usuario: dict, pagina: str) -> tuple[set[int] | None, set[str] | None]:

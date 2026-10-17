@@ -250,9 +250,10 @@ refaz a imagem com ele.
 
 O que acompanhar:
 
-- **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente (uns 60 MB para quem vê tudo;
-  até 2 acessos ao mesmo tempo, `recortes` em `[ia]`). Confira com `docker stats bi_metas`; o limite do container é
-  512 MB. Se apertar, use `recortes = 1`.
+- **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente. O de todos os vendedores
+  (uns 60 MB) tem vaga própria e fica carregado, porque a página Gestão usa ele sempre; além dele, até 2 acessos ao
+  mesmo tempo (`recortes` em `[ia]`). Confira com `docker stats bi_metas`; o limite do container é 512 MB. Se
+  apertar, use `recortes = 1`.
 - **Perguntas longas:** uma pergunta pode levar até uns 100 s (`tempo_total`). O `reverse_proxy` do Caddy não tem
   tempo limite de resposta por padrão, então o Caddyfile não precisa mudar. Mesmo assim, depois de publicar, faça
   uma pergunta que exija várias consultas e confira que a resposta chega.
@@ -262,7 +263,7 @@ O que acompanhar:
 ### Banco de dados (PostgreSQL)
 
 O que o painel cria fica num PostgreSQL só dele, o container `bi_banco`: usuários, regras salvas nas páginas,
-conversas e uso do Assistente. Mais adiante, o módulo de gestão também vai para ele.
+conversas e uso do Assistente, e as campanhas da página Gestão (migração `007_gestao.sql`).
 
 - **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
   a internet e não fala com o app de promotoria.

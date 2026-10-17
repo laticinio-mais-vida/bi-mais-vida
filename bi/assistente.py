@@ -6,6 +6,8 @@ Como funciona:
   vendedores e com as regras das metas já aplicadas (equivalência de produto, grupos, categorias, motivos de
   devolução que descontam). A IA só consulta esse recorte: o que está fora dele não existe para ela, seja qual for
   o SQL. Arquivos, extensões e configurações ficam travados, e cada consulta tem tempo e linhas limitados.
+  Exceção: as ferramentas de campanha (listar, andamento e propor) usam bi/gestao.py, com o acesso da pessoa na
+  página Gestão, para darem os mesmos números da página; quem não tem a Gestão recebe um erro dentro delas.
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
 - Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). As
@@ -32,7 +34,7 @@ import pandas as pd
 
 from .banco import BancoForaDoAr
 from .configuracao import VISOES
-from .conversas import MAX_MENSAGENS_CONVERSA, id_valido, novo_id
+from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
 
@@ -345,6 +347,57 @@ FERRAMENTAS = [
         "strict": True,
     },
     {
+        "name": "listar_campanhas",
+        "description": ("Campanhas da página Gestão de quem pergunta (o administrador vê todas), da mais nova para a "
+                        "mais antiga: código, nome, status, período, métrica, meta padrão e nº de vendedores. Use para "
+                        "achar a campanha citada ('a que eu criei', pelo nome)."),
+        "input_schema": _objeto({
+            "texto": {"type": "string", "description": "parte do nome ou o código; vazio lista todas"},
+            "incluir_arquivadas": {"type": "boolean", "description": "true para incluir as arquivadas"},
+        }, ["texto", "incluir_arquivadas"]),
+        "strict": True,
+    },
+    {
+        "name": "andamento_campanha",
+        "description": ("Andamento de uma campanha por vendedor, exatamente como na página Gestão: realizado, meta, % "
+                        "atingido, situação (batida, no ritmo, atenção, abaixo), projeção e quanto falta por dia útil, "
+                        "e o total."),
+        "input_schema": _objeto({
+            "campanha": {"type": "integer", "description": "código da campanha (de listar_campanhas)"},
+        }, ["campanha"]),
+        "strict": True,
+    },
+    {
+        "name": "propor_campanha",
+        "description": ("Confere e monta o RASCUNHO de uma campanha nova, sem gravar: a pessoa cria pelo botão que "
+                        "aparece abaixo da resposta. Devolve o rascunho com os nomes, ou o erro para corrigir. Filtros "
+                        "que não vierem (ou vierem vazios) não limitam nada."),
+        "input_schema": _objeto({
+            "nome": {"type": "string", "description": "nome curto da campanha"},
+            "descricao": {"type": "string", "description": "objetivo e regras, em poucas linhas (pode ser vazio)"},
+            "premiacao": {"type": "string", "description": "prêmio, se houver (pode ser vazio)"},
+            "inicio": {"type": "string", "format": "date", "description": "primeiro dia (AAAA-MM-DD)"},
+            "fim": {"type": "string", "format": "date", "description": "último dia, inclusive (AAAA-MM-DD)"},
+            "metrica": {"type": "string", "enum": ["faturamento", "volume", "positivacao", "mix"]},
+            "meta_padrao": {"type": "number", "description": "meta de cada vendedor na métrica; 0 = sem meta (só ranking)"},
+            "metas": {"type": "array", "description": "metas diferentes da padrão, por vendedor",
+                      "items": _objeto({"id_vendedor": {"type": "integer"}, "meta": {"type": "number"}},
+                                       ["id_vendedor", "meta"])},
+            "vendedores": {**_INTEIROS, "description": "códigos dos vendedores participantes (de buscar_vendedor)"},
+            "equipes": {"type": "array", "items": {"type": "string", "enum": ["ES", "BA", "EDIR"]},
+                        "description": "inclui todos os vendedores ativos dessas equipes"},
+            "produtos": {**_INTEIROS, "description": "códigos de produto (de buscar_produto)"},
+            "linhas": {"type": "array", "items": {"type": "string"}, "description": "linhas de produto, como nos dados"},
+            "categorias": {"type": "array", "items": {"type": "string"}, "description": "categorias das outras linhas"},
+            "grupos": {"type": "array", "items": {"type": "string", "enum": ["mussarela", "outras"]}},
+            "ufs": {"type": "array", "items": {"type": "string"}, "description": "UF do cliente (ES, BA...)"},
+            "segmentos": {"type": "array", "items": {"type": "string"}, "description": "segmentos do cliente"},
+        }, ["nome", "inicio", "fim", "metrica", "meta_padrao"]),
+        # Sem strict: com este esquema (o maior de todos) a API recusa o pedido inteiro ("compiled grammar is too
+        # large"). A conferência é do servidor (bi/gestao.py validar), que devolve o erro para a IA corrigir.
+        "strict": False,
+    },
+    {
         "name": "consultar_sql",
         "description": ("Executa UMA consulta SELECT (DuckDB) nas tabelas descritas nas instruções, para o que as "
                         "outras ferramentas não resolvem. Somente leitura; devolve até 200 linhas."),
@@ -385,12 +438,15 @@ def _palavras(texto: str) -> list[str]:
 class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
-    def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None):
+    def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None):
+        """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão)."""
         self.cur = recorte.cursor()
         self.ids = recorte.ids
         self.calc = calc
         self.cfg = cfg
         self.equipes = equipes
+        self.gestao = gestao
+        self.rascunhos: list[dict] = []  # campanhas propostas nesta pergunta (a página mostra o botão de criar)
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
     def executar(self, nome: str, args: dict) -> tuple[dict, dict]:
@@ -404,8 +460,11 @@ class Ferramentas:
             if extras:
                 raise ValueError(f"argumento desconhecido: {', '.join(sorted(extras))}")
             resultado = metodo(passo, **args)
-        except (ValueError, RuntimeError, duckdb.Error) as e:
+        except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada) as e:
             passo["erro"] = str(e).split("\n")[0][:500] if isinstance(e, duckdb.Error) else str(e)
+            resultado = {"erro": passo["erro"]}
+        except BancoForaDoAr as e:  # as campanhas ficam no PostgreSQL
+            passo["erro"] = f"as campanhas não puderam ser lidas: {e.aviso}"
             resultado = {"erro": passo["erro"]}
         except Exception as e:  # argumento que a ferramenta não tem, ou defeito: a IA fica sabendo e segue
             log.exception("falha na ferramenta %s %s", nome, args)
@@ -610,6 +669,69 @@ class Ferramentas:
                      linhas=len(linhas))
         return resultado
 
+    # --- campanhas (página Gestão) -----------------------------------------------------
+    def _campanhas(self):
+        if self.gestao is None:
+            raise ValueError("o acesso de quem pergunta não inclui a página Gestão, onde ficam as campanhas")
+        return self.gestao
+
+    def f_listar_campanhas(self, passo: dict, texto: str = "", incluir_arquivadas: bool = False) -> dict:
+        lista = self._campanhas().listar(texto, bool(incluir_arquivadas))
+        passo.update(colunas=["código", "campanha", "status", "início", "fim", "métrica"],
+                     amostra=[[c["id"], c["nome"], c["status"], c["inicio"], c["fim"], c["metrica"]] for c in lista[:10]],
+                     linhas=len(lista))
+        if not lista:
+            return {"campanhas": [], "aviso": "nenhuma campanha encontrada" + (" com esse texto" if texto else "")}
+        return {"campanhas": lista}
+
+    def f_andamento_campanha(self, passo: dict, campanha: int) -> dict:
+        r = self._campanhas().andamento(int(campanha))
+        c = r["campanha"]
+        passo.update(colunas=["vendedor", "realizado", "meta", "%", "situação"],
+                     amostra=[[v["nome"], v["realizado"], v.get("meta"), v.get("pct"), v["status"]]
+                              for v in r["vendedores"][:10]],
+                     linhas=len(r["vendedores"]), resumo=f"#{c['id']} {c['nome']}")
+        return r
+
+    def f_propor_campanha(self, passo: dict, nome: str, inicio: str, fim: str, metrica: str, meta_padrao: float = 0,
+                          descricao: str = "", premiacao: str = "", metas=None, vendedores=None, equipes=None,
+                          produtos=None, linhas=None, categorias=None, grupos=None, ufs=None, segmentos=None) -> dict:
+        individuais = {}
+        for m in metas or []:
+            try:
+                individuais[int(m["id_vendedor"])] = m["meta"]
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("metas: use uma lista de {id_vendedor, meta}") from None
+        participantes = [{"id": int(v), "meta": individuais.get(int(v))} for v in vendedores or []]
+        ja = {p["id"] for p in participantes}
+        participantes += [{"id": v, "meta": m} for v, m in individuais.items() if v not in ja]
+        dados = {"nome": nome, "descricao": descricao, "premiacao": premiacao, "inicio": inicio, "fim": fim,
+                 "metrica": metrica, "meta_padrao": meta_padrao, "vendedores": participantes,
+                 "filtros": {"produtos": produtos, "linhas": linhas, "categorias": categorias, "grupos": grupos,
+                             "ufs": ufs, "segmentos": segmentos}}
+        r = self._campanhas().propor(dados, equipes or [])
+        self.rascunhos.append(r)
+        n = len(r["vendedores"])
+        passo.update(colunas=["rascunho", "período", "métrica", "meta padrão", "vendedores"],
+                     amostra=[[r["nome"], f"{r['inicio']} a {r['fim']}", r["nome_metrica"], r["meta_padrao"], n]],
+                     linhas=1, resumo=(f"rascunho {r['id']} (ainda não criado): {r['nome']}, {r['metrica']}, "
+                                       f"{r['inicio']} a {r['fim']}, {n} vendedores"))
+        nomes = r["nomes"]
+        filtros = dict(r["filtros"])
+        if filtros.get("produtos"):
+            filtros["produtos"] = [f"{p} {nomes['produtos'].get(str(p), '')}".strip() for p in filtros["produtos"]]
+        return {
+            "situacao": ("RASCUNHO, AINDA NÃO CRIADO. A pessoa confere e cria no botão 'Criar campanha' que aparece "
+                         "abaixo da sua resposta (ou ajusta em 'Revisar no painel')."),
+            "rascunho": {
+                "nome": r["nome"], "periodo": f"{r['inicio']} a {r['fim']}", "metrica": r["nome_metrica"],
+                "unidade": r["unidade"], "meta_padrao": r["meta_padrao"], "descricao": r["descricao"],
+                "premiacao": r["premiacao"], "filtros": filtros,
+                "vendedores": [{"id": v["id"], "nome": nomes["vendedores"].get(str(v["id"])),
+                                "meta": r["meta_padrao"] if v["meta"] is None else v["meta"]} for v in r["vendedores"]],
+            },
+        }
+
 
 def _sql_legivel(sql: str, params: list) -> str:
     """SQL com os parâmetros no lugar (só para mostrar na tela e no registro; a consulta usa parâmetros)."""
@@ -701,6 +823,22 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 - Clientes atendidos (positivação) = clientes distintos com venda no período. Venda média = faturamento ÷ clientes.
 - Quantidade só soma com sentido dentro do mesmo produto (unidades diferentes).
 
+# Campanhas (página Gestão)
+- Uma campanha mede, num período, uma métrica por vendedor participante, com uma meta padrão e ajustes por \
+vendedor: faturamento (venda líquida, R$), volume (quantidade; exige filtro de produto com uma unidade só), \
+positivação (clientes distintos com venda) ou mix (produtos distintos vendidos). Filtros opcionais: produtos, \
+linhas, categorias, grupos, UFs e segmentos do cliente.
+- Para criar uma campanha, use propor_campanha: ela confere e monta um RASCUNHO, sem gravar. A pessoa cria no botão \
+"Criar campanha" que aparece abaixo da sua resposta. Nunca diga que a campanha foi criada: diga que o rascunho \
+está pronto para conferir e resuma o que ficou (período, métrica, meta, vendedores e filtros). Se faltar período, \
+métrica ou vendedores, pergunte antes; o nome você pode sugerir. Vendedores e produtos citados pelo nome: códigos \
+com buscar_vendedor e buscar_produto; "todos de BA" = equipes ["BA"]. Se a ferramenta devolver erro, corrija e \
+chame de novo.
+- Cada pessoa só vê as campanhas que criou (o administrador vê todas). Para achar uma campanha ("a que eu criei", \
+pelo nome) use listar_campanhas, que também mostra se um rascunho já virou campanha; para o andamento por \
+vendedor, andamento_campanha (os números da página Gestão). Se houver mais de uma candidata, use a mais recente e \
+diga qual.
+
 # Tabelas para consultar_sql (DuckDB)
 {ESQUEMA}
 
@@ -733,6 +871,8 @@ class Assistente:
         self.conversas = conversas
         self._recortes: collections.OrderedDict = collections.OrderedDict()
         self._trava_recortes = threading.Lock()
+        self._completo: tuple | None = None  # (chave, Recorte) com todos os vendedores: vaga própria, ver recorte()
+        self._trava_completo = threading.Lock()
         self._vagas = threading.BoundedSemaphore(max(1, self.cfg.simultaneos))
         self._ocupados: dict[int, dict] = {}  # id do usuário -> a pergunta que está sendo respondida
         self._trava = threading.Lock()
@@ -765,17 +905,26 @@ class Assistente:
         return f"{len(lista)} vendedor{'es' if len(lista) != 1 else ''}: {', '.join(lista[:6])}{mais}"
 
     def recorte(self, ids: frozenset[int] | None) -> Recorte:
+        """O recorte do acesso, guardado enquanto os dados e as regras não mudam. O de todos os vendedores (ids
+        None) tem vaga própria, fora do limite [ia] recortes: a página Gestão usa ele o tempo todo (filtrando os
+        vendedores no SQL), e assim não derruba o recorte de quem está perguntando ao Assistente."""
         cache = self.calc.cache
         cfg = json.dumps(self.calc.configuracao.atual(), sort_keys=True)
         chave = (cache.info.get("extraido_em"), hashlib.sha1(cfg.encode()).hexdigest(),
                  self.calc.metas.versao, self.calc.metas_produtos.versao, ids)
+        if ids is None:
+            with self._trava_completo:  # dois pedidos juntos montam uma vez só
+                if self._completo is None or self._completo[0] != chave:
+                    r = Recorte(self.calc, self.nomes_vendedores(), None)
+                    log.info("recorte com todos os vendedores montado em %.1f s", r.segundos)
+                    self._completo = (chave, r)
+                return self._completo[1]
         with self._trava_recortes:
             if chave in self._recortes:
                 self._recortes.move_to_end(chave)
                 return self._recortes[chave]
         r = Recorte(self.calc, self.nomes_vendedores(), ids)
-        log.info("recorte do Assistente montado em %.1f s (%s)", r.segundos,
-                 "todos os vendedores" if ids is None else f"{len(ids)} vendedores")
+        log.info("recorte do Assistente montado em %.1f s (%d vendedores)", r.segundos, len(ids))
         with self._trava_recortes:
             self._recortes[chave] = r
             for antiga in [k for k in self._recortes if k[:4] != chave[:4]]:
@@ -847,7 +996,7 @@ class Assistente:
             self._cliente = anthropic.Anthropic(api_key=self.cfg.chave, max_retries=2, timeout=self.cfg.timeout)
         return self._cliente
 
-    def _contexto(self, usuario: dict, escopo: str) -> str:
+    def _contexto(self, usuario: dict, escopo: str, gestao: bool = False) -> str:
         """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa)."""
         cache, hoje = self.calc.cache, dt.date.today()
         data_ref = cache.data_ref()
@@ -862,6 +1011,7 @@ class Assistente:
                 f"em andamento até essa data.\n"
                 f"- Quem pergunta: {usuario['nome']} ({'administrador' if usuario['papel'] == 'admin' else 'visualizador'}); "
                 f"vê {escopo}.\n"
+                f"- Campanhas (página Gestão): {'pode criar e acompanhar' if gestao else 'o acesso não inclui'}.\n"
                 f"- Categorias das outras linhas: {', '.join(regras.categorias) or 'nenhuma'}.\n"
                 f"- Motivos de devolução que descontam: {descontam}.")
 
@@ -895,9 +1045,10 @@ class Assistente:
         return saida
 
     def perguntar(self, usuario: dict, conversa_id, pergunta, vendedores: set[int] | None,
-                  equipes: set[str] | None) -> dict:
+                  equipes: set[str] | None, gestao=None) -> dict:
         """Pergunta numa conversa do histórico (sem conversa_id, começa uma nova). A pergunta e a resposta são
-        gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas."""
+        gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas.
+        gestao: bi/gestao.py ContextoGestao de quem pergunta, para as ferramentas de campanha (None = sem a página)."""
         pergunta = str(pergunta or "").strip()
         if not pergunta:
             raise ErroAssistente("escreva uma pergunta")
@@ -928,7 +1079,7 @@ class Assistente:
 
         return self.responder(usuario, anteriores + [{"papel": "usuario", "texto": pergunta}], vendedores, equipes,
                               pendente={"conversa": conversa_id, "nova": not anteriores, "pergunta": pergunta},
-                              guardar=guardar)
+                              guardar=guardar, gestao=gestao)
 
     def pendente(self, usuario: int) -> dict | None:
         """A pergunta que ainda está sendo respondida para esta pessoa (de outra aba ou de antes de recarregar a
@@ -940,7 +1091,7 @@ class Assistente:
             return {**{k: p[k] for k in ("conversa", "nova", "pergunta")}, "segundos": round(time.time() - p["inicio"])}
 
     def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None,
-                  pendente: dict | None = None, guardar=None) -> dict:
+                  pendente: dict | None = None, guardar=None, gestao=None) -> dict:
         """mensagens: a conversa inteira, terminando na pergunta (perguntar() monta a partir do histórico).
         pendente: o que pendente() mostra enquanto a pergunta roda. guardar(resultado): grava a resposta antes de
         liberar a pessoa; devolve o "conversa"."""
@@ -968,7 +1119,8 @@ class Assistente:
             if not self._vagas.acquire(timeout=20):
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
-                r = self._responder(usuario, api_mensagens, vendedores, equipes, (pendente or {}).get("conversa"))
+                r = self._responder(usuario, api_mensagens, vendedores, equipes, (pendente or {}).get("conversa"),
+                                    gestao)
             finally:
                 self._vagas.release()
             r["restantes"] = None if admin else max(0, self.cfg.limite_diario - perguntas - 1)
@@ -979,16 +1131,17 @@ class Assistente:
             with self._trava:
                 self._ocupados.pop(dono, None)
 
-    def _responder(self, usuario, api_mensagens, vendedores, equipes, conversa: str | None = None) -> dict:
+    def _responder(self, usuario, api_mensagens, vendedores, equipes, conversa: str | None = None,
+                   gestao=None) -> dict:
         t0 = time.time()
         pergunta = _sem_prefixo(api_mensagens[-1]["content"])
         ids = self.ids_do_escopo(vendedores, equipes)
         if ids is not None and not ids:
             raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
         escopo = self.descrever_escopo(ids, vendedores, equipes)
-        ferramentas = Ferramentas(self.recorte(ids), self.calc, self.cfg, equipes)
+        ferramentas = Ferramentas(self.recorte(ids), self.calc, self.cfg, equipes, gestao=gestao)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": self._contexto(usuario, escopo)}]
+                  {"type": "text", "text": self._contexto(usuario, escopo, gestao is not None)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}
         passos: list[dict] = []
         texto, aviso, erro, modelo, parada, ids_req = "", None, None, self.cfg.modelo, None, []
@@ -1046,7 +1199,7 @@ class Assistente:
         admin = usuario["papel"] == "admin"
         return {
             "resposta": texto, "aviso": aviso, "consultas": _resumo_consultas(passos), "passos": passos,
-            "data_ref": self.calc.cache.info.get("data_ref"), "escopo": escopo,
+            "rascunhos": ferramentas.rascunhos, "data_ref": self.calc.cache.info.get("data_ref"), "escopo": escopo,
             "uso": uso if admin else {"segundos": uso["segundos"]},
         }
 
@@ -1070,13 +1223,21 @@ def _sem_prefixo(texto: str) -> str:
     return texto
 
 
+# Ferramentas cujo resumo leva os primeiros achados (código e nome), para a próxima pergunta usar os códigos.
+ACHADOS = {"buscar_cliente": 3, "buscar_produto": 3, "buscar_vendedor": 3, "listar_campanhas": 5}
+
+
 def _resumo_consultas(passos: list[dict]) -> str:
     """Linha por ferramenta usada, para a próxima pergunta saber o que já foi consultado (códigos achados etc.)."""
     linhas = []
     for p in passos:
-        args = json.dumps(p["args"], ensure_ascii=False, separators=(",", ":"))
-        if p["ferramenta"].startswith("buscar_") and p["amostra"] and not p["erro"]:
-            achados = "; ".join(f"{r[0]} {r[1]}" for r in p["amostra"][:3])
+        # O rascunho de campanha leva todos os campos: no resumo vai só o que ficou (cabe no limite).
+        args = "" if p["ferramenta"] == "propor_campanha" else json.dumps(p["args"], ensure_ascii=False,
+                                                                           separators=(",", ":"))
+        if p.get("resumo") and not p["erro"]:
+            linhas.append(f"{p['ferramenta']}{args} -> {p['resumo']}")
+        elif p["ferramenta"] in ACHADOS and p["amostra"] and not p["erro"]:
+            achados = "; ".join(f"{r[0]} {r[1]}" for r in p["amostra"][:ACHADOS[p['ferramenta']]])
             linhas.append(f"{p['ferramenta']}{args} -> {achados}")
         else:
             linhas.append(f"{p['ferramenta']}{args}" + (" -> erro" if p["erro"] else ""))

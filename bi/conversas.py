@@ -17,7 +17,7 @@ from .banco import Banco
 MAX_MENSAGENS_CONVERSA = 200  # 100 perguntas; a IA vê só as últimas (MAX_MENSAGENS em bi/assistente.py)
 TAM_TITULO = 60
 MAX_TITULO = 80
-DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso")  # o que a página mostra junto da resposta
+DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso", "rascunhos")  # o que a página mostra junto da resposta
 _META = "id, titulo, criada_em, atualizada_em"
 
 
@@ -102,6 +102,19 @@ class Conversas:
             linhas = con.execute("SELECT papel, texto, detalhes->>'consultas' FROM mensagens WHERE conversa = %s "
                                  "ORDER BY id", [id_]).fetchall()
         return [{"papel": p, "texto": t, **({"consultas": c} if c else {})} for p, t, c in linhas]
+
+    def rascunho(self, usuario: int, id_) -> dict | None:
+        """Um rascunho de campanha que o Assistente montou numa conversa da pessoa (para abrir na página Gestão)."""
+        id_ = id_valido(id_)
+        if not id_:
+            return None
+        with self.banco.conexao() as con:
+            linha = con.execute(
+                "SELECT r FROM mensagens m JOIN conversas c ON c.id = m.conversa, jsonb_array_elements(CASE WHEN "
+                "jsonb_typeof(m.detalhes->'rascunhos') = 'array' THEN m.detalhes->'rascunhos' ELSE '[]' END) r "
+                "WHERE c.usuario = %s AND m.detalhes->'rascunhos' @> %s::jsonb AND r->>'id' = %s LIMIT 1",
+                [usuario, json.dumps([{"id": id_}]), id_]).fetchone()
+        return linha[0] if linha else None
 
     def acrescentar(self, usuario: int, id_, pergunta: str, resposta: dict) -> dict:
         """Grava uma pergunta e a resposta ({"texto", e os DETALHES}); cria a conversa se ela ainda não existe.

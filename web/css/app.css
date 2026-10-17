@@ -1487,6 +1487,153 @@ body.sem-rolagem { overflow: hidden; }
   body.chat-gaveta { overflow: hidden; }
 }
 
+/* ==========================================================================
+   Gestão: campanhas em quadro (kanban), andamento por vendedor e formulário
+   ========================================================================== */
+.g-busca input { width: 210px; }
+.btn.ativo { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 45%, var(--linha)); color: var(--acento-tinta); }
+.btn.ativo .ic { color: var(--acento); }
+
+.kanban { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; align-items: start; }
+.kanban-coluna {
+  display: flex; flex-direction: column; gap: 10px; min-height: 240px; padding: 12px;
+  border-radius: var(--raio); border: 1px solid var(--linha); background: var(--surface-2);
+  border-top: 4px solid var(--c);
+  transition: border-color .2s, background .2s, box-shadow .2s;
+}
+.kanban-coluna.alvo { background: color-mix(in srgb, var(--c) 8%, var(--surface-2)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); }
+.kanban-cab { display: flex; align-items: center; gap: 8px; padding: 2px 4px; font-family: var(--f-titulo); font-size: 15px; }
+.kanban-cab .ponto { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.kanban-cab .cont { margin-left: auto; min-width: 26px; text-align: center; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--tinta-2); font: 700 12px var(--f-texto); }
+.kanban-cards { display: grid; gap: 10px; align-content: start; flex: 1; min-height: 80px; }
+.kanban-vazio { margin: 0; padding: 22px 12px; border: 1.5px dashed var(--linha-forte); border-radius: 14px; text-align: center; font-size: 13px; color: var(--tinta-3); }
+
+.camp-card {
+  position: relative; padding: 12px 14px 12px 16px; border-radius: 14px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--linha); box-shadow: var(--sombra-1);
+  transition: transform .25s var(--mola), box-shadow .2s, border-color .2s, opacity .2s;
+}
+.camp-card::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0; background: var(--c); }
+.camp-card:hover { transform: translateY(-2px); box-shadow: var(--sombra-2); }
+.camp-card:focus-visible { outline: 3px solid var(--azul); outline-offset: 2px; }
+.camp-card.selecionada { border-color: var(--laranja); box-shadow: 0 0 0 3px var(--acento-suave), var(--sombra-2); }
+.camp-card.arrastando { opacity: .4; transform: rotate(1.5deg) scale(.98); }
+.camp-card.arquivada { opacity: .65; }
+.camp-card.com-menu { z-index: 25; }
+.camp-lugar { border-radius: 14px; border: 2px dashed var(--acento); background: var(--acento-suave); }
+.camp-topo { display: flex; align-items: center; gap: 6px; min-height: 28px; }
+.camp-topo .chip { padding: 3px 9px; font-size: 12px; }
+.camp-topo .chip .ic { width: 14px; height: 14px; }
+.camp-metrica { background: color-mix(in srgb, var(--c) 14%, var(--surface)); color: color-mix(in srgb, var(--c) 75%, var(--tinta)); }
+.camp-menu-btn { margin-left: auto; width: 30px; height: 30px; flex: none; display: grid; place-items: center; border: 0; border-radius: 9px; background: none; color: var(--tinta-3); cursor: pointer; }
+.camp-menu-btn:hover, .camp-card.com-menu .camp-menu-btn { background: var(--surface-3); color: var(--tinta); }
+.camp-card h4 { margin: 8px 0 6px; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.camp-info { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; font-size: 12.5px; color: var(--tinta-3); }
+.camp-info span { display: inline-flex; align-items: center; gap: 4px; }
+.camp-info .ic { width: 14px; height: 14px; }
+.camp-barra { position: relative; height: 6px; margin-top: 12px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.camp-barra i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 999px; background: var(--c); transition: width 1.1s var(--suave); }
+.camp-num { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12.5px; color: var(--tinta-2); font-variant-numeric: tabular-nums; }
+.camp-sugestao {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 5px 10px; border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--atencao-forte) 60%, transparent); background: var(--atencao-bg); color: var(--atencao);
+  font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: left;
+}
+.camp-sugestao .ic { width: 14px; height: 14px; flex: none; }
+.camp-sugestao:hover { border-style: solid; }
+.camp-autor { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 12px; color: var(--tinta-3); }
+.camp-autor .ic { width: 13px; height: 13px; }
+.camp-pop {
+  position: absolute; right: 8px; top: 42px; z-index: 30; min-width: 220px; padding: 6px; display: grid;
+  border-radius: 14px; background: var(--surface); border: 1px solid var(--linha); box-shadow: var(--sombra-2);
+  animation: subir .25s var(--suave) both;
+}
+.camp-pop button { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 0; border-radius: 10px; background: none; color: var(--tinta); font-weight: 600; font-size: 13.5px; text-align: left; cursor: pointer; }
+.camp-pop button:hover, .camp-pop button:focus-visible { background: var(--surface-2); outline: none; }
+.camp-pop button .ic { width: 16px; height: 16px; color: var(--tinta-3); }
+.camp-pop button.perigo, .camp-pop button.perigo .ic { color: var(--ruim); }
+
+/* painel de andamento da campanha */
+.camp-detalhe { border-top: 4px solid var(--c); scroll-margin-top: 16px; }
+.camp-detalhe .cartao-cab h2 .ic { color: var(--c); }
+.camp-acoes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.camp-acoes a.btn { text-decoration: none; color: var(--tinta); }
+.camp-acoes a.btn .ic { color: var(--acento); }
+.camp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.camp-chips .chip .ic { width: 14px; height: 14px; }
+.ponto-coluna { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.camp-descricao { margin: 12px 0 0; color: var(--tinta-2); font-size: 14px; white-space: pre-wrap; }
+.camp-sugestao-linha { flex-wrap: wrap; }
+.camp-sugestao-linha .btn { height: 34px; padding: 0 12px; font-size: 13px; }
+#g-detalhe { scroll-margin-top: 16px; }
+#g-detalhe .kpi-valor small { font-size: 15px; }
+#g-detalhe .kpi-meta .status { margin-right: 4px; vertical-align: -1px; }
+
+/* formulário da campanha */
+.camp-dialogo { width: min(880px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.camp-dialogo form { gap: 14px; }
+.cf-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.cf-grade .largo { grid-column: 1 / -1; min-width: 0; }
+.cf-rotulo { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
+.cf-rotulo small { font-weight: 500; color: var(--tinta-3); }
+.campo-form small { font-weight: 500; }
+.campo-form textarea {
+  width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--linha); background: var(--surface);
+  font: 500 14px var(--f-texto); color: var(--tinta); resize: vertical; transition: border-color .2s, box-shadow .2s;
+}
+.campo-form textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 4px var(--acento-suave); }
+.campo-form input[type="date"] { font-family: var(--f-texto); color: var(--tinta); }
+.cf-metricas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.cf-metricas .visao-op { width: 100%; color: var(--tinta); font: inherit; }
+.cf-filtros { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cf-filtros .multi.curto .multi-botao { min-width: 0; width: 100%; }
+.cf-filtros .multi { width: 100%; }
+.cf-vendedores { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 6px; max-height: 300px; overflow: auto; padding: 2px; }
+.cf-vend { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 6px; align-items: center; }
+.cf-vend .vend-op { min-width: 0; }
+.cf-vend.marcado .vend-op { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 40%, transparent); }
+.cf-meta-v { width: 100%; height: 38px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--linha); background: var(--surface); color: var(--tinta); font: 600 13px var(--f-texto); }
+.cf-meta-v:disabled { opacity: .4; }
+.cf-meta-v:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+#cf-equipes { display: contents; }
+
+/* rascunho de campanha na resposta do Assistente */
+.camp-rascunho {
+  margin-top: 10px; padding: 14px 16px; border-radius: 16px; background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--c) 35%, var(--linha)); border-left: 4px solid var(--c); box-shadow: var(--sombra-1);
+}
+.camp-rascunho-cab { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--tinta-3); }
+.camp-rascunho-cab .ic { width: 16px; height: 16px; color: var(--c); }
+.camp-rascunho h4 { margin: 6px 0 10px; font-family: var(--f-titulo); font-size: 17px; }
+.camp-rascunho dl { display: grid; gap: 6px; margin: 0; }
+.camp-rascunho dl > div { display: grid; grid-template-columns: 18px 130px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 13.5px; }
+.camp-rascunho dl .ic { width: 15px; height: 15px; color: var(--tinta-3); align-self: center; }
+.camp-rascunho dt { color: var(--tinta-3); font-weight: 600; }
+.camp-rascunho dd { margin: 0; color: var(--tinta); overflow-wrap: anywhere; }
+.camp-rascunho > p { margin: 10px 0 0; font-size: 13px; }
+.camp-rascunho-acoes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--linha); }
+.camp-rascunho-acoes .btn { height: 38px; text-decoration: none; color: var(--tinta); }
+.camp-rascunho-acoes .btn.primario { color: #fff; }
+.camp-criada { background: var(--ok-bg); color: var(--ok); }
+.camp-criada .ic { width: 14px; height: 14px; }
+
+@media (max-width: 1180px) {
+  .kanban { grid-template-columns: 1fr; }
+  .kanban-coluna { min-height: 0; }
+  .cf-filtros { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .g-busca, .g-busca input { width: 100%; }
+  .camp-acoes { justify-content: flex-start; }
+  .camp-acoes .btn span { display: none; }
+  .camp-acoes .btn:not(.icone) { width: 40px; padding: 0; justify-content: center; }
+  .cf-grade, .cf-metricas, .cf-filtros { grid-template-columns: 1fr; }
+  .cf-vendedores { grid-template-columns: 1fr; }
+  .camp-dialogo { padding: 18px 16px; }
+  .camp-rascunho dl > div { grid-template-columns: 18px minmax(0, 1fr); }
+  .camp-rascunho dd { grid-column: 2; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .entra { opacity: 1; }

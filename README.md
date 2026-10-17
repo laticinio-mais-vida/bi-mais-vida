@@ -5,14 +5,14 @@ Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtro
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
-(Claude).
+(Claude). A página **Gestão** organiza campanhas de vendas num quadro e mostra o andamento de cada vendedor.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
 uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção Administração, que só o
 administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
 administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
-Assistente, o que cada pessoa consulta e o uso.
+Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa pode pôr nas campanhas.
 
 ## Como abrir
 
@@ -244,6 +244,8 @@ O botão **Configurar** da página (só administradores) tem duas seções:
   - gasto do dia, para todos (`limite_custo_dia`, US$ 2);
   - perguntas respondidas ao mesmo tempo (`simultaneos`, 2);
   - consultas por pergunta (`max_passos`, 8).
+- **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente. O de todos os vendedores
+  (uns 60 MB) tem vaga própria, porque a página Gestão usa ele sempre; os demais, até `recortes` (2) ao mesmo tempo.
 
   Vale também pôr um limite de gasto mensal no Console da Anthropic.
 - **Recusas:** se o classificador de segurança da Anthropic recusar uma pergunta por engano, o próprio servidor
@@ -256,6 +258,55 @@ O botão **Configurar** da página (só administradores) tem duas seções:
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
 pela API para treinar modelos. CPF/CNPJ, telefone, endereço e limite de crédito não estão no cache e não vão.
+
+## Página Gestão
+
+Um quadro de **campanhas de vendas** (kanban), como no Bitrix: cada card é uma campanha, nas colunas **Planejada**,
+**Em andamento** e **Concluída**. Clicar num card mostra embaixo do quadro o andamento de cada vendedor.
+
+### Campanhas
+
+- **O que uma campanha mede:** cada uma escolhe a sua métrica, no período dela:
+  - **Faturamento:** venda líquida em R$, descontando as devoluções, como em Metas;
+  - **Volume:** quantidade vendida. Exige um filtro de produto com uma unidade só (kg não soma com unidade);
+  - **Positivação:** clientes distintos com venda no período;
+  - **Mix:** produtos distintos vendidos no período.
+- **O que conta:** filtros opcionais de produtos, linhas, categorias, grupo (mussarela ou outras), UF e segmento do
+  cliente. Nada escolhido conta tudo.
+- **Metas:** uma meta padrão para todos os vendedores da campanha, com ajuste por vendedor. Meta 0 deixa a campanha
+  (ou o vendedor) só no ranking.
+- **Colunas:** uma campanha nova entra na coluna das datas (Planejada antes do início, Em andamento no período).
+  Depois disso só muda arrastando o card (ou pelo menu **⋯** do card, que também funciona no celular). Quando as
+  datas dizem que ela já devia ter mudado ("Começou em 01/11", "Terminou em 30/11"), o card mostra um aviso com o
+  botão para mover.
+- **Andamento:** realizado, meta, % atingido, situação (meta batida, no ritmo, atenção, abaixo), projeção, quanto
+  falta e quanto falta por dia útil, por vendedor, e o total. O ritmo esperado vem dos dias úteis da região de cada
+  vendedor no período da campanha (os feriados e extras das Configurações das metas). As regras de venda são as de
+  Metas: vendedor da venda, equivalências de produto, produtos que "não contam" fora, devoluções dos motivos
+  marcados.
+- **Arquivar e excluir:** arquivar tira o card do quadro (o botão **Arquivadas** mostra de novo); excluir apaga.
+
+### Quem vê o quê
+
+- Cada pessoa com a página liberada cria, edita e move **as próprias** campanhas, e só vê essas.
+- O administrador vê as dele e, em **De todos**, as de todo mundo, e mexe em qualquer uma.
+- Os vendedores que a pessoa pode pôr nas campanhas (e vê no andamento) são os do acesso dela na Gestão, escolhidos
+  no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou **Só alguns**, como em Projeções e no
+  Assistente.
+- Se o usuário for excluído, as campanhas dele ficam, sem dono, e só os administradores passam a vê-las.
+
+### Pelo Assistente
+
+- **Criar:** "crie uma campanha de positivação de requeijão para a equipe BA em novembro, meta de 30 clientes, e 45
+  para a Jamille". O Assistente confere tudo e mostra um **rascunho** embaixo da resposta, com os botões **Criar
+  campanha** e **Revisar no painel** (abre o formulário preenchido). Nada é gravado antes do clique, e clicar de novo
+  não cria outra.
+- **Acompanhar:** "veja como está o andamento dos vendedores na campanha que eu criei". O Assistente acha a campanha
+  e responde com os mesmos números da página.
+- No painel de uma campanha, **Perguntar ao Assistente** abre uma conversa nova com a pergunta escrita (não envia
+  sozinho).
+- O Assistente só mexe nas campanhas de quem pergunta e só com os vendedores do acesso dela na Gestão. Quem não tem
+  a página Gestão recebe a explicação em vez do rascunho.
 
 ## Banco de dados
 
@@ -271,6 +322,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `regras` | as regras de Metas e os vendedores de Projeções; cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
+| `campanhas` e `campanha_vendedores` | as campanhas da página Gestão: período, métrica, filtros, coluna do quadro, quem criou, e os vendedores com as metas |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -288,7 +340,7 @@ subida com o banco, a migração `005_importar_arquivos.py` traz o que estava no
 onde estão, só como cópia: o painel não os lê mais. Nessa subida todos entram de novo uma vez, porque o cookie de
 sessão mudou.
 
-Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `007_tarefas.sql`). Nunca
+Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `008_tarefas.sql`). Nunca
 edite uma migração que já foi aplicada: ela não roda de novo.
 
 ## Login e acessos
@@ -302,7 +354,7 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
-abas e os vendedores; em Projeções e no Assistente, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
+abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
 antes da página Projeções existir continua só com Metas até o administrador marcar a página nova.
 
 Exemplos (em Metas › Configurar › Acesso por usuário):
@@ -319,7 +371,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Assistente). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -407,6 +459,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
+| `bi/gestao.py` | página Gestão: campanhas (no PostgreSQL), conferência e cálculo do andamento por vendedor |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
 | `bi/banco.py` | conexão com o PostgreSQL e as migrações |
 | `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |

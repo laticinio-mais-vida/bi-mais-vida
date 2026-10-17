@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest import mock
 
-from bi.acesso import Usuarios, escopo_assistente, escopo_projecoes
+from bi.acesso import Usuarios, escopo_assistente, escopo_gestao, escopo_projecoes
 from tests.apoio import BaseBanco
 
 
@@ -56,6 +56,15 @@ class TestEscopoAssistente(Base):
         self.assertEqual(self.ana()["paginas"], ["metas"])
         self.u.definir_assistente({"ana": {"ve": True, "modo": "todos"}})
         self.assertEqual(self.ana()["paginas"], ["metas", "assistente"])
+
+    def test_gestao_com_modo_proprio(self):
+        self.assertEqual(self.ana()["gestao"], {"modo": "metas", "vendedores": None})
+        self.assertEqual(escopo_gestao(self.ana()), (None, {"ES"}))
+        self.u.definir_gestao({"ana": {"ve": True, "modo": "alguns", "vendedores": [141]}})
+        self.assertEqual(escopo_gestao(self.ana()), ({141}, None))
+        self.assertEqual(self.ana()["paginas"], ["metas", "assistente", "gestao"])
+        self.assertEqual(escopo_assistente(self.ana()), (None, {"ES"}))  # o Assistente continua com o dele
+        self.assertIsNone(self.u.obter("chefe")["gestao"])
 
     def test_metas_vendedores_e_tudo_ou_nada(self):
         self.u.definir_metas({"ana": {"visoes": ["es", "ba"], "vendedores": [124, 141]}})

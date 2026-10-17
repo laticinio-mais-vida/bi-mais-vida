@@ -4,13 +4,14 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", assistente: "conversa" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", assistente: "conversa", gestao: "quadro" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   assistente: "Perguntas sobre os dados, respondidas por IA",
+  gestao: "Campanhas de vendas e o andamento dos vendedores",
 };
-const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", assistente: "config-assistente" }; // rota do Configurar de cada página
+const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", assistente: "config-assistente", gestao: "config-gestao" }; // rota do Configurar de cada página
 
 let ctx = null, raiz = null;
 let dados = null;     // { usuarios, paginas }
@@ -318,7 +319,7 @@ async function salvar() {
 
 async function excluir() {
   const u = dados.usuarios.find((x) => x.login === sel);
-  if (!confirm(`Excluir o acesso de ${u.nome}? A pessoa não vai mais conseguir entrar. Se for só por um tempo, prefira desativar.`)) return;
+  if (!confirm(`Excluir o acesso de ${u.nome}? A pessoa não vai mais conseguir entrar (as campanhas que ela criou na Gestão ficam, visíveis só para os administradores). Se for só por um tempo, prefira desativar.`)) return;
   try {
     const r = await api("/api/usuarios/excluir", { json: { login: sel } });
     dados.usuarios = r.usuarios;

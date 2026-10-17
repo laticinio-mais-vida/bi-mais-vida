@@ -8,12 +8,14 @@ import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
+import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
+import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "gestao"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -65,6 +67,25 @@ const PAGINAS = {
     pendente: configAssistenteTemAlteracoes,
     montar: (el) => montarConfigAssistente(el),
   },
+  gestao: {
+    nome: "Gestão",
+    titulo: "Gestão de campanhas",
+    pendente: gestaoTemAlteracoes,
+    montar: (el) => montarGestao(el, {
+      admin: ehAdmin(), eu: app.usuario, assistente: paginasPermitidas().includes("assistente"),
+      subtitulo: (d) => subtitulo("gestao", d),
+    }),
+    recarregar: recarregarGestao,
+  },
+  "config-gestao": {
+    titulo: "Configurações da gestão",
+    fixo: "Os vendedores que cada pessoa pode pôr nas campanhas e acompanhar",
+    pai: "gestao",
+    admin: true,
+    sempreMonta: true,
+    pendente: configGestaoTemAlteracoes,
+    montar: (el) => montarConfigGestao(el),
+  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel e quais páginas cada pessoa vê",
@@ -82,6 +103,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
+  gestao: () => "Campanhas de vendas e o andamento de cada vendedor",
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

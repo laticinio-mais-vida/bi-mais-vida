@@ -13,11 +13,13 @@ import json
 import logging
 from pathlib import Path
 
-from bi.acesso import PAGINAS, PAGINAS_COM_ESCOPO, PAGINAS_PADRAO
+from bi.acesso import PAGINAS, PAGINAS_PADRAO
 from bi.configuracao import _valida as valida_metas
 from bi.projecoes import ConfigProjecoes
 
 log = logging.getLogger("bi.banco")
+# As páginas com escopo no usuarios.json (as colunas que existem nesta migração; as páginas novas vêm depois).
+PAGINAS_COM_ESCOPO = ("projecoes", "assistente")
 
 
 def aplicar(con, raiz: Path | None) -> None:

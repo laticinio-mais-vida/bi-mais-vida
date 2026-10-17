@@ -3,7 +3,11 @@
 // resposta com as consultas feitas. As conversas ficam no servidor, como nos chats de IA: a lista ao lado mostra as
 // da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador.
 // A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
+// Campanhas: quando a IA monta um rascunho (propor_campanha), a resposta traz um card com "Criar campanha" (grava
+// pela página Gestão) e "Revisar no painel"; nada é criado sem o clique. #/assistente?q=… abre uma conversa nova com
+// a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
 import { MESES, api, esc, fmt, icone, toast } from "./util.js";
+import { METRICAS, periodoTexto, textoFiltros, valorMetrica } from "./gestao.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
@@ -21,6 +25,9 @@ const FERRAMENTA = {
   resumo_vendas: { nome: "Resumo de vendas", icone: "moeda" },
   metas_e_realizado: { nome: "Metas e realizado", icone: "alvo" },
   consultar_sql: { nome: "Consulta aos dados", icone: "banco" },
+  listar_campanhas: { nome: "Campanhas", icone: "quadro" },
+  andamento_campanha: { nome: "Andamento da campanha", icone: "quadro" },
+  propor_campanha: { nome: "Rascunho de campanha", icone: "quadro" },
 };
 
 let ctx = null, raiz = null, info = null;
@@ -31,10 +38,11 @@ let pendente = null;    // {conversa, nova, pergunta, inicio}: pergunta que o se
                         // aba ou antes de recarregar a página
 let busca = "", pedidoLista = 0, abrindo = 0, acompanhando = false;
 
-// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?}]
+// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?, rascunhos?}]
 function nova() { return { id: null, titulo: "", mensagens: [] }; }
 const linkDe = (id) => `#/assistente?c=${encodeURIComponent(id)}`;
 const idDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("c");
+const perguntaDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("q");
 
 export async function montarAssistente(container, contexto) {
   ctx = contexto;
@@ -75,6 +83,7 @@ export async function montarAssistente(container, contexto) {
   });
   container.querySelector("#a-form").addEventListener("submit", (e) => { e.preventDefault(); enviar(); });
   container.querySelector("#a-nova").addEventListener("click", () => novaConversa());
+  container.querySelector("#a-msgs").addEventListener("click", aoClicarRascunho);
   ligarLista();
   window.addEventListener("hashchange", aoMudarHash);
   setInterval(atualizarPensando, 1000);
@@ -134,8 +143,20 @@ async function iniciarHistorico() {
   raiz.querySelector("#a-abrir-lista").hidden = false;
   raiz.querySelector("#a-conversas").innerHTML = '<div class="esqueleto chat-item-esqueleto"></div>'.repeat(4);
   await carregarLista();
+  const q = perguntaDoHash();
   // Recarregou no meio da primeira pergunta de uma conversa: ela abre e mostra a resposta quando ficar pronta.
-  await abrir(idDoHash() || (pendente?.nova ? pendente.conversa : null));
+  await abrir(q ? null : idDoHash() || (pendente?.nova ? pendente.conversa : null));
+  if (q) escreverPergunta(q);
+}
+
+// Pergunta pronta vinda de outra página (#/assistente?q=…): conversa nova, com o texto na caixa, sem enviar.
+function escreverPergunta(q) {
+  novaConversa({ substituir: true });
+  const caixa = raiz.querySelector("#a-texto");
+  caixa.value = q.slice(0, 4000);
+  ajustarAltura(caixa);
+  caixa.focus();
+  caixa.setSelectionRange(caixa.value.length, caixa.value.length);
 }
 
 const urlLista = () => `/api/assistente/conversas${busca ? `?busca=${encodeURIComponent(busca)}` : ""}`;
@@ -184,6 +205,8 @@ async function abrir(id) {
 function aoMudarHash() {
   fecharLista();
   if (!/^#\/assistente(\?|$)/.test(location.hash)) return;
+  const q = perguntaDoHash();
+  if (q) return escreverPergunta(q);
   const id = idDoHash();
   if (id && id !== atual.id) abrir(id);
   else if (!id && atual.id) history.replaceState(null, "", linkDe(atual.id)); // voltou de outra página: segue na conversa
@@ -424,7 +447,7 @@ async function enviar(textoPronto) {
     // O servidor lê a conversa do banco: vai só a pergunta.
     const r = await api("/api/assistente", { json: { conversa: conversa.id, pergunta: texto }, signal: controle.signal });
     conversa.mensagens.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
-      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso });
+      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso, rascunhos: r.rascunhos });
     if (r.conversa) gravada(conversa, r.conversa);
     if (r.restantes !== undefined) mostrarRestantes(r.restantes);
     pararEspera(limite);
@@ -524,10 +547,67 @@ function balaoIA(m, i) {
   return `<div class="chat-msg ia"><span class="chat-avatar">${icone("conversa")}</span>
     <div class="chat-corpo">
       <div class="chat-balao chat-texto">${markdown(m.texto)}</div>
+      ${(m.rascunhos || []).map((r, j) => cartaoRascunho(r, i, j)).join("")}
       ${m.aviso ? `<p class="chat-aviso">${icone("alerta")}${esc(m.aviso)}</p>` : ""}
       <div class="chat-meta">${meta}<button type="button" class="chat-acao" data-copiar="${i}">${icone("copiar")}Copiar</button></div>
       ${passos.length ? desenharPassos(passos) : ""}
     </div></div>`;
+}
+
+// ---------- rascunho de campanha ----------
+function cartaoRascunho(r, i, j) {
+  const m = METRICAS[r.metrica] || { nome: r.metrica, icone: "quadro", cor: "var(--acento)" };
+  const nomes = r.nomes?.vendedores || {};
+  const vend = (r.vendedores || []).map((v) => nomes[v.id] || `Vendedor ${v.id}`);
+  const ajustes = (r.vendedores || []).filter((v) => v.meta != null).length;
+  const meta = r.meta_padrao ? `${valorMetrica(r.metrica, r.meta_padrao, r.unidade)} por vendedor` : "sem meta (só ranking)";
+  const filtros = textoFiltros(r.filtros || {}, r.nomes?.produtos);
+  const linhas = [
+    ["calendario", "Período", periodoTexto(r.inicio, r.fim)],
+    [m.icone, "Métrica", m.nome + (r.unidade && r.metrica === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
+    ["alvo", "Meta", meta + (ajustes ? ` · ${ajustes} ajustada${ajustes === 1 ? "" : "s"}` : "")],
+    ["pessoas", `${vend.length} vendedor${vend.length === 1 ? "" : "es"}`, vend.length <= 6 ? vend.join(", ") : `${vend.slice(0, 5).join(", ")} e mais ${vend.length - 5}`],
+    ["funil", "Conta", filtros.length ? filtros.join(" · ") : "todos os produtos e clientes"],
+    ...(r.premiacao ? [["trofeu", "Prêmio", r.premiacao]] : []),
+  ];
+  let acoes;
+  if (r.campanha) {
+    acoes = `<span class="chip camp-criada">${icone("certo")}Criada</span>
+      <a class="btn" href="#/gestao?c=${r.campanha.id}">${icone("quadro")}Abrir no painel</a>`;
+  } else if (info?.gestao) {
+    acoes = `<button class="btn primario" type="button" data-criar="${i}:${j}">${icone("mais")}Criar campanha</button>
+      <a class="btn" href="#/gestao?rascunho=${encodeURIComponent(r.id)}">${icone("lapis")}Revisar no painel</a>`;
+  } else {
+    acoes = `<span class="fraco">Para criar, peça ao administrador acesso à página Gestão.</span>`;
+  }
+  return `<div class="camp-rascunho" style="--c:${m.cor}">
+    <div class="camp-rascunho-cab">${icone("quadro")}<span>${r.campanha ? "Campanha criada" : "Rascunho de campanha · ainda não criada"}</span></div>
+    <h4>${esc(r.nome)}</h4>
+    <dl>${linhas.map(([ic, rot, val]) => `<div>${icone(ic)}<dt>${esc(rot)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>
+    ${r.descricao ? `<p class="fraco">${esc(r.descricao)}</p>` : ""}
+    <div class="camp-rascunho-acoes">${acoes}</div>
+  </div>`;
+}
+
+async function aoClicarRascunho(e) {
+  const b = e.target.closest("[data-criar]");
+  if (!b) return;
+  const [i, j] = b.dataset.criar.split(":").map(Number);
+  const conversa = atual;
+  const r = conversa.mensagens[i]?.rascunhos?.[j];
+  if (!r || r.campanha) return;
+  b.disabled = true;
+  try {
+    const campanha = { nome: r.nome, descricao: r.descricao, premiacao: r.premiacao, inicio: r.inicio, fim: r.fim,
+      metrica: r.metrica, filtros: r.filtros, meta_padrao: r.meta_padrao, vendedores: r.vendedores };
+    const res = await api("/api/gestao/campanhas", { json: { campanha, rascunho: r.id } });
+    r.campanha = { id: res.campanha.id, nome: res.campanha.nome };
+    toast(res.ja_existia ? "Esta campanha já tinha sido criada" : `Campanha “${res.campanha.nome}” criada`);
+    if (conversa === atual) desenharMensagens();
+  } catch (err) {
+    b.disabled = false;
+    toast(err.message, "erro");
+  }
 }
 
 function desenharPassos(passos) {
@@ -554,6 +634,9 @@ function descricao(p) {
     return partes.join(", ");
   }
   if (p.ferramenta === "metas_e_realizado") return `${a.visao || ""} · ${(a.meses || []).join(", ")}`;
+  if (p.ferramenta === "listar_campanhas") return a.texto ? `“${a.texto}”` : "todas";
+  if (p.ferramenta === "andamento_campanha") return p.resumo || `campanha ${a.campanha}`;
+  if (p.ferramenta === "propor_campanha") return a.nome || "";
   return p.objetivo || a.objetivo || "";
 }
 
