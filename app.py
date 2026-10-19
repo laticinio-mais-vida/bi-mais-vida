@@ -320,9 +320,19 @@ class Manipulador(BaseHTTPRequestHandler):
                 "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
 
     def _config_gestao(self) -> dict:
-        """Configuração da página Gestão: os vendedores que cada visualizador pode pôr nas campanhas."""
+        """Configuração da página Gestão: os vendedores que cada visualizador pode pôr nas campanhas e os dias de
+        atendimento das áreas comerciais (efetividade)."""
         return {"vendedores": self.app.assistente.catalogo_vendedores(),
-                "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
+                "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores(),
+                **self.app.gestao.config_areas()}
+
+    def _salvar_config_gestao(self, usuario: dict, corpo: dict):
+        """Acessos e dias de atendimento numa transação só: ou grava tudo, ou nada."""
+        with self.app.banco.conexao() as con:
+            self.app.usuarios.definir_gestao(corpo.get("usuarios") or {}, con)
+            self.app.gestao.definir_areas(usuario, corpo.get("areas") or {}, con)
+        log.info("%s salvou a configuração da Gestão", usuario["login"])
+        return self._json({"ok": True, **self._config_gestao()})
 
     def _pode_gestao(self, usuario: dict) -> bool:
         if "gestao" in paginas_permitidas(usuario):
@@ -338,8 +348,8 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(gestao.listar(usuario, escopo, q.get("todas") == "1", q.get("arquivadas") == "1"))
         if caminho == "/api/gestao/catalogo":
             return self._json(gestao.catalogo(escopo))
-        if caminho == "/api/gestao/campanha":
-            return self._json(gestao.obter(usuario, q.get("id"), escopo))
+        if caminho == "/api/gestao/campanha":  # abrir: area, segmento ou produto (vazio = nenhuma)
+            return self._json(gestao.obter(usuario, q.get("id"), escopo, q.get("abrir", "padrao")))
         # /api/gestao/rascunho: o rascunho que o Assistente montou numa conversa da pessoa, para revisar na página
         rascunho = self.app.conversas.rascunho(usuario["id"], q.get("id"))
         if rascunho is None:
@@ -602,9 +612,7 @@ class Manipulador(BaseHTTPRequestHandler):
                             "/api/gestao/campanha/arquivar", "/api/gestao/campanha/excluir"):
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":
-                self.app.usuarios.definir_gestao(self._corpo_json().get("usuarios") or {})
-                log.info("%s salvou o acesso da Gestão", usuario["login"])
-                return self._json({"ok": True, **self._config_gestao()})
+                return self._salvar_config_gestao(usuario, self._corpo_json())
             if url.path == "/api/config/padrao":
                 log.info("%s restaurou o padrão das regras de Metas", usuario["login"])
                 return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao(usuario)})

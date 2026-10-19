@@ -263,7 +263,8 @@ O que acompanhar:
 ### Banco de dados (PostgreSQL)
 
 O que o painel cria fica num PostgreSQL só dele, o container `bi_banco`: usuários, regras salvas nas páginas,
-conversas e uso do Assistente, e as campanhas da página Gestão (migração `007_gestao.sql`).
+conversas e uso do Assistente, as campanhas da página Gestão (migrações `007_gestao.sql` e `008_indicadores.sql`) e
+os dias de atendimento das áreas comerciais.
 
 - **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
   a internet e não fala com o app de promotoria.
@@ -358,6 +359,26 @@ Depois disso:
 - Se o `usuarios.json` não estiver na pasta e já houver conversas, a migração para com
   `nenhum usuário foi importado`, e o login mostra que a atualização das tabelas falhou. Nada é apagado. Ponha o
   arquivo de volta e reinicie o painel.
+
+#### Versão dos indicadores das campanhas (migração 008)
+
+Esta versão troca as 4 métricas das campanhas por tipos (positivação, mix médio, efetividade, frequência, preço médio
+e Personalizada) e passa a ler os **pedidos de venda** do ERP, para a efetividade.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site. O site com o código anterior ignora a tabela de pedidos no
+  pacote; o site novo sem ela mostra a efetividade sem números, com o aviso "os pedidos de venda ainda não chegaram",
+  até o PC mandar.
+- **No PC:** ao abrir a versão nova, o painel lê o banco do ERP de novo uma vez (etapa "Lendo pedidos de venda") e
+  manda ao site. Se a leitura dos pedidos falhar, o resto do painel segue normal; o log mostra "não deu para ler os
+  pedidos de venda", e ele tenta de novo na próxima cópia do banco.
+- **A migração 008** converte as campanhas que já existem (faturamento, volume e mix viram Personalizada, com os
+  mesmos números) e cria as tabelas `campanha_produtos` e `areas_atendimento`. Esta última já vem com as 84 áreas da
+  planilha "Dia de Atendimento Areas Comerciais.xlsx". Ensaie a migração antes de publicar, como nas outras com
+  dados.
+- **Voltar atrás:** depois da 008, o código anterior não entende as campanhas convertidas. Voltar exige restaurar a
+  cópia do banco feita antes da publicação, não só a pasta.
+- **Depois de publicar:** o administrador abre Gestão › Configurar › Dias de atendimento no site e completa as áreas
+  pendentes (o PC e o site têm cada um a sua tabela, e vale a do site).
 
 #### Voltar as regras para uma versão anterior
 

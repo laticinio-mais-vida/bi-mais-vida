@@ -24,7 +24,7 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import TABELAS, TABELAS_DETALHE, Cache
+from bi.cache import TABELAS, TABELAS_DETALHE, TABELAS_PEDIDOS, Cache
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -63,9 +63,11 @@ class PlanilhaFalsa:
         return self._linhas
 
 
-def criar_calc(pasta: Path, fora: tuple[int, ...] = ()) -> Calculadora:
+def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True) -> Calculadora:
+    """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
+    setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
-    for nome, colunas in {**TABELAS, **TABELAS_DETALHE}.items():
+    for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -78,6 +80,15 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = ()) -> Calculadora:
         (D(2026, 8, 10), BA, 2, "CLIENTE", 32, 4000.0, 200.0),
         (D(2026, 9, 5), EDIR, 4, "CLIENTE", 32, 700.0, 35.0),
     ]
+    if extras:  # julho: frequência e preço médio
+        vendas += [
+            (D(2026, 7, 1), ES, 10, "CLIENTE", 32, 300.0, 10.0),
+            (D(2026, 7, 3), ES, 10, "CLIENTE", 27, 50.0, 5.0),
+            (D(2026, 7, 8), ES, 10, "CLIENTE", 32, 320.0, 10.0),
+            (D(2026, 7, 14), ES, 11, "CLIENTE", 32, 640.0, 20.0),
+            (D(2026, 7, 2), BA, 12, "CLIENTE", 32, 280.0, 10.0),
+            (D(2026, 7, 20), BA, 12, "CLIENTE", 27, 90.0, 10.0),
+        ]
     con.executemany("INSERT INTO vendas_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?)", vendas)
     con.execute("INSERT INTO vendas_itens SELECT data, id_vendedor, id_produto, SUM(valor), SUM(quantidade) "
                 "FROM vendas_clientes_itens GROUP BY ALL")
@@ -101,13 +112,35 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = ()) -> Calculadora:
         (999, "CARROCERIA USADA", 9, "IMOBILIZADO", "UN", 0)])
     con.executemany("INSERT INTO vendedores VALUES (?, ?, ?, ?, ?)", [
         (ES, "RUBENS - ES", 3, "VALDIRENE", 0), (BA, "THAIS - CENTRAL", 7, "MARCOS", 0), (EDIR, "EDIR - PS", 8, "TERC", 0)])
-    con.executemany("INSERT INTO clientes VALUES (?, ?, ?)", [
-        (1, "MERCADO DO JOAO", ES), (2, "PADARIA DA MARIA", BA), (3, "ACOUGUE SAO JOSE", ES), (4, "MERCEARIA DO EDIR", EDIR),
-        (7, "CLIENTE SETE", BA)])
-    con.executemany("INSERT INTO clientes_detalhes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    clientes = [(1, "MERCADO DO JOAO", ES), (2, "PADARIA DA MARIA", BA), (3, "ACOUGUE SAO JOSE", ES),
+                (4, "MERCEARIA DO EDIR", EDIR), (7, "CLIENTE SETE", BA)]
+    detalhes = [
         (1, "JOAO COMERCIO LTDA", "VILA VELHA", "ES", 1, "ROTA 1", 1, "MERCADO", 0, D(2020, 1, 1)),
         (2, "MARIA PAES LTDA", "PORTO SEGURO", "BA", 2, "ROTA 2", 2, "PADARIA", 0, D(2021, 1, 1)),
-        (3, "SAO JOSE CARNES", "SERRA", "ES", 1, "ROTA 1", 3, "AÇOUGUE", 0, D(2022, 1, 1))])
+        (3, "SAO JOSE CARNES", "SERRA", "ES", 1, "ROTA 1", 3, "AÇOUGUE", 0, D(2022, 1, 1))]
+    if extras:
+        clientes += [(10, "POUSADA DO SOL", ES), (11, "HOTEL MAR", ES), (12, "PADARIA CENTRAL", BA),
+                     (13, "PEDIDO BLOQUEADO - BAR DO ZE", BA), (14, "MERCADO FECHADO", ES)]
+        detalhes += [
+            (10, "SOL HOTELARIA", "VITORIA", "ES", 3, "ROTA 3 (SEXTA)", 4, "HOTEL E POUSADA", 0, D(2023, 1, 1)),
+            (11, "MAR HOTEIS", "VITORIA", "ES", 3, "ROTA 3 (SEXTA)", 4, "HOTEL E POUSADA", 0, D(2023, 1, 1)),
+            (12, "CENTRAL PAES", "PORTO SEGURO", "BA", 2, "ROTA 2", 2, "PADARIA", 0, D(2023, 1, 1)),
+            (13, "ZE BAR", "PORTO SEGURO", "BA", 2, "ROTA 2", 5, "RESTAURANTE", 0, D(2023, 1, 1)),
+            (14, "FECHADO LTDA", "SERRA", "ES", 1, "ROTA 1", 1, "MERCADO", 1, D(2023, 1, 1))]
+        if pedidos:  # (data, vendedor do pedido, cliente, tipo, tipo do pedido, cancelada, pedidos, total)
+            con.executemany("INSERT INTO pedidos_venda VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+                (D(2026, 9, 2), ES, 1, "CLIENTE", "PEDIDOVENDA", 0, 1, 1300.0),
+                (D(2026, 9, 15), ES, 3, "CLIENTE", "PEDIDOVENDA", 0, 1, 200.0),
+                (D(2026, 9, 16), ES, 3, "CLIENTE", "PEDIDOVENDA", 1, 1, 90.0),     # cancelado
+                (D(2026, 9, 3), BA, 2, "CLIENTE", "PEDIDOVENDA", 0, 1, 5400.0),
+                (D(2026, 9, 4), BA, 2, "CLIENTE", "ORCAMENTO", 0, 1, 100.0),        # não é pedido de venda
+                (D(2026, 9, 10), ES, 12, "CLIENTE", "PEDIDOVENDA", 0, 1, 50.0),    # carteira da BA
+                (D(2026, 9, 24), BA, 13, "CLIENTE", "PEDIDOVENDA", 0, 1, 70.0),    # bloqueado: o pedido conta
+                (D(2026, 9, 5), ES, 10, "CLIENTE", "PEDIDOVENDA", 0, 1, 60.0),     # área sem dia: fica fora
+                (D(2026, 9, 6), ES, 1, "FUNCIONARIO", "PEDIDOVENDA", 0, 1, 10.0),  # código de outro cadastro
+            ])
+    con.executemany("INSERT INTO clientes VALUES (?, ?, ?)", clientes)
+    con.executemany("INSERT INTO clientes_detalhes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", detalhes)
     con.executemany("INSERT INTO motivos VALUES (?, ?)", [(1, "ERRO DE LANÇAMENTO"), (2, "RECUSA"), (3, "VENCIDO")])
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),

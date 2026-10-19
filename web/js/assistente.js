@@ -7,7 +7,7 @@
 // pela página Gestão) e "Revisar no painel"; nada é criado sem o clique. #/assistente?q=… abre uma conversa nova com
 // a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
 import { MESES, api, esc, fmt, icone, toast } from "./util.js";
-import { METRICAS, periodoTexto, textoFiltros, valorMetrica } from "./gestao.js";
+import { descritorLegado, metaDigitada, periodoTexto, textoBase, textoFiltros, visual } from "./gestao.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
@@ -556,15 +556,19 @@ function balaoIA(m, i) {
 
 // ---------- rascunho de campanha ----------
 function cartaoRascunho(r, i, j) {
-  const m = METRICAS[r.metrica] || { nome: r.metrica, icone: "quadro", cor: "var(--acento)" };
+  const ind = r.indicador || descritorLegado(r); // rascunho de antes dos tipos novos
+  const m = visual(ind);
   const nomes = r.nomes?.vendedores || {};
   const vend = (r.vendedores || []).map((v) => nomes[v.id] || `Vendedor ${v.id}`);
   const ajustes = (r.vendedores || []).filter((v) => v.meta != null).length;
-  const meta = r.meta_padrao ? `${valorMetrica(r.metrica, r.meta_padrao, r.unidade)} por vendedor` : "sem meta (só ranking)";
-  const filtros = textoFiltros(r.filtros || {}, r.nomes?.produtos);
+  const precos = r.metas_produto || [];
+  const meta = ind.tipo === "preco_medio"
+    ? `preço-alvo de ${precos.length} produto${precos.length === 1 ? "" : "s"}: ${precos.slice(0, 3).map((p) => `${r.nomes?.produtos?.[p.id] || p.id} a R$ ${fmt.num(p.meta, 2)}`).join(", ")}${precos.length > 3 ? "…" : ""}`
+    : r.meta_padrao ? `${metaDigitada(ind, r.meta_padrao, r.unidade)} por vendedor` : "sem meta (só ranking)";
+  const filtros = [...textoFiltros(r.filtros || {}, r.nomes?.produtos), ...textoBase(ind)];
   const linhas = [
     ["calendario", "Período", periodoTexto(r.inicio, r.fim)],
-    [m.icone, "Métrica", m.nome + (r.unidade && r.metrica === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
+    [m.icone, "Mede", ind.nome + (r.unidade && ind.medida === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
     ["alvo", "Meta", meta + (ajustes ? ` · ${ajustes} ajustada${ajustes === 1 ? "" : "s"}` : "")],
     ["pessoas", `${vend.length} vendedor${vend.length === 1 ? "" : "es"}`, vend.length <= 6 ? vend.join(", ") : `${vend.slice(0, 5).join(", ")} e mais ${vend.length - 5}`],
     ["funil", "Conta", filtros.length ? filtros.join(" · ") : "todos os produtos e clientes"],
@@ -599,7 +603,8 @@ async function aoClicarRascunho(e) {
   b.disabled = true;
   try {
     const campanha = { nome: r.nome, descricao: r.descricao, premiacao: r.premiacao, inicio: r.inicio, fim: r.fim,
-      metrica: r.metrica, filtros: r.filtros, meta_padrao: r.meta_padrao, vendedores: r.vendedores };
+      metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros, meta_padrao: r.meta_padrao,
+      vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
     const res = await api("/api/gestao/campanhas", { json: { campanha, rascunho: r.id } });
     r.campanha = { id: res.campanha.id, nome: res.campanha.nome };
     toast(res.ja_existia ? "Esta campanha já tinha sido criada" : `Campanha “${res.campanha.nome}” criada`);

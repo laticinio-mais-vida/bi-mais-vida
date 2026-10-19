@@ -52,6 +52,12 @@ TABELAS_DETALHE = {
     "clientes_detalhes": ("id INTEGER, razao_social VARCHAR, cidade VARCHAR, uf VARCHAR, id_area INTEGER, "
                           "area VARCHAR, id_segmento INTEGER, segmento VARCHAR, inativo INTEGER, data_cadastro DATE"),
 }
+# Pedidos de venda (PEDIDOVENDAS), para a efetividade das campanhas da Gestão (pedidos ÷ visitas esperadas, como no
+# Power BI). Também opcional, como o detalhe: um cache sem ela vale para o resto, e a efetividade avisa que falta.
+TABELAS_PEDIDOS = {
+    "pedidos_venda": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, tipopedido VARCHAR, "
+                      "cancelada INTEGER, pedidos INTEGER, total DOUBLE"),
+}
 
 
 def _data(v):
@@ -94,6 +100,7 @@ class Cache:
         self.info: dict[str, str] = {}
         self.antigo = False  # cache de uma versão anterior do painel (falta tabela): precisa extrair de novo
         self.sem_detalhe = False  # falta o detalhe por cliente do Assistente (Metas e Projeções funcionam)
+        self.sem_pedidos = False  # faltam os pedidos de venda (só a efetividade das campanhas precisa)
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -123,6 +130,7 @@ class Cache:
         info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
         antigo = _tabela_diferente(con) is not None
         sem_detalhe = _tabela_diferente(con, TABELAS_DETALHE) is not None
+        sem_pedidos = _tabela_diferente(con, TABELAS_PEDIDOS) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -130,6 +138,7 @@ class Cache:
             self.info = info
             self.antigo = antigo
             self.sem_detalhe = sem_detalhe
+            self.sem_pedidos = sem_pedidos
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -143,10 +152,12 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente pode faltar (pacote do PC com o código anterior), mas, se vier, tem de estar no formato atual."""
+        cliente e os pedidos podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de estar no
+        formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
-            nome = _tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
+            nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -166,12 +177,14 @@ class Cache:
             self._abrir()
 
     def desatualizado(self) -> bool:
-        """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior."""
+        """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos
+        que não deu para ler (pedidos_erro) esperam a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
             return False
         return (self._con is None or self.antigo or self.sem_detalhe
+                or (self.sem_pedidos and not self.info.get("pedidos_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -193,7 +206,8 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            for nome, colunas in {**TABELAS, **TABELAS_DETALHE}.items():
+            pedidos = {k: v for k, v in TABELAS_PEDIDOS.items() if k in dados}  # a leitura pode ter falhado
+            for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **pedidos}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
                 linhas = dados.pop(nome)  # solta a lista assim que gravar (o detalhe tem ~1 milhão de linhas)
                 if linhas:
@@ -208,6 +222,8 @@ class Cache:
             con.execute("CREATE INDEX ix_di ON devolucoes_itens (data)")
             con.execute("CREATE INDEX ix_vci ON vendas_clientes_itens (data)")
             con.execute("CREATE INDEX ix_dci ON devolucoes_clientes_itens (data)")
+            if pedidos:
+                con.execute("CREATE INDEX ix_pv ON pedidos_venda (data)")
             self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
@@ -315,6 +331,19 @@ class Cache:
                 "FROM VENDEDORES v LEFT JOIN SUPERVISOR s ON s.ID_SUPERVISOR = v.ID_SUPERVISOR")
             dados["clientes"] = bd.consulta("SELECT ID_CLIENTE, NOME, COALESCE(ID_VENDEDOR, 0) FROM CLIENTES")
             dados["motivos"] = bd.consulta("SELECT ID_MOTIVODEVOLUCAO, NOME FROM MOTIVODEVOLUCAO")
+            # Por último e à parte: se a tabela de pedidos mudar no ERP, o resto do painel não para.
+            self.estado["etapa"] = "Lendo pedidos de venda"
+            pedidos_erro = None
+            try:
+                dados["pedidos_venda"] = [
+                    (_data(d), v, c, t, tp, None if ca is None else int(ca), n, float(tot or 0))
+                    for d, v, c, t, tp, ca, n, tot in bd.consulta(
+                        "SELECT CAST(p.DATA AS DATE), COALESCE(p.ID_VENDEDOR, 0), p.ID_CLIENTE, p.TIPOCLIENTE, "
+                        "p.TIPOPEDIDO, p.CANCELADA, COUNT(*), SUM(p.TOTAL) FROM PEDIDOVENDAS p "
+                        "WHERE p.DATA >= ? AND p.DATA < ? GROUP BY 1, 2, 3, 4, 5, 6", (de, ate))]
+            except Exception as e:
+                log.warning("não deu para ler os pedidos de venda (a efetividade das campanhas fica sem dados): %s", e)
+                pedidos_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -325,5 +354,6 @@ class Cache:
             ("banco_mtime", str(banco_mtime)),
             ("banco_copia", dt.datetime.fromtimestamp(copia_mtime).isoformat(timespec="minutes")),
             ("inicio", self.inicio.isoformat()),
+            *([("pedidos_erro", pedidos_erro)] if pedidos_erro else []),
         ]
         return dados

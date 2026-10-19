@@ -1,6 +1,10 @@
-// Configuração da página Gestão (só administradores): quem usa a página e quais vendedores cada visualizador pode
-// pôr nas campanhas e acompanhar no andamento. Cada pessoa vê só as campanhas que criou; o administrador vê todas.
-// Vendedor aqui é o vendedor da venda, como na página Metas. Tudo vale depois de Salvar.
+// Configuração da página Gestão (só administradores):
+// - Acesso por usuário: quem usa a página e quais vendedores cada visualizador pode pôr nas campanhas e acompanhar no
+//   andamento. Cada pessoa vê só as campanhas que criou; o administrador vê todas. Vendedor aqui é o vendedor da
+//   venda, como na página Metas.
+// - Dias de atendimento: em que dias da semana cada área comercial é visitada. A efetividade das campanhas conta as
+//   visitas esperadas por eles (começou com a planilha do Power BI). Área pendente ou não atendida fica fora da conta.
+// Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { iniciais } from "./conta.js";
 
@@ -9,12 +13,19 @@ const MODOS = [
   { id: "todos", nome: "Todos", icone: "pessoas" },
   { id: "alguns", nome: "Só alguns", icone: "usuario" },
 ];
+const DIAS = [[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [7, "Dom"]];
+const FILTROS_AREA = [
+  { id: "pendentes", nome: "Pendentes" }, { id: "atendidas", nome: "Com dias" },
+  { id: "nao", nome: "Não atendidas" }, { id: "todas", nome: "Todas" },
+];
 
 let raiz = null;
 let dados = null;          // resposta de /api/gestao/config
 let orig = null, rasc = null;
 let usuarioSel = null;
 let buscaUsuario = "";
+let secao = "usuarios";
+let buscaArea = "", filtroArea = "pendentes";
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -24,6 +35,7 @@ export async function montarConfigGestao(container) {
   raiz = container;
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   if (q.get("u")) usuarioSel = q.get("u");
+  if (q.get("secao") === "areas") secao = "areas";
   if (rasc && contarAlteracoes() > 0) { render(); return; }
   container.innerHTML = `<div class="config"><div class="esqueleto" style="height:300px"></div><div class="esqueleto" style="height:600px"></div></div>`;
   try {
@@ -42,6 +54,7 @@ function carregarDados(r) {
       modo: u.gestao?.modo || "metas",
       vendedores: [...(u.gestao?.vendedores || [])].sort((a, b) => a - b),
     }])),
+    areas: Object.fromEntries((dados.areas || []).map((a) => [a.id, a.dias])),  // null = pendente; [] = não atendida
   };
   rasc = clone(orig);
   if (!dados.usuarios.some((u) => u.login === usuarioSel)) usuarioSel = dados.usuarios[0]?.login ?? null;
@@ -58,7 +71,11 @@ function usuarioMudou(login) {
   return a.ve !== b.ve || a.modo !== b.modo || (a.modo === "alguns" && JSON.stringify(a.vendedores) !== JSON.stringify(b.vendedores));
 }
 
-function contarAlteracoes() { return Object.keys(rasc.usuarios).filter(usuarioMudou).length; }
+const areaMudou = (id) => JSON.stringify(rasc.areas[id]) !== JSON.stringify(orig.areas[id]);
+const areasMudadas = () => Object.keys(rasc.areas).filter(areaMudou);
+const pendentes = () => (dados.areas || []).filter((a) => rasc.areas[a.id] == null && a.ativos > 0).length;
+
+function contarAlteracoes() { return Object.keys(rasc.usuarios).filter(usuarioMudou).length + areasMudadas().length; }
 
 // Vendedores (com venda nos últimos 12 meses) que o usuário pode pôr nas campanhas, com o rascunho atual.
 function vendedoresDoUsuario(u, r) {
@@ -83,9 +100,10 @@ function render() {
   raiz.innerHTML = `
   <div class="config">
     <aside class="cartao config-menu entra" style="--i:0">
-      <button class="ativa">${icone("escudo")}Acesso por usuário<span class="cont">${nVe}</span></button>
+      ${[["usuarios", "escudo", "Acesso por usuário", nVe], ["areas", "calendario", "Dias de atendimento", pendentes()]]
+        .map(([id, ic, nome, n]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}<span class="cont">${n}</span></button>`).join("")}
       <div class="dica">${icone("info")} Cada pessoa vê só as campanhas que criou, com os vendedores do acesso dela.
-        Administradores veem e mexem em todas.</div>
+        Administradores veem e mexem em todas. Os dias de atendimento das áreas valem para a efetividade.</div>
     </aside>
     <div id="cg-secao"></div>
   </div>
@@ -94,9 +112,20 @@ function render() {
     <button class="btn" id="cg-descartar">Descartar</button>
     <button class="btn primario" id="cg-salvar">${icone("disco")}Salvar alterações</button>
   </div>`;
+  raiz.querySelectorAll("[data-secao]").forEach((b) => b.addEventListener("click", () => {
+    secao = b.dataset.secao;
+    raiz.querySelectorAll("[data-secao]").forEach((x) => x.classList.toggle("ativa", x === b));
+    renderSecao();
+  }));
   raiz.querySelector("#cg-salvar").addEventListener("click", salvar);
   raiz.querySelector("#cg-descartar").addEventListener("click", () => { rasc = clone(orig); render(); });
-  secaoUsuarios(raiz.querySelector("#cg-secao"));
+  renderSecao();
+}
+
+function renderSecao() {
+  const alvo = raiz.querySelector("#cg-secao");
+  if (secao === "areas") secaoAreas(alvo);
+  else secaoUsuarios(alvo);
   atualizarBarra();
 }
 
@@ -104,7 +133,103 @@ function atualizarBarra() {
   const n = contarAlteracoes();
   raiz.querySelector("#cg-barra").classList.toggle("visivel", n > 0);
   raiz.querySelector("#cg-n").textContent = n === 1 ? "1 alteração não salva" : `${n} alterações não salvas`;
-  raiz.querySelector(".config-menu .cont").textContent = dados.usuarios.filter((u) => rasc.usuarios[u.login].ve).length;
+  const conts = raiz.querySelectorAll(".config-menu .cont");
+  conts[0].textContent = dados.usuarios.filter((u) => rasc.usuarios[u.login].ve).length;
+  conts[1].textContent = pendentes();
+}
+
+// ======================================================================================
+// Dias de atendimento das áreas comerciais
+// ======================================================================================
+function secaoAreas(alvo) {
+  const n = pendentes();
+  alvo.innerHTML = `
+  <section class="cartao secao entra" style="--i:1">
+    <div class="cartao-cab"><div><h2>${icone("calendario")}Dias de atendimento das áreas</h2>
+      <p class="sub">A efetividade das campanhas conta uma visita esperada por cliente ativo da área em cada dia marcado.
+        Área pendente ou não atendida fica fora da conta (pedidos e visitas).</p></div></div>
+    ${dados.aviso_areas ? `<div class="aviso">${icone("alerta")}<span>${esc(dados.aviso_areas)}</span></div>` : ""}
+    ${n ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>${n} área${n === 1 ? "" : "s"} com clientes ativos ainda sem dia: os clientes delas ficam fora da efetividade.</span></p>` : ""}
+    <div class="barra-ferramentas usu-busca">
+      <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span><input id="ca-busca" type="search" placeholder="Buscar área ou código" value="${esc(buscaArea)}"></label>
+      <div class="seg-mini" role="group" aria-label="Quais áreas">${FILTROS_AREA.map((f) => `<button type="button" data-filtro="${f.id}" class="${filtroArea === f.id ? "ativo" : ""}">${f.nome}</button>`).join("")}</div>
+      <button class="btn" type="button" id="ca-sugestoes" title="Nas áreas pendentes, marca o dia que o nome da área diz (ex.: “TEIXEIRA (SEXTA)”)">${icone("raio")}Usar o dia do nome nas pendentes</button>
+    </div>
+    <div class="areas-lista" id="ca-lista"></div>
+  </section>`;
+  alvo.querySelector("#ca-busca").addEventListener("input", (e) => { buscaArea = e.target.value; desenharAreas(); });
+  alvo.querySelectorAll("[data-filtro]").forEach((b) => b.addEventListener("click", () => {
+    filtroArea = b.dataset.filtro;
+    alvo.querySelectorAll("[data-filtro]").forEach((x) => x.classList.toggle("ativo", x === b));
+    desenharAreas();
+  }));
+  alvo.querySelector("#ca-sugestoes").addEventListener("click", () => {
+    let n = 0;
+    for (const a of dados.areas) if (rasc.areas[a.id] == null && a.sugestao?.length) { rasc.areas[a.id] = [...a.sugestao]; n++; }
+    toast(n ? `${n} área${n === 1 ? "" : "s"} com o dia do nome (confira e salve)` : "Nenhuma pendente com o dia no nome", n ? "ok" : "erro");
+    desenharAreas();
+    atualizarBarra();
+  });
+  alvo.querySelector("#ca-lista").addEventListener("click", aoClicarArea);
+  desenharAreas();
+}
+
+function estadoArea(a) {
+  const d = rasc.areas[a.id];
+  if (d == null) return "pendente";
+  return d.length ? "atendida" : "nao";
+}
+
+function desenharAreas() {
+  const termo = buscaArea.trim().toLowerCase();
+  const lista = (dados.areas || []).filter((a) => {
+    const st = estadoArea(a);
+    if (filtroArea === "pendentes" && st !== "pendente") return false;
+    if (filtroArea === "atendidas" && st !== "atendida") return false;
+    if (filtroArea === "nao" && st !== "nao") return false;
+    return !termo || `${a.nome} ${a.id}`.toLowerCase().includes(termo);
+  }).sort((x, y) => (y.ativos - x.ativos) || x.nome.localeCompare(y.nome));
+  const el = raiz.querySelector("#ca-lista");
+  if (!lista.length) {
+    el.innerHTML = `<p class="usu-nota">${icone("busca")}<span>${filtroArea === "pendentes" && !termo ? "Nenhuma área pendente." : "Nenhuma área com esse filtro."}</span></p>`;
+    return;
+  }
+  el.innerHTML = lista.map((a) => {
+    const dias = rasc.areas[a.id] || [];
+    const st = estadoArea(a);
+    const chip = { pendente: `<span class="chip-papel inativo">Pendente</span>`, nao: `<span class="chip-papel inativo">Não atendida</span>`,
+                   atendida: `<span class="chip-papel">${dias.length} dia${dias.length === 1 ? "" : "s"}</span>` }[st];
+    const sug = st === "pendente" && a.sugestao?.length
+      ? `<button class="btn" type="button" data-sugestao="${a.id}">Usar ${a.sugestao.map((d) => DIAS[d - 1][1]).join(", ")}</button>` : "";
+    return `<div class="area-linha ${areaMudou(a.id) ? "mudou" : ""}" data-id="${a.id}">
+      <div class="n"><b>${esc(a.nome)}${areaMudou(a.id) ? " <em>(alterada)</em>" : ""}</b>
+        <small>código ${a.id} · ${fmt.num(a.ativos)} cliente${a.ativos === 1 ? "" : "s"} ativo${a.ativos === 1 ? "" : "s"}${a.vendedores?.length ? ` · ${esc(a.vendedores.join(", "))}` : ""}${a.atualizada_por_nome && !areaMudou(a.id) ? ` · por ${esc(a.atualizada_por_nome)}` : ""}</small></div>
+      <div class="dias-semana" role="group" aria-label="Dias de atendimento de ${esc(a.nome)}">${DIAS.map(([d, n]) =>
+        `<button type="button" data-dia="${d}" aria-pressed="${dias.includes(d)}" class="${dias.includes(d) ? "ativo" : ""}">${n}</button>`).join("")}</div>
+      <div class="area-acoes">${chip}${sug}
+        <button class="btn icone" type="button" data-nao="${a.id}" title="Não atendida (fica fora da efetividade, sem aviso)" aria-label="Marcar ${esc(a.nome)} como não atendida">${icone("menos")}</button>
+        <button class="btn icone" type="button" data-limpar="${a.id}" title="Voltar a pendente" aria-label="Voltar ${esc(a.nome)} a pendente">${icone("restaurar")}</button></div>
+    </div>`;
+  }).join("");
+}
+
+function aoClicarArea(e) {
+  const b = e.target.closest("button");
+  const linha = e.target.closest(".area-linha");
+  if (!b || !linha) return;
+  const id = Number(linha.dataset.id);
+  const a = dados.areas.find((x) => x.id === id);
+  if (b.dataset.dia) {
+    const d = Number(b.dataset.dia);
+    const atual = new Set(rasc.areas[id] || []);
+    atual.has(d) ? atual.delete(d) : atual.add(d);
+    rasc.areas[id] = [...atual].sort((x, y) => x - y);
+  } else if (b.dataset.sugestao) rasc.areas[id] = [...a.sugestao];
+  else if (b.dataset.nao) rasc.areas[id] = [];
+  else if (b.dataset.limpar) rasc.areas[id] = null;
+  else return;
+  desenharAreas();
+  atualizarBarra();
 }
 
 // ======================================================================================
@@ -301,10 +426,11 @@ async function salvar() {
     const r = rasc.usuarios[u.login];
     return [u.login, { ve: r.ve, modo: r.modo, vendedores: r.modo === "alguns" ? r.vendedores : null }];
   }));
+  const areas = Object.fromEntries(areasMudadas().map((id) => [id, rasc.areas[id]]));
   btn.disabled = true;
   try {
-    carregarDados(await api("/api/gestao/config", { json: { usuarios } }));
-    toast("Acessos da Gestão salvos");
+    carregarDados(await api("/api/gestao/config", { json: { usuarios, areas } }));
+    toast("Configuração da Gestão salva");
     render();
   } catch (e) {
     toast(e.message, "erro");
@@ -315,6 +441,7 @@ async function salvar() {
 
 function erroUsuario(u, msg) {
   usuarioSel = u.login;
+  secao = "usuarios";
   render();
   const el = raiz.querySelector("#cg-erro");
   el.textContent = `${u.nome}: ${msg}.`;

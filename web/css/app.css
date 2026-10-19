@@ -465,12 +465,12 @@ body.com-lateral.lateral-pronta { transition: padding-left .35s var(--suave), ba
 .status.no_ritmo { background: var(--ok-bg); color: var(--ok); }
 .status.atencao { background: var(--atencao-bg); color: var(--atencao); }
 .status.abaixo { background: var(--ruim-bg); color: var(--ruim); }
-.status.sem_meta { background: var(--neutro-bg); color: var(--tinta-3); }
+.status.sem_meta, .status.sem_dados { background: var(--neutro-bg); color: var(--tinta-3); }
 .ponto-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
 .ponto-status.batida, .ponto-status.no_ritmo { background: var(--ok-forte); }
 .ponto-status.atencao { background: var(--atencao-forte); }
 .ponto-status.abaixo { background: var(--ruim-forte); }
-.ponto-status.sem_meta { background: var(--linha-forte); }
+.ponto-status.sem_meta, .ponto-status.sem_dados { background: var(--linha-forte); }
 
 /* ---------- indicadores (KPIs) ---------- */
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
@@ -1596,6 +1596,37 @@ body.sem-rolagem { overflow: hidden; }
 .cf-meta-v:disabled { opacity: .4; }
 .cf-meta-v:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
 #cf-equipes { display: contents; }
+.cf-sub { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.cf-sub[hidden] { display: none; }
+.cf-sub .campo, .cf-sub .campo select { width: 100%; }
+.cf-sub .campo select { height: 42px; border-radius: 12px; font-weight: 500; }
+.cf-precos { display: grid; gap: 6px; margin-top: 8px; }
+.cf-preco { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 12px; border: 1px solid var(--linha); background: var(--surface-2); }
+.cf-preco .n { min-width: 0; font-size: 13.5px; font-weight: 600; }
+.cf-preco .n small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 12px; }
+.cf-preco .fraco { font-size: 12.5px; }
+.camp-grade td small, .camp-grade th small { display: block; font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
+.camp-grade tfoot td { font-weight: 700; border-top: 2px solid var(--linha-forte); background: var(--surface-2); }
+.camp-grade th:first-child, .camp-grade td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+
+/* Gestão › Configurar: dias de atendimento das áreas */
+.areas-lista { display: grid; gap: 6px; margin-top: 12px; max-height: 620px; overflow: auto; padding: 2px; }
+.area-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto 236px; gap: 12px; align-items: center; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--linha); background: var(--surface-2); }
+.area-linha.mudou { border-color: color-mix(in srgb, var(--laranja) 50%, var(--linha)); }
+.area-linha .n { min-width: 0; font-size: 13.5px; }
+.area-linha .n b em { font-style: normal; font-weight: 500; color: var(--acento-tinta); }
+.area-linha .n small { display: block; color: var(--tinta-3); font-size: 12px; overflow-wrap: anywhere; }
+.dias-semana { display: flex; gap: 4px; }
+.dias-semana button { width: 40px; height: 32px; border-radius: 9px; border: 1px solid var(--linha); background: var(--surface); color: var(--tinta-2); font: 700 12px var(--f-texto); cursor: pointer; transition: background .2s, border-color .2s, color .2s; }
+.dias-semana button:hover { border-color: var(--linha-forte); }
+.dias-semana button.ativo { background: var(--laranja); border-color: var(--laranja); color: #fff; }
+.area-acoes { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.area-acoes .btn { height: 32px; font-size: 12.5px; }
+.area-acoes .btn.icone { width: 32px; padding: 0; justify-content: center; }
+@media (max-width: 860px) {
+  .area-linha { grid-template-columns: 1fr; }
+  .dias-semana button { flex: 1; width: auto; }
+}
 
 /* rascunho de campanha na resposta do Assistente */
 .camp-rascunho {
@@ -1628,6 +1659,8 @@ body.sem-rolagem { overflow: hidden; }
   .camp-acoes .btn span { display: none; }
   .camp-acoes .btn:not(.icone) { width: 40px; padding: 0; justify-content: center; }
   .cf-grade, .cf-metricas, .cf-filtros { grid-template-columns: 1fr; }
+  .cf-preco { grid-template-columns: minmax(0, 1fr) 96px; }
+  .cf-preco > .fraco { display: none; }
   .cf-vendedores { grid-template-columns: 1fr; }
   .camp-dialogo { padding: 18px 16px; }
   .camp-rascunho dl > div { grid-template-columns: 18px minmax(0, 1fr); }

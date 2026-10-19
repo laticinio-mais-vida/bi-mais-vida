@@ -120,6 +120,7 @@ export const STATUS = {
   atencao: { rotulo: "Atenção", icone: "alerta" },
   abaixo: { rotulo: "Abaixo do ritmo", icone: "abaixo" },
   sem_meta: { rotulo: "Sem meta", icone: "menos" },
+  sem_dados: { rotulo: "Sem dados", icone: "menos" }, // média sem divisor (ex.: nenhuma visita esperada)
 };
 
 export function chipStatus(st, rotulo) {

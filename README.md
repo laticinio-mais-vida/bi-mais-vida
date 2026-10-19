@@ -266,24 +266,60 @@ Um quadro de **campanhas de vendas** (kanban), como no Bitrix: cada card é uma 
 
 ### Campanhas
 
-- **O que uma campanha mede:** cada uma escolhe a sua métrica, no período dela:
-  - **Faturamento:** venda líquida em R$, descontando as devoluções, como em Metas;
-  - **Volume:** quantidade vendida. Exige um filtro de produto com uma unidade só (kg não soma com unidade);
-  - **Positivação:** clientes distintos com venda no período;
-  - **Mix:** produtos distintos vendidos no período.
-- **O que conta:** filtros opcionais de produtos, linhas, categorias, grupo (mussarela ou outras), UF e segmento do
-  cliente. Nada escolhido conta tudo.
-- **Metas:** uma meta padrão para todos os vendedores da campanha, com ajuste por vendedor. Meta 0 deixa a campanha
-  (ou o vendedor) só no ranking.
+- **O que uma campanha mede:** um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma
+  Personalizada (a conta fica em `bi/indicadores.py`):
+  - **Positivação:** clientes distintos com venda no período.
+  - **Mix médio:** produtos da campanha levados, somados cliente a cliente, ÷ todos os clientes positivados.
+  - **Efetividade:** pedidos de venda ÷ visitas esperadas, pela carteira do vendedor.
+    - Os pedidos vêm do ERP (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA).
+    - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada dia de atendimento dela que cai no
+      período. Feriados contam, como no Power BI.
+    - Os dias de cada área ficam em **Configurar › Dias de atendimento**. Clientes em área sem dia ficam fora da conta
+      (pedidos e visitas), e o andamento avisa quantos são. Diferente do Power BI, que contava os pedidos deles e não
+      as visitas.
+  - **Frequência:** semanas com compra, somadas cliente a cliente, ÷ clientes positivados. A semana vai de domingo a
+    sábado e é cortada na virada do mês, como no Power BI.
+  - **Preço médio por produto:** cada produto tem um preço-alvo (R$ por unidade).
+    - Preço médio = venda líquida ÷ quantidade líquida, por vendedor e produto, numa grade.
+    - O índice do vendedor é o que ele vendeu ÷ o que teria vendido as mesmas quantidades nos preços-alvo
+      (100% = no alvo).
+  - **Personalizada:** **o que medir** (faturamento, volume, clientes ou mix de produtos) × **como**:
+    - total no período;
+    - por cliente positivado;
+    - % da carteira que comprou;
+    - crescimento sobre o período anterior ou o mesmo período do ano anterior. A meta de cada vendedor vira o que
+      ele fez lá mais o crescimento pedido.
+
+    Faturamento, volume e mix das campanhas antigas viraram Personalizada, com os mesmos números. Volume exige
+    produtos de uma unidade só (kg não soma com unidade).
+- **Quem conta:** todos os clientes, ou só os novos (sem compra antes do início), os recuperados (sem compra há N dias
+  ou mais antes do início; padrão 90), quem nunca comprou os produtos da campanha ou quem já comprava. O histórico
+  começa em `[cache] inicio`.
+- **O que conta:** filtros opcionais de produtos, linhas, categorias, grupo (mussarela ou outras), UF, segmento e área
+  comercial do cliente. Nada escolhido conta tudo. Efetividade e preço médio só têm filtros de cliente.
+- **Metas:** uma meta padrão para todos os vendedores da campanha, com ajuste por vendedor. Percentuais vão como
+  número (80 = 80%). Meta 0 deixa a campanha (ou o vendedor) só no ranking.
+- **Como a meta é lida:**
+  - o que acumula no período (positivação, faturamento, volume, crescimento) segue o ritmo dos dias úteis, com
+    projeção;
+  - a frequência usa o ritmo, sem projeção;
+  - médias e percentuais (mix médio, efetividade, preço médio, por cliente, % da carteira) comparam direto com a
+    meta: com o período aberto, quem está na meta fica "na meta", e "meta batida" só quando ele fecha.
+- **Aberto por:** efetividade, frequência e os outros tipos (menos crescimento e preço médio) mostram a mesma conta
+  aberta por área comercial, segmento ou produto, com os vendedores juntos.
 - **Colunas:** uma campanha nova entra na coluna das datas (Planejada antes do início, Em andamento no período).
   Depois disso só muda arrastando o card (ou pelo menu **⋯** do card, que também funciona no celular). Quando as
   datas dizem que ela já devia ter mudado ("Começou em 01/11", "Terminou em 30/11"), o card mostra um aviso com o
   botão para mover.
-- **Andamento:** realizado, meta, % atingido, situação (meta batida, no ritmo, atenção, abaixo), projeção, quanto
-  falta e quanto falta por dia útil, por vendedor, e o total. O ritmo esperado vem dos dias úteis da região de cada
-  vendedor no período da campanha (os feriados e extras das Configurações das metas). As regras de venda são as de
-  Metas: vendedor da venda, equivalências de produto, produtos que "não contam" fora, devoluções dos motivos
-  marcados.
+- **Andamento:** realizado, meta, % atingido, situação, projeção, quanto falta e quanto falta por dia útil, por
+  vendedor, e o total. Nas médias e percentuais, também o numerador e o denominador (ex.: pedidos e visitas). O total
+  das médias é a conta da campanha inteira, sem repetir clientes, e não a soma dos vendedores.
+  - O ritmo esperado vem dos dias úteis da região de cada vendedor no período da campanha (os feriados e extras das
+    Configurações das metas).
+  - As regras de venda são as de Metas: vendedor da venda (na efetividade e na % da carteira, o da carteira),
+    equivalências de produto, produtos que "não contam" fora, devoluções dos motivos marcados, só clientes do
+    cadastro (sem funcionário, fornecedor ou produtor).
+  - O quadro guarda as contas até os dados, as regras, a campanha ou os dias de atendimento mudarem.
 - **Arquivar e excluir:** arquivar tira o card do quadro (o botão **Arquivadas** mostra de novo); excluir apaga.
 
 ### Quem vê o quê
@@ -293,14 +329,27 @@ Um quadro de **campanhas de vendas** (kanban), como no Bitrix: cada card é uma 
 - Os vendedores que a pessoa pode pôr nas campanhas (e vê no andamento) são os do acesso dela na Gestão, escolhidos
   no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou **Só alguns**, como em Projeções e no
   Assistente.
+- Também em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
+  efetividade).
+  - O ponto de partida foi a planilha "Dia de Atendimento Areas Comerciais.xlsx" do Power BI, lida pela coluna
+    numérica (a de texto tinha "Terça" com acento, que o Power BI não reconhecia).
+  - Cada área pode ficar com dias, como **não atendida** (fora da conta, sem aviso) ou **pendente** (fora da conta,
+    com aviso).
+  - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)".
 - Se o usuário for excluído, as campanhas dele ficam, sem dono, e só os administradores passam a vê-las.
 
 ### Pelo Assistente
 
-- **Criar:** "crie uma campanha de positivação de requeijão para a equipe BA em novembro, meta de 30 clientes, e 45
-  para a Jamille". O Assistente confere tudo e mostra um **rascunho** embaixo da resposta, com os botões **Criar
-  campanha** e **Revisar no painel** (abre o formulário preenchido). Nada é gravado antes do clique, e clicar de novo
-  não cria outra.
+- **Criar:** o Assistente traduz o pedido em texto para um tipo e os blocos. Exemplos:
+  - "crie uma campanha de positivação de requeijão para a equipe BA em novembro, meta de 30 clientes, e 45 para a
+    Jamille";
+  - "recuperar as padarias sem compra há 60 dias";
+  - "efetividade de 80% para a equipe ES";
+  - "mussarela 4kg a R$ 39 o quilo";
+  - "crescer 10% sobre outubro".
+
+  Ele confere tudo e mostra um **rascunho** embaixo da resposta, com os botões **Criar campanha** e **Revisar no
+  painel** (abre o formulário preenchido). Nada é gravado antes do clique, e clicar de novo não cria outra.
 - **Acompanhar:** "veja como está o andamento dos vendedores na campanha que eu criei". O Assistente acha a campanha
   e responde com os mesmos números da página.
 - No painel de uma campanha, **Perguntar ao Assistente** abre uma conversa nova com a pergunta escrita (não envia
@@ -322,7 +371,9 @@ O painel usa dois bancos, cada um para uma coisa:
 | `regras` | as regras de Metas e os vendedores de Projeções; cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
-| `campanhas` e `campanha_vendedores` | as campanhas da página Gestão: período, métrica, filtros, coluna do quadro, quem criou, e os vendedores com as metas |
+| `campanhas` e `campanha_vendedores` | as campanhas da página Gestão: período, tipo e parâmetros (`parametros`), filtros, coluna do quadro, quem criou, e os vendedores com as metas |
+| `campanha_produtos` | o preço-alvo de cada produto nas campanhas de preço médio |
+| `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -340,8 +391,9 @@ subida com o banco, a migração `005_importar_arquivos.py` traz o que estava no
 onde estão, só como cópia: o painel não os lê mais. Nessa subida todos entram de novo uma vez, porque o cookie de
 sessão mudou.
 
-Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `008_tarefas.sql`). Nunca
-edite uma migração que já foi aplicada: ela não roda de novo.
+Para mudar o banco, crie um arquivo novo em `bi/migracoes/` com o número seguinte (ex.: `009_tarefas.sql`). Nunca
+edite uma migração que já foi aplicada: ela não roda de novo. A `008_indicadores.sql` converteu as campanhas antigas
+para os tipos novos: depois dela, voltar o código para uma versão anterior exige restaurar o banco.
 
 ## Login e acessos
 
@@ -454,12 +506,13 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda, para a efetividade, vêm num grupo à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
-| `bi/gestao.py` | página Gestão: campanhas (no PostgreSQL), conferência e cálculo do andamento por vendedor |
+| `bi/gestao.py` | página Gestão: campanhas e dias de atendimento das áreas (no PostgreSQL), conferência e o quadro |
+| `bi/indicadores.py` | os tipos de campanha (positivação, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
 | `bi/banco.py` | conexão com o PostgreSQL e as migrações |
 | `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |

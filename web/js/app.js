@@ -79,7 +79,7 @@ const PAGINAS = {
   },
   "config-gestao": {
     titulo: "Configurações da gestão",
-    fixo: "Os vendedores que cada pessoa pode pôr nas campanhas e acompanhar",
+    fixo: "Os vendedores de cada pessoa nas campanhas e os dias de atendimento das áreas",
     pai: "gestao",
     admin: true,
     sempreMonta: true,

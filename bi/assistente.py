@@ -35,6 +35,8 @@ import pandas as pd
 from .banco import BancoForaDoAr
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
+from .indicadores import (BASES as BASES_CAMPANHA, COMPARAR as COMPARAR_CAMPANHA, FORMAS as FORMAS_CAMPANHA,
+                          MEDIDAS as MEDIDAS_CAMPANHA, TIPOS as TIPOS_CAMPANHA)
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
 
@@ -96,6 +98,7 @@ class Recorte:
 
     def __init__(self, calc: Calculadora, nomes: dict[int, str], ids: frozenset[int] | None):
         self.ids = ids
+        self.memo: dict = {}  # contas guardadas por quem usa o recorte (o quadro da Gestão); some com ele
         t0 = time.time()
         self.con = self._montar(calc, nomes, ids)
         self.segundos = round(time.time() - t0, 2)
@@ -113,6 +116,14 @@ class Recorte:
                          "cancelada, valor, quantidade FROM devolucoes_clientes_itens" + filtro, params)
         pedidos = cache.df("SELECT data, id_vendedor, id_cliente, tipocliente AS tipo_cliente, vendas AS pedidos "
                            "FROM vendas_clientes" + filtro, params)
+        # Pedidos de venda do ERP (efetividade das campanhas da Gestão); vazia se o cache ainda não tem.
+        pedidos_venda = (pd.DataFrame({"data": pd.Series(dtype="datetime64[ns]"), "id_vendedor": pd.Series(dtype="int32"),
+                                       "id_cliente": pd.Series(dtype="int32"), "tipo_cliente": pd.Series(dtype="object"),
+                                       "tipopedido": pd.Series(dtype="object"), "cancelada": pd.Series(dtype="Int32"),
+                                       "pedidos": pd.Series(dtype="int32")})
+                         if cache.sem_pedidos else
+                         cache.df("SELECT data, id_vendedor, id_cliente, tipocliente AS tipo_cliente, tipopedido, cancelada, "
+                                  "pedidos FROM pedidos_venda" + filtro, params))
         if regras.equivalentes:
             vendas["id_produto"] = vendas["id_produto"].replace(regras.equivalentes)
             devol["id_produto"] = devol["id_produto"].replace(regras.equivalentes)
@@ -138,7 +149,7 @@ class Recorte:
             vendedores = vendedores[vendedores["id_vendedor"].isin(sorted(ids))]
 
         clientes = cache.df(
-            "SELECT c.id AS id_cliente, c.nome AS cliente, d.razao_social, d.cidade, d.uf, d.area, d.segmento, "
+            "SELECT c.id AS id_cliente, c.nome AS cliente, d.razao_social, d.cidade, d.uf, d.id_area, d.area, d.segmento, "
             "d.inativo::BOOLEAN AS inativo, d.data_cadastro, NULLIF(c.id_vendedor, 0) AS id_vendedor_carteira "
             "FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id")
         clientes["vendedor_carteira"] = clientes["id_vendedor_carteira"].map(
@@ -161,6 +172,7 @@ class Recorte:
             "_vendas": (vendas, fatos),
             "_devolucoes": (devol, fatos),
             "_pedidos": (pedidos, fatos),
+            "_pedidos_venda": (pedidos_venda, "CAST(data AS DATE) AS data, * EXCLUDE (data)"),
             "produtos": (produtos, "*"),
             "vendedores": (vendedores, "id_vendedor, vendedor, nome_erp, equipe, supervisor, inativo"),
             "_clientes": (clientes, "* EXCLUDE (data_cadastro), CAST(data_cadastro AS DATE) AS data_cadastro"),
@@ -186,7 +198,7 @@ class Recorte:
                 SELECT id_cliente, MIN(data) AS primeira_compra, MAX(data) AS ultima_compra,
                        SUM(CASE WHEN data > ? THEN valor ELSE 0 END) AS venda_bruta_12m
                 FROM _vendas WHERE tipo_cliente = 'CLIENTE' GROUP BY 1)
-            SELECT c.id_cliente, c.cliente, c.razao_social, c.cidade, c.uf, c.area, c.segmento, c.inativo,
+            SELECT c.id_cliente, c.cliente, c.razao_social, c.cidade, c.uf, c.id_area, c.area, c.segmento, c.inativo,
                    c.data_cadastro, c.id_vendedor_carteira, c.vendedor_carteira, k.primeira_compra, k.ultima_compra,
                    COALESCE(k.venda_bruta_12m, 0) AS venda_bruta_12m
             FROM _clientes c LEFT JOIN compras k USING (id_cliente) {so_do_acesso}""", [desde_12m])
@@ -360,8 +372,10 @@ FERRAMENTAS = [
     {
         "name": "andamento_campanha",
         "description": ("Andamento de uma campanha por vendedor, exatamente como na página Gestão: realizado, meta, % "
-                        "atingido, situação (batida, no ritmo, atenção, abaixo), projeção e quanto falta por dia útil, "
-                        "e o total."),
+                        "atingido, situação (batida, no ritmo, atenção, abaixo, sem dados), projeção e quanto falta por "
+                        "dia útil quando o indicador acumula, numerador e denominador nas médias e percentuais, e o "
+                        "total. Efetividade e frequência vêm também abertas por área ou segmento; preço médio, por "
+                        "produto."),
         "input_schema": _objeto({
             "campanha": {"type": "integer", "description": "código da campanha (de listar_campanhas)"},
         }, ["campanha"]),
@@ -378,11 +392,24 @@ FERRAMENTAS = [
             "premiacao": {"type": "string", "description": "prêmio, se houver (pode ser vazio)"},
             "inicio": {"type": "string", "format": "date", "description": "primeiro dia (AAAA-MM-DD)"},
             "fim": {"type": "string", "format": "date", "description": "último dia, inclusive (AAAA-MM-DD)"},
-            "metrica": {"type": "string", "enum": ["faturamento", "volume", "positivacao", "mix"]},
-            "meta_padrao": {"type": "number", "description": "meta de cada vendedor na métrica; 0 = sem meta (só ranking)"},
+            "metrica": {"type": "string", "enum": list(TIPOS_CAMPANHA),
+                        "description": "o tipo de campanha (veja as instruções); personalizada usa medida e forma"},
+            "medida": {"type": "string", "enum": list(MEDIDAS_CAMPANHA), "description": "só na personalizada"},
+            "forma": {"type": "string", "enum": list(FORMAS_CAMPANHA), "description": "só na personalizada (padrão total)"},
+            "comparar": {"type": "string", "enum": list(COMPARAR_CAMPANHA),
+                         "description": "só na forma crescimento (padrão periodo_anterior)"},
+            "clientes_base": {"type": "string", "enum": list(BASES_CAMPANHA),
+                              "description": "quem conta (padrão todos); nunca_compraram e ja_compraram exigem produtos"},
+            "dias_sem_compra": {"type": "integer", "description": "com clientes_base recuperados (padrão 90)"},
+            "meta_padrao": {"type": "number", "description": ("meta de cada vendedor, na unidade do indicador; "
+                                                              "percentual como número (80 = 80%); 0 = sem meta (só "
+                                                              "ranking); no preço médio não se usa")},
             "metas": {"type": "array", "description": "metas diferentes da padrão, por vendedor",
                       "items": _objeto({"id_vendedor": {"type": "integer"}, "meta": {"type": "number"}},
                                        ["id_vendedor", "meta"])},
+            "metas_produto": {"type": "array", "description": "preço médio: o preço-alvo (R$ por unidade) de cada produto",
+                              "items": _objeto({"id_produto": {"type": "integer"}, "meta": {"type": "number"}},
+                                               ["id_produto", "meta"])},
             "vendedores": {**_INTEIROS, "description": "códigos dos vendedores participantes (de buscar_vendedor)"},
             "equipes": {"type": "array", "items": {"type": "string", "enum": ["ES", "BA", "EDIR"]},
                         "description": "inclui todos os vendedores ativos dessas equipes"},
@@ -392,6 +419,7 @@ FERRAMENTAS = [
             "grupos": {"type": "array", "items": {"type": "string", "enum": ["mussarela", "outras"]}},
             "ufs": {"type": "array", "items": {"type": "string"}, "description": "UF do cliente (ES, BA...)"},
             "segmentos": {"type": "array", "items": {"type": "string"}, "description": "segmentos do cliente"},
+            "areas": {"type": "array", "items": {"type": "string"}, "description": "áreas comerciais (rotas) do cliente"},
         }, ["nome", "inicio", "fim", "metrica", "meta_padrao"]),
         # Sem strict: com este esquema (o maior de todos) a API recusa o pedido inteiro ("compiled grammar is too
         # large"). A conferência é do servidor (bi/gestao.py validar), que devolve o erro para a IA corrigir.
@@ -694,8 +722,10 @@ class Ferramentas:
         return r
 
     def f_propor_campanha(self, passo: dict, nome: str, inicio: str, fim: str, metrica: str, meta_padrao: float = 0,
-                          descricao: str = "", premiacao: str = "", metas=None, vendedores=None, equipes=None,
-                          produtos=None, linhas=None, categorias=None, grupos=None, ufs=None, segmentos=None) -> dict:
+                          descricao: str = "", premiacao: str = "", medida=None, forma=None, comparar=None,
+                          clientes_base=None, dias_sem_compra=None, metas=None, metas_produto=None, vendedores=None,
+                          equipes=None, produtos=None, linhas=None, categorias=None, grupos=None, ufs=None,
+                          segmentos=None, areas=None) -> dict:
         individuais = {}
         for m in metas or []:
             try:
@@ -705,16 +735,25 @@ class Ferramentas:
         participantes = [{"id": int(v), "meta": individuais.get(int(v))} for v in vendedores or []]
         ja = {p["id"] for p in participantes}
         participantes += [{"id": v, "meta": m} for v, m in individuais.items() if v not in ja]
+        try:
+            precos = [{"id": int(m["id_produto"]), "meta": m["meta"]} for m in metas_produto or []]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("metas_produto: use uma lista de {id_produto, meta}") from None
+        parametros = {k: v for k, v in {"medida": medida, "forma": forma, "comparar": comparar,
+                                        "clientes": clientes_base, "dias_sem_compra": dias_sem_compra}.items()
+                      if v not in (None, "")}
         dados = {"nome": nome, "descricao": descricao, "premiacao": premiacao, "inicio": inicio, "fim": fim,
-                 "metrica": metrica, "meta_padrao": meta_padrao, "vendedores": participantes,
+                 "metrica": metrica, "parametros": parametros, "meta_padrao": meta_padrao, "vendedores": participantes,
+                 "metas_produto": precos,
                  "filtros": {"produtos": produtos, "linhas": linhas, "categorias": categorias, "grupos": grupos,
-                             "ufs": ufs, "segmentos": segmentos}}
+                             "ufs": ufs, "segmentos": segmentos, "areas": areas}}
         r = self._campanhas().propor(dados, equipes or [])
         self.rascunhos.append(r)
         n = len(r["vendedores"])
-        passo.update(colunas=["rascunho", "período", "métrica", "meta padrão", "vendedores"],
-                     amostra=[[r["nome"], f"{r['inicio']} a {r['fim']}", r["nome_metrica"], r["meta_padrao"], n]],
-                     linhas=1, resumo=(f"rascunho {r['id']} (ainda não criado): {r['nome']}, {r['metrica']}, "
+        ind = r["indicador"]
+        passo.update(colunas=["rascunho", "período", "indicador", "meta padrão", "vendedores"],
+                     amostra=[[r["nome"], f"{r['inicio']} a {r['fim']}", ind["nome"], r["meta_padrao"], n]],
+                     linhas=1, resumo=(f"rascunho {r['id']} (ainda não criado): {r['nome']}, {ind['nome']}, "
                                        f"{r['inicio']} a {r['fim']}, {n} vendedores"))
         nomes = r["nomes"]
         filtros = dict(r["filtros"])
@@ -724,9 +763,12 @@ class Ferramentas:
             "situacao": ("RASCUNHO, AINDA NÃO CRIADO. A pessoa confere e cria no botão 'Criar campanha' que aparece "
                          "abaixo da sua resposta (ou ajusta em 'Revisar no painel')."),
             "rascunho": {
-                "nome": r["nome"], "periodo": f"{r['inicio']} a {r['fim']}", "metrica": r["nome_metrica"],
-                "unidade": r["unidade"], "meta_padrao": r["meta_padrao"], "descricao": r["descricao"],
-                "premiacao": r["premiacao"], "filtros": filtros,
+                "nome": r["nome"], "periodo": f"{r['inicio']} a {r['fim']}", "indicador": ind["nome"],
+                "o_que_mede": ind["descricao"], "unidade": r["unidade"], "meta_padrao": r["meta_padrao"],
+                **({"meta_em_percentual": True} if ind["meta_em_pct"] else {}),
+                "descricao": r["descricao"], "premiacao": r["premiacao"], "filtros": filtros,
+                **({"precos_alvo": [{"produto": f"{p['id']} {nomes['produtos'].get(str(p['id']), '')}".strip(),
+                                     "meta": p["meta"]} for p in r["metas_produto"]]} if r["metas_produto"] else {}),
                 "vendedores": [{"id": v["id"], "nome": nomes["vendedores"].get(str(v["id"])),
                                 "meta": r["meta_padrao"] if v["meta"] is None else v["meta"]} for v in r["vendedores"]],
             },
@@ -765,9 +807,9 @@ devolucoes — todas as devoluções (inclusive as que não descontam): data (de
   cancelada, desconta, valor, quantidade
 pedidos — notas de venda por dia, vendedor e cliente: data, ano, mes, id_vendedor, vendedor, id_cliente, cliente,
   tipo_cliente, pedidos (quantidade de notas)
-clientes — cadastro (só tipo CLIENTE): id_cliente, cliente, razao_social, cidade, uf, area (rota comercial),
-  segmento, inativo, data_cadastro, id_vendedor_carteira, vendedor_carteira, primeira_compra, ultima_compra,
-  venda_bruta_12m
+clientes — cadastro (só tipo CLIENTE): id_cliente, cliente, razao_social, cidade, uf, id_area, area (rota
+  comercial), segmento, inativo, data_cadastro, id_vendedor_carteira, vendedor_carteira, primeira_compra,
+  ultima_compra, venda_bruta_12m
 produtos — id_produto, produto, linha, unidade, inativo, grupo ('mussarela', 'outras' ou 'fora'), categoria
 vendedores — id_vendedor, vendedor, nome_erp, equipe ('ES', 'BA', 'Edir', 'Outros'), supervisor, inativo
 motivos — id_motivo, motivo, desconta (se a devolução por esse motivo desconta das vendas)
@@ -824,14 +866,39 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 - Quantidade só soma com sentido dentro do mesmo produto (unidades diferentes).
 
 # Campanhas (página Gestão)
-- Uma campanha mede, num período, uma métrica por vendedor participante, com uma meta padrão e ajustes por \
-vendedor: faturamento (venda líquida, R$), volume (quantidade; exige filtro de produto com uma unidade só), \
-positivação (clientes distintos com venda) ou mix (produtos distintos vendidos). Filtros opcionais: produtos, \
-linhas, categorias, grupos, UFs e segmentos do cliente.
+- Uma campanha mede um indicador por vendedor participante, num período, com uma meta padrão e ajustes por \
+vendedor. Tipos (metrica):
+  - positivacao: clientes distintos com venda. Recuperação de clientes = clientes_base recuperados, com \
+dias_sem_compra (padrão 90).
+  - mix_medio: produtos da campanha levados por cliente positivado (média). "Clientes que nunca compraram X" = \
+clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com os produtos.
+  - efetividade: pedidos ÷ visitas esperadas, pelos dias de atendimento das áreas, pela carteira do vendedor. A meta \
+é em % (80 = 80%); só aceita filtros de cliente (UF, segmento, área).
+  - frequencia: semanas com compra por cliente positivado (média).
+  - preco_medio: preço-alvo de cada produto em metas_produto (R$ por unidade); a meta é estar no preço-alvo.
+  - personalizada: para o resto, monte com medida (faturamento, volume, clientes ou produtos) e forma: total; \
+por_cliente (faturamento ou volume ÷ clientes positivados); pct_carteira (clientes da carteira que compraram; meta \
+em %); crescimento (sobre comparar periodo_anterior ou ano_anterior; meta em % de crescimento). Volume exige \
+produtos de uma unidade só.
+- Filtros de produto: produtos, linhas, categorias, grupos. Filtros de cliente: ufs, segmentos, areas (rotas). \
+Segmentos e áreas vão como estão nos dados: confira com consultar_sql (SELECT DISTINCT segmento FROM clientes) \
+se não tiver certeza.
+- Como traduzir o pedido, por exemplo:
+  - "positivar padarias" = positivacao, segmentos ["PADARIA"];
+  - "recuperar clientes sem compra há 60 dias" = positivacao, clientes_base recuperados, dias_sem_compra 60;
+  - "colocar o requeijão em quem nunca comprou" = mix_medio ou positivacao, produtos [requeijão], clientes_base \
+nunca_compraram;
+  - "efetividade de 80%" = efetividade, meta_padrao 80;
+  - "mussarela a R$ 32/kg e manteiga a R$ 9,50" = preco_medio, metas_produto;
+  - "vender 10% a mais que no mês passado" = personalizada, medida faturamento, forma crescimento, meta_padrao 10;
+  - "ticket por cliente" = personalizada, faturamento, por_cliente;
+  - "atender 60% da carteira" = personalizada, clientes, pct_carteira, meta_padrao 60;
+  - "vender R$ 50 mil" = personalizada, faturamento, total;
+  - "300 kg de mussarela" = personalizada, volume, total, com os produtos.
 - Para criar uma campanha, use propor_campanha: ela confere e monta um RASCUNHO, sem gravar. A pessoa cria no botão \
 "Criar campanha" que aparece abaixo da sua resposta. Nunca diga que a campanha foi criada: diga que o rascunho \
-está pronto para conferir e resuma o que ficou (período, métrica, meta, vendedores e filtros). Se faltar período, \
-métrica ou vendedores, pergunte antes; o nome você pode sugerir. Vendedores e produtos citados pelo nome: códigos \
+está pronto para conferir e resuma o que ficou (período, indicador, meta, vendedores e filtros). Se faltar período, \
+o que medir ou vendedores, pergunte antes; o nome você pode sugerir. Vendedores e produtos citados pelo nome: códigos \
 com buscar_vendedor e buscar_produto; "todos de BA" = equipes ["BA"]. Se a ferramenta devolver erro, corrija e \
 chame de novo.
 - Cada pessoa só vê as campanhas que criou (o administrador vê todas). Para achar uma campanha ("a que eu criei", \
