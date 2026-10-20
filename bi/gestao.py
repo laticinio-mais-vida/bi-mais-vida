@@ -875,23 +875,42 @@ class Gestao:
             return saida
         return k.memo(("fat_meta", regiao, padrao["ano"], padrao["mes"]), fazer), padrao
 
-    def _objetivo(self, k: _Contas, o: dict, ids, regiao: str) -> dict:
-        """O andamento do objetivo: a equipe da região (só os vendedores do acesso de quem vê)."""
-        equipe = k.memo(("equipe", regiao), lambda: self.assistente.ids_do_escopo(None, set(EQUIPES_REGIAO[regiao])))
-        conta = sorted(equipe if ids is None else equipe & ids)
-        areas, versao_areas = k.areas(o)
-        return k.memo(("objetivo", o["id"], o["versao"], tuple(conta), versao_areas),
-                      lambda: total_equipe(k.cur, o, conta, k.cal, k.data_ref, regiao, areas))
+    def _time(self, k: _Contas, regiao: str, meses) -> set[int]:
+        """A equipe da região: os vendedores com meta (planilha METAS) em algum dos meses, como na página Metas.
+        Contas da casa (venda interna, funcionário, produtor) não têm meta e ficam fora."""
+        equipes = EQUIPES_REGIAO[regiao]
+        return {m["id_vendedor"] for m in self.calc.metas.dados()
+                if m["mes"] in meses and k.regras.grupo_vendedor(m["id_vendedor"]) in equipes}
 
-    def _cartao_objetivo(self, k: _Contas | None, o: dict, ids, regiao: str, hoje: dt.date, parcial) -> dict:
-        item = {**publica(o), "situacao": situacao(o, hoje), "prazo": prazo(o, hoje), "parcial": parcial,
+    def _time_padrao(self, k: _Contas, regiao: str) -> set[int]:
+        """A equipe do mês das metas (o mesmo da página Metas); sem planilha, quem vendeu nos últimos 12 meses."""
+        padrao = self.calc.opcoes()["padrao"]
+        time = self._time(k, regiao, {dt.date(padrao["ano"], padrao["mes"], 1)}) if padrao else set()
+        return time or {v["id"] for v in self._catalogo(k) if v["equipe"] in EQUIPES_REGIAO[regiao] and not v["inativo"]}
+
+    def _objetivo(self, k: _Contas, o: dict, ids, time_padrao: set[int]) -> tuple[dict, dict | None]:
+        """O andamento do objetivo, com a equipe dos meses dele (só os vendedores do acesso de quem vê), e quantos
+        da equipe contaram quando a pessoa vê só parte dela."""
+        meses, d = set(), o["inicio"].replace(day=1)
+        while d <= o["fim"]:
+            meses.add(d)
+            d = (d + dt.timedelta(days=32)).replace(day=1)
+        time = self._time(k, o["regiao"], meses) or time_padrao
+        conta = sorted(time if ids is None else time & ids)
+        parcial = None if ids is None or time <= ids else {"vendedores": len(conta), "total": len(time)}
+        areas, versao_areas = k.areas(o)
+        a = k.memo(("objetivo", o["id"], o["versao"], tuple(conta), versao_areas),
+                   lambda: total_equipe(k.cur, o, conta, k.cal, k.data_ref, o["regiao"], areas))
+        return a, parcial
+
+    def _cartao_objetivo(self, k: _Contas, o: dict, ids, hoje: dt.date, time_padrao: set[int]) -> dict:
+        item = {**publica(o), "situacao": situacao(o, hoje), "prazo": prazo(o, hoje), "parcial": None,
                 "andamento": None, "aviso": None}
-        if k is not None:
-            try:
-                item["andamento"] = self._objetivo(k, o, ids, regiao)
-                item["indicador"] = item["andamento"]["indicador"]
-            except SemDados as e:
-                item["aviso"] = str(e)
+        try:
+            item["andamento"], item["parcial"] = self._objetivo(k, o, ids, time_padrao)
+            item["indicador"] = item["andamento"]["indicador"]
+        except SemDados as e:
+            item["aviso"] = str(e)
         item.pop("vendedores", None)
         return item
 
@@ -926,10 +945,8 @@ class Gestao:
                 itens = self._ler_regiao(regiao, hoje)
             acoes = [c for c in itens if c["tipo"] == "acao" and self._visivel(c, ids)]
             catalogo = self._catalogo(k)
-            equipes = EQUIPES_REGIAO[regiao]
-            time = {v["id"] for v in catalogo if v["equipe"] in equipes and not v["inativo"]}
-            parcial = None if ids is None or time <= ids else {"vendedores": len(time & ids), "total": len(time)}
-            saida["objetivos"] = [self._cartao_objetivo(k, o, ids, regiao, hoje, parcial)
+            time = self._time_padrao(k, regiao)
+            saida["objetivos"] = [self._cartao_objetivo(k, o, ids, hoje, time)
                                   for o in sorted((c for c in itens if c["tipo"] == "objetivo"),
                                                   key=lambda o: (o["inicio"], o["id"]))]
 
@@ -961,18 +978,17 @@ class Gestao:
                                                "provisorio": estado["provisorio"]} if encerrada else {})})
             saida["acoes"] = _em_ordem(cartoes)
 
-            # os quadrados: a equipe ativa do acesso e quem está numa ação que ainda corre
-            grade = {v["id"]: v for v in catalogo if v["equipe"] in equipes and not v["inativo"]
-                     and (ids is None or v["id"] in ids)}
+            # os quadrados: a equipe do acesso e quem está numa ação que ainda corre
+            grade = sorted(vid for vid in time if ids is None or vid in ids)
             extras = {vid for c in acoes if situacao(c, hoje) != "encerrada" for vid in (v["id"] for v in c["vendedores"])
-                      if vid not in grade and (ids is None or vid in ids)}
+                      if vid not in time and (ids is None or vid in ids)}
             por_id = {v["id"]: v for v in catalogo}
-            nomes = k.nomes(extras - set(por_id))
+            nomes = k.nomes([vid for vid in (*grade, *extras) if vid not in por_id])
             fat, mes = self._faturamento_meta(k, regiao)
             saida["mes_faturamento"] = mes
             vendedores = []
             for vid in [*grade, *sorted(extras)]:
-                info = grade.get(vid) or por_id.get(vid)
+                info = por_id.get(vid)
                 nome = info["nome"] if info else nomes.get(vid, (f"Vendedor {vid}",))[0]
                 equipe = info["equipe"] if info else k.regras.grupo_vendedor(vid)
                 lista = _em_ordem(etiquetas.get(vid, []))
@@ -1028,8 +1044,8 @@ class Gestao:
                 dia = quando.astimezone().date()
                 if tipo == "lancada" and dados.get("inicio"):
                     dia = min(dia, dt.date.fromisoformat(dados["inicio"]))
-                if tipo == "resultado" and dados.get("fim"):
-                    dia = dt.date.fromisoformat(dados["fim"])
+                if tipo == "resultado" and dados.get("fim"):  # entra no dia seguinte ao fim (ou ao encerrar antes)
+                    dia = min(dia, dt.date.fromisoformat(dados["fim"]) + dt.timedelta(days=1))
                 e = {"id": id_, "tipo": tipo, "acao": camp, "data": dia.isoformat(), "texto": texto, "autor": autor,
                      "criada_em": hora(quando), "dados": dados}
                 eventos.append(e)
@@ -1068,7 +1084,8 @@ class Gestao:
                                     "autor": None, "criada_em": None, "dados": p})
                 if estado["provisorio"] and not c["arquivada"] and estado["vendedores"][vid]["resultado"] is not None:
                     e = estado["vendedores"][vid]
-                    item = {"id": None, "tipo": "resultado", "acao": c["id"], "data": c["fim"].isoformat(), "texto": "",
+                    dia = min(hoje, c["fim"] + dt.timedelta(days=1))
+                    item = {"id": None, "tipo": "resultado", "acao": c["id"], "data": dia.isoformat(), "texto": "",
                             "autor": None, "criada_em": None, "provisorio": True,
                             "dados": {**self._retrato(c, e["base"], e["alvo"]),
                                       **{x: e.get(x) for x in ("resultado", "classe", "delta", "delta_pct", "caminho")}}}
@@ -1078,7 +1095,9 @@ class Gestao:
                 c_info = info_acoes.get(camp)
                 e["atual"] = bool(c_info and c_info["participa"] and not c_info["arquivada"]
                                   and (c_info["congelado"] or e.get("provisorio")))
-            eventos.sort(key=lambda e: (e["data"], ORDEM_EVENTO.get(e["tipo"], 9), e["criada_em"] or "", e["id"] or 0))
+            # no mesmo dia, pela hora (as parciais abrem o dia; o resultado provisório fecha); empate: lançada antes
+            eventos.sort(key=lambda e: (e["data"], e["criada_em"] or ("~" if e["tipo"] == "resultado" else ""),
+                                        ORDEM_EVENTO.get(e["tipo"], 9), e["id"] or 0))
         return {"vendedor": vendedor, "eventos": eventos, "acoes": {str(i): a for i, a in info_acoes.items()},
                 "em_vigor": sum(1 for a in info_acoes.values() if a["participa"] and a["situacao"] == "em_vigor"),
                 "pode_editar": usuario["papel"] == "admin", "data_ref": self.calc.cache.info.get("data_ref"),
@@ -1101,12 +1120,12 @@ class Gestao:
             if c["tipo"] == "objetivo":
                 if c["regiao"] not in self.regioes(k, ids):
                     raise NaoEncontrada("objetivo não encontrado")
-                aviso, andamento_ = None, None
+                aviso, andamento_, parcial = None, None, None
                 try:
-                    andamento_ = self._objetivo(k, c, ids, c["regiao"])
+                    andamento_, parcial = self._objetivo(k, c, ids, self._time_padrao(k, c["regiao"]))
                 except SemDados as e:
                     aviso = str(e)
-                return {"item": {**publica(c), "situacao": situacao(c, hoje), "prazo": prazo(c, hoje)},
+                return {"item": {**publica(c), "situacao": situacao(c, hoje), "prazo": prazo(c, hoje), "parcial": parcial},
                         "andamento": andamento_, "aviso": aviso, "pode_editar": usuario["papel"] == "admin",
                         "data_ref": k.data_ref.isoformat()}
             if not self._visivel(c, ids):
@@ -1149,8 +1168,9 @@ class Gestao:
                      **({k_: a["total"][k_] for k_ in ("realizado", "numerador", "denominador", "distintos")
                          if a and k_ in a["total"]})}
             item = {**publica(c), "situacao": estado["situacao"], "prazo": prazo(c, hoje),
-                    "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada}
-            item.pop("vendedores", None)
+                    "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada,
+                    "vendedores": [{"id": v["id"], "meta": v["meta"]} for v in c["vendedores"]
+                                   if ids is None or v["id"] in ids]}
             return {"item": item, "indicador": desc, "unidade": desc["unidade"], "linhas": linhas, "total": total,
                     "abertura": (a or {}).get("abertura"), "produtos": (a or {}).get("produtos"),
                     "calendarios": (a or {}).get("calendarios"), "avisos": (a or {}).get("avisos", []),

@@ -1,261 +1,191 @@
-// Página Gestão: campanhas de vendas num quadro (kanban), como no Bitrix. Cada card é uma campanha; arrastar muda a
-// coluna (Planejada, Em andamento, Concluída) e, quando as datas dizem que ela já devia ter mudado, o card sugere.
-// Clicar num card mostra embaixo o andamento de cada vendedor. A conta é toda no servidor (bi/indicadores.py, os
-// mesmos números que o Assistente dá), que manda junto o descritor do indicador (nome, formato, como ler a meta):
-// a página só formata. Criar e editar é numa janela; o rascunho que o Assistente monta chega por
-// #/gestao?rascunho=<id> e abre a janela preenchida. Cada pessoa vê as campanhas que criou (o administrador, todas).
-import { api, esc, fmt, icone, chipStatus, corStatus, STATUS, animarEntradas, ligarTooltips, linhaTT, toast } from "./util.js";
-import { multiSelecao } from "./multiselecao.js";
+// Página Gestão ("Gestão da equipe"), separada por região (ES e BA; o Edir é da BA). No topo, os objetivos do
+// período da região; abaixo, as ações (com o tempo que falta e, nas encerradas, quantos ficaram no alvo) e um
+// quadrado por vendedor do acesso, com o % da meta de faturamento do mês e uma etiqueta por ação. Clicar no
+// vendedor abre o histórico interno dele (as ações com a base e o alvo dele, as observações, a parcial de cada
+// semana e o resultado); clicar numa ação abre o andamento dela por vendedor.
+// Só o administrador lança ações (marcando vendedores no quadro: a mesma ação para todos), cria objetivos, escreve
+// observações, encerra e prorroga; quem tem a página acompanha os vendedores do acesso. A conta é toda no servidor
+// (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
+// por #/gestao?rascunho=<id> e abre o formulário já preenchido.
+import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
+import { ABERTURAS, ALVOS, definirCatalogo, deltaTexto, duracaoTexto, iniciais, periodoTexto, textoAlvo, textoBase, textoFiltros,
+         textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
+import { construtorIndicador } from "./construtorindicador.js";
 
-export const COLUNAS = [
-  { id: "planejada", nome: "Planejada", cor: "var(--s-ritmo)", vazio: "Campanhas que ainda vão começar" },
-  { id: "andamento", nome: "Em andamento", cor: "var(--laranja)", vazio: "Arraste para cá as que já começaram" },
-  { id: "concluida", nome: "Concluída", cor: "var(--ok-forte)", vazio: "As encerradas ficam aqui" },
-];
-// Os tipos de campanha (bi/indicadores.py TIPOS) e os blocos da Personalizada.
-export const TIPOS = {
-  positivacao: { nome: "Positivação", icone: "pessoas", cor: "var(--k-cli)", descricao: "clientes distintos com venda; dá para contar só os recuperados ou os novos" },
-  mix_medio: { nome: "Mix médio", icone: "etiqueta", cor: "var(--s-out)", descricao: "produtos da campanha levados por cliente positivado (média)" },
-  efetividade: { nome: "Efetividade", icone: "alvo", cor: "var(--s-ritmo)", descricao: "pedidos ÷ visitas esperadas, pelos dias de atendimento das áreas" },
-  frequencia: { nome: "Frequência", icone: "calendario", cor: "var(--laranja)", descricao: "semanas com compra por cliente positivado (média)" },
-  preco_medio: { nome: "Preço médio", icone: "moeda", cor: "var(--s-mus)", descricao: "preço de cada produto contra um preço-alvo" },
-  personalizada: { nome: "Personalizada", icone: "ajustes", cor: "var(--s-fat)", descricao: "monte: faturamento, volume, clientes ou mix, no total, por cliente ou crescimento" },
-};
-const MEDIDAS = {
-  faturamento: { nome: "Faturamento (R$)", icone: "moeda", cor: "var(--s-fat)", formas: ["total", "por_cliente", "crescimento"] },
-  volume: { nome: "Volume (quantidade)", icone: "caixa", cor: "var(--s-mus)", formas: ["total", "por_cliente", "crescimento"] },
-  clientes: { nome: "Clientes positivados", icone: "pessoas", cor: "var(--k-cli)", formas: ["total", "pct_carteira", "crescimento"] },
-  produtos: { nome: "Mix (produtos distintos)", icone: "etiqueta", cor: "var(--s-out)", formas: ["total"] },
-};
-const FORMAS = { total: "Total no período", por_cliente: "Por cliente positivado", pct_carteira: "% da carteira que comprou", crescimento: "Crescimento sobre outro período" };
-const COMPARAR = { periodo_anterior: "O período anterior", ano_anterior: "O mesmo período do ano anterior" };
-const BASES = { todos: "Todos os clientes", novos: "Só clientes novos (sem compra antes do início)", recuperados: "Só clientes recuperados",
-                nunca_compraram: "Quem nunca comprou os produtos da campanha", ja_compraram: "Quem já comprava os produtos da campanha" };
-const LEGADOS = { faturamento: ["faturamento", "total"], volume: ["volume", "total"], mix: ["produtos", "total"] };
-const ABERTURAS = { area: "Área comercial", segmento: "Segmento", produto: "Produto" };
-const FILTROS_PRODUTO = ["produtos", "linhas", "categorias", "grupos"];
-const FILTROS = [
-  { id: "produtos", rotulo: "Produtos", icone: "caixa", todos: "Todos os produtos", plural: "produtos" },
-  { id: "linhas", rotulo: "Linhas", icone: "etiqueta", todos: "Todas as linhas", plural: "linhas" },
-  { id: "categorias", rotulo: "Categorias", icone: "funil", todos: "Todas as categorias", plural: "categorias" },
-  { id: "grupos", rotulo: "Grupo", icone: "queijo", todos: "Mussarela e outras", plural: "grupos", semBusca: true },
-  { id: "ufs", rotulo: "UF do cliente", icone: "mapa", todos: "Todas as UFs", plural: "UFs", semBusca: true },
-  { id: "segmentos", rotulo: "Segmentos", icone: "pessoas", todos: "Todos os segmentos", plural: "segmentos" },
-  { id: "areas", rotulo: "Áreas comerciais", icone: "mapa", todos: "Todas as áreas", plural: "áreas" },
-];
-const NOME_GRUPO = { mussarela: "Mussarela", outras: "Outras linhas" };
-const EQUIPE = { ES: "ES", BA: "BA", EDIR: "Edir", OCULTO: "Outros" };
+const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
+const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
+const CLASSE = { ok: "Alvo batido", mid: "Melhorou sobre a base", bad: "Abaixo da base", sem_alvo: "Sem alvo para comparar", sem_dados: "Sem dados" };
+const SITUACAO = { planejada: "Planejada", em_vigor: "Em vigor", encerrada: "Encerrada" };
+const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
+const DESCARTAR = "Descartar o que foi preenchido nesta ação?";
 
 let ctx = null, raiz = null, ligado = false;
-const estado = { quadro: null, catalogo: null, erroCatalogo: null, sel: null, detalhe: null, todas: false,
-                 arquivadas: false, busca: "", pedido: 0, pedidoSel: 0, naPagina: false, abrir: null };
-let dlg = null, form = null, filtros = {}, precos = null;
+const estado = {
+  regiao: ler("mv-gestao-regiao", null), quadro: null, catalogo: null, erroCatalogo: null,
+  vista: "grade", vendedor: null, historico: null, acao: null, detalhe: null, abrir: null, // o que o corpo mostra
+  selecao: null, form: null, // lançando (ou editando) uma ação: os vendedores marcados e o formulário em linha
+  recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
+};
+let dlg = null, formObj = null;
 
 // ---------- apoio ----------
-// Ícone e cor do card: o do tipo ou, na Personalizada, o da medida.
-export function visual(ind) {
-  return (ind?.tipo === "personalizada" ? MEDIDAS[ind.medida] : TIPOS[ind?.tipo]) || { icone: "quadro", cor: "var(--acento)" };
-}
-
-// O descritor de uma campanha ou rascunho de antes dos tipos novos (faturamento, volume, mix, positivação).
-export function descritorLegado(r) {
-  const [medida, forma] = LEGADOS[r.metrica] || [];
-  if (medida) {
-    return { tipo: "personalizada", medida, forma, comportamento: "soma", meta_em_pct: false, sufixo: "", casas: 0, unidade: r.unidade || "",
-             nome: { faturamento: "Faturamento", volume: "Volume", produtos: "Mix de produtos" }[medida],
-             formato: { faturamento: "moeda", volume: "quantidade", produtos: "produtos" }[medida] };
-  }
-  return { tipo: r.metrica, nome: TIPOS[r.metrica]?.nome || r.metrica, formato: r.metrica === "positivacao" ? "clientes" : "razao",
-           comportamento: "soma", meta_em_pct: false, sufixo: "", casas: 0, unidade: "" };
-}
-
-// Valor no formato do indicador (curto: para cards e barras). Percentuais vêm em fração (0,8 = 80%).
-export function valorIndicador(ind, v, unidade = "", curto = false) {
-  if (v == null || isNaN(v)) return "—";
-  const suf = !curto && ind.sufixo ? ` ${ind.sufixo}` : "";
-  switch (ind.formato) {
-    case "moeda": return (ind.casas && !curto ? `R$ ${fmt.num(v, 2)}` : curto ? fmt.moedaC(v) : fmt.moeda(v)) + suf;
-    case "quantidade": {
-      const u = (unidade || ind.unidade || "").toLowerCase();
-      return `${fmt.num(v, Math.abs(v) >= 100 ? 0 : 1)}${u ? " " + u : ""}${suf}`;
-    }
-    case "pct": return fmt.pct(v);
-    case "razao": return `${fmt.num(v, ind.casas || 2)}${suf}`;
-    default: {
-      const n = Math.round(v);
-      const nome = ind.formato === "clientes" ? (n === 1 ? "cliente" : "clientes") : (n === 1 ? "produto" : "produtos");
-      return `${fmt.num(n)} ${nome}`;
-    }
-  }
-}
-
-// A meta como a pessoa digitou (percentual em pontos: 80 = 80%; crescimento: +10%).
-export function metaDigitada(ind, v, unidade = "") {
-  if (!ind.meta_em_pct) return valorIndicador(ind, v, unidade);
-  return ind.forma === "crescimento" ? `+${fmt.num(v, 1)}%` : `${fmt.num(v, 1)}%`;
-}
-
-// Contagens (pedidos, visitas, clientes) e, na venda por cliente e no preço médio, valores em R$.
-function valorParte(ind, v) {
-  if (v == null) return "—";
-  return ind.medida === "faturamento" || ind.tipo === "preco_medio" ? fmt.moeda(v) : fmt.num(v, 1);
-}
-
-const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Em médias e percentuais não há ritmo: a situação é contra a meta.
-const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
-const rotuloStatus = (ind, st) => (ind?.comportamento === "taxa" && ROTULO_TAXA[st]) || (STATUS[st] || STATUS.sem_meta).rotulo;
-const chipInd = (ind, st) => chipStatus(st, rotuloStatus(ind, st));
-
-export function periodoTexto(inicio, fim) {
-  return inicio === fim ? fmt.data(inicio) : `${fmt.data(inicio)} a ${fmt.data(fim)}`;
-}
-
-const hoje = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const parametros = () => new URLSearchParams(location.hash.split("?")[1] || "");
 const naGestao = () => /^#\/gestao(\?|$)/.test(location.hash);
 const plural = (n, um, varios) => `${fmt.num(n)} ${n === 1 ? um : varios}`;
+const corAvatar = (id) => CORES_AVATAR[Math.abs(Number(id) || 0) % CORES_AVATAR.length];
+const primeiroNome = (nome) => String(nome || "").split(" ")[0];
+const hora = (iso) => (iso ? iso.slice(11, 16) : "");
+const capitalizar = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+const rotuloStatus = (ind, st) => (ind?.comportamento === "taxa" && ROTULO_TAXA[st]) || (STATUS[st] || STATUS.sem_meta).rotulo;
 
-function nomeProduto(id, nomes) {
-  return nomes?.[id] || estado.catalogo?.produtos.find((p) => p.id === id)?.nome || `produto ${id}`;
+function hojeLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-
-// Os filtros em texto curto (cards, painel e rascunho do Assistente).
-export function textoFiltros(f, nomesProdutos) {
-  const partes = [];
-  const lista = (v, max = 3) => (v.length <= max ? v.join(", ") : `${v.slice(0, max).join(", ")} e mais ${v.length - max}`);
-  if (f.produtos?.length) partes.push(lista(f.produtos.map((p) => nomeProduto(p, nomesProdutos))));
-  if (f.linhas?.length) partes.push(`linha ${lista(f.linhas)}`);
-  if (f.categorias?.length) partes.push(lista(f.categorias));
-  if (f.grupos?.length) partes.push(f.grupos.map((g) => NOME_GRUPO[g] || g).join(" e "));
-  if (f.ufs?.length) partes.push(`clientes de ${lista(f.ufs, 5)}`);
-  if (f.segmentos?.length) partes.push(`segmento ${lista(f.segmentos)}`);
-  if (f.areas?.length) partes.push(`área ${lista(f.areas, 2)}`);
-  return partes;
+function somar(iso, dias) {
+  const d = new Date(`${iso}T12:00`);
+  d.setDate(d.getDate() + dias);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-
-// Quem conta e com o que compara, para os chips e o rascunho do Assistente.
-export function textoBase(ind) {
-  const partes = [];
-  if (ind.base && ind.base !== "todos" && ind.base_texto) partes.push(ind.base_texto);
-  if (ind.forma === "crescimento" && ind.comparar) partes.push(`contra ${COMPARAR[ind.comparar]?.toLowerCase() || ind.comparar}`);
-  return partes;
+function fimDoMes(iso) {
+  const [a, m] = iso.split("-").map(Number);
+  return `${a}-${String(m).padStart(2, "0")}-${String(new Date(a, m, 0).getDate()).padStart(2, "0")}`;
 }
+// O prazo em semanas (só os da lista); null = até uma data.
+function semanasDe(inicio, fim) {
+  const dias = Math.round((Date.parse(fim) - Date.parse(inicio)) / 864e5) + 1;
+  return dias % 7 === 0 && PRAZOS.includes(dias / 7) ? dias / 7 : null;
+}
+// "novembro" (o mês inteiro) ou "13/10 a 30/11".
+function periodoCurto(inicio, fim) {
+  const [, m, d] = inicio.split("-").map(Number);
+  if (d === 1 && fim === fimDoMes(inicio)) return MESES[m - 1];
+  return `${fmt.dataCurta(inicio)} a ${fmt.dataCurta(fim)}`;
+}
+// "nas 3 semanas antes", "no dia antes": o tamanho da janela da base.
+function janelaTexto(inicio, fim) {
+  const t = duracaoTexto(inicio, fim);
+  if (t === "1 semana") return "na semana antes";
+  if (t === "1 dia") return "no dia antes";
+  return `${t.endsWith("semanas") ? "nas" : "nos"} ${t} antes`;
+}
+function rotuloClasse(classe, caminho) {
+  if (classe === "mid" && caminho != null) return `${fmt.num(Math.max(0, Math.min(1, caminho)) * 100)}% do caminho até o alvo`;
+  return CLASSE[classe] || CLASSE.sem_dados;
+}
+const acaoDoQuadro = (id) => (estado.quadro?.acoes || []).find((a) => a.id === id);
 
 // ---------- montagem ----------
-export function gestaoTemAlteracoes() { return !!(dlg?.open && formMudou()); }
+export function gestaoTemAlteracoes() {
+  return !!((estado.form && formMudou()) || (dlg?.open && objetivoMudou()) || raiz?.querySelector("#g-nota")?.value.trim());
+}
 
 export function recarregarGestao() {
   if (!ctx) return;
   estado.catalogo = null;
   carregar(true);
+  if (estado.vista !== "grade") carregarVista({ silencioso: true });
 }
 
 export function montarGestao(container, contexto) {
   ctx = contexto;
-  raiz = container;
-  const q = parametros();
-  if (q.get("c")) estado.sel = Number(q.get("c")) || null;
-  container.innerHTML = `
+  estado.selecao = estado.form = null;
+  lerUrl();
+  container.innerHTML = `<div class="ge" id="g-raiz">
     <div class="controles entra" style="--i:0">
-      <div class="proj-titulo"><span class="proj-icone">${icone("quadro")}</span>
-        <div><b>Campanhas</b><small>arraste os cards entre as colunas · clique para ver o andamento</small></div></div>
+      <div class="proj-titulo"><span class="proj-icone">${icone("pessoas")}</span>
+        <div><b>Gestão da equipe</b><small id="g-hoje">&nbsp;</small></div></div>
       <div class="filtros">
-        <label class="campo sem-seta g-busca"><span class="ic-campo">${icone("busca")}</span>
-          <input type="search" id="g-busca" placeholder="Buscar campanha" aria-label="Buscar campanha" value="${esc(estado.busca)}"></label>
-        ${ctx.admin ? `<div class="seg-mini" role="group" aria-label="Campanhas de quem">
-          <button type="button" data-todas="0" class="${estado.todas ? "" : "ativo"}">Minhas</button>
-          <button type="button" data-todas="1" class="${estado.todas ? "ativo" : ""}">De todos</button></div>` : ""}
-        <button class="btn btn-limpar ${estado.arquivadas ? "ativo" : ""}" type="button" id="g-arquivadas" aria-pressed="${estado.arquivadas}">${icone("arquivo")}Arquivadas</button>
-        <button class="btn primario" type="button" id="g-nova">${icone("mais")}Nova campanha</button>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/config-gestao" title="Configurações da gestão: os vendedores que cada pessoa pode pôr nas campanhas">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        <div class="seg-mini ge-regioes" role="group" aria-label="Região" id="g-regioes"></div>
+        ${ctx.admin ? `<button class="btn primario" type="button" data-nova>${icone("mais")}Nova ação</button>
+          <a class="btn btn-config" href="#/config-gestao" title="Quem acompanha quais vendedores e os dias de atendimento das áreas">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="g-avisos"></div>
-    <div id="g-quadro"><div class="kanban">${COLUNAS.map(() => '<div class="esqueleto" style="height:320px"></div>').join("")}</div></div>
-    <div id="g-detalhe"></div>`;
-  let relogio = null;
-  container.querySelector("#g-busca").addEventListener("input", (e) => {
-    clearTimeout(relogio);
-    relogio = setTimeout(() => { estado.busca = e.target.value.trim(); desenharQuadro(); }, 150);
-  });
-  container.querySelectorAll("[data-todas]").forEach((b) => b.addEventListener("click", () => {
-    estado.todas = b.dataset.todas === "1";
-    container.querySelectorAll("[data-todas]").forEach((x) => x.classList.toggle("ativo", x === b));
-    carregar();
-  }));
-  container.querySelector("#g-arquivadas").addEventListener("click", (e) => {
-    estado.arquivadas = !estado.arquivadas;
-    e.currentTarget.classList.toggle("ativo", estado.arquivadas);
-    e.currentTarget.setAttribute("aria-pressed", estado.arquivadas);
-    carregar();
-  });
-  container.querySelector("#g-nova").addEventListener("click", () => abrirFormulario());
-  ligarQuadro(container.querySelector("#g-quadro"));
-  container.querySelector("#g-detalhe").addEventListener("click", aoClicarDetalhe);
-  container.querySelector("#g-detalhe").addEventListener("change", (e) => {
-    const s = e.target.closest("select[data-abrir]");
-    if (!s || !estado.sel) return;
-    estado.abrir = s.value; // "" = não abrir
-    selecionar(estado.sel);
-  });
+    <section class="ge-secao" id="g-objetivos"><div class="esqueleto" style="height:96px"></div></section>
+    <section class="ge-secao" id="g-acoes"><div class="esqueleto" style="height:118px"></div></section>
+    <section class="ge-secao" id="g-corpo"><div class="esqueleto" style="height:320px"></div></section>
+  </div>`;
+  raiz = container.querySelector("#g-raiz");
+  raiz.addEventListener("click", aoClicar);
+  raiz.addEventListener("change", aoMudarCampo);
+  raiz.addEventListener("input", aoDigitar);
+  raiz.addEventListener("keydown", aoTeclar);
   criarJanela();
   if (!ligado) {
     ligado = true;
     window.addEventListener("hashchange", aoMudarHash);
-    document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".camp-pop, [data-menu]")) fecharMenus(); });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharMenus(); });
   }
   estado.naPagina = true;
+  const rascunho = parametros().get("rascunho");
   carregar();
-  carregarCatalogo();
-  if (q.get("rascunho")) abrirRascunho(q.get("rascunho"));
+  if (estado.vista !== "grade") carregarVista();
+  if (rascunho) abrirRascunho(rascunho);
 }
 
-// Ao voltar para a página o quadro é lido de novo (uma campanha criada pelo Assistente aparece); ao sair, a janela
-// de campanha fecha (se tinha alterações, o roteador já perguntou antes).
-function aoMudarHash() {
-  if (!naGestao()) {
-    estado.naPagina = false;
-    if (dlg?.open) dlg.close();
-    fecharMenus();
-    return;
-  }
+function lerUrl() {
   const q = parametros();
-  if (!estado.naPagina) { estado.naPagina = true; carregar(true); }
-  if (q.get("rascunho")) abrirRascunho(q.get("rascunho"));
-  else if (q.get("c") && Number(q.get("c")) !== estado.sel) selecionar(Number(q.get("c")), { rolar: true });
+  if (q.get("r")) estado.regiao = q.get("r").toUpperCase();
+  const v = Number(q.get("v")) || null, a = Number(q.get("a") || q.get("c")) || null; // c: os links de antes
+  estado.vista = v ? "vendedor" : a ? "acao" : "grade";
+  estado.vendedor = v;
+  estado.acao = a;
 }
 
 function atualizarUrl() {
   if (!naGestao()) return;
-  history.replaceState(null, "", estado.sel ? `#/gestao?c=${estado.sel}` : "#/gestao");
+  const p = new URLSearchParams();
+  if (estado.regiao) p.set("r", estado.regiao);
+  if (estado.vista === "vendedor") p.set("v", estado.vendedor);
+  if (estado.vista === "acao") p.set("a", estado.acao);
+  history.replaceState(null, "", `#/gestao${p.toString() ? `?${p}` : ""}`);
+}
+
+// Ao voltar para a página o quadro é lido de novo (uma ação lançada pelo Assistente aparece); um link de dentro do
+// painel (#/gestao?a=12, ?rascunho=…) abre o que pede. Ao sair, a janela do objetivo fecha (se tinha alterações, o
+// roteador já perguntou).
+function aoMudarHash() {
+  if (!naGestao()) {
+    estado.naPagina = false;
+    if (dlg?.open) dlg.close();
+    return;
+  }
+  const q = parametros();
+  if (!estado.naPagina) { estado.naPagina = true; carregar(true); }
+  if (q.get("rascunho")) return abrirRascunho(q.get("rascunho"));
+  const antes = [estado.regiao, estado.vista, estado.vendedor, estado.acao].join();
+  lerUrl();
+  if ([estado.regiao, estado.vista, estado.vendedor, estado.acao].join() === antes) return;
+  carregar(true);
+  if (estado.vista !== "grade") carregarVista({ rolar: true });
 }
 
 // ---------- dados ----------
 async function carregar(silencioso = false) {
-  const alvo = raiz.querySelector("#g-quadro");
   const pedido = ++estado.pedido;
-  if (estado.quadro) alvo.classList.add("recarregando");
+  const blocos = ["#g-objetivos", "#g-acoes", "#g-grade"].map((s) => raiz.querySelector(s)).filter(Boolean);
+  if (estado.quadro) blocos.forEach((b) => b.classList.add("recarregando"));
   try {
-    const p = new URLSearchParams();
-    if (estado.todas) p.set("todas", "1");
-    if (estado.arquivadas) p.set("arquivadas", "1");
-    const d = await api(`/api/gestao?${p}`);
+    const d = await api(`/api/gestao${estado.regiao ? `?regiao=${encodeURIComponent(estado.regiao)}` : ""}`);
     if (pedido !== estado.pedido) return;
     estado.quadro = d;
+    if (d.regiao) { estado.regiao = d.regiao; guardar("mv-gestao-regiao", d.regiao); }
     if (d.data_ref) ctx.subtitulo({ data_ref: d.data_ref });
-    raiz.querySelector("#g-avisos").innerHTML = d.aviso ? `<div class="aviso">${icone("alerta")}<span>${esc(d.aviso)}</span></div>` : "";
-    desenharQuadro();
-    if (estado.sel && d.campanhas.some((c) => c.id === estado.sel)) selecionar(estado.sel, { silencioso: true });
-    else if (estado.sel) { estado.sel = null; estado.detalhe = null; desenharDetalhe(); atualizarUrl(); }
+    atualizarUrl();
+    desenharTudo();
   } catch (e) {
     if (pedido !== estado.pedido) return;
-    alvo.innerHTML = `<div class="cartao secao vazio">${icone("alerta")}<p>Não foi possível carregar as campanhas: ${esc(e.message)}</p></div>`;
+    if (e.status === 403 && estado.regiao) { // a região guardada não está mais no acesso: a primeira que estiver
+      estado.regiao = null;
+      guardar("mv-gestao-regiao", null);
+      return carregar(silencioso);
+    }
+    raiz.querySelector("#g-avisos").innerHTML = `<div class="cartao secao vazio">${icone("alerta")}<p>Não foi possível carregar a Gestão: ${esc(e.message)}</p></div>`;
+    ["#g-objetivos", "#g-acoes"].forEach((s) => { raiz.querySelector(s).innerHTML = ""; });
+    if (estado.vista === "grade") raiz.querySelector("#g-corpo").innerHTML = "";
     if (!silencioso) toast(e.message, "erro");
   } finally {
-    if (pedido === estado.pedido) alvo.classList.remove("recarregando");
+    if (pedido === estado.pedido) blocos.forEach((b) => b.classList.remove("recarregando"));
   }
 }
 
@@ -263,6 +193,7 @@ async function carregarCatalogo() {
   if (estado.catalogo) return estado.catalogo;
   try {
     estado.catalogo = await api("/api/gestao/catalogo");
+    definirCatalogo(estado.catalogo);
     estado.erroCatalogo = null;
   } catch (e) {
     estado.erroCatalogo = e.message;
@@ -270,290 +201,601 @@ async function carregarCatalogo() {
   return estado.catalogo;
 }
 
-async function selecionar(id, { rolar = false, silencioso = false } = {}) {
-  const mudou = estado.sel !== id;
-  if (mudou) estado.abrir = null; // a abertura escolhida vale para a campanha aberta
-  estado.sel = id;
-  atualizarUrl();
-  raiz.querySelectorAll(".camp-card").forEach((c) => c.classList.toggle("selecionada", Number(c.dataset.id) === id));
-  const pedido = ++estado.pedidoSel;
-  const alvo = raiz.querySelector("#g-detalhe");
-  if (mudou || !estado.detalhe) {
-    alvo.innerHTML = `<div class="secao"><div class="esqueleto" style="height:150px"></div><div class="esqueleto secao" style="height:340px"></div></div>`;
-  } else {
-    alvo.classList.add("recarregando");
-  }
-  if (rolar) alvo.scrollIntoView({ behavior: "smooth", block: "start" });
+// O histórico do vendedor ou o detalhe da ação (o corpo da página, no lugar dos quadrados).
+async function carregarVista({ rolar = false, silencioso = false } = {}) {
+  const el = raiz.querySelector("#g-corpo");
+  const pedido = ++estado.pedidoVista;
+  const mesma = estado.vista === "vendedor" ? estado.historico?.vendedor?.id === estado.vendedor : estado.detalhe?.item?.id === estado.acao;
+  if (!mesma) el.innerHTML = `<div class="esqueleto" style="height:360px"></div>`;
+  else el.classList.add("recarregando");
+  if (rolar) el.scrollIntoView({ behavior: "smooth", block: "start" });
   try {
-    const d = await api(`/api/gestao/campanha?id=${id}${estado.abrir != null ? `&abrir=${encodeURIComponent(estado.abrir)}` : ""}`);
-    if (pedido !== estado.pedidoSel) return;
-    estado.detalhe = d;
-    desenharDetalhe();
+    if (estado.vista === "vendedor") {
+      const d = await api(`/api/gestao/vendedor?id=${estado.vendedor}`);
+      if (pedido !== estado.pedidoVista) return;
+      estado.historico = d;
+    } else if (estado.vista === "acao") {
+      const d = await api(`/api/gestao/acao?id=${estado.acao}${estado.abrir != null ? `&abrir=${encodeURIComponent(estado.abrir)}` : ""}`);
+      if (pedido !== estado.pedidoVista) return;
+      estado.detalhe = d;
+    } else {
+      return;
+    }
+    desenharCorpo();
   } catch (e) {
-    if (pedido !== estado.pedidoSel) return;
-    if (e.status === 404) { estado.sel = null; estado.detalhe = null; atualizarUrl(); }
-    alvo.innerHTML = `<div class="cartao secao vazio">${icone("alerta")}<p>${esc(e.message)}</p></div>`;
+    if (pedido !== estado.pedidoVista) return;
+    el.innerHTML = `<div class="cartao secao vazio">${icone("alerta")}<p>${esc(e.message)}</p>
+      <button class="btn" type="button" data-voltar>${icone("voltar")}Voltar ao quadro</button></div>`;
     if (!silencioso) toast(e.message, "erro");
   } finally {
-    if (pedido === estado.pedidoSel) alvo.classList.remove("recarregando");
+    if (pedido === estado.pedidoVista) el.classList.remove("recarregando");
   }
 }
 
-function fecharDetalhe() {
-  estado.sel = null;
-  estado.detalhe = null;
-  ++estado.pedidoSel;
-  atualizarUrl();
-  raiz.querySelectorAll(".camp-card.selecionada").forEach((c) => c.classList.remove("selecionada"));
-  desenharDetalhe();
+async function recarregarTudo() {
+  await Promise.all([carregar(true), estado.vista !== "grade" ? carregarVista({ silencioso: true }) : null]);
 }
 
 // ---------- quadro ----------
-function visiveis() {
-  const termo = estado.busca.toLowerCase();
-  return (estado.quadro?.campanhas || []).filter((c) => !termo ||
-    `${c.nome} ${c.descricao} ${c.criada_por_nome} ${c.id}`.toLowerCase().includes(termo));
+function desenharTudo() {
+  const d = estado.quadro;
+  raiz.querySelector("#g-hoje").textContent = `Hoje, ${fmt.dataCurta(d.hoje)}${d.data_ref ? ` · dados até ${fmt.dataCurta(d.data_ref)}` : ""}`;
+  const regioes = raiz.querySelector("#g-regioes");
+  regioes.innerHTML = (d.regioes || []).map((r) => `<button type="button" data-regiao="${r}" class="${r === d.regiao ? "ativo" : ""}" aria-pressed="${r === d.regiao}">${r}</button>`).join("");
+  regioes.hidden = !(d.regioes || []).length;
+  raiz.querySelector("#g-avisos").innerHTML = d.aviso ? `<div class="aviso">${icone("alerta")}<span>${esc(d.aviso)}</span></div>` : "";
+  desenharObjetivos();
+  desenharAcoes();
+  desenharCorpo();
 }
 
-function desenharQuadro() {
-  const alvo = raiz.querySelector("#g-quadro");
-  if (!estado.quadro) return;
-  const lista = visiveis();
-  if (!estado.quadro.campanhas.length && !estado.busca) {
-    alvo.innerHTML = `<section class="cartao secao usu-vazio entra" style="--i:1">
-      <div class="usu-vazio-ic">${icone("quadro")}</div>
-      <h3>${estado.arquivadas ? "Nenhuma campanha arquivada" : "Nenhuma campanha ainda"}</h3>
-      <p>Uma campanha acompanha, num período, um indicador de cada vendedor: positivação (inclusive de clientes
-        recuperados), mix médio, efetividade, frequência, preço médio por produto ou um indicador montado por você
-        (faturamento, volume, clientes, crescimento…). Crie aqui ou peça ao Assistente, por exemplo:
-        <i>“crie uma campanha para recuperar padarias sem compra há 60 dias, equipe BA, em novembro”</i>.</p>
-      <button class="btn primario" type="button" data-nova>${icone("mais")}Nova campanha</button></section>`;
-    alvo.querySelector("[data-nova]").addEventListener("click", () => abrirFormulario());
-    return;
-  }
-  alvo.innerHTML = `<div class="kanban">${COLUNAS.map((col, i) => {
-    const cards = lista.filter((c) => c.status === col.id);
-    return `<section class="kanban-coluna entra" style="--i:${i + 1};--c:${col.cor}" data-status="${col.id}" aria-label="${esc(col.nome)}">
-      <header class="kanban-cab"><span class="ponto"></span><b>${esc(col.nome)}</b><span class="cont">${cards.length}</span></header>
-      <div class="kanban-cards" data-status="${col.id}">
-        ${cards.map(cartao).join("") || `<p class="kanban-vazio">${esc(estado.busca ? "Nenhuma campanha com esse nome" : col.vazio)}</p>`}
-      </div></section>`;
-  }).join("")}</div>`;
-  animarEntradas(alvo);
-  ligarTooltips(alvo);
+function desenharObjetivos() {
+  const d = estado.quadro, el = raiz.querySelector("#g-objetivos");
+  const lista = d.objetivos || [];
+  if (!d.regiao || (!lista.length && !ctx.admin)) { el.innerHTML = ""; el.hidden = true; return; }
+  el.hidden = false;
+  const novo = ctx.admin ? `<button type="button" class="ge-obj ge-obj-novo entra" style="--i:${lista.length + 1}" data-objetivo="novo">${icone("mais")}<span>Objetivo do período</span></button>` : "";
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("alvo")}Objetivos do período</h3>
+      ${lista.length ? `<span>${plural(lista.length, "objetivo", "objetivos")} da equipe ${d.regiao}</span>` : ""}</div>
+    <div class="ge-objetivos">${lista.map(cartaoObjetivo).join("")}${novo}</div>`;
+  animarEntradas(el);
 }
 
-function cartao(c) {
-  const ind = c.indicador || descritorLegado(c);
-  const m = visual(ind);
-  const r = c.resumo;
-  let progresso = "";
-  if (r && r.meta) {
-    progresso = `<div class="camp-barra" style="--c:${corStatus(r.status)}"><i data-largura="${Math.min(100, (r.pct || 0) * 100)}%"></i></div>
-      <div class="camp-num"><span><b>${fmt.pct(r.pct)}</b> da meta</span><span>${r.bateram} de ${r.com_meta} ${ind.comportamento === "taxa" ? "na meta" : "bateram"}</span></div>`;
-  } else if (r) {
-    progresso = `<div class="camp-num"><span>${esc(valorIndicador(ind, r.distintos ?? r.realizado, r.unidade, true))}</span><span>só ranking</span></div>`;
-  } else if (c.aviso) {
-    progresso = `<p class="camp-num fraco" title="${esc(c.aviso)}">${icone("info")}sem números ainda</p>`;
-  }
-  const sug = c.sugestao && !c.arquivada
-    ? `<button type="button" class="camp-sugestao" data-mover="${c.sugestao.status}" title="Mover para ${esc(COLUNAS.find((x) => x.id === c.sugestao.status).nome)}">${icone("alerta")}${esc(c.sugestao.texto)} · mover</button>` : "";
-  const autor = estado.todas && !c.minha ? `<small class="camp-autor">${icone("usuario")}${esc(c.criada_por_nome)}</small>` : "";
-  return `<article class="camp-card ${c.id === estado.sel ? "selecionada" : ""} ${c.arquivada ? "arquivada" : ""}" draggable="true"
-      data-id="${c.id}" tabindex="0" style="--c:${m.cor}" aria-label="Campanha ${esc(c.nome)}">
-    <div class="camp-topo">
-      <span class="chip camp-metrica">${icone(m.icone)}${esc(ind.nome)}</span>
-      ${c.arquivada ? `<span class="chip">${icone("arquivo")}arquivada</span>` : ""}
-      <button type="button" class="camp-menu-btn" data-menu aria-haspopup="menu" aria-label="Mais ações da campanha ${esc(c.nome)}">${icone("pontos")}</button>
-    </div>
-    <h4>${esc(c.nome)}</h4>
-    <p class="camp-info"><span>${icone("calendario")}${esc(periodoTexto(c.inicio, c.fim))}</span>
-      <span>${icone("pessoas")}${plural(c.vendedores.length, "vendedor", "vendedores")}</span>
-      ${c.premiacao ? `<span title="${esc(c.premiacao)}">${icone("trofeu")}prêmio</span>` : ""}</p>
-    ${progresso}${sug}${autor}
-  </article>`;
-}
-
-// Menu do card: mover para outra coluna (no celular não dá para arrastar), editar, arquivar e excluir.
-function abrirMenu(card) {
-  fecharMenus();
-  const c = estado.quadro.campanhas.find((x) => x.id === Number(card.dataset.id));
-  if (!c) return;
-  card.insertAdjacentHTML("beforeend", `<div class="camp-pop" role="menu">
-    ${COLUNAS.filter((col) => col.id !== c.status).map((col) => `<button type="button" role="menuitem" data-mover="${col.id}">${icone("seta")}Mover para ${esc(col.nome)}</button>`).join("")}
-    <button type="button" role="menuitem" data-editar>${icone("lapis")}Editar</button>
-    <button type="button" role="menuitem" data-arquivar="${c.arquivada ? "0" : "1"}">${icone("arquivo")}${c.arquivada ? "Tirar do arquivo" : "Arquivar"}</button>
-    <button type="button" role="menuitem" data-excluir class="perigo">${icone("lixeira")}Excluir</button>
-  </div>`);
-  card.classList.add("com-menu");
-  card.querySelector(".camp-pop button")?.focus();
-}
-
-function fecharMenus() {
-  raiz?.querySelectorAll(".camp-pop").forEach((p) => { p.closest(".camp-card")?.classList.remove("com-menu"); p.remove(); });
-}
-
-function ligarQuadro(alvo) {
-  alvo.addEventListener("click", (e) => {
-    const card = e.target.closest(".camp-card");
-    if (!card) return;
-    const id = Number(card.dataset.id);
-    const botao = e.target.closest("button");
-    if (botao?.hasAttribute("data-menu")) { e.stopPropagation(); return card.querySelector(".camp-pop") ? fecharMenus() : abrirMenu(card); }
-    if (botao?.dataset.mover) { fecharMenus(); return mover(id, botao.dataset.mover, null); }
-    if (botao?.hasAttribute("data-editar")) { fecharMenus(); return editar(id); }
-    if (botao?.dataset.arquivar) { fecharMenus(); return arquivar(id, botao.dataset.arquivar === "1"); }
-    if (botao?.hasAttribute("data-excluir")) { fecharMenus(); return excluir(id); }
-    if (e.target.closest(".camp-pop")) return;
-    selecionar(id, { rolar: true });
-  });
-  alvo.addEventListener("keydown", (e) => {
-    const card = e.target.closest(".camp-card");
-    if (!card || e.target !== card) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selecionar(Number(card.dataset.id), { rolar: true }); }
-  });
-  // Arrastar (mouse): o lugar onde o card vai cair aparece tracejado; soltar grava a coluna e a posição.
-  let arrastando = null;
-  const lugar = document.createElement("div");
-  lugar.className = "camp-lugar";
-  alvo.addEventListener("dragstart", (e) => {
-    const card = e.target.closest?.(".camp-card");
-    if (!card) return;
-    fecharMenus();
-    arrastando = card;
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", card.dataset.id);
-    lugar.style.height = `${card.offsetHeight}px`;
-    requestAnimationFrame(() => card.classList.add("arrastando"));
-  });
-  const listaDe = (e) => e.target.closest?.(".kanban-coluna")?.querySelector(".kanban-cards");
-  alvo.addEventListener("dragover", (e) => {
-    const lista = listaDe(e);
-    if (!arrastando || !lista) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    alvo.querySelectorAll(".kanban-coluna").forEach((c) => c.classList.toggle("alvo", c.contains(lista)));
-    const depois = [...lista.querySelectorAll(".camp-card:not(.arrastando)")]
-      .find((c) => e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
-    lista.querySelector(".kanban-vazio")?.setAttribute("hidden", "");
-    if (depois) lista.insertBefore(lugar, depois);
-    else lista.appendChild(lugar);
-  });
-  alvo.addEventListener("drop", (e) => {
-    const lista = listaDe(e);
-    if (!arrastando || !lista) return;
-    e.preventDefault();
-    const proximo = lugar.nextElementSibling?.closest(".camp-card");
-    const id = Number(arrastando.dataset.id);
-    lista.insertBefore(arrastando, lugar);
-    limparArraste();
-    mover(id, lista.dataset.status, proximo ? Number(proximo.dataset.id) : null);
-  });
-  alvo.addEventListener("dragend", limparArraste);
-  function limparArraste() {
-    arrastando?.classList.remove("arrastando");
-    arrastando = null;
-    lugar.remove();
-    alvo.querySelectorAll(".kanban-coluna.alvo").forEach((c) => c.classList.remove("alvo"));
-    alvo.querySelectorAll(".kanban-vazio[hidden]").forEach((v) => v.removeAttribute("hidden"));
-  }
-}
-
-async function mover(id, status, antesDe) {
-  const c = estado.quadro.campanhas.find((x) => x.id === id);
-  try {
-    await api("/api/gestao/campanha/mover", { json: { id, status, antes_de: antesDe } });
-    if (c && c.status !== status) toast(`${c.nome}: ${COLUNAS.find((x) => x.id === status).nome}`);
-  } catch (e) {
-    toast(e.message, "erro");
-  }
-  await carregar(true);
-}
-
-async function arquivar(id, arquivada) {
-  try {
-    await api("/api/gestao/campanha/arquivar", { json: { id, arquivada } });
-    toast(arquivada ? "Campanha arquivada" : "Campanha de volta ao quadro");
-    if (arquivada && estado.sel === id && !estado.arquivadas) fecharDetalhe();
-  } catch (e) {
-    toast(e.message, "erro");
-  }
-  await carregar(true);
-}
-
-async function excluir(id) {
-  const c = estado.quadro?.campanhas.find((x) => x.id === id) || estado.detalhe?.campanha;
-  if (!confirm(`Excluir a campanha “${c?.nome || id}”? Não dá para desfazer (para só tirar do quadro, use Arquivar).`)) return;
-  try {
-    await api("/api/gestao/campanha/excluir", { json: { id } });
-    toast("Campanha excluída");
-    if (estado.sel === id) fecharDetalhe();
-  } catch (e) {
-    toast(e.message, "erro");
-  }
-  await carregar(true);
-}
-
-// ---------- andamento ----------
-function desenharDetalhe() {
-  const alvo = raiz.querySelector("#g-detalhe");
-  const d = estado.detalhe;
-  if (!d) { alvo.innerHTML = ""; return; }
-  const c = d.campanha, a = d.andamento;
-  const ind = a?.indicador || c.indicador || descritorLegado(c), m = visual(ind);
-  const filtrosTxt = [...textoFiltros(c.filtros), ...textoBase(ind)];
-  const pergunta = `Como está o andamento dos vendedores na campanha #${c.id} “${c.nome}”?`;
-  const cab = `
-  <section class="cartao secao camp-detalhe entra" style="--i:0;--c:${m.cor}">
-    <div class="cartao-cab">
-      <div>
-        <h2>${icone(m.icone)}${esc(c.nome)}</h2>
-        <p class="sub">${esc(periodoTexto(c.inicio, c.fim))} · ${esc(ind.nome)}: ${esc(ind.descricao || "")} · criada por ${esc(c.criada_por_nome)}</p>
-      </div>
-      <div class="camp-acoes">
-        ${ctx.assistente ? `<a class="btn" href="#/assistente?q=${encodeURIComponent(pergunta)}" title="Abre o Assistente com a pergunta pronta">${icone("conversa")}<span>Perguntar ao Assistente</span></a>` : ""}
-        <button class="btn" type="button" data-editar>${icone("lapis")}<span>Editar</span></button>
-        <button class="btn icone" type="button" data-arquivar="${c.arquivada ? "0" : "1"}" title="${c.arquivada ? "Tirar do arquivo" : "Arquivar"}" aria-label="${c.arquivada ? "Tirar do arquivo" : "Arquivar"}">${icone("arquivo")}</button>
-        <button class="btn icone perigo" type="button" data-excluir title="Excluir" aria-label="Excluir a campanha">${icone("lixeira")}</button>
-        <button class="btn icone" type="button" data-fechar title="Fechar" aria-label="Fechar o andamento">${icone("x")}</button>
-      </div>
-    </div>
-    <div class="camp-chips">
-      <span class="chip" style="--c:${COLUNAS.find((x) => x.id === c.status).cor}"><span class="ponto-coluna"></span>${esc(COLUNAS.find((x) => x.id === c.status).nome)}</span>
-      ${filtrosTxt.length ? filtrosTxt.map((t) => `<span class="chip">${icone("funil")}${esc(t)}</span>`).join("") : `<span class="chip">${icone("funil")}todos os produtos e clientes</span>`}
-      ${c.premiacao ? `<span class="chip laranja">${icone("trofeu")}${esc(c.premiacao)}</span>` : ""}
-    </div>
-    ${c.descricao ? `<p class="camp-descricao">${esc(c.descricao)}</p>` : ""}
-    ${c.sugestao && !c.arquivada ? `<p class="usu-nota aviso-nota camp-sugestao-linha">${icone("alerta")}<span>${esc(c.sugestao.texto)}: a campanha está em
-      <b>${esc(COLUNAS.find((x) => x.id === c.status).nome)}</b>.</span>
-      <button class="btn" type="button" data-mover="${c.sugestao.status}">${icone("seta")}Mover para ${esc(COLUNAS.find((x) => x.id === c.sugestao.status).nome)}</button></p>` : ""}
-  </section>`;
+function cartaoObjetivo(o, i) {
+  const a = o.andamento, ind = a?.indicador || o.indicador, u = a?.unidade || "";
+  let corpo;
   if (!a) {
-    alvo.innerHTML = cab + `<div class="aviso">${icone("alerta")}<span>${esc(d.aviso || "Sem dados de vendas para calcular o andamento.")}</span></div>`;
-    return;
+    corpo = `<span class="ge-obj-num fraco">${esc(o.aviso || "sem números ainda")}</span>`;
+  } else if (a.realizado == null) {
+    corpo = `<span class="ge-obj-num fraco">${o.situacao === "planejada" ? "ainda não começou" : "sem dados no período"}</span>`;
+  } else {
+    const semBarra = o.parcial && ind.comportamento === "soma"; // só parte da equipe: a barra contra o alvo de todos enganaria
+    const pct = Math.max(0, Math.min(1, a.pct || 0));
+    corpo = `${semBarra ? "" : `<span class="ge-obj-barra"><i style="--c:${corStatus(a.status)}" data-largura="${pct * 100}%"></i></span>`}
+      <span class="ge-obj-num">${esc(textoProgresso(ind, a.realizado, a.meta, u))}${o.situacao === "planejada" ? " · ainda não começou" : ""}</span>`;
   }
-  const avisos = (a.avisos || []).map((t) => `<div class="aviso">${icone("alerta")}<span>${esc(t)}</span></div>`).join("");
-  const preco = ind.tipo === "preco_medio";
-  alvo.innerHTML = cab + avisos + kpisAndamento(c, a) + rankingAndamento(c, a)
-    + (preco ? gradePrecos(c, a) : tabelaAndamento(c, a)) + aberturaAndamento(a);
-  animarEntradas(alvo);
-  ligarTooltips(alvo);
+  const parcial = o.parcial ? `<span class="ge-obj-nota">conta só os seus ${o.parcial.vendedores} de ${o.parcial.total} vendedores</span>` : "";
+  const cab = `<span class="ge-obj-cab"><b>${icone("alvo")}${esc(o.nome)}</b><small>${esc(periodoCurto(o.inicio, o.fim))}</small></span>`;
+  return ctx.admin
+    ? `<button type="button" class="ge-obj entra" style="--i:${i + 1}" data-objetivo="${o.id}" title="Editar o objetivo">${cab}${corpo}${parcial}</button>`
+    : `<div class="ge-obj entra" style="--i:${i + 1}">${cab}${corpo}${parcial}</div>`;
 }
 
-// A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos, sem meta).
-function aberturaAndamento(a) {
-  const ind = a.indicador;
-  if (!ind.aberturas?.length || a.situacao === "futuro") return "";
-  const ab = a.abertura;
+function desenharAcoes() {
+  const d = estado.quadro, el = raiz.querySelector("#g-acoes");
+  if (!d?.regiao) { el.innerHTML = ""; return; }
+  const acoes = d.acoes || [];
+  const vigor = acoes.filter((a) => a.situacao === "em_vigor").length;
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("bandeira")}Ações da região ${d.regiao}</h3><span class="ge-contagem">${fmt.num(vigor)} em vigor</span></div>
+    ${acoes.length ? `<div class="ge-acoes">${acoes.map(cartaoAcao).join("")}</div>`
+      : `<p class="ge-vazio">${icone("info")}<span>Nenhuma ação lançada nesta região${ctx.admin ? ". Use Nova ação para marcar os vendedores e lançar." : "."}</span></p>`}`;
+  animarEntradas(el);
+}
+
+function cartaoAcao(a, i) {
+  const enc = a.situacao === "encerrada", plan = a.situacao === "planejada", pz = a.prazo;
+  const acaba = !enc && !plan && pz.faltam <= 5;
+  const largura = enc ? 100 : plan ? 0 : pz.decorrido * 100;
+  const texto = enc ? "Encerrada, resultado no histórico de cada um"
+    : plan ? `Começa em ${pz.comeca_em === 1 ? "1 dia" : `${pz.comeca_em} dias`}`
+    : pz.faltam === 0 ? "Termina hoje" : acaba ? `Termina em ${pz.faltam === 1 ? "1 dia" : `${pz.faltam} dias`}` : `Faltam ${pz.faltam} dias`;
+  const extras = [a.provisorio ? "provisório" : "", a.base_pendente ? "base aguardando os dados" : ""].filter(Boolean).join(" · ");
+  const noAlvo = enc && a.com_resultado ? `<span class="ge-no-alvo ${a.no_alvo ? "ok" : "zero"}">${a.no_alvo} de ${a.vendedores} no alvo</span>` : "";
+  const classe = enc ? "encerrada" : plan ? "planejada" : acaba ? "acaba" : "em-vigor";
+  return `<button type="button" class="ge-acao ${classe} ${estado.vista === "acao" && estado.acao === a.id ? "atual" : ""} entra" style="--i:${i + 1}" data-acao="${a.id}">
+    <span class="ge-acao-cab"><b>${esc(a.nome)}</b>${noAlvo}</span>
+    <span class="ge-acao-info">${plural(a.vendedores, "vendedor", "vendedores")}, até ${fmt.dataCurta(a.fim)}</span>
+    <span class="ge-tempo"><i data-largura="${largura}%"></i></span>
+    <span class="ge-prazo">${esc(texto)}${extras ? `<small> · ${esc(extras)}</small>` : ""}</span>
+  </button>`;
+}
+
+function desenharCorpo() {
+  const el = raiz.querySelector("#g-corpo");
+  if (estado.vista === "vendedor") { desenharHistorico(); return; }
+  if (estado.vista === "acao") { desenharDetalhe(); return; }
+  if (!estado.quadro?.regiao) { el.innerHTML = ""; return; }
+  if (!el.querySelector("#g-grade")) el.innerHTML = `<div id="g-form"></div><div id="g-grade"></div>`;
+  desenharGrade();
+}
+
+function desenharGrade() {
+  const el = raiz.querySelector("#g-grade");
+  if (!el) return;
+  const d = estado.quadro, vend = d.vendedores || [];
+  const mes = d.mes_faturamento ? `% da meta de faturamento de ${MESES[d.mes_faturamento.mes - 1]}` : "";
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${mes ? ` · ${mes}` : ""}</span></div>
+    ${vend.length ? `<div class="ge-grade ${estado.selecao ? "selecionando" : ""}">${vend.map(quadrado).join("")}</div>`
+      : `<p class="ge-vazio">${icone("info")}<span>Nenhum vendedor da região no seu acesso.</span></p>`}`;
+}
+
+function quadrado(v) {
+  const sel = estado.selecao, marcado = !!sel?.has(v.id);
+  const fat = v.faturamento_pct == null ? "Sem meta de faturamento no mês" : `Faturamento ${fmt.pct(v.faturamento_pct, 0)} da meta`;
+  const pills = v.acoes.map(etiqueta).join("") || `<span class="ge-sem-acao">Sem ação em vigor</span>`;
+  return `<button type="button" class="ge-vend ${marcado ? "marcado" : ""}" data-vendedor="${v.id}" ${sel ? `role="checkbox" aria-checked="${marcado}"` : ""} aria-label="${esc(v.nome)}">
+    <span class="ge-vend-cab"><span class="ge-avatar" style="--c:${corAvatar(v.id)}">${esc(iniciais(v.nome))}</span><b>${esc(v.nome)}</b>
+      ${sel ? `<span class="ge-caixa">${marcado ? icone("visto") : ""}</span>` : ""}</span>
+    <span class="ge-vend-fat">${esc(fat)}${v.inativo ? " · inativo" : ""}</span>
+    <span class="ge-pills">${pills}</span></button>`;
+}
+
+function etiqueta(e) {
+  const pop = estado.recem === e.id ? " pop" : "";
+  if (e.situacao === "em_vigor") return `<span class="ge-pill vigor${pop}" title="Em vigor até ${fmt.dataCurta(e.fim)}">${icone("bandeira")}${esc(e.rotulo)}</span>`;
+  if (e.situacao === "planejada") return `<span class="ge-pill planejada${pop}" title="Ainda não começou">${icone("calendario")}${esc(e.rotulo)}</span>`;
+  const a = acaoDoQuadro(e.id);
+  const delta = a && e.delta != null ? deltaTexto(a.indicador, e.delta, a.unidade) : "";
+  const cls = ["ok", "mid", "bad"].includes(e.classe) ? e.classe : "";
+  return `<span class="ge-pill ${cls}${pop}" title="${esc(rotuloClasse(e.classe))}${e.provisorio ? " (provisório)" : ""}">${esc(e.rotulo)}${delta ? ` ${esc(delta)}` : ""}</span>`;
+}
+
+// ---------- ação em lote: marcar os vendedores e lançar ----------
+function padraoAcao() {
+  return { nome: "", rotulo: "", descricao: "", inicio: estado.quadro?.hoje || hojeLocal(), fim: null, semanas: 3,
+           metrica: "mix_medio", parametros: {}, filtros: {}, alvo_tipo: "mais", meta_padrao: "", metas_produto: [] };
+}
+
+function formMudou() {
+  const f = estado.form;
+  return !!(f && f.orig && JSON.stringify(coletarForm()) !== f.orig);
+}
+
+// Antes de trocar o que o corpo mostra: confirma se há uma ação preenchida e sai do modo de seleção.
+function podeSairDoForm() {
+  if (!estado.form) return true;
+  if (formMudou() && !confirm(DESCARTAR)) return false;
+  estado.form = estado.selecao = null;
+  return true;
+}
+
+async function entrarSelecao(ids = [], dados = null, extra = {}) {
+  if (!ctx.admin || !estado.quadro?.regiao) return;
+  if (estado.form && formMudou() && !confirm(DESCARTAR)) return;
+  estado.selecao = new Set(ids);
+  estado.form = { id: extra.id || null, rascunho: extra.rascunho || null, nomes: extra.nomes || {}, construtor: null, orig: null,
+                  dados: { ...padraoAcao(), ...(dados || {}) },
+                  metas: new Map((dados?.vendedores || []).map((v) => [v.id, v.meta ?? null])) };
+  if (estado.vista !== "grade") {
+    estado.vista = "grade";
+    estado.historico = estado.detalhe = null;
+    atualizarUrl();
+    raiz.querySelector("#g-corpo").innerHTML = "";
+    desenharAcoes();
+  }
+  desenharCorpo();
+  await montarForm();
+  raiz.querySelector("#g-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function sairSelecao() {
+  if (estado.form && formMudou() && !confirm(DESCARTAR)) return;
+  estado.form = estado.selecao = null;
+  const el = raiz.querySelector("#g-form");
+  if (el) el.innerHTML = "";
+  desenharGrade();
+}
+
+function alternar(id) {
+  const s = estado.selecao;
+  if (s.has(id)) s.delete(id); else s.add(id);
+  const card = raiz.querySelector(`.ge-vend[data-vendedor="${id}"]`);
+  if (card) {
+    const m = s.has(id);
+    card.classList.toggle("marcado", m);
+    card.setAttribute("aria-checked", m);
+    card.querySelector(".ge-caixa").innerHTML = m ? icone("visto") : "";
+  }
+  contarSelecao();
+}
+
+function contarSelecao() {
+  const n = estado.selecao?.size || 0, f = estado.form;
+  const t = raiz.querySelector("#gf-titulo"), b = raiz.querySelector("[data-lancar] span");
+  if (t) t.textContent = f?.id ? `Editar ação · ${plural(n, "vendedor", "vendedores")}` : `Nova ação para ${plural(n, "vendedor", "vendedores")}`;
+  if (b) b.textContent = f?.id ? "Salvar alterações" : `Lançar para ${n}`;
+  if (n) erroForm("");
+}
+
+async function montarForm() {
+  const alvo = raiz.querySelector("#g-form"), f = estado.form;
+  if (!alvo || !f) return;
+  const d = f.dados;
+  f.semanas = d.fim ? semanasDe(d.inicio, d.fim) : d.semanas;
+  alvo.innerHTML = `<section class="cartao ge-form entra" style="--i:0">
+    <div class="ge-form-cab"><div><b id="gf-titulo"></b>
+        <span class="fraco">${f.rascunho ? "Rascunho do Assistente: confira e lance. " : ""}Marque os vendedores no quadro abaixo.</span></div>
+      <span class="ge-pill">região ${esc(estado.quadro.regiao)}</span></div>
+    <div class="ge-campos">
+      <label class="campo-form"><span>Ação</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Aumentar mix médio" autocomplete="off"></label>
+      <div class="ge-indicador" id="gf-indicador"><div class="esqueleto" style="height:66px"></div></div>
+      <label class="campo-form"><span>Prazo</span><span class="campo"><select name="prazo" style="padding-left:14px"></select></span></label>
+      <div class="campo-form ge-alvo"><span>Alvo <small id="gf-unidade"></small></span>
+        <span class="ge-alvo-linha"><span class="campo"><select name="alvo_tipo" aria-label="Tipo de alvo" style="padding-left:14px">${Object.entries(ALVOS)
+          .map(([k, n]) => `<option value="${k}" ${k === (d.alvo_tipo || "mais") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></span>
+          <input name="meta" type="number" min="0" step="any" inputmode="decimal" value="${d.meta_padrao ?? ""}" placeholder="quanto" aria-label="Número do alvo"></span>
+        <small class="ge-previa" id="gf-previa"></small></div>
+    </div>
+    <div id="gf-precos"></div>
+    <details class="ge-mais"><summary>${icone("ajustes")}Mais opções: início, etiqueta, descrição, produtos e clientes que contam</summary>
+      <div class="ge-campos">
+        <label class="campo-form"><span>Início</span><input type="date" name="inicio" value="${esc(d.inicio)}"></label>
+        <label class="campo-form" id="gf-fim-bloco" ${f.semanas ? "hidden" : ""}><span>Fim</span><input type="date" name="fim" value="${esc(d.fim || somar(d.inicio, 20))}"></label>
+        <label class="campo-form"><span>Etiqueta no quadro <small>(até 20 letras)</small></span><input name="rotulo" maxlength="20" value="${esc(d.rotulo || "")}" autocomplete="off"></label>
+        <label class="campo-form ge-largo"><span>Descrição <small>(opcional)</small></span><textarea name="descricao" rows="2" maxlength="2000" placeholder="Objetivo e combinados da ação">${esc(d.descricao || "")}</textarea></label>
+      </div>
+      <div id="gf-filtros"></div>
+    </details>
+    <p class="form-erro" role="alert" hidden></p>
+    <div class="ge-form-acoes">
+      <button class="btn" type="button" data-cancelar-form>Cancelar</button>
+      <button class="btn primario" type="button" data-lancar>${icone(f.id ? "disco" : "bandeira")}<span></span></button>
+    </div>
+  </section>`;
+  desenharPrazos(f.semanas ? String(f.semanas) : "data");
+  contarSelecao();
+  animarEntradas(alvo);
+  const cat = await carregarCatalogo();
+  if (estado.form !== f) return; // cancelou ou abriu outra enquanto o catálogo vinha
+  if (!cat) {
+    alvo.querySelector("#gf-indicador").innerHTML = `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Não foi possível carregar produtos e clientes: ${esc(estado.erroCatalogo)}</span></p>`;
+    return;
+  }
+  f.construtor = construtorIndicador(alvo.querySelector("#gf-indicador"), {
+    catalogo: cat, inicial: d, nomes: f.nomes, filtrosEm: alvo.querySelector("#gf-filtros"), precosEm: alvo.querySelector("#gf-precos"),
+    aoMudar: atualizarAlvo,
+  });
+  if (f.construtor.temFiltros() || d.descricao || d.rotulo || !f.semanas) alvo.querySelector(".ge-mais").open = true;
+  atualizarAlvo();
+  f.orig = JSON.stringify(coletarForm());
+}
+
+function desenharPrazos(valor) {
+  const form = raiz.querySelector("#g-form"), el = form?.querySelector('[name="prazo"]');
+  if (!el) return;
+  const atual = valor || el.value;
+  const inicio = form.querySelector('[name="inicio"]').value || estado.quadro.hoje;
+  el.innerHTML = PRAZOS.map((n) => `<option value="${n}">${n} semana${n === 1 ? "" : "s"}, até ${fmt.dataCurta(somar(inicio, 7 * n - 1))}</option>`).join("")
+    + `<option value="data">Até uma data (em Mais opções)</option>`;
+  el.value = atual;
+}
+
+function atualizarAlvo() {
+  const f = estado.form, form = raiz.querySelector("#g-form");
+  if (!f?.construtor || !form) return;
+  const pr = f.construtor.preset(), desc = f.construtor.descritor();
+  const preco = pr.metrica === "preco_medio";
+  const tipo = form.querySelector('[name="alvo_tipo"]').value;
+  form.querySelector(".ge-alvo-linha").hidden = preco;
+  form.querySelector("#gf-unidade").textContent = preco ? "" : tipo === "pct" ? "(% sobre a base)"
+    : `(${f.construtor.unidadeAlvo() || "valor"}${tipo === "mais" && pr.pct ? ", em pontos" : ""})`;
+  const meta = form.querySelector('[name="meta"]').value;
+  form.querySelector("#gf-previa").textContent = preco ? "No preço-alvo de cada produto (100%)."
+    : meta !== "" ? `${capitalizar(textoAlvo(desc, tipo, Number(meta), desc.unidade))}.` : "";
+  form.querySelector('[name="rotulo"]').placeholder = pr.rotulo;
+}
+
+function coletarForm() {
+  const f = estado.form, form = raiz.querySelector("#g-form");
+  const val = (n) => form?.querySelector(`[name="${n}"]`)?.value ?? "";
+  const prazo = val("prazo");
+  const ind = f.construtor ? f.construtor.valor()
+    : { metrica: f.dados.metrica, parametros: f.dados.parametros, filtros: f.dados.filtros, metas_produto: f.dados.metas_produto || [] };
+  const preco = ind.metrica === "preco_medio";
+  return {
+    nome: val("nome").trim(), rotulo: val("rotulo").trim(), descricao: val("descricao").trim(), regiao: estado.quadro?.regiao,
+    inicio: val("inicio"), ...(prazo === "data" ? { fim: val("fim") } : { semanas: Number(prazo) }), ...ind,
+    alvo_tipo: preco ? "fixo" : val("alvo_tipo"), meta_padrao: preco ? 100 : (val("meta") === "" ? null : Number(val("meta"))),
+    vendedores: [...(estado.selecao || [])].map((id) => ({ id, meta: f.metas.get(id) ?? null })),
+  };
+}
+
+function erroForm(msg) {
+  const el = raiz.querySelector("#g-form .form-erro");
+  if (!el) return;
+  el.textContent = msg ? capitalizar(msg) : "";
+  el.hidden = !msg;
+  if (msg) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+async function lancar() {
+  const f = estado.form;
+  if (!f) return;
+  if (!f.construtor) return erroForm("espere carregar os produtos e os clientes");
+  const dados = coletarForm();
+  if (!dados.vendedores.length) return erroForm("marque ao menos um vendedor");
+  if (!dados.nome) return erroForm("dê um nome à ação");
+  if (dados.metrica === "preco_medio") {
+    if (!dados.metas_produto.length) return erroForm("escolha os produtos do preço médio");
+    if (dados.metas_produto.some((p) => !(p.meta > 0))) return erroForm("dê o preço-alvo de cada produto (R$ por unidade)");
+  } else if (!(dados.meta_padrao > 0)) {
+    return erroForm("dê o alvo");
+  }
+  const btn = raiz.querySelector("[data-lancar]");
+  btn.disabled = true;
+  erroForm("");
+  try {
+    const r = f.id
+      ? await api("/api/gestao/acao/editar", { json: { id: f.id, acao: dados } })
+      : await api("/api/gestao/acoes", { json: { acao: dados, rascunho: f.rascunho } });
+    const id = f.id || r.id;
+    toast(f.id ? "Ação salva" : r.ja_existia ? "Este rascunho já tinha virado ação" : `Ação lançada para ${plural(dados.vendedores.length, "vendedor", "vendedores")}`);
+    estado.form = estado.selecao = null;
+    raiz.querySelector("#g-form").innerHTML = "";
+    estado.recem = id;
+    setTimeout(() => { if (estado.recem === id) estado.recem = null; }, 1600);
+    await carregar(true);
+  } catch (e) {
+    erroForm(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- histórico interno do vendedor ----------
+async function abrirVendedor(id) {
+  if (estado.selecao && estado.vista === "grade") return alternar(id);
+  if (!podeSairDoForm()) return;
+  estado.vista = "vendedor";
+  estado.vendedor = id;
+  estado.historico = null;
+  atualizarUrl();
+  desenharAcoes();
+  carregarVista({ rolar: true });
+}
+
+function voltarGrade() {
+  if (raiz.querySelector("#g-nota")?.value.trim() && !confirm("Descartar a observação que você escreveu?")) return;
+  estado.vista = "grade";
+  estado.historico = estado.detalhe = null;
+  atualizarUrl();
+  raiz.querySelector("#g-corpo").innerHTML = "";
+  desenharAcoes();
+  desenharCorpo();
+}
+
+function desenharHistorico() {
+  const h = estado.historico, el = raiz.querySelector("#g-corpo");
+  if (!h) return;
+  const v = h.vendedor;
+  let corpo = "", dia = null;
+  for (const e of h.eventos) {
+    if (e.data !== dia) { corpo += `<div class="ge-dia"><span>${fmt.dataCurta(e.data)}</span></div>`; dia = e.data; }
+    corpo += evento(e, h);
+  }
+  if (!h.eventos.length) corpo = `<p class="ge-hist-vazio">${h.pode_editar ? "Nenhum registro ainda. Lance uma ação ou escreva uma observação." : "Nenhum registro ainda."}</p>`;
+  el.innerHTML = `<section class="cartao ge-hist entra" style="--i:0">
+    <header class="ge-hist-cab">
+      <button class="btn icone" type="button" data-voltar title="Voltar ao quadro" aria-label="Voltar ao quadro">${icone("voltar")}</button>
+      <span class="ge-avatar grande" style="--c:${corAvatar(v.id)}">${esc(iniciais(v.nome))}</span>
+      <div class="ge-hist-quem"><b>${esc(v.nome)}</b>
+        <small>${esc(v.regiao || v.equipe || "")}, ${plural(h.em_vigor, "ação em vigor", "ações em vigor")}${v.inativo ? " · inativo no ERP" : ""}</small></div>
+      <span class="ge-cadeado" title="O vendedor não vê este histórico">${icone("cadeado")}Só controle interno</span>
+    </header>
+    <div class="ge-hist-corpo">${corpo}</div>
+    ${h.pode_editar ? `<div class="ge-hist-rodape">
+      <textarea id="g-nota" rows="1" maxlength="2000" placeholder="Escreva uma observação sobre ${esc(primeiroNome(v.nome))}" aria-label="Observação sobre ${esc(v.nome)}"></textarea>
+      <button class="btn primario icone" type="button" data-enviar-nota title="Gravar a observação" aria-label="Gravar a observação">${icone("enviar")}</button>
+      <button class="btn" type="button" data-acao-para="${v.id}" title="Lançar uma ação só para ${esc(v.nome)}">${icone("bandeira")}Ação</button>
+    </div>` : ""}
+  </section>`;
+  animarEntradas(el);
+}
+
+function evento(e, h) {
+  const a = h.acoes[String(e.acao)] || null;
+  const ind = a?.indicador || { formato: "razao", casas: 2 };
+  const u = a?.unidade || "";
+  const val = (x) => esc(valorIndicador(ind, x, u));
+  const d = e.dados || {};
+  const nome = esc(d.nome || a?.nome || "");
+  switch (e.tipo) {
+    case "nota":
+      return `<div class="ge-bolha dir"><p>${icone("lapis")}<span>${esc(e.texto)}</span></p>
+        <small>${esc(e.autor)} · ${hora(e.criada_em)}${h.pode_editar ? `<button type="button" class="ge-x" data-excluir-nota="${e.id}" title="Apagar a observação" aria-label="Apagar a observação">${icone("x")}</button>` : ""}</small></div>`;
+    case "lancada": {
+      const base = d.base_pendente ? `Base: aguardando os dados de ${fmt.dataCurta(d.base_inicio)} a ${fmt.dataCurta(d.base_fim)}`
+        : d.base == null ? `Base: sem dados ${janelaTexto(d.base_inicio, d.base_fim)}` : `Base: ${val(d.base)} ${janelaTexto(d.base_inicio, d.base_fim)}`;
+      const alvo = d.alvo == null ? (d.base_pendente ? "Alvo: sai da base, quando ela chegar" : "Alvo: sem base para calcular")
+        : `Alvo: ${val(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
+      return `<div class="ge-bolha esq"><b>${icone("bandeira")}Ação lançada: ${nome}</b>
+        <p>${base}<br>${alvo}${d.vendedores > 1 ? `<br>Mesma ação para ${d.vendedores} vendedores` : ""}</p>
+        <small>${esc(e.autor)}${a ? ` · <button type="button" class="ge-link" data-acao="${e.acao}">ver a ação</button>` : ""}</small></div>`;
+    }
+    case "parcial":
+      return `<p class="ge-linha">${icone("grafico")}Parcial da semana ${d.semana}${a ? ` de ${esc(a.rotulo)}` : ""}: <b>${val(d.valor)}</b></p>`;
+    case "resultado":
+      return cartaoResultado(e, a, ind, u, h);
+    case "prorrogada":
+      return `<p class="ge-linha sistema">${icone("calendario")}${nome} prorrogada até ${fmt.dataCurta(d.fim)}${d.base_pendente ? "; a base nova aguarda os dados"
+        : `; base refeita ${janelaTexto(d.base_inicio, d.base_fim)}: ${val(d.base)}, alvo ${val(d.alvo)}`} · ${esc(e.autor)}</p>`;
+    case "encerrada":
+      return `<p class="ge-linha sistema">${icone("certo")}${nome} encerrada em ${fmt.dataCurta(d.fim)}${d.fim_antes && d.fim_antes !== d.fim ? ` (ia até ${fmt.dataCurta(d.fim_antes)})` : ""} · ${esc(e.autor)}</p>`;
+    case "editada":
+      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc((d.mudou || []).join(", "))})${d.alvo != null ? `: alvo ${val(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
+    case "removido":
+      return `<p class="ge-linha sistema">${icone("x")}Saiu da ação ${nome} · ${esc(e.autor)}</p>`;
+    default:
+      return "";
+  }
+}
+
+function cartaoResultado(e, a, ind, u, h) {
+  const d = e.dados || {};
+  const cls = d.classe || "sem_dados";
+  const valores = [d.base, d.alvo, d.resultado].filter((x) => x != null);
+  const mx = Math.max(...valores, 0) || 1;
+  const cor = { ok: "var(--ok-forte)", mid: "var(--atencao-forte)", bad: "var(--ruim-forte)" }[cls] || "var(--linha-forte)";
+  const barra = (rotulo, v, c) => `<div class="ge-barra"><span>${rotulo}</span><span class="ge-barra-trilho"><i style="--c:${c}" data-largura="${v == null ? 0 : (Math.max(0, v) / mx) * 100}%"></i></span>
+    <b>${v == null ? "—" : esc(valorIndicador(ind, v, u, true))}</b></div>`;
+  const delta = d.delta != null
+    ? `${esc(deltaTexto(ind, d.delta, u))} sobre a base${d.delta_pct != null
+      ? ` (${d.delta_pct >= 0 ? "+" : "−"}${fmt.num(Math.abs(d.delta_pct) * 100, Math.abs(d.delta_pct) < 0.1 ? 1 : 0)}%)` : ""}` : "";
+  const botoes = e.atual && h.pode_editar && a ? `<div class="ge-resultado-acoes">
+      ${e.provisorio ? `<button class="btn" type="button" data-encerrar="${a.id}">${icone("certo")}Encerrar ação</button>` : ""}
+      <button class="btn" type="button" data-prorrogar="${a.id}">${icone("calendario")}Prorrogar 2 semanas</button></div>` : "";
+  return `<div class="ge-resultado ${cls}">
+    <div class="ge-resultado-cab"><b>${icone("ranking")}Resultado: ${esc(d.nome || a?.nome || "")}</b><span class="ge-pill ${cls}">${esc(rotuloClasse(cls, d.caminho))}</span></div>
+    ${barra("Base", d.base, "var(--s-ritmo)")}${barra("Alvo", d.alvo, "var(--linha-forte)")}${barra("Resultado", d.resultado, cor)}
+    ${delta ? `<p class="ge-delta">${delta}</p>` : ""}
+    ${e.provisorio ? `<p class="ge-delta fraco">Provisório: os dados vão até ${fmt.dataCurta(h.data_ref)}; o resultado fecha quando passarem do fim.</p>` : ""}
+    ${botoes}</div>`;
+}
+
+async function enviarNota() {
+  const t = raiz.querySelector("#g-nota"), btn = raiz.querySelector("[data-enviar-nota]");
+  const texto = t?.value.trim();
+  if (!texto) return;
+  btn.disabled = true;
+  try {
+    await api("/api/gestao/notas", { json: { id_vendedor: estado.vendedor, texto } });
+    t.value = "";
+    await carregarVista({ silencioso: true });
+    raiz.querySelector("#g-nota")?.focus();
+  } catch (e) {
+    toast(e.message, "erro");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function excluirNota(id) {
+  if (!confirm("Apagar esta observação?")) return;
+  try {
+    await api("/api/gestao/nota/excluir", { json: { id } });
+    await carregarVista({ silencioso: true });
+  } catch (e) {
+    toast(e.message, "erro");
+  }
+}
+
+// O botão "Ação" do histórico: volta ao quadro com o vendedor já marcado.
+async function acaoPara(id) {
+  const v = estado.historico?.vendedor;
+  if (raiz.querySelector("#g-nota")?.value.trim() && !confirm("Descartar a observação que você escreveu?")) return;
+  if (v?.regiao && v.regiao !== estado.regiao) {
+    estado.regiao = v.regiao;
+    await carregar(true);
+  }
+  entrarSelecao([id]);
+}
+
+// ---------- detalhe da ação ----------
+function abrirAcao(id) {
+  if (!podeSairDoForm()) return;
+  estado.vista = "acao";
+  estado.acao = id;
+  estado.abrir = null;
+  estado.detalhe = null;
+  atualizarUrl();
+  desenharAcoes();
+  carregarVista({ rolar: true });
+}
+
+function desenharDetalhe() {
+  const d = estado.detalhe, el = raiz.querySelector("#g-corpo");
+  if (!d) return;
+  const it = d.item;
+  if (it.tipo === "objetivo") { // link para um objetivo: ele aparece no topo
+    estado.vista = "grade";
+    atualizarUrl();
+    el.innerHTML = "";
+    desenharCorpo();
+    return;
+  }
+  const ind = d.indicador || it.indicador, u = d.unidade || "", m = visual(ind);
+  const filtros = [...textoFiltros(it.filtros || {}), ...textoBase(ind)];
+  const enc = it.situacao === "encerrada";
+  const resumo = enc ? `${d.total.no_alvo} de ${d.total.vendedores} no alvo · ${plural(d.total.acima_da_base, "acima da base", "acima da base")}`
+    : it.situacao === "planejada" ? `${plural(d.total.vendedores, "vendedor", "vendedores")} · começa em ${fmt.dataCurta(it.inicio)}`
+    : `${plural(d.total.vendedores, "vendedor", "vendedores")} · dados até ${fmt.dataCurta(d.data_ref)}`;
+  const pergunta = `Como está a ação #${it.id} “${it.nome}”, vendedor por vendedor?`;
+  const botoes = d.pode_editar ? `
+    <button class="btn" type="button" data-editar-acao="${it.id}">${icone("lapis")}<span>Editar</span></button>
+    ${!it.congelado && it.situacao !== "planejada" ? `<button class="btn" type="button" data-encerrar="${it.id}">${icone("certo")}<span>Encerrar</span></button>` : ""}
+    <button class="btn" type="button" data-prorrogar="${it.id}">${icone("calendario")}<span>Prorrogar 2 semanas</span></button>
+    <button class="btn icone" type="button" data-arquivar-acao="${it.id}" data-arquivada="${it.arquivada ? "0" : "1"}" title="${it.arquivada ? "Voltar ao quadro" : "Arquivar (sai do quadro; o histórico fica)"}" aria-label="${it.arquivada ? "Tirar do arquivo" : "Arquivar"}">${icone("arquivo")}</button>
+    <button class="btn icone perigo" type="button" data-excluir-acao="${it.id}" title="Excluir a ação" aria-label="Excluir a ação">${icone("lixeira")}</button>` : "";
+  const avisos = [d.aviso, ...(d.avisos || [])].filter(Boolean).map((t) => `<div class="aviso">${icone("alerta")}<span>${esc(t)}</span></div>`).join("");
+  el.innerHTML = `<section class="cartao secao camp-detalhe entra" style="--i:0;--c:${m.cor}">
+      <div class="cartao-cab">
+        <div class="ge-det-tit"><button class="btn icone" type="button" data-voltar title="Voltar ao quadro" aria-label="Voltar ao quadro">${icone("voltar")}</button>
+          <div><h2>${icone(m.icone)}${esc(it.nome)}</h2>
+            <p class="sub">${esc(ind.nome)} · ${esc(periodoTexto(it.inicio, it.fim))} · alvo ${esc(textoAlvo(ind, it.alvo_tipo, it.meta_padrao, u))} · lançada por ${esc(it.criada_por_nome)}</p></div></div>
+        <div class="camp-acoes">${ctx.assistente ? `<a class="btn" href="#/assistente?q=${encodeURIComponent(pergunta)}" title="Abre o Assistente com a pergunta pronta">${icone("conversa")}<span>Perguntar ao Assistente</span></a>` : ""}${botoes}</div>
+      </div>
+      <div class="camp-chips">
+        <span class="ge-pill ${enc ? "" : it.situacao === "planejada" ? "planejada" : "vigor"}">${esc(SITUACAO[it.situacao])}${it.provisorio ? " · provisório" : ""}</span>
+        <span class="chip">${icone("calendario")}base: ${esc(periodoTexto(it.base_inicio, it.base_fim))} (o mesmo tamanho, logo antes)</span>
+        ${(filtros.length ? filtros : ["todos os produtos e clientes"]).map((t) => `<span class="chip">${icone("funil")}${esc(t)}</span>`).join("")}
+        ${it.arquivada ? `<span class="chip">${icone("arquivo")}arquivada</span>` : ""}
+      </div>
+      ${it.descricao ? `<p class="camp-descricao">${esc(it.descricao)}</p>` : ""}
+      <p class="ge-det-resumo">${esc(resumo)}${d.ocultos ? ` · ${plural(d.ocultos, "vendedor fora do seu acesso", "vendedores fora do seu acesso")}` : ""}</p>
+    </section>
+    ${avisos}${ind.tipo === "preco_medio" && d.produtos?.length ? gradePrecos(d) : tabelaAcao(d)}${aberturaAcao(d)}`;
+  animarEntradas(el);
+  ligarTooltips(el);
+}
+
+function tabelaAcao(d) {
+  if (!d.linhas.length) return `<div class="cartao secao vazio">${icone("pessoas")}<p>Nenhum vendedor da ação no seu acesso.</p></div>`;
+  const it = d.item, ind = d.indicador, u = d.unidade;
+  const v = (x) => esc(valorIndicador(ind, x, u));
+  const enc = it.situacao === "encerrada";
+  const partes = !!ind.numerador && !it.congelado;
+  const linhas = d.linhas.map((x) => `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0" title="Abrir o histórico de ${esc(x.nome)}">
+    <td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
+    <td>${x.base_pendente ? '<span class="fraco">aguardando os dados</span>' : x.base == null ? '<span class="fraco">sem dados</span>' : v(x.base)}</td>
+    <td>${x.alvo == null ? "—" : v(x.alvo)}</td>
+    <td>${x.resultado == null ? "—" : `<b>${v(x.resultado)}</b>`}${partes && x.numerador != null
+      ? `<small>${valorParte(ind, x.numerador)} ÷ ${valorParte(ind, x.denominador)}</small>` : ""}</td>
+    <td>${x.delta == null ? "—" : esc(deltaTexto(ind, x.delta, u))}</td>
+    <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
+      : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`).join("");
+  return `<section class="cartao secao entra" style="--i:2">
+    <div class="cartao-cab"><div><h3>${icone("pessoas")}Por vendedor</h3>
+      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da ação" : "resultado provisório: os dados ainda não passaram do fim")
+        : "resultado até agora; a situação considera o ritmo dos dias úteis"} · clique no vendedor para ver o histórico</p></div></div>
+    <div class="tabela-rolagem"><table class="dados">
+      <thead><tr><th>Vendedor</th><th>Base</th><th>Alvo</th><th${partes ? ` title="${esc(ind.numerador)} ÷ ${esc(ind.denominador)}"` : ""}>Resultado</th><th>Sobre a base</th><th>Situação</th></tr></thead>
+      <tbody>${linhas}</tbody></table></div></section>`;
+}
+
+// A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos), enquanto a ação corre.
+function aberturaAcao(d) {
+  const ind = d.indicador;
+  if (!ind.aberturas?.length || d.item.congelado || d.item.situacao === "planejada") return "";
+  const ab = d.abertura;
   const opcoes = [["", "Não abrir"], ...ind.aberturas.map((k) => [k, ABERTURAS[k]])]
     .map(([k, n]) => `<option value="${k}" ${k === (ab?.por || "") ? "selected" : ""}>${esc(n)}</option>`).join("");
   const comPartes = !!ind.numerador;
-  const linhas = (ab?.linhas || []).map((x, i) => `<tr style="--i:${i}">
-    <td class="nome-v">${esc(x.nome)}</td><td>${esc(valorIndicador(ind, x.valor, a.unidade))}</td>
+  const linhas = (ab?.linhas || []).map((x) => `<tr>
+    <td class="nome-v">${esc(x.nome)}</td><td>${esc(valorIndicador(ind, x.valor, d.unidade))}</td>
     ${comPartes ? `<td>${valorParte(ind, x.numerador)}</td><td>${valorParte(ind, x.denominador)}</td>` : ""}</tr>`).join("");
-  return `<section class="cartao secao entra" style="--i:7">
+  return `<section class="cartao secao entra" style="--i:3">
     <div class="cartao-cab"><div><h3>${icone("funil")}Aberto por ${esc(ab ? ABERTURAS[ab.por].toLowerCase() : "…")}</h3>
-      <p class="sub">os vendedores da campanha juntos, sem meta${ab?.mais ? ` · mostrando ${ab.linhas.length} de ${ab.linhas.length + ab.mais}` : ""}</p></div>
+      <p class="sub">os vendedores da ação juntos${ab?.mais ? ` · mostrando ${ab.linhas.length} de ${ab.linhas.length + ab.mais}` : ""}</p></div>
       <label class="campo"><select data-abrir aria-label="Abrir por" style="padding-left:14px">${opcoes}</select></label></div>
     ${ab ? `<div class="tabela-rolagem"><table class="dados">
       <thead><tr><th>${esc(ABERTURAS[ab.por])}</th><th>${esc(ind.nome)}</th>${comPartes ? `<th>${esc(ind.numerador)}</th><th>${esc(ind.denominador)}</th>` : ""}</tr></thead>
@@ -562,590 +804,316 @@ function aberturaAndamento(a) {
   </section>`;
 }
 
-// Preço médio: o preço de cada vendedor em cada produto, contra o preço-alvo.
-function gradePrecos(c, a) {
-  if (!a.vendedores.length) return `<div class="cartao secao vazio">${icone("pessoas")}<p>Nenhum vendedor da campanha no seu acesso.</p></div>`;
-  const prods = a.produtos || [];
+// Preço médio: o preço de cada vendedor em cada produto, contra o preço-alvo (enquanto a ação corre).
+function gradePrecos(d) {
+  const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const prods = d.produtos, ind = d.indicador;
   const cor = (pct) => (pct == null ? "" : pct >= 1 ? "var(--ok)" : pct >= 0.9 ? "var(--atencao)" : "var(--ruim)");
   const cel = (p) => (p?.preco == null ? '<td class="fraco">—</td>'
     : `<td><b style="color:${cor(p.pct)}">${reais2(p.preco)}</b><small>${fmt.pct(p.pct)} · ${fmt.num(p.quantidade, 1)} ${esc((p.unidade || "").toLowerCase())}</small></td>`);
-  const linhas = a.vendedores.map((v, i) => {
-    const por = Object.fromEntries((v.produtos || []).map((p) => [p.id, p]));
-    return `<tr style="--i:${i}"><td class="nome-v">${esc(v.nome)}<small>código ${v.id} · ${esc(v.equipe || "")}</small></td>
+  const linhas = d.linhas.map((x) => {
+    const por = Object.fromEntries((x.produtos || []).map((p) => [p.id, p]));
+    return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
       ${prods.map((p) => cel(por[p.id])).join("")}
-      <td>${v.realizado != null ? `<b>${fmt.pct(v.realizado)}</b>` : "—"}</td><td>${a.situacao === "futuro" ? chipStatus("sem_meta", "Não começou") : chipInd(a.indicador, v.status)}</td></tr>`;
+      <td>${x.resultado != null ? `<b>${fmt.pct(x.resultado)}</b>` : "—"}</td>
+      <td>${x.base != null ? fmt.pct(x.base) : '<span class="fraco">sem base</span>'}</td>
+      <td>${x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`;
   }).join("");
-  return `<section class="cartao secao entra" style="--i:6">
+  return `<section class="cartao secao entra" style="--i:2">
     <div class="cartao-cab"><div><h3>${icone("moeda")}Preço médio por produto</h3>
-      <p class="sub">venda líquida ÷ quantidade de cada vendedor, contra o preço-alvo; o índice compara o que vendeu com o que seria nos preços-alvo</p></div></div>
+      <p class="sub">venda líquida ÷ quantidade de cada vendedor, contra o preço-alvo; o índice compara o que vendeu com o que seria nos preços-alvo (100% = no alvo)</p></div></div>
     <div class="tabela-rolagem"><table class="dados camp-grade">
-      <thead><tr><th>Vendedor</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${reais2(p.meta)}${p.unidade ? `/${esc(p.unidade.toLowerCase())}` : ""}</small></th>`).join("")}<th>Índice</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Vendedor</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${reais2(p.meta)}${p.unidade ? `/${esc(p.unidade.toLowerCase())}` : ""}</small></th>`).join("")}<th>Índice</th><th>Base</th><th>Situação</th></tr></thead>
       <tbody>${linhas}</tbody>
-      <tfoot><tr><td class="nome-v">Total</td>${prods.map(cel).join("")}<td><b>${fmt.pct(a.total.realizado)}</b></td><td>${chipInd(a.indicador, a.total.status)}</td></tr></tfoot>
+      <tfoot><tr><td class="nome-v">Total</td>${prods.map(cel).join("")}<td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado) : "—"}</b></td><td></td><td></td></tr></tfoot>
     </table></div></section>`;
 }
 
-function aoClicarDetalhe(e) {
-  const b = e.target.closest("button");
-  const c = estado.detalhe?.campanha;
-  if (!b || !c) return;
-  if (b.hasAttribute("data-fechar")) return fecharDetalhe();
-  if (b.hasAttribute("data-editar")) return editar(c.id);
-  if (b.dataset.arquivar) return arquivar(c.id, b.dataset.arquivar === "1");
-  if (b.hasAttribute("data-excluir")) return excluir(c.id);
-  if (b.dataset.mover) return mover(c.id, b.dataset.mover, null);
+// ---------- gravação (só o administrador) ----------
+// nome, quantos vendedores e o fim: do detalhe aberto, do histórico ou do quadro.
+function infoAcao(id) {
+  const det = estado.detalhe?.item;
+  if (det && det.id === id) return { nome: det.nome, n: det.vendedores?.length || estado.detalhe.total.vendedores, fim: det.fim };
+  const h = estado.historico?.acoes?.[String(id)];
+  if (h) return { nome: h.nome, n: h.vendedores, fim: h.fim };
+  const q = acaoDoQuadro(id);
+  return q ? { nome: q.nome, n: q.total_vendedores, fim: q.fim } : { nome: `#${id}`, n: 0, fim: null };
 }
+const paraQuem = (n) => (n === 1 ? "o vendedor" : n ? `os ${n} vendedores` : "os vendedores");
 
-function kpi(i, ic, rotulo, valor, meta, cor = "var(--acento)") {
-  return `<article class="cartao kpi kpi-simples entra" style="--i:${i};--cor:${cor}">
-    <div class="kpi-cab"><span class="kpi-rotulo"><span class="kpi-icone">${icone(ic)}</span>${esc(rotulo)}</span></div>
-    <div class="kpi-corpo"><div><div class="kpi-valor">${valor}</div><div class="kpi-meta">${meta}</div></div></div></article>`;
-}
-
-function kpisAndamento(c, a) {
-  const t = a.total, ind = a.indicador, m = visual(ind), u = a.unidade;
-  const v = (x, curto) => esc(valorIndicador(ind, x, u, curto));
-  const taxa = ind.comportamento === "taxa";
-  const extras = [];
-  if (t.distintos != null && t.distintos !== t.realizado) extras.push(`${esc(valorIndicador(ind, t.distintos, u))} sem repetir entre vendedores`);
-  if (ind.numerador && t.numerador != null) extras.push(`${valorParte(ind, t.numerador)} ${esc(ind.numerador.toLowerCase())} ÷ ${valorParte(ind, t.denominador)} ${esc(ind.denominador.toLowerCase())}`);
-  if (ind.forma === "crescimento" && a.periodo_base) extras.push(`contra ${v(t.base, true)} de ${esc(periodoTexto(a.periodo_base.inicio, a.periodo_base.fim))}`);
-  const cards = [kpi(1, m.icone, "Realizado", v(t.realizado, true),
-    [a.periodo.ate ? `até ${fmt.data(a.periodo.ate)}` : "a campanha ainda não começou", ...extras].join(" · "), m.cor)];
-  const quem = taxa ? "na meta" : "bateram";
-  if (a.situacao === "futuro") {
-    cards.push(kpi(2, "alvo", "Meta da campanha", t.meta ? v(t.meta, true) : "Sem meta",
-      t.meta ? (taxa ? "meta de cada vendedor (média)" : `soma das metas de ${plural(t.com_meta, "vendedor", "vendedores")}`) : "vale o ranking", "var(--s-ritmo)"));
-    cards.push(kpi(3, "pessoas", "Vendedores", fmt.num(t.vendedores), "participando da campanha", "var(--ok-forte)"));
-  } else if (t.meta) {
-    const ritmo = !taxa && a.situacao === "aberto" && t.esperado != null ? ` · pelo ritmo, o esperado até agora é ${v(t.esperado, true)}` : "";
-    cards.push(kpi(2, "alvo", "Atingido", fmt.pct(t.pct),
-      `${chipInd(ind, t.status)} da meta${taxa ? "" : " de"} ${v(t.meta, true)}${ritmo}`, corStatus(t.status)));
-    cards.push(kpi(3, "estrela", `Vendedores ${quem}`, `${t.bateram} <small class="fraco">de ${t.com_meta}</small>`,
-      t.com_meta < t.vendedores ? `${plural(t.vendedores - t.com_meta, "vendedor", "vendedores")} sem meta (só ranking)` : "todos com meta", "var(--ok-forte)"));
-  } else {
-    const lider = a.vendedores[0];
-    const tem = lider && lider.realizado != null && lider.realizado !== 0;
-    cards.push(kpi(2, "ranking", "Liderando", tem ? esc(lider.nome) : "—", tem ? v(lider.realizado) : "ninguém vendeu ainda"));
-    cards.push(kpi(3, "pessoas", "Vendedores", fmt.num(t.vendedores), "campanha sem meta: vale o ranking", "var(--ok-forte)"));
-  }
-  const cal = Object.entries(a.calendarios);
-  const uteis = cal.map(([r, x]) => `${cal.length > 1 ? `${r}: ` : ""}${fmt.dias(x.dias_uteis)}`).join(" · ");
-  if (a.situacao === "aberto") {
-    const dias = cal.map(([r, x]) => `${cal.length > 1 ? `<small class="fraco">${r}</small> ` : ""}${fmt.dias(x.dias_restantes)}`).join(" ");
-    cards.push(kpi(4, "calendario", "Dias úteis restantes", dias,
-      `de ${uteis} no período${taxa ? "" : ` · ritmo esperado: ${cal.map(([, x]) => fmt.pct(x.ritmo, 0)).join(" / ")}`}`, "var(--s-fat)"));
-  } else {
-    const futuro = a.situacao === "futuro";
-    cards.push(kpi(4, "calendario", futuro ? "Começa em" : "Encerrada em", fmt.dataCurta(futuro ? c.inicio : c.fim),
-      `${esc(periodoTexto(c.inicio, c.fim))} · ${uteis} dias úteis`, "var(--s-fat)"));
-  }
-  const ocultos = a.ocultos ? `<p class="usu-nota">${icone("info")}<span>${plural(a.ocultos, "vendedor da campanha está", "vendedores da campanha estão")} fora do seu acesso e não ${a.ocultos === 1 ? "aparece" : "aparecem"} aqui.</span></p>` : "";
-  return `<section class="kpis n4 secao">${cards.join("")}</section>${ocultos}`;
-}
-
-// Barras por vendedor: % da meta (com o ritmo esperado e os 100%) ou, sem meta, o realizado comparado ao maior.
-// Em médias e percentuais (taxa) não há ritmo: vale a meta direto.
-function rankingAndamento(c, a) {
-  const itens = a.vendedores;
-  if (!itens.length || a.situacao === "futuro") return "";
-  const ind = a.indicador, cor = visual(ind).cor;
-  const comMeta = itens.some((v) => v.meta);
-  const u = a.unidade;
-  const max = comMeta ? Math.min(Math.max(1.1, ...itens.map((v) => v.pct || 0)), 2) * 1.04
-    : Math.max(...itens.map((v) => v.realizado || 0), ind.formato === "pct" ? 0.01 : 1) * 1.04;
-  const pos = (x) => `${(Math.min(x, max) / max) * 100}%`;
-  const comRitmo = ind.comportamento !== "taxa";
-  const linhas = itens.map((v, i) => {
-    const ritmo = comMeta && comRitmo && a.situacao === "aberto" ? a.calendarios[v.regiao]?.ritmo : null;
-    const tt = `<div class='tt-t'>${esc(v.nome)}</div>` + linhaTT("Realizado", esc(valorIndicador(ind, v.realizado, u))) +
-      (v.numerador != null ? linhaTT(ind.numerador, valorParte(ind, v.numerador)) + linhaTT(ind.denominador, valorParte(ind, v.denominador)) : "") +
-      (v.meta ? linhaTT("Meta", esc(valorIndicador(ind, v.meta, u))) + linhaTT("Atingido", fmt.pct(v.pct)) + linhaTT("Situação", rotuloStatus(ind, v.status)) : "");
-    const largura = comMeta ? pos(v.pct || 0) : pos(v.realizado || 0);
-    return `<div class="rank-linha" data-tt="${esc(tt)}" tabindex="0">
-      <span class="rank-pos ${i < 3 && v.realizado ? "top" : ""}">${i + 1}º</span>
-      <span class="rank-nome" title="${esc(v.nome)}">${esc(v.nome)}</span>
-      <span class="rank-trilho">
-        ${ritmo ? `<span class="rank-marca" style="left:${pos(ritmo)}"></span>` : ""}
-        ${comMeta ? `<span class="rank-marca cem" style="left:${pos(1)}"></span>` : ""}
-        <span class="rank-barra ${v.status === "batida" ? "batida" : ""}" style="--cor-barra:${comMeta ? corStatus(v.status) : cor}" data-largura="${largura}"></span>
-      </span>
-      <span class="rank-val"><b>${v.meta ? fmt.pct(v.pct) : esc(valorIndicador(ind, v.realizado, u, true))}</b><span>${v.meta ? esc(valorIndicador(ind, v.realizado, u, true)) : "sem meta"}</span></span>
-    </div>`;
-  }).join("");
-  const escala = comMeta ? `<div class="rank-escala"><span></span><span></span><div class="faixa-e"><span style="left:${pos(1)}">meta 100%</span></div><span></span></div>` : "";
-  const sub = !comMeta ? "quem foi melhor na campanha"
-    : comRitmo ? "% da meta de cada um; o traço tracejado é o ritmo esperado até a data dos dados" : "% da meta de cada um";
-  return `<section class="cartao secao entra" style="--i:5">
-    <div class="cartao-cab"><div><h3>${icone("ranking")}Ranking dos vendedores</h3><p class="sub">${sub}</p></div></div>
-    ${escala}<div class="ranking">${linhas}</div></section>`;
-}
-
-function tabelaAndamento(c, a) {
-  if (!a.vendedores.length) return `<div class="cartao secao vazio">${icone("pessoas")}<p>Nenhum vendedor da campanha no seu acesso.</p></div>`;
-  const ind = a.indicador, u = a.unidade;
-  const v = (x) => esc(valorIndicador(ind, x, u));
-  const soma = ind.comportamento === "soma";
-  const aberto = a.situacao === "aberto" && soma;
-  const partes = !!ind.numerador, base = ind.forma === "crescimento";
-  const linhas = a.vendedores.map((r, i) => `<tr style="--i:${i}">
-    <td class="nome-v">${esc(r.nome)}<small>código ${r.id} · ${esc(r.equipe || "")}</small></td>
-    <td>${v(r.realizado)}</td>
-    ${partes ? `<td>${valorParte(ind, r.numerador)}</td><td>${valorParte(ind, r.denominador)}</td>` : ""}
-    ${base ? `<td>${r.base ? v(r.base) : '<span class="fraco">sem base</span>'}</td>` : ""}
-    <td>${r.meta ? v(r.meta) : '<span class="fraco">sem meta</span>'}${r.meta_individual ? ' <span class="fraco" title="meta ajustada para este vendedor">*</span>' : ""}</td>
-    <td>${r.meta && r.pct != null ? `<span class="pct-cel"><span class="mini"><i style="width:${Math.min(100, (r.pct || 0) * 100)}%;--c:${corStatus(r.status)}"></i></span><b>${fmt.pct(r.pct)}</b></span>` : "—"}</td>
-    ${soma ? `<td>${r.falta != null ? v(r.falta) : "—"}</td>` : ""}
-    ${aberto ? `<td>${r.falta_por_dia != null ? v(r.falta_por_dia) : "—"}</td><td>${r.projecao != null ? v(r.projecao) : "—"}</td>` : ""}
-    <td>${a.situacao === "futuro" ? chipStatus("sem_meta", "Não começou") : chipInd(ind, r.status)}</td></tr>`).join("");
-  const individuais = a.vendedores.some((r) => r.meta_individual)
-    ? `<p class="usu-nota">${icone("info")}<span>* meta ajustada para o vendedor; os demais seguem a meta padrão de ${esc(metaDigitada(ind, c.meta_padrao, u))}.</span></p>` : "";
-  const nota = base ? `<p class="usu-nota">${icone("info")}<span>A meta de cada vendedor é a base (o que ele fez em ${esc(periodoTexto(a.periodo_base.inicio, a.periodo_base.fim))}) mais o crescimento pedido. Sem base, fica só no ranking.</span></p>` : "";
-  return `<section class="cartao secao entra" style="--i:6">
-    <div class="cartao-cab"><div><h3>${icone("pessoas")}Andamento por vendedor</h3>
-      <p class="sub">${esc(ind.nome)} de ${esc(periodoTexto(c.inicio, c.fim))}${a.periodo.ate && a.periodo.ate !== c.fim ? `, com dados até ${fmt.data(a.periodo.ate)}` : ""}</p></div></div>
-    <div class="tabela-rolagem"><table class="dados">
-      <thead><tr><th>Vendedor</th><th>Realizado</th>${partes ? `<th>${esc(ind.numerador)}</th><th>${esc(ind.denominador)}</th>` : ""}
-        ${base ? "<th>Base</th>" : ""}<th>Meta</th><th>Atingido</th>${soma ? "<th>Falta</th>" : ""}
-        ${aberto ? "<th>Falta por dia útil</th><th>Projeção</th>" : ""}<th>Situação</th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table></div>${individuais}${nota}</section>`;
-}
-
-// ---------- formulário (criar e editar) ----------
-function criarJanela() {
-  if (dlg) return;
-  dlg = document.createElement("dialog");
-  dlg.className = "dialogo camp-dialogo";
-  dlg.setAttribute("aria-labelledby", "cf-titulo");
-  document.body.appendChild(dlg);
-  dlg.addEventListener("cancel", (e) => {
-    if (dlg.querySelector(".multi-painel:not([hidden])")) { e.preventDefault(); return; } // o Esc era da lista
-    if (formMudou() && !confirm("Descartar o que foi preenchido nesta campanha?")) e.preventDefault();
-  });
-  dlg.addEventListener("close", () => { form = null; });
-}
-
-async function editar(id) {
-  const c = estado.quadro?.campanhas.find((x) => x.id === id) || (estado.detalhe?.campanha.id === id ? estado.detalhe.campanha : null);
-  if (!c) return;
-  abrirFormulario({ id: c.id, dados: c });
-}
-
-async function abrirRascunho(uuid) {
-  if (naGestao()) history.replaceState(null, "", estado.sel ? `#/gestao?c=${estado.sel}` : "#/gestao");
+async function encerrar(id) {
+  const a = infoAcao(id), ate = estado.quadro?.data_ref;
+  if (!confirm(`Encerrar “${a.nome}” para ${paraQuem(a.n)} dela? O resultado de cada um fica congelado${ate ? ` com os dados até ${fmt.dataCurta(ate)}` : ""}.`)) return;
   try {
-    const r = await api(`/api/gestao/rascunho?id=${encodeURIComponent(uuid)}`);
-    if (r.campanha) {
-      toast(`Este rascunho já virou a campanha “${r.campanha.nome}”`);
-      return selecionar(r.campanha.id, { rolar: true });
-    }
-    abrirFormulario({ dados: r.rascunho, rascunho: r.rascunho.id, nomes: r.rascunho.nomes });
+    await api("/api/gestao/acao/encerrar", { json: { id } });
+    toast("Ação encerrada");
+    await recarregarTudo();
   } catch (e) {
     toast(e.message, "erro");
   }
 }
 
-// Campanha de antes dos tipos novos (ou rascunho antigo do Assistente): faturamento, volume e mix viram Personalizada.
-function normalizarLegado(d) {
-  const legado = LEGADOS[d.metrica];
-  if (!legado) return { metrica: d.metrica, parametros: { ...(d.parametros || {}) } };
-  return { metrica: "personalizada", parametros: { ...(d.parametros || {}), medida: legado[0], forma: legado[1] } };
+async function prorrogar(id) {
+  const a = infoAcao(id);
+  const novo = a.fim ? ` (até ${fmt.dataCurta(somar(a.fim, 14))})` : "";
+  if (!confirm(`Prorrogar “${a.nome}” por 2 semanas para ${paraQuem(a.n)} dela${novo}? A base de cada um é medida de novo, no mesmo tamanho do novo prazo.`)) return;
+  try {
+    await api("/api/gestao/acao/prorrogar", { json: { id, dias: 14 } });
+    toast("Ação prorrogada por 2 semanas");
+    await recarregarTudo();
+  } catch (e) {
+    toast(e.message, "erro");
+  }
 }
 
-const aceitaBase = (t, p) => ["positivacao", "mix_medio", "frequencia"].includes(t)
-  || (t === "personalizada" && ["total", "por_cliente"].includes(p.forma));
-const semFiltroProduto = (t) => t === "efetividade" || t === "preco_medio";
+async function arquivar(id, sim) {
+  try {
+    await api("/api/gestao/acao/arquivar", { json: { id, arquivada: sim } });
+    toast(sim ? "Ação arquivada: saiu do quadro (o histórico dos vendedores continua)" : "A ação voltou ao quadro");
+    await recarregarTudo();
+  } catch (e) {
+    toast(e.message, "erro");
+  }
+}
 
-// dados: a campanha (editar), o rascunho do Assistente ou nada (nova). nomes: nomes que o rascunho já trouxe.
-async function abrirFormulario({ id = null, dados = null, rascunho = null, nomes = null } = {}) {
-  if (dlg.open && formMudou() && !confirm("Descartar o que foi preenchido nesta campanha?")) return;
-  const inicio = hoje();
-  filtros = {};
-  precos = null;
-  const d = dados || {
-    nome: "", descricao: "", premiacao: "", inicio, fim: fimDoMes(inicio), metrica: "positivacao", parametros: {},
-    filtros: {}, meta_padrao: 0, vendedores: [], metas_produto: [],
-  };
-  const { metrica, parametros } = normalizarLegado(d);
-  form = {
-    id, rascunho, nomes: nomes || {},
-    metrica, parametros: { medida: "faturamento", forma: "total", clientes: "todos", ...parametros },
-    metasProduto: new Map((d.metas_produto || []).map((p) => [p.id, p.meta])),
-    vendedores: new Map((d.vendedores || []).map((v) => [v.id, v.meta])),
-  };
-  dlg.innerHTML = `<form id="cf-form" novalidate>
-    <h2 id="cf-titulo">${icone("quadro")}${id ? "Editar campanha" : rascunho ? "Rascunho do Assistente" : "Nova campanha"}</h2>
-    <p class="sub">${rascunho ? "Confira o que o Assistente montou e ajuste se quiser; a campanha só é criada quando você clicar em Criar." : "Os números saem das vendas do ERP, com as mesmas regras das metas."}</p>
+async function excluirAcao(id) {
+  const a = infoAcao(id);
+  if (!confirm(`Excluir “${a.nome}”? O histórico dos vendedores perde os registros desta ação (as observações ficam).`)) return;
+  try {
+    await api("/api/gestao/acao/excluir", { json: { id } });
+    toast("Ação excluída");
+    estado.vista = "grade";
+    estado.detalhe = null;
+    atualizarUrl();
+    raiz.querySelector("#g-corpo").innerHTML = "";
+    await carregar(true);
+  } catch (e) {
+    toast(e.message, "erro");
+  }
+}
+
+async function editarAcao(id) {
+  let it = estado.detalhe?.item?.id === id ? estado.detalhe.item : null;
+  try {
+    if (!it) it = (await api(`/api/gestao/acao?id=${id}&abrir=`)).item;
+  } catch (e) {
+    return toast(e.message, "erro");
+  }
+  if (it.regiao !== estado.regiao) {
+    estado.regiao = it.regiao;
+    await carregar(true);
+  }
+  entrarSelecao(it.vendedores.map((v) => v.id), it, { id: it.id });
+}
+
+// ---------- rascunho do Assistente ----------
+async function abrirRascunho(uuid) {
+  atualizarUrl();
+  if (!ctx.admin) { toast("Só o administrador lança ações; peça a ele.", "erro"); return; }
+  try {
+    const r = await api(`/api/gestao/rascunho?id=${encodeURIComponent(uuid)}`);
+    if (r.acao) {
+      toast(`Este rascunho já virou a ação “${r.acao.nome}”`);
+      if (r.acao.regiao) estado.regiao = r.acao.regiao;
+      estado.vista = "acao";
+      estado.acao = r.acao.id;
+      atualizarUrl();
+      await carregar(true);
+      return carregarVista({ rolar: true });
+    }
+    const d = r.rascunho;
+    let regiao = d.regiao;
+    if (!regiao) { // rascunho de antes das regiões: a dos vendedores
+      const cat = await carregarCatalogo();
+      const equipes = (d.vendedores || []).map((v) => cat?.vendedores.find((x) => x.id === v.id)?.equipe);
+      regiao = equipes.filter((e) => e === "ES").length >= equipes.filter((e) => e === "BA" || e === "EDIR").length ? "ES" : "BA";
+    }
+    estado.regiao = regiao;
+    await carregar(true);
+    entrarSelecao((d.vendedores || []).map((v) => v.id), { ...d, alvo_tipo: d.alvo_tipo || "fixo" }, { rascunho: d.id, nomes: d.nomes });
+  } catch (e) {
+    toast(e.message, "erro");
+  }
+}
+
+// ---------- objetivos (janela) ----------
+function criarJanela() {
+  if (dlg) return;
+  dlg = document.createElement("dialog");
+  dlg.className = "dialogo camp-dialogo";
+  dlg.setAttribute("aria-labelledby", "go-titulo");
+  document.body.appendChild(dlg);
+  dlg.addEventListener("cancel", (e) => {
+    if (dlg.querySelector(".multi-painel:not([hidden])")) { e.preventDefault(); return; } // o Esc era da lista
+    if (objetivoMudou() && !confirm("Descartar o que foi preenchido neste objetivo?")) e.preventDefault();
+  });
+  dlg.addEventListener("close", () => { formObj = null; });
+}
+
+function coletarObjetivo() {
+  const f = dlg.querySelector("form");
+  const val = (n) => f.querySelector(`[name="${n}"]`).value;
+  const ind = formObj.construtor ? formObj.construtor.valor() : {};
+  const preco = ind.metrica === "preco_medio";
+  return { nome: val("nome").trim(), regiao: formObj.regiao, inicio: val("inicio"), fim: val("fim"), ...ind,
+           meta_padrao: preco ? 100 : (val("meta") === "" ? null : Number(val("meta"))), descricao: val("descricao").trim() };
+}
+
+function objetivoMudou() {
+  return !!(formObj?.orig && dlg?.open && JSON.stringify(coletarObjetivo()) !== formObj.orig);
+}
+
+async function abrirObjetivo(id) {
+  if (!ctx.admin || !estado.quadro?.regiao) return;
+  const o = id === "novo" ? null : (estado.quadro.objetivos || []).find((x) => String(x.id) === String(id));
+  const hoje = estado.quadro.hoje;
+  const d = o || { nome: "", inicio: `${hoje.slice(0, 8)}01`, fim: fimDoMes(hoje), metrica: "positivacao", parametros: {}, filtros: {},
+                   meta_padrao: "", metas_produto: [], descricao: "" };
+  formObj = { id: o?.id || null, regiao: o?.regiao || estado.quadro.regiao, construtor: null, orig: null };
+  dlg.innerHTML = `<form novalidate>
+    <h2 id="go-titulo">${icone("alvo")}${o ? "Editar objetivo" : "Novo objetivo do período"}</h2>
+    <p class="sub">Equipe ${esc(formObj.regiao)}: o indicador da equipe toda (sem repetir clientes entre os vendedores), contra um alvo da equipe.</p>
     <div class="cf-grade">
-      <label class="campo-form largo"><span>Nome da campanha</span><input name="nome" maxlength="120" required value="${esc(d.nome)}" placeholder="Ex.: Requeijão BA — novembro"></label>
-      <label class="campo-form"><span>Início</span><input type="date" name="inicio" required value="${esc(d.inicio)}"></label>
-      <label class="campo-form"><span>Fim</span><input type="date" name="fim" required value="${esc(d.fim)}"></label>
-      <div class="largo"><span class="cf-rotulo">O que a campanha mede</span>
-        <div class="cf-metricas" role="radiogroup" aria-label="Tipo de campanha">${Object.entries(TIPOS).map(([k, m]) => `
-          <button type="button" class="visao-op ${k === metrica ? "ativo" : ""}" role="radio" aria-checked="${k === metrica}" data-metrica="${k}">
-            ${icone(m.icone)}<span><b>${esc(m.nome)}</b><small>${esc(m.descricao)}</small></span></button>`).join("")}</div>
-        <div class="cf-sub" id="cf-sub"></div></div>
-      <div class="largo" id="cf-precos-bloco" hidden><span class="cf-rotulo">Produtos e preços-alvo <small>(R$ por unidade do produto)</small></span>
-        <div class="filtros"><div id="cf-precos-ms"></div></div>
-        <div class="cf-precos" id="cf-precos"></div></div>
-      <div class="largo"><span class="cf-rotulo"><span id="cf-rotulo-filtros">Produtos e clientes que contam</span> <small>(nada escolhido = tudo)</small></span>
-        <div class="filtros cf-filtros">${FILTROS.map((f) => `<div id="cf-f-${f.id}"></div>`).join("")}</div>
-        <p class="usu-nota" id="cf-dica-filtro"></p></div>
-      <label class="campo-form" id="cf-meta-bloco"><span>Meta padrão por vendedor <small id="cf-unidade"></small></span>
-        <input type="number" name="meta_padrao" min="0" step="any" inputmode="decimal" value="${metrica === "preco_medio" ? "" : d.meta_padrao || ""}" placeholder="0 = sem meta, só ranking"></label>
-      <label class="campo-form"><span>Premiação <small>(opcional)</small></span><input name="premiacao" maxlength="2000" value="${esc(d.premiacao)}" placeholder="Ex.: vale-compras de R$ 300"></label>
-      <div class="largo"><span class="cf-rotulo">Vendedores <small id="cf-n-vend"></small></span>
-        <div class="barra-ferramentas usu-busca">
-          <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span><input id="cf-busca-v" type="search" placeholder="Buscar vendedor ou código"></label>
-          <span id="cf-equipes"></span>
-          <button class="btn" type="button" id="cf-marcar">Marcar os da lista</button>
-          <button class="btn" type="button" id="cf-desmarcar">Desmarcar todos</button>
-        </div>
-        <div class="cf-vendedores" id="cf-vendedores"><div class="esqueleto" style="height:120px"></div></div>
-        <p class="usu-nota">${icone("info")}<span>Deixe a meta do vendedor em branco para usar a padrão; 0 deixa o vendedor sem meta (só no ranking).</span></p>
-      </div>
-      <label class="campo-form largo"><span>Descrição <small>(opcional)</small></span><textarea name="descricao" rows="2" maxlength="2000" placeholder="Objetivo e regras da campanha">${esc(d.descricao)}</textarea></label>
+      <label class="campo-form largo"><span>Nome</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Mix médio da equipe" autocomplete="off"></label>
+      <label class="campo-form"><span>Início</span><input type="date" name="inicio" value="${esc(d.inicio)}"></label>
+      <label class="campo-form"><span>Fim</span><input type="date" name="fim" value="${esc(d.fim)}"></label>
+      <div class="largo ge-indicador" id="go-indicador"><div class="esqueleto" style="height:66px"></div></div>
+      <label class="campo-form" id="go-meta-bloco"><span>Alvo da equipe <small id="go-unidade"></small></span>
+        <input type="number" name="meta" min="0" step="any" inputmode="decimal" value="${d.meta_padrao ?? ""}"></label>
+      <div class="largo" id="go-precos"></div>
+      <div class="largo" id="go-filtros"></div>
+      <label class="campo-form largo"><span>Descrição <small>(opcional)</small></span><textarea name="descricao" rows="2" maxlength="2000">${esc(d.descricao || "")}</textarea></label>
     </div>
     <p class="form-erro" role="alert" hidden></p>
     <div class="dialogo-acoes">
+      ${o ? `<button class="btn perigo" type="button" data-excluir-obj style="margin-right:auto">${icone("lixeira")}Excluir</button>` : ""}
       <button class="btn" type="button" data-cancelar>Cancelar</button>
-      <button class="btn primario" type="submit">${icone(id ? "disco" : "mais")}${id ? "Salvar alterações" : "Criar campanha"}</button>
+      <button class="btn primario" type="submit">${icone(o ? "disco" : "mais")}${o ? "Salvar" : "Criar objetivo"}</button>
     </div></form>`;
   const f = dlg.querySelector("form");
-  f.addEventListener("submit", (e) => { e.preventDefault(); salvar(); });
+  const erro = (msg) => { const el = f.querySelector(".form-erro"); el.textContent = capitalizar(msg); el.hidden = !msg; };
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dados = coletarObjetivo();
+    if (!dados.nome) return erro("dê um nome ao objetivo");
+    if (!dados.inicio || !dados.fim) return erro("escolha o início e o fim");
+    if (dados.metrica !== "preco_medio" && !(dados.meta_padrao > 0)) return erro("dê o alvo da equipe");
+    const btn = f.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    erro("");
+    try {
+      if (formObj.id) await api("/api/gestao/objetivo/editar", { json: { id: formObj.id, objetivo: dados } });
+      else await api("/api/gestao/objetivos", { json: { objetivo: dados } });
+      toast(formObj.id ? "Objetivo salvo" : "Objetivo criado");
+      formObj = null;
+      dlg.close();
+      await carregar(true);
+    } catch (err) {
+      erro(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   f.querySelector("[data-cancelar]").addEventListener("click", () => {
-    if (formMudou() && !confirm("Descartar o que foi preenchido nesta campanha?")) return;
+    if (objetivoMudou() && !confirm("Descartar o que foi preenchido neste objetivo?")) return;
     dlg.close();
   });
-  f.querySelectorAll("[data-metrica]").forEach((b) => b.addEventListener("click", () => {
-    form.metrica = b.dataset.metrica;
-    f.querySelectorAll("[data-metrica]").forEach((x) => { x.classList.toggle("ativo", x === b); x.setAttribute("aria-checked", x === b); });
-    desenharSub();
-  }));
-  f.querySelector("#cf-sub").addEventListener("change", (e) => {
-    const k = e.target.dataset.p;
-    if (!k) return;
-    form.parametros[k] = e.target.type === "number" ? Number(e.target.value) || null : e.target.value;
-    if (k === "medida" && !MEDIDAS[form.parametros.medida].formas.includes(form.parametros.forma)) form.parametros.forma = "total";
-    desenharSub();
-  });
-  f.querySelector('[name="inicio"]').addEventListener("change", (e) => {
-    const fim = f.querySelector('[name="fim"]');
-    if (!fim.value || fim.value < e.target.value) fim.value = fimDoMes(e.target.value);
+  f.querySelector("[data-excluir-obj]")?.addEventListener("click", async () => {
+    if (!confirm(`Excluir o objetivo “${o.nome}”?`)) return;
+    try {
+      await api("/api/gestao/objetivo/excluir", { json: { id: o.id } });
+      toast("Objetivo excluído");
+      formObj = null;
+      dlg.close();
+      await carregar(true);
+    } catch (err) {
+      erro(err.message);
+    }
   });
   if (!dlg.open) dlg.showModal();
-  desenharSub();
   f.querySelector('[name="nome"]').focus();
   const cat = await carregarCatalogo();
-  if (!form || dlg.querySelector("form") !== f) return; // fechou ou abriu outra enquanto o catálogo vinha
-  if (!cat) {
-    erroForm(`Não foi possível carregar vendedores e produtos: ${estado.erroCatalogo}`);
-    f.querySelector("#cf-vendedores").innerHTML = "";
-  } else {
-    montarFiltros(f, d.filtros || {}, cat);
-    montarPrecos(f, cat);
-    montarVendedores(f, cat);
-  }
-  form.orig = JSON.stringify(coletar());
-  desenharSub();
-}
-
-// Os blocos que dependem do tipo: medida, forma e comparação (Personalizada), quem conta (base de clientes) e,
-// fora dele, a lista de preços-alvo, os filtros de produto e a meta padrão.
-function desenharSub() {
-  if (!form) return;
-  const f = dlg.querySelector("form");
-  const t = form.metrica, p = form.parametros;
-  const sel = (k, rotulo, opcoes, valor) => `<label class="campo-form"><span>${esc(rotulo)}</span>
-    <span class="campo"><select data-p="${k}" style="padding-left:14px">${Object.entries(opcoes).map(([id, n]) =>
-      `<option value="${id}" ${id === valor ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></span></label>`;
-  let html = "";
-  if (t === "personalizada") {
-    html += sel("medida", "O que medir", Object.fromEntries(Object.entries(MEDIDAS).map(([k, m]) => [k, m.nome])), p.medida);
-    html += sel("forma", "Como", Object.fromEntries(MEDIDAS[p.medida].formas.map((k) => [k, FORMAS[k]])), p.forma);
-    if (p.forma === "crescimento") html += sel("comparar", "Comparar com", COMPARAR, p.comparar || "periodo_anterior");
-  }
-  if (aceitaBase(t, p)) {
-    html += sel("clientes", "Quem conta", BASES, p.clientes || "todos");
-    if (p.clientes === "recuperados") {
-      html += `<label class="campo-form"><span>Sem compra há pelo menos <small>(dias antes do início)</small></span>
-        <input type="number" data-p="dias_sem_compra" min="1" max="730" step="1" value="${p.dias_sem_compra || 90}"></label>`;
-    }
-  }
-  const sub = f.querySelector("#cf-sub");
-  sub.innerHTML = html;
-  sub.hidden = !html;
-  for (const id of FILTROS_PRODUTO) {
-    const el = f.querySelector(`#cf-f-${id}`);
-    if (el) el.hidden = semFiltroProduto(t);
-  }
-  f.querySelector("#cf-rotulo-filtros").textContent = semFiltroProduto(t) ? "Clientes que contam" : "Produtos e clientes que contam";
-  f.querySelector("#cf-precos-bloco").hidden = t !== "preco_medio";
-  f.querySelector("#cf-meta-bloco").hidden = t === "preco_medio";
-  f.querySelectorAll(".cf-vend .cf-meta-v").forEach((i) => {
-    const linha = i.closest(".cf-vend");
-    i.disabled = t === "preco_medio" || !linha.classList.contains("marcado");
-    i.placeholder = t === "preco_medio" ? "—" : "padrão";
-  });
-  dicas();
-}
-
-// Preço médio: os produtos (a mesma lista do filtro) e o preço-alvo de cada um, com o preço dos últimos 90 dias de dica.
-function montarPrecos(f, cat) {
-  const itens = opcoesFiltro("produtos", cat);
-  for (const p of form.metasProduto.keys()) if (!itens.some((i) => i.id === p)) itens.push({ id: p, nome: nomeProduto(p, form.nomes.produtos), grupo: "cat:", detalhe: `código ${p}` });
-  const grupos = [{ id: "mussarela", nome: "Mussarela" }, ...cat.categorias.map((c) => ({ id: `cat:${c}`, nome: c })), { id: "cat:", nome: "Demais produtos" }];
-  precos = multiSelecao(f.querySelector("#cf-precos-ms"), {
-    rotulo: "Produtos da campanha", icone: "caixa", todos: "Escolha os produtos", plural: "produtos", busca: "Buscar produto",
-    classe: "curto", itens, selecionados: [...form.metasProduto.keys()], nomesAte: 2, grupos,
-    aoAplicar: (ids) => {
-      const novo = new Map();
-      for (const id of ids) novo.set(id, form.metasProduto.get(id) ?? null);
-      form.metasProduto = novo;
-      desenharPrecos(f);
-    },
-  });
-  desenharPrecos(f);
-}
-
-function desenharPrecos(f) {
-  const alvo = f.querySelector("#cf-precos");
-  const porId = new Map((estado.catalogo?.produtos || []).map((p) => [p.id, p]));
-  if (!form.metasProduto.size) {
-    alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Escolha os produtos e dê o preço-alvo de cada um. O índice do vendedor compara o que ele vendeu com o que seria nos preços-alvo (100% = no alvo).</span></p>`;
-    return;
-  }
-  alvo.innerHTML = [...form.metasProduto].map(([id, meta]) => {
-    const p = porId.get(id);
-    const un = (p?.unidade || "").toLowerCase();
-    return `<div class="cf-preco" data-id="${id}">
-      <span class="n">${esc(p?.nome || nomeProduto(id, form.nomes.produtos))}<small>código ${id}${un ? ` · ${esc(un)}` : ""}${p?.preco_90d ? ` · média dos últimos 90 dias: ${reais2(p.preco_90d)}` : ""}</small></span>
-      <input class="cf-meta-v" type="number" min="0" step="0.01" inputmode="decimal" aria-label="Preço-alvo de ${esc(p?.nome || id)}"
-        placeholder="${p?.preco_90d ? fmt.num(p.preco_90d, 2) : "R$"}" value="${meta ?? ""}"><span class="fraco">R$${un ? `/${esc(un)}` : ""}</span>
-    </div>`;
-  }).join("");
-  alvo.querySelectorAll(".cf-preco input").forEach((i) => i.addEventListener("input", () => {
-    const v = i.value.trim();
-    form.metasProduto.set(Number(i.closest(".cf-preco").dataset.id), v === "" ? null : Number(v));
-  }));
-}
-
-function fimDoMes(iso) {
-  const [a, m] = iso.split("-").map(Number);
-  return new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
-}
-
-// Valores de texto (linhas, UFs…) vão para a lista de seleção por posição: ela trabalha com números.
-function opcoesFiltro(id, cat) {
-  if (id === "produtos") {
-    return cat.produtos.map((p) => ({ id: p.id, nome: p.nome, grupo: p.grupo === "mussarela" ? "mussarela" : `cat:${p.categoria || ""}`,
-      detalhe: `código ${p.id}${p.unidade ? ` · ${p.unidade}` : ""}${p.linha ? ` · ${p.linha}` : ""}` }));
-  }
-  const valores = { linhas: cat.linhas, categorias: cat.categorias, grupos: cat.grupos, ufs: cat.ufs, segmentos: cat.segmentos,
-                    areas: cat.areas || [] }[id];
-  return valores.map((v, i) => ({ id: i, nome: id === "grupos" ? NOME_GRUPO[v] || v : v, valor: v }));
-}
-
-function montarFiltros(f, atuais, cat) {
-  filtros = {};
-  const grupos = [{ id: "mussarela", nome: "Mussarela" }, ...cat.categorias.map((c) => ({ id: `cat:${c}`, nome: c })), { id: "cat:", nome: "Demais produtos" }];
-  for (const def of FILTROS) {
-    const itens = opcoesFiltro(def.id, cat);
-    const marcados = def.id === "produtos"
-      ? (atuais.produtos || [])
-      : (atuais[def.id] || []).map((v) => itens.findIndex((i) => i.valor === v)).filter((i) => i >= 0);
-    // produto escolhido que não vendeu nos últimos 12 meses continua na lista, para poder tirar
-    if (def.id === "produtos") {
-      for (const p of marcados) if (!itens.some((i) => i.id === p)) itens.push({ id: p, nome: nomeProduto(p, form.nomes.produtos), grupo: "cat:", detalhe: `código ${p}` });
-    }
-    filtros[def.id] = { itens, ms: multiSelecao(f.querySelector(`#cf-f-${def.id}`), {
-      rotulo: def.rotulo, icone: def.icone, todos: def.todos, plural: def.plural, busca: `Buscar ${def.rotulo.toLowerCase()}`,
-      semBusca: def.semBusca, classe: "curto", itens, selecionados: marcados, nomesAte: 2,
-      grupos: def.id === "produtos" ? grupos : undefined, aoAplicar: dicas,
-    }) };
-  }
-}
-
-function valoresFiltros() {
-  const saida = {};
-  for (const [id, { itens, ms }] of Object.entries(filtros)) {
-    if (semFiltroProduto(form.metrica) && FILTROS_PRODUTO.includes(id)) continue; // escondidos neste tipo
-    const v = ms.valor();
-    if (!v.length) continue;
-    saida[id] = id === "produtos" ? v : v.map((i) => itens.find((x) => x.id === i)?.valor).filter((x) => x != null);
-  }
-  return saida;
-}
-
-function montarVendedores(f, cat) {
-  const conhecidos = new Map(cat.vendedores.map((v) => [v.id, v]));
-  const lista = [...cat.vendedores];
-  for (const id of form.vendedores.keys()) {
-    if (!conhecidos.has(id)) {
-      lista.push({ id, nome: form.nomes.vendedores?.[id] || estado.detalhe?.andamento?.vendedores.find((v) => v.id === id)?.nome || `Vendedor ${id}`,
-                   rotulo_equipe: "sem venda em 12 meses", equipe: "" });
-    }
-  }
-  const alvo = f.querySelector("#cf-vendedores");
-  if (!lista.length) {
-    alvo.innerHTML = `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Seu acesso na Gestão não tem vendedores. Fale com o administrador.</span></p>`;
-    return;
-  }
-  alvo.innerHTML = lista.map((v) => {
-    const marcado = form.vendedores.has(v.id);
-    const meta = form.vendedores.get(v.id);
-    return `<div class="cf-vend ${marcado ? "marcado" : ""}" data-id="${v.id}" data-equipe="${esc(v.equipe)}" data-busca="${esc(`${v.nome} ${v.nome_erp || ""} ${v.id}`.toLowerCase())}">
-      <label class="vend-op"><input type="checkbox" ${marcado ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
-        <span class="n">${esc(v.nome)}<small>código ${v.id} · ${esc(v.rotulo_equipe || EQUIPE[v.equipe] || "")}${v.inativo ? " · inativo no ERP" : ""}</small></span></label>
-      <input class="cf-meta-v" type="number" min="0" step="any" inputmode="decimal" placeholder="padrão" aria-label="Meta de ${esc(v.nome)}"
-        value="${meta != null ? meta : ""}" ${marcado ? "" : "disabled"}>
-    </div>`;
-  }).join("");
-  const equipes = [...new Set(cat.vendedores.map((v) => v.equipe))].filter(Boolean);
-  f.querySelector("#cf-equipes").innerHTML = equipes.map((e) => `<button class="btn" type="button" data-equipe="${esc(e)}" title="Marcar todos os vendedores ativos da equipe">${icone("pessoas")}${esc(EQUIPE[e] || e)}</button>`).join("");
-  const marcar = (linha, sim) => {
-    linha.classList.toggle("marcado", sim);
-    linha.querySelector('input[type="checkbox"]').checked = sim;
-    linha.querySelector(".cf-meta-v").disabled = !sim || form.metrica === "preco_medio";
+  if (!formObj || dlg.querySelector("form") !== f) return;
+  if (!cat) return erro(`não foi possível carregar produtos e clientes: ${estado.erroCatalogo}`);
+  const unidade = () => {
+    const pr = formObj.construtor.preset();
+    f.querySelector("#go-meta-bloco").hidden = pr.metrica === "preco_medio";
+    f.querySelector("#go-unidade").textContent = `(${formObj.construtor.unidadeAlvo() || "valor"} para a equipe)`;
   };
-  alvo.addEventListener("change", (e) => {
-    if (e.target.type === "checkbox") { marcar(e.target.closest(".cf-vend"), e.target.checked); contarVendedores(); }
+  formObj.construtor = construtorIndicador(f.querySelector("#go-indicador"), {
+    catalogo: cat, inicial: d, objetivo: true, filtrosEm: f.querySelector("#go-filtros"), precosEm: f.querySelector("#go-precos"),
+    aoMudar: unidade,
   });
-  f.querySelector("#cf-busca-v").addEventListener("input", (e) => {
-    const termo = e.target.value.trim().toLowerCase();
-    alvo.querySelectorAll(".cf-vend").forEach((l) => { l.hidden = !!termo && !l.dataset.busca.includes(termo); });
-  });
-  f.querySelector("#cf-marcar").addEventListener("click", () => {
-    alvo.querySelectorAll(".cf-vend:not([hidden])").forEach((l) => marcar(l, true));
-    contarVendedores();
-  });
-  f.querySelector("#cf-desmarcar").addEventListener("click", () => {
-    alvo.querySelectorAll(".cf-vend").forEach((l) => marcar(l, false));
-    contarVendedores();
-  });
-  f.querySelectorAll("#cf-equipes [data-equipe]").forEach((b) => b.addEventListener("click", () => {
-    alvo.querySelectorAll(`.cf-vend[data-equipe="${CSS.escape(b.dataset.equipe)}"]`).forEach((l) => {
-      if (!conhecidos.get(Number(l.dataset.id))?.inativo) marcar(l, true);
-    });
-    contarVendedores();
-  }));
-  contarVendedores();
+  unidade();
+  formObj.orig = JSON.stringify(coletarObjetivo());
 }
 
-function contarVendedores() {
-  const n = dlg.querySelectorAll(".cf-vend.marcado").length;
-  const el = dlg.querySelector("#cf-n-vend");
-  if (el) el.textContent = n ? `· ${plural(n, "marcado", "marcados")}` : "· nenhum marcado";
+// ---------- eventos ----------
+function trocarRegiao(r) {
+  if (r === estado.regiao) return;
+  if (!podeSairDoForm()) return;
+  if (raiz.querySelector("#g-nota")?.value.trim() && !confirm("Descartar a observação que você escreveu?")) return;
+  estado.regiao = r;
+  estado.vista = "grade";
+  estado.historico = estado.detalhe = null;
+  raiz.querySelector("#g-corpo").innerHTML = `<div class="esqueleto" style="height:320px"></div>`;
+  atualizarUrl();
+  carregar();
 }
 
-// Explica a unidade da meta e o que cada tipo pede (volume: uma unidade só; nunca/já compraram: os produtos).
-function dicas() {
-  if (!form) return;
-  const f = dlg.querySelector("form");
-  const un = f.querySelector("#cf-unidade");
-  const dica = f.querySelector("#cf-dica-filtro");
-  const t = form.metrica, p = form.parametros;
-  const escolhidos = filtros.produtos ? filtros.produtos.ms.valor() : [];
-  const comProduto = FILTROS_PRODUTO.some((id) => filtros[id]?.ms.valor().length);
-  let unidade = { positivacao: "(clientes)", mix_medio: "(produtos por cliente)", efetividade: "(%, ex.: 80)",
-                  frequencia: "(semanas com compra por cliente)" }[t] || "";
-  const textos = [];
-  if (t === "personalizada") {
-    unidade = p.forma === "crescimento" ? "(% de crescimento, ex.: 10)" : p.forma === "pct_carteira" ? "(% da carteira, ex.: 60)"
-      : { faturamento: p.forma === "por_cliente" ? "(R$ por cliente)" : "(R$)", volume: p.forma === "por_cliente" ? "(por cliente)" : "",
-          clientes: "(clientes)", produtos: "(produtos)" }[p.medida];
-    if (p.medida === "volume") {
-      const unidades = [...new Set((estado.catalogo?.produtos || []).filter((x) => escolhidos.includes(x.id)).map((x) => x.unidade))];
-      if (unidades.length === 1 && p.forma !== "crescimento") unidade = `(${unidades[0].toLowerCase()}${p.forma === "por_cliente" ? " por cliente" : ""})`;
-      textos.push(unidades.length > 1
-        ? `Os produtos escolhidos têm unidades diferentes (${unidades.join(", ")}): em volume use uma só.`
-        : "Em volume, escolha produtos, linha, categoria ou grupo com uma unidade só (a quantidade não soma kg com unidade).");
+function aoClicar(e) {
+  const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
+    "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
+    "[data-enviar-nota],[data-cancelar-form],[data-lancar]");
+  if (!t) return;
+  const ds = t.dataset;
+  if (ds.regiao) return trocarRegiao(ds.regiao);
+  if ("nova" in ds) return entrarSelecao([]);
+  if (ds.objetivo) return abrirObjetivo(ds.objetivo);
+  if (ds.acaoPara) return acaoPara(Number(ds.acaoPara));
+  if (ds.acao) return abrirAcao(Number(ds.acao));
+  if (ds.vendedor) return abrirVendedor(Number(ds.vendedor));
+  if ("voltar" in ds) return voltarGrade();
+  if (ds.encerrar) return encerrar(Number(ds.encerrar));
+  if (ds.prorrogar) return prorrogar(Number(ds.prorrogar));
+  if (ds.editarAcao) return editarAcao(Number(ds.editarAcao));
+  if (ds.arquivarAcao) return arquivar(Number(ds.arquivarAcao), ds.arquivada === "1");
+  if (ds.excluirAcao) return excluirAcao(Number(ds.excluirAcao));
+  if (ds.excluirNota) return excluirNota(Number(ds.excluirNota));
+  if ("enviarNota" in ds) return enviarNota();
+  if ("cancelarForm" in ds) return sairSelecao();
+  if ("lancar" in ds) return lancar();
+}
+
+function aoMudarCampo(e) {
+  const t = e.target;
+  if (t.matches("select[data-abrir]")) {
+    estado.abrir = t.value; // "" = não abrir
+    return carregarVista();
+  }
+  if (!t.closest("#g-form")) return;
+  const form = raiz.querySelector("#g-form");
+  if (t.name === "prazo") {
+    const data = t.value === "data";
+    form.querySelector("#gf-fim-bloco").hidden = !data;
+    if (data) {
+      form.querySelector(".ge-mais").open = true;
+      form.querySelector('[name="fim"]').focus();
     }
-    if (p.forma === "crescimento") textos.push("A meta de cada vendedor é o que ele fez no período de comparação mais o crescimento pedido.");
-    if (p.forma === "pct_carteira") textos.push("Conta os clientes ativos da carteira de cada vendedor que compraram no período, de qualquer vendedor.");
   }
-  if (t === "efetividade") textos.push("Conta os pedidos de venda e as visitas esperadas pelos dias de atendimento das áreas (Gestão › Configurar), pela carteira de cada vendedor. Clientes em áreas sem dia ficam fora.");
-  if (t === "frequencia") textos.push("Semanas de domingo a sábado, cortadas na virada do mês, como no Power BI.");
-  if (t === "mix_medio") textos.push("Os produtos escolhidos são o mix da campanha; nada escolhido = todos os produtos. Divide por todos os clientes que compraram.");
-  if (["nunca_compraram", "ja_compraram"].includes(p.clientes) && aceitaBase(t, p) && !comProduto) {
-    textos.push("Para contar quem nunca ou já comprou, escolha os produtos da campanha.");
-  }
-  un.textContent = unidade;
-  dica.innerHTML = textos.length ? `${icone("info")}<span>${esc(textos.join(" "))}</span>` : "";
-  dica.hidden = !textos.length;
+  if (t.name === "inicio") desenharPrazos();
+  if (t.name === "alvo_tipo") atualizarAlvo();
 }
 
-function parametrosColetados() {
-  const t = form.metrica, p = form.parametros, saida = {};
-  if (t === "personalizada") {
-    Object.assign(saida, { medida: p.medida, forma: p.forma });
-    if (p.forma === "crescimento") saida.comparar = p.comparar || "periodo_anterior";
-  }
-  if (aceitaBase(t, p)) {
-    saida.clientes = p.clientes || "todos";
-    if (saida.clientes === "recuperados") saida.dias_sem_compra = p.dias_sem_compra || 90;
-  }
-  return saida;
+function aoDigitar(e) {
+  if (e.target.name === "meta" && e.target.closest("#g-form")) atualizarAlvo();
 }
 
-function coletar() {
-  const f = dlg.querySelector("form");
-  const val = (n) => f.querySelector(`[name="${n}"]`).value;
-  const preco = form.metrica === "preco_medio";
-  const vendedores = [...f.querySelectorAll(".cf-vend.marcado")].map((l) => {
-    const meta = l.querySelector(".cf-meta-v").value.trim();
-    return { id: Number(l.dataset.id), meta: meta === "" || preco ? null : Number(meta) };
-  });
-  return {
-    nome: val("nome").trim(), inicio: val("inicio"), fim: val("fim"), metrica: form.metrica, parametros: parametrosColetados(),
-    filtros: Object.keys(filtros).length ? valoresFiltros() : {}, meta_padrao: preco ? 100 : Number(val("meta_padrao") || 0),
-    premiacao: val("premiacao").trim(), descricao: val("descricao").trim(),
-    vendedores: f.querySelector(".cf-vend") ? vendedores : [...form.vendedores].map(([id, meta]) => ({ id, meta })),
-    metas_produto: preco ? [...form.metasProduto].map(([id, meta]) => ({ id, meta })) : [],
-  };
-}
-
-function formMudou() {
-  return !!(form && dlg?.open && form.orig && JSON.stringify(coletar()) !== form.orig);
-}
-
-function erroForm(msg) {
-  const el = dlg.querySelector(".form-erro");
-  el.textContent = msg.charAt(0).toUpperCase() + msg.slice(1);
-  el.hidden = !msg;
-  if (msg) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
-
-async function salvar() {
-  const dados = coletar();
-  if (!dados.nome) return erroForm("dê um nome à campanha");
-  if (!dados.inicio || !dados.fim) return erroForm("escolha o início e o fim");
-  if (dados.fim < dados.inicio) return erroForm("o fim é antes do início");
-  if (!dados.vendedores.length) return erroForm("marque os vendedores da campanha");
-  if (dados.metrica === "preco_medio") {
-    if (!dados.metas_produto.length) return erroForm("escolha os produtos do preço médio");
-    if (dados.metas_produto.some((p) => !(p.meta > 0))) return erroForm("dê o preço-alvo de cada produto (R$ por unidade)");
-  }
-  const btn = dlg.querySelector('button[type="submit"]');
-  btn.disabled = true;
-  erroForm("");
-  try {
-    const r = form.id
-      ? await api("/api/gestao/campanha/editar", { json: { id: form.id, campanha: dados } })
-      : await api("/api/gestao/campanhas", { json: { campanha: dados, rascunho: form.rascunho } });
-    toast(form.id ? "Campanha salva" : r.ja_existia ? "Esta campanha já tinha sido criada" : "Campanha criada");
-    form = null;
-    dlg.close();
-    estado.detalhe = { campanha: r.campanha, andamento: r.andamento, aviso: r.aviso };
-    estado.sel = r.campanha.id;
-    atualizarUrl();
-    desenharDetalhe();
-    await carregar(true);
-    raiz.querySelector("#g-detalhe").scrollIntoView({ behavior: "smooth", block: "start" });
-  } catch (e) {
-    erroForm(e.message);
-  } finally {
-    btn.disabled = false;
+function aoTeclar(e) {
+  if (e.target.id === "g-nota" && e.key === "Enter" && !e.shiftKey) { // Enter grava; Shift+Enter pula linha
+    e.preventDefault();
+    enviarNota();
+  } else if (e.key === "Enter" && e.target.matches("tr[data-vendedor]")) {
+    abrirVendedor(Number(e.target.dataset.vendedor));
   }
 }

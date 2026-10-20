@@ -57,6 +57,7 @@ const ICONES = {
   seta: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   arquivo: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v10.5h14V9M10 13h4"/>',
   pontos: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
+  bandeira: '<path d="M5 21V4"/><path d="M5 4.5c2.5-1.6 5-1.6 7 0s4.5 1.6 7 0v9c-2.5 1.6-5 1.6-7 0s-4.5-1.6-7 0"/>',
   foguete:'<path d="M12 15c-2-2-3-5-1-9 2-3 6-3.5 9-3.5 0 3-.5 7-3.5 9-4 2-7 1-9-1"/><path d="M9 13 5 14l2-4M11 15l-1 4 4-2"/><circle cx="15.5" cy="8.5" r="1.4"/>',
 };
 

@@ -634,7 +634,7 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual([(p["data"], p["dados"]["valor"]) for p in parciais],
                          [("2026-09-08", 5000), ("2026-09-15", 4750), ("2026-09-22", 4750)])
         self.assertEqual((resultado["data"], resultado["dados"]["classe"], resultado["dados"]["caminho"], resultado["atual"]),
-                         ("2026-09-28", "mid", 0.75, True))
+                         ("2026-09-29", "mid", 0.75, True))  # entra no dia seguinte ao fim
         self.assertEqual((h["vendedor"]["nome"], h["vendedor"]["regiao"], h["em_vigor"]), ("Thais", "BA", 0))
         d = self.gestao.detalhe(self.chefe, (None, None), id_)
         self.assertEqual({x["id"]: (x["base"], x["alvo"], x["resultado"], x["classe"]) for x in d["linhas"]},
@@ -738,9 +738,11 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual((es["regioes"], es["regiao"], es["pode_editar"], es["mes_faturamento"]),
                          (["ES", "BA"], "ES", True, {"ano": 2026, "mes": 9}))
         self.assertEqual([(v["id"], v["nome"], v["faturamento_pct"]) for v in es["vendedores"]], [(ES, "Rubens", 0.74)])
-        ba = self.quadro()
-        self.assertEqual({v["id"]: v["faturamento_pct"] for v in ba["vendedores"]}, {BA: 0.7917, EDIR: None})  # Edir sem meta
-        self.assertEqual([v["acoes"] for v in ba["vendedores"]], [[], []])
+        ba = self.quadro()  # a equipe é quem tem meta no mês (planilha METAS): o Edir não tem em setembro
+        self.assertEqual({v["id"]: v["faturamento_pct"] for v in ba["vendedores"]}, {BA: 0.7917})
+        self.criar("Do Edir", vendedores=[EDIR], fim="2026-10-31")  # numa ação em vigor ele aparece, sem meta
+        self.assertEqual({v["id"]: (v["faturamento_pct"], v["em_vigor"]) for v in self.quadro()["vendedores"]},
+                         {BA: (0.7917, 0), EDIR: (None, 1)})
         with self.assertRaises(ValueError):
             self.quadro(regiao="SP")
 
@@ -785,6 +787,8 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual(self.eventos(BA), ["nota"])  # os eventos da ação saem; a observação fica
 
     def test_objetivo_da_regiao(self):
+        self.calc.metas.dados().append({"mes": D(2026, 9, 1), "id_vendedor": EDIR, "vendedor": "EDIR", "meta_fat": 1000.0,
+                                        "meta_mus": 0.0, "meta_out": 0.0, "meta_cli": 1.0})  # a equipe BA: Thais e Edir
         id_ = self.gestao.criar(self.chefe, {"nome": "Faturamento da equipe", "regiao": "BA", "inicio": "2026-09-01",
                                              "fim": "2026-09-30", "metrica": "faturamento", "meta_padrao": 6000},
                                 "objetivo")["id"]

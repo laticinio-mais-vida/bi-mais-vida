@@ -1,8 +1,8 @@
 // Configuração da página Gestão (só administradores):
-// - Acesso por usuário: quem usa a página e quais vendedores cada visualizador pode pôr nas campanhas e acompanhar no
-//   andamento. Cada pessoa vê só as campanhas que criou; o administrador vê todas. Vendedor aqui é o vendedor da
+// - Acesso por usuário: quem usa a página e quais vendedores cada visualizador acompanha (as ações, os objetivos e o
+//   histórico deles). Só o administrador lança ações e objetivos e escreve observações. Vendedor aqui é o vendedor da
 //   venda, como na página Metas.
-// - Dias de atendimento: em que dias da semana cada área comercial é visitada. A efetividade das campanhas conta as
+// - Dias de atendimento: em que dias da semana cada área comercial é visitada. A efetividade das ações conta as
 //   visitas esperadas por eles (começou com a planilha do Power BI). Área pendente ou não atendida fica fora da conta.
 // Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
@@ -77,7 +77,7 @@ const pendentes = () => (dados.areas || []).filter((a) => rasc.areas[a.id] == nu
 
 function contarAlteracoes() { return Object.keys(rasc.usuarios).filter(usuarioMudou).length + areasMudadas().length; }
 
-// Vendedores (com venda nos últimos 12 meses) que o usuário pode pôr nas campanhas, com o rascunho atual.
+// Vendedores (com venda nos últimos 12 meses) que o usuário acompanha na Gestão, com o rascunho atual.
 function vendedoresDoUsuario(u, r) {
   if (r.modo === "todos") return dados.vendedores;
   if (r.modo === "alguns") { const s = new Set(r.vendedores); return dados.vendedores.filter((v) => s.has(v.id)); }
@@ -102,8 +102,8 @@ function render() {
     <aside class="cartao config-menu entra" style="--i:0">
       ${[["usuarios", "escudo", "Acesso por usuário", nVe], ["areas", "calendario", "Dias de atendimento", pendentes()]]
         .map(([id, ic, nome, n]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}<span class="cont">${n}</span></button>`).join("")}
-      <div class="dica">${icone("info")} Cada pessoa vê só as campanhas que criou, com os vendedores do acesso dela.
-        Administradores veem e mexem em todas. Os dias de atendimento das áreas valem para a efetividade.</div>
+      <div class="dica">${icone("info")} Cada pessoa vê as ações, os objetivos e o histórico dos vendedores do acesso dela.
+        Só os administradores lançam e mudam. Os dias de atendimento das áreas valem para a efetividade.</div>
     </aside>
     <div id="cg-secao"></div>
   </div>
@@ -146,7 +146,7 @@ function secaoAreas(alvo) {
   alvo.innerHTML = `
   <section class="cartao secao entra" style="--i:1">
     <div class="cartao-cab"><div><h2>${icone("calendario")}Dias de atendimento das áreas</h2>
-      <p class="sub">A efetividade das campanhas conta uma visita esperada por cliente ativo da área em cada dia marcado.
+      <p class="sub">A efetividade das ações conta uma visita esperada por cliente ativo da área em cada dia marcado.
         Área pendente ou não atendida fica fora da conta (pedidos e visitas).</p></div></div>
     ${dados.aviso_areas ? `<div class="aviso">${icone("alerta")}<span>${esc(dados.aviso_areas)}</span></div>` : ""}
     ${n ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>${n} área${n === 1 ? "" : "s"} com clientes ativos ainda sem dia: os clientes delas ficam fora da efetividade.</span></p>` : ""}
@@ -239,7 +239,7 @@ function secaoUsuarios(alvo) {
   if (!dados.usuarios.length) {
     alvo.innerHTML = `<section class="cartao usu-vazio entra" style="--i:1">
       <div class="usu-vazio-ic">${icone("escudo")}</div><h3>Ainda não há visualizadores</h3>
-      <p>Cadastre as pessoas em <b>Usuários</b>; depois, aqui você escolhe quais vendedores cada uma pode pôr nas campanhas.</p>
+      <p>Cadastre as pessoas em <b>Usuários</b>; depois, aqui você escolhe quais vendedores cada uma acompanha.</p>
       <a class="btn primario" href="#/usuarios">${icone("escudo")}Abrir Usuários</a></section>`;
     return;
   }
@@ -247,7 +247,7 @@ function secaoUsuarios(alvo) {
   <div class="usuarios cp-usuarios">
     <aside class="cartao usu-lista entra" style="--i:1">
       <div class="cartao-cab"><div><h2>${icone("escudo")}Visualizadores</h2>
-        <p class="sub">Quem usa a Gestão e com quais vendedores monta as campanhas</p></div></div>
+        <p class="sub">Quem usa a Gestão e quais vendedores acompanha</p></div></div>
       <label class="campo sem-seta cp-busca-u"><span class="ic-campo">${icone("busca")}</span><input id="cg-busca-u" type="search" placeholder="Buscar pessoa" value="${esc(buscaUsuario)}"></label>
       <div class="usu-itens" id="cg-itens"></div>
       <div class="dica">${icone("info")}<span>Nome, senha e páginas ficam em <a href="#/usuarios">Usuários</a>; as abas e os
@@ -293,12 +293,12 @@ function desenharEditor() {
     </div></div>
     <div class="opcao-linha">
       <button class="chave ${r.ve ? "ligada" : ""}" id="cg-ve" type="button" role="switch" aria-checked="${r.ve}" aria-label="Usa a Gestão"></button>
-      <div><b>Usa a Gestão</b><p>${r.ve ? "A página aparece na barra lateral desta pessoa, que cria e acompanha as próprias campanhas (também pelo Assistente)." : "Desligado, a página some da barra lateral e o servidor recusa os pedidos."}
+      <div><b>Usa a Gestão</b><p>${r.ve ? "A página aparece na barra lateral desta pessoa, que acompanha as ações, os objetivos e o histórico dos vendedores do acesso (também pelo Assistente)." : "Desligado, a página some da barra lateral e o servidor recusa os pedidos."}
         ${!outras.length && r.ve ? " É a única página dela: para tirar, libere outra antes em Usuários." : ""}</p></div>
     </div>
     <div ${r.ve ? "" : "hidden"}>
-      <h3 class="usu-titulo">Vendedores que pode pôr nas campanhas</h3>
-      <div class="seletor cp-modo" data-v="${idx}" role="radiogroup" aria-label="Vendedores das campanhas"><span class="marcador"></span>
+      <h3 class="usu-titulo">Vendedores que acompanha</h3>
+      <div class="seletor cp-modo" data-v="${idx}" role="radiogroup" aria-label="Vendedores que acompanha"><span class="marcador"></span>
         ${MODOS.map((m) => `<button type="button" role="radio" data-modo="${m.id}" aria-checked="${m.id === r.modo}" class="${m.id === r.modo ? "ativo" : ""}">${icone(m.icone)}${m.nome}</button>`).join("")}
       </div>
       <div id="cg-modo-detalhe"></div>
@@ -339,7 +339,7 @@ function desenharModo(u) {
         e ${vend}. Se o acesso de Metas mudar, este muda junto.</span></p>`;
     }
   } else if (r.modo === "todos") {
-    alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Pode pôr qualquer vendedor nas campanhas, inclusive os que entrarem depois.</span></p>`;
+    alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Acompanha qualquer vendedor, inclusive os que entrarem depois.</span></p>`;
   } else {
     desenharEscolha(u);
   }
@@ -403,12 +403,12 @@ function atualizarResumoU(u) {
   const quem = `<b>${esc(u.nome)}</b>`;
   let txt;
   if (!r.ve) txt = `${quem} não usa a Gestão.`;
-  else if (r.modo === "todos") txt = `${quem} monta campanhas com <b>qualquer vendedor</b>.`;
+  else if (r.modo === "todos") txt = `${quem} acompanha <b>qualquer vendedor</b>.`;
   else {
     const vendo = vendedoresDoUsuario(u, r);
-    if (!vendo.length) txt = `${quem} vê a página, mas <b>nenhum vendedor</b>: não conseguiria montar campanhas.`;
-    else if (vendo.length <= 4) txt = `${quem} monta campanhas só com ${emLista(vendo.map((v) => `<b>${esc(v.nome)}</b>`))}.`;
-    else txt = `${quem} monta campanhas com <b>${vendo.length} vendedores</b>; os demais não aparecem para ela.`;
+    if (!vendo.length) txt = `${quem} vê a página, mas <b>nenhum vendedor</b>: não veria nenhuma ação.`;
+    else if (vendo.length <= 4) txt = `${quem} acompanha só ${emLista(vendo.map((v) => `<b>${esc(v.nome)}</b>`))}.`;
+    else txt = `${quem} acompanha <b>${vendo.length} vendedores</b>; os demais não aparecem para ela.`;
   }
   el.innerHTML = `${icone("olho")}<span>${txt}</span>`;
 }

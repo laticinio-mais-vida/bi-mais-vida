@@ -9,7 +9,7 @@ const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   assistente: "Perguntas sobre os dados, respondidas por IA",
-  gestao: "Campanhas de vendas e o andamento dos vendedores",
+  gestao: "Objetivos, ações e o histórico de cada vendedor",
 };
 const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", assistente: "config-assistente", gestao: "config-gestao" }; // rota do Configurar de cada página
 
@@ -319,7 +319,7 @@ async function salvar() {
 
 async function excluir() {
   const u = dados.usuarios.find((x) => x.login === sel);
-  if (!confirm(`Excluir o acesso de ${u.nome}? A pessoa não vai mais conseguir entrar (as campanhas que ela criou na Gestão ficam, visíveis só para os administradores). Se for só por um tempo, prefira desativar.`)) return;
+  if (!confirm(`Excluir o acesso de ${u.nome}? A pessoa não vai mais conseguir entrar (as ações que ela lançou na Gestão ficam). Se for só por um tempo, prefira desativar.`)) return;
   try {
     const r = await api("/api/usuarios/excluir", { json: { login: sel } });
     dados.usuarios = r.usuarios;

@@ -69,7 +69,7 @@ const PAGINAS = {
   },
   gestao: {
     nome: "Gestão",
-    titulo: "Gestão de campanhas",
+    titulo: "Gestão da equipe",
     pendente: gestaoTemAlteracoes,
     montar: (el) => montarGestao(el, {
       admin: ehAdmin(), eu: app.usuario, assistente: paginasPermitidas().includes("assistente"),
@@ -79,7 +79,7 @@ const PAGINAS = {
   },
   "config-gestao": {
     titulo: "Configurações da gestão",
-    fixo: "Os vendedores de cada pessoa nas campanhas e os dias de atendimento das áreas",
+    fixo: "Os vendedores que cada pessoa acompanha e os dias de atendimento das áreas",
     pai: "gestao",
     admin: true,
     sempreMonta: true,
@@ -103,7 +103,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
-  gestao: () => "Campanhas de vendas e o andamento de cada vendedor",
+  gestao: () => "Objetivos, ações e o histórico de cada vendedor, por região",
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

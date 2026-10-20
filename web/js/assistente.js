@@ -3,11 +3,11 @@
 // resposta com as consultas feitas. As conversas ficam no servidor, como nos chats de IA: a lista ao lado mostra as
 // da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador.
 // A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
-// Campanhas: quando a IA monta um rascunho (propor_campanha), a resposta traz um card com "Criar campanha" (grava
-// pela página Gestão) e "Revisar no painel"; nada é criado sem o clique. #/assistente?q=… abre uma conversa nova com
-// a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
+// Ações: quando a IA monta um rascunho (propor_acao, só para o administrador), a resposta traz um card com "Lançar
+// ação" (grava pela página Gestão) e "Revisar no painel"; nada é lançado sem o clique. #/assistente?q=… abre uma
+// conversa nova com a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
 import { MESES, api, esc, fmt, icone, toast } from "./util.js";
-import { descritorLegado, metaDigitada, periodoTexto, textoBase, textoFiltros, visual } from "./gestao.js";
+import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, visual } from "./indicadores.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
@@ -25,6 +25,10 @@ const FERRAMENTA = {
   resumo_vendas: { nome: "Resumo de vendas", icone: "moeda" },
   metas_e_realizado: { nome: "Metas e realizado", icone: "alvo" },
   consultar_sql: { nome: "Consulta aos dados", icone: "banco" },
+  listar_acoes: { nome: "Ações da Gestão", icone: "bandeira" },
+  andamento_acao: { nome: "Andamento da ação", icone: "bandeira" },
+  propor_acao: { nome: "Rascunho de ação", icone: "bandeira" },
+  // nomes de antes (conversas gravadas)
   listar_campanhas: { nome: "Campanhas", icone: "quadro" },
   andamento_campanha: { nome: "Andamento da campanha", icone: "quadro" },
   propor_campanha: { nome: "Rascunho de campanha", icone: "quadro" },
@@ -554,7 +558,7 @@ function balaoIA(m, i) {
     </div></div>`;
 }
 
-// ---------- rascunho de campanha ----------
+// ---------- rascunho de ação ----------
 function cartaoRascunho(r, i, j) {
   const ind = r.indicador || descritorLegado(r); // rascunho de antes dos tipos novos
   const m = visual(ind);
@@ -562,30 +566,32 @@ function cartaoRascunho(r, i, j) {
   const vend = (r.vendedores || []).map((v) => nomes[v.id] || `Vendedor ${v.id}`);
   const ajustes = (r.vendedores || []).filter((v) => v.meta != null).length;
   const precos = r.metas_produto || [];
-  const meta = ind.tipo === "preco_medio"
+  const alvo = ind.tipo === "preco_medio"
     ? `preço-alvo de ${precos.length} produto${precos.length === 1 ? "" : "s"}: ${precos.slice(0, 3).map((p) => `${r.nomes?.produtos?.[p.id] || p.id} a R$ ${fmt.num(p.meta, 2)}`).join(", ")}${precos.length > 3 ? "…" : ""}`
-    : r.meta_padrao ? `${metaDigitada(ind, r.meta_padrao, r.unidade)} por vendedor` : "sem meta (só ranking)";
+    : r.alvo_tipo ? textoAlvo(ind, r.alvo_tipo, r.meta_padrao, r.unidade)
+    : r.meta_padrao ? `${metaDigitada(ind, r.meta_padrao, r.unidade)} por vendedor` : "sem alvo";
   const filtros = [...textoFiltros(r.filtros || {}, r.nomes?.produtos), ...textoBase(ind)];
   const linhas = [
+    ...(r.regiao ? [["mapa", "Região", r.regiao]] : []),
     ["calendario", "Período", periodoTexto(r.inicio, r.fim)],
     [m.icone, "Mede", ind.nome + (r.unidade && ind.medida === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
-    ["alvo", "Meta", meta + (ajustes ? ` · ${ajustes} ajustada${ajustes === 1 ? "" : "s"}` : "")],
+    ["alvo", "Alvo", alvo + (ajustes ? ` · ${ajustes} ajustado${ajustes === 1 ? "" : "s"}` : "")],
     ["pessoas", `${vend.length} vendedor${vend.length === 1 ? "" : "es"}`, vend.length <= 6 ? vend.join(", ") : `${vend.slice(0, 5).join(", ")} e mais ${vend.length - 5}`],
     ["funil", "Conta", filtros.length ? filtros.join(" · ") : "todos os produtos e clientes"],
-    ...(r.premiacao ? [["trofeu", "Prêmio", r.premiacao]] : []),
   ];
+  const lancada = r.acao || r.campanha; // r.campanha: conversas de antes
   let acoes;
-  if (r.campanha) {
-    acoes = `<span class="chip camp-criada">${icone("certo")}Criada</span>
-      <a class="btn" href="#/gestao?c=${r.campanha.id}">${icone("quadro")}Abrir no painel</a>`;
-  } else if (info?.gestao) {
-    acoes = `<button class="btn primario" type="button" data-criar="${i}:${j}">${icone("mais")}Criar campanha</button>
+  if (lancada) {
+    acoes = `<span class="chip camp-criada">${icone("certo")}Lançada</span>
+      <a class="btn" href="#/gestao?${lancada.regiao ? `r=${lancada.regiao}&` : ""}a=${lancada.id}">${icone("bandeira")}Abrir no painel</a>`;
+  } else if (info?.gestao && ctx.admin) {
+    acoes = `<button class="btn primario" type="button" data-criar="${i}:${j}">${icone("bandeira")}Lançar ação</button>
       <a class="btn" href="#/gestao?rascunho=${encodeURIComponent(r.id)}">${icone("lapis")}Revisar no painel</a>`;
   } else {
-    acoes = `<span class="fraco">Para criar, peça ao administrador acesso à página Gestão.</span>`;
+    acoes = `<span class="fraco">${info?.gestao ? "Só o administrador lança ações." : "Para acompanhar as ações, peça ao administrador acesso à página Gestão."}</span>`;
   }
   return `<div class="camp-rascunho" style="--c:${m.cor}">
-    <div class="camp-rascunho-cab">${icone("quadro")}<span>${r.campanha ? "Campanha criada" : "Rascunho de campanha · ainda não criada"}</span></div>
+    <div class="camp-rascunho-cab">${icone("bandeira")}<span>${lancada ? "Ação lançada" : "Rascunho de ação · ainda não lançada"}</span></div>
     <h4>${esc(r.nome)}</h4>
     <dl>${linhas.map(([ic, rot, val]) => `<div>${icone(ic)}<dt>${esc(rot)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>
     ${r.descricao ? `<p class="fraco">${esc(r.descricao)}</p>` : ""}
@@ -599,15 +605,15 @@ async function aoClicarRascunho(e) {
   const [i, j] = b.dataset.criar.split(":").map(Number);
   const conversa = atual;
   const r = conversa.mensagens[i]?.rascunhos?.[j];
-  if (!r || r.campanha) return;
+  if (!r || r.acao || r.campanha) return;
   b.disabled = true;
   try {
-    const campanha = { nome: r.nome, descricao: r.descricao, premiacao: r.premiacao, inicio: r.inicio, fim: r.fim,
-      metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros, meta_padrao: r.meta_padrao,
-      vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
-    const res = await api("/api/gestao/campanhas", { json: { campanha, rascunho: r.id } });
-    r.campanha = { id: res.campanha.id, nome: res.campanha.nome };
-    toast(res.ja_existia ? "Esta campanha já tinha sido criada" : `Campanha “${res.campanha.nome}” criada`);
+    const acao = { nome: r.nome, rotulo: r.rotulo || "", descricao: r.descricao || "", regiao: r.regiao, inicio: r.inicio,
+      fim: r.fim, metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros, alvo_tipo: r.alvo_tipo || "fixo",
+      meta_padrao: r.meta_padrao, vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
+    const res = await api("/api/gestao/acoes", { json: { acao, rascunho: r.id } });
+    r.acao = { id: res.id, nome: r.nome, regiao: res.regiao };
+    toast(res.ja_existia ? "Este rascunho já tinha virado ação" : `Ação “${r.nome}” lançada`);
     if (conversa === atual) desenharMensagens();
   } catch (err) {
     b.disabled = false;
@@ -639,9 +645,10 @@ function descricao(p) {
     return partes.join(", ");
   }
   if (p.ferramenta === "metas_e_realizado") return `${a.visao || ""} · ${(a.meses || []).join(", ")}`;
-  if (p.ferramenta === "listar_campanhas") return a.texto ? `“${a.texto}”` : "todas";
+  if (p.ferramenta === "listar_acoes" || p.ferramenta === "listar_campanhas") return a.texto ? `“${a.texto}”` : "todas";
+  if (p.ferramenta === "andamento_acao") return p.resumo || `ação ${a.acao}`;
   if (p.ferramenta === "andamento_campanha") return p.resumo || `campanha ${a.campanha}`;
-  if (p.ferramenta === "propor_campanha") return a.nome || "";
+  if (p.ferramenta === "propor_acao" || p.ferramenta === "propor_campanha") return a.nome || "";
   return p.objetivo || a.objetivo || "";
 }
 

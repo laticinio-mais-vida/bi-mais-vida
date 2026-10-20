@@ -120,7 +120,7 @@ export function multiSelecao(el, op) {
 
   function fora(e) { if (!el.contains(e.target)) fechar(true); }
   function tecla(e) {
-    // Esc fecha só a lista (dentro de uma janela, como a da campanha na Gestão, a janela fica aberta)
+    // Esc fecha só a lista (dentro de uma janela, como a do objetivo na Gestão, a janela fica aberta)
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fechar(false); botao.focus(); }
     if (e.key === "Enter" && e.target === busca) { e.preventDefault(); fechar(true); botao.focus(); }
   }
