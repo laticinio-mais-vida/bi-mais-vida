@@ -308,6 +308,10 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
   - Pedidos na rota: só os de clientes das áreas atendidas naquele dia da semana. Pedido de cliente de área de
     outro dia não conta (o "Pedidos Fora de Rota" do Power BI). Exemplo: a área X é atendida na segunda, com 10
     visitas; de 8 pedidos na segunda, 6 são de clientes da X e 2 de áreas de outros dias: 6 ÷ 10.
+  - Visitas esperadas pela frequência de compra do cliente, que é a rede dele no cadastro do ERP (SEMANAL,
+    QUINZENAL ou MENSAL): no dia de atendimento da área, entram todos os semanais, os quinzenais sem compra
+    (pedido de venda) nos 7 dias antes e os mensais sem compra nos 21 dias antes. Quem não estava previsto e comprou
+    no dia entra como visita (e o pedido conta). Cliente em outra rede conta como semanal, com aviso.
   - Dia sem visita esperada (fim de semana, dia em que nenhuma área do vendedor é atendida) fica fora da média.
   - Diferente do Power BI, que divide todos os pedidos do período pelas visitas do período: lá, os pedidos fora de
     rota e os de sábado e domingo entram sem visita, e numa ação curta isso distorce a conta.
@@ -532,7 +536,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda, para a efetividade, vêm num grupo à parte: se a leitura falhar, o resto segue) |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |

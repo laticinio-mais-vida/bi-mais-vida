@@ -58,6 +58,11 @@ TABELAS_PEDIDOS = {
     "pedidos_venda": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, tipopedido VARCHAR, "
                       "cancelada INTEGER, pedidos INTEGER, total DOUBLE"),
 }
+# A rede de cada cliente (CLIENTES.ID_REDE -> REDES.NOME). As redes SEMANAL, QUINZENAL e MENSAL são a frequência de
+# compra, para as visitas esperadas da efetividade. Opcional como os pedidos: sem ela, todo cliente conta como semanal.
+TABELAS_REDE = {
+    "clientes_rede": "id INTEGER, rede VARCHAR",
+}
 
 
 def _data(v):
@@ -101,6 +106,7 @@ class Cache:
         self.antigo = False  # cache de uma versão anterior do painel (falta tabela): precisa extrair de novo
         self.sem_detalhe = False  # falta o detalhe por cliente do Assistente (Metas e Projeções funcionam)
         self.sem_pedidos = False  # faltam os pedidos de venda (só a efetividade das campanhas precisa)
+        self.sem_rede = False  # falta a rede (frequência) dos clientes: a efetividade conta todos como semanais
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -131,6 +137,7 @@ class Cache:
         antigo = _tabela_diferente(con) is not None
         sem_detalhe = _tabela_diferente(con, TABELAS_DETALHE) is not None
         sem_pedidos = _tabela_diferente(con, TABELAS_PEDIDOS) is not None
+        sem_rede = _tabela_diferente(con, TABELAS_REDE) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -139,6 +146,7 @@ class Cache:
             self.antigo = antigo
             self.sem_detalhe = sem_detalhe
             self.sem_pedidos = sem_pedidos
+            self.sem_rede = sem_rede
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -157,7 +165,8 @@ class Cache:
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -178,13 +187,15 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos
-        que não deu para ler (pedidos_erro) esperam a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
+        ou redes que não deu para ler (pedidos_erro, rede_erro) esperam a próxima cópia, em vez de extrair tudo de
+        novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
             return False
         return (self._con is None or self.antigo or self.sem_detalhe
                 or (self.sem_pedidos and not self.info.get("pedidos_erro"))
+                or (self.sem_rede and not self.info.get("rede_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -206,8 +217,10 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            pedidos = {k: v for k, v in TABELAS_PEDIDOS.items() if k in dados}  # a leitura pode ter falhado
-            for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **pedidos}.items():
+            # pedidos e rede: a leitura pode ter falhado
+            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE}.items() if k in dados}
+            pedidos = "pedidos_venda" in opcionais
+            for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
                 linhas = dados.pop(nome)  # solta a lista assim que gravar (o detalhe tem ~1 milhão de linhas)
                 if linhas:
@@ -344,6 +357,15 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler os pedidos de venda (a efetividade das campanhas fica sem dados): %s", e)
                 pedidos_erro = str(e)[:300]
+            # A rede de cada cliente (frequência de compra da efetividade), também à parte.
+            self.estado["etapa"] = "Lendo as redes dos clientes"
+            rede_erro = None
+            try:
+                dados["clientes_rede"] = bd.consulta(
+                    "SELECT c.ID_CLIENTE, r.NOME FROM CLIENTES c JOIN REDES r ON r.ID_REDE = c.ID_REDE")
+            except Exception as e:
+                log.warning("não deu para ler as redes dos clientes (a efetividade conta todos como semanais): %s", e)
+                rede_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -355,5 +377,6 @@ class Cache:
             ("banco_copia", dt.datetime.fromtimestamp(copia_mtime).isoformat(timespec="minutes")),
             ("inicio", self.inicio.isoformat()),
             *([("pedidos_erro", pedidos_erro)] if pedidos_erro else []),
+            *([("rede_erro", rede_erro)] if rede_erro else []),
         ]
         return dados

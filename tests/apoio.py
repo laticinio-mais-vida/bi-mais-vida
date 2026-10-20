@@ -24,7 +24,7 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import TABELAS, TABELAS_DETALHE, TABELAS_PEDIDOS, Cache
+from bi.cache import TABELAS, TABELAS_DETALHE, TABELAS_PEDIDOS, TABELAS_REDE, Cache
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -63,11 +63,14 @@ class PlanilhaFalsa:
         return self._linhas
 
 
-def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True) -> Calculadora:
+def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
+               redes: dict[int, str] | None = None, rede: bool = True) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
-    setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior)."""
+    setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
+    redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
-    for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {})}.items():
+    for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
+                          **(TABELAS_REDE if rede else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -140,6 +143,10 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                 (D(2026, 9, 6), ES, 1, "FUNCIONARIO", "PEDIDOVENDA", 0, 1, 10.0),  # código de outro cadastro
             ])
     con.executemany("INSERT INTO clientes VALUES (?, ?, ?)", clientes)
+    if rede:
+        redes = {c: "SEMANAL" for c, _, _ in clientes} if redes is None else redes
+        if redes:
+            con.executemany("INSERT INTO clientes_rede VALUES (?, ?)", list(redes.items()))
     con.executemany("INSERT INTO clientes_detalhes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", detalhes)
     con.executemany("INSERT INTO motivos VALUES (?, ?)", [(1, "ERRO DE LANÇAMENTO"), (2, "RECUSA"), (3, "VENCIDO")])
     con.executemany("INSERT INTO info VALUES (?, ?)", [

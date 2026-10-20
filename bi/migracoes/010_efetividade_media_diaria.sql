@@ -1,5 +1,6 @@
--- A efetividade passa a ser a média da efetividade de cada dia, só com os pedidos na rota do dia
--- (bi/indicadores.py), não mais os pedidos do período ÷ as visitas do período. As bases já medidas das ações de efetividade sem resultado congelado voltam a
+-- A efetividade passa a ser a média da efetividade de cada dia, só com os pedidos na rota do dia e as visitas pela
+-- frequência de compra dos clientes (bi/indicadores.py), não mais os pedidos do período ÷ as visitas do período. As
+-- bases já medidas das ações de efetividade sem resultado congelado voltam a
 -- "aguardando" e são medidas de novo, com a conta nova, na próxima leitura (Gestao._pendencias). O retrato dos
 -- eventos da mesma janela da base também volta a pendente, para receber a base nova.
 

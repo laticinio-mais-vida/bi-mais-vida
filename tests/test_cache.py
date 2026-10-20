@@ -24,10 +24,34 @@ class TestPedidosNoCache(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def cache(self, pedidos=True, extras=False) -> Path:
-        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras)
+    def cache(self, pedidos=True, extras=False, rede=True) -> Path:
+        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
+
+    def test_redes_opcionais(self):
+        # sem a tabela das redes (frequência dos clientes): vale, e o PC extrai de novo uma vez para trazê-la
+        arquivo = self.cache(rede=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_rede, c.sem_pedidos, c.desatualizado()), (True, False, True))
+        c.info["rede_erro"] = "Table unknown REDES"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE clientes_rede (id INTEGER)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("clientes_rede", str(e.exception))
 
     def test_conferir_aceita_sem_pedidos_mas_nao_errados(self):
         Cache.conferir(self.cache(pedidos=True))

@@ -548,6 +548,9 @@ class _Contas:
         if self.gestao.calc.cache.sem_pedidos:
             raise SemDados("os pedidos de venda ainda não chegaram do computador da empresa; a efetividade aparece "
                            "depois da próxima atualização")
+        if self.gestao.calc.cache.sem_rede:  # sem ela, as bases gravadas sairiam com todos os clientes semanais
+            raise SemDados("a frequência de compra dos clientes (rede) ainda não chegou do computador da empresa; a "
+                           "efetividade aparece depois da próxima atualização")
         if self._areas is None:
             self._areas = self.gestao._areas()
         return self._areas, json.dumps(sorted(self._areas.items()))

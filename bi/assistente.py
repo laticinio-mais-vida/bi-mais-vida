@@ -37,7 +37,7 @@ from .banco import BancoForaDoAr
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
 from .indicadores import (BASES as BASES_CAMPANHA, FORMAS as FORMAS_CAMPANHA, MEDIDAS as MEDIDAS_CAMPANHA,
-                          TIPOS as TIPOS_CAMPANHA)
+                          TIPOS as TIPOS_CAMPANHA, semanas_da_frequencia)
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
 
@@ -149,12 +149,16 @@ class Recorte:
         if ids is not None:
             vendedores = vendedores[vendedores["id_vendedor"].isin(sorted(ids))]
 
+        # A rede (e a frequência de compra que ela diz, para a efetividade da Gestão) é opcional no cache: sem ela, fica
+        # vazia (conta como semanal).
+        rede = ("CAST(NULL AS VARCHAR)", "") if cache.sem_rede else ("r.rede", " LEFT JOIN clientes_rede r ON r.id = c.id")
         clientes = cache.df(
             "SELECT c.id AS id_cliente, c.nome AS cliente, d.razao_social, d.cidade, d.uf, d.id_area, d.area, d.segmento, "
-            "d.inativo::BOOLEAN AS inativo, d.data_cadastro, NULLIF(c.id_vendedor, 0) AS id_vendedor_carteira "
-            "FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id")
+            "d.inativo::BOOLEAN AS inativo, d.data_cadastro, NULLIF(c.id_vendedor, 0) AS id_vendedor_carteira, "
+            f"{rede[0]} AS rede FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id{rede[1]}")
         clientes["vendedor_carteira"] = clientes["id_vendedor_carteira"].map(
             lambda v: None if pd.isna(v) else nomes.get(int(v), f"Vendedor {int(v)}"))
+        clientes["frequencia_semanas"] = clientes["rede"].map(semanas_da_frequencia).astype("Int32")
 
         metas = _metas_vendedor(calc, ids)
         metas_prod = _metas_produto(calc, regras, ids)
@@ -201,7 +205,7 @@ class Recorte:
                 FROM _vendas WHERE tipo_cliente = 'CLIENTE' GROUP BY 1)
             SELECT c.id_cliente, c.cliente, c.razao_social, c.cidade, c.uf, c.id_area, c.area, c.segmento, c.inativo,
                    c.data_cadastro, c.id_vendedor_carteira, c.vendedor_carteira, k.primeira_compra, k.ultima_compra,
-                   COALESCE(k.venda_bruta_12m, 0) AS venda_bruta_12m
+                   COALESCE(k.venda_bruta_12m, 0) AS venda_bruta_12m, c.rede, c.frequencia_semanas
             FROM _clientes c LEFT JOIN compras k USING (id_cliente) {so_do_acesso}""", [desde_12m])
         con.execute("DROP TABLE _clientes")
         nome_cliente = ("CASE m.tipo_cliente WHEN 'CLIENTE' THEN COALESCE(c.cliente, 'Cliente cód. ' || m.id_cliente) "
@@ -824,7 +828,8 @@ pedidos — notas de venda por dia, vendedor e cliente: data, ano, mes, id_vende
   tipo_cliente, pedidos (quantidade de notas)
 clientes — cadastro (só tipo CLIENTE): id_cliente, cliente, razao_social, cidade, uf, id_area, area (rota
   comercial), segmento, inativo, data_cadastro, id_vendedor_carteira, vendedor_carteira, primeira_compra,
-  ultima_compra, venda_bruta_12m
+  ultima_compra, venda_bruta_12m, rede (do cadastro; as redes SEMANAL, QUINZENAL e MENSAL são a frequência de
+  compra), frequencia_semanas (1, 2 ou 4, pela rede; vazio = a rede não é uma frequência)
 produtos — id_produto, produto, linha, unidade, inativo, grupo ('mussarela', 'outras' ou 'fora'), categoria
 vendedores — id_vendedor, vendedor, nome_erp, equipe ('ES', 'BA', 'Edir', 'Outros'), supervisor, inativo
 motivos — id_motivo, motivo, desconta (se a devolução por esse motivo desconta das vendas)
@@ -892,7 +897,10 @@ dias_sem_compra (padrão 90).
 clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com os produtos.
   - efetividade: a média da efetividade de cada dia (pedidos na rota do dia ÷ visitas esperadas no dia, pelos dias \
 de atendimento das áreas), pela carteira do vendedor. Só contam os pedidos de clientes das áreas atendidas naquele \
-dia: pedido de cliente de área de outro dia fica fora. Dias sem visita esperada (fim de semana) ficam fora da média. \
+dia: pedido de cliente de área de outro dia fica fora. As visitas esperadas seguem a frequência de compra (a rede \
+SEMANAL, QUINZENAL ou MENSAL do cliente): o semanal sempre, o quinzenal sem compra nos 7 dias antes, o mensal sem \
+compra nos 21 dias antes; quem não estava previsto e comprou entra como visita; sem frequência conta como semanal. \
+Dias sem visita esperada (fim de semana) ficam fora da média. \
 O numerador e o denominador que vêm junto (pedidos na rota e visitas desses dias) não dão a média se divididos: use \
 o valor que vem pronto. A meta \
 é em % (80 = 80%); só aceita filtros de cliente (UF, segmento, área).

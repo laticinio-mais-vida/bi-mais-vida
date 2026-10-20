@@ -26,10 +26,10 @@ SETEMBRO = {"inicio": D(2026, 9, 1), "fim": D(2026, 9, 30)}
 class ComCache:
     """O cache sintético de tests/apoio.py (setembro de 2026 fechado) e o recorte com todos os vendedores."""
 
-    def montar_cache(self, extras=False):
+    def montar_cache(self, extras=False, **opcoes):
         self._tmp = tempfile.TemporaryDirectory()
         self.pasta = Path(self._tmp.name)
-        self.calc = criar_calc(self.pasta, fora=(999,), extras=extras)
+        self.calc = criar_calc(self.pasta, fora=(999,), extras=extras, **opcoes)
         self.assistente = criar_assistente(self.pasta, self.calc)
         self.cur = self.assistente.recorte(None).cursor()
         self.regras = self.calc.regras()
@@ -215,6 +215,35 @@ class TestIndicadores(ComCache, unittest.TestCase):
         # semana sem nenhum dia de visita (sábado e domingo): sem efetividade, mesmo com pedido
         por, _ = self.medir("efetividade", meta=30, inicio=D(2026, 9, 5), fim=D(2026, 9, 6), areas={3: [3]})
         self.assertEqual((por[ES]["realizado"], por[ES]["dias"], por[ES]["status"]), (None, 0, "sem_dados"))
+
+    def test_efetividade_pela_frequencia_do_cliente(self):
+        # quinzenal: esperado só sem compra nos 7 dias antes; mensal, sem compra nos 21 dias antes (de qualquer
+        # vendedor: o pedido de 10/9 do cliente 12 foi feito pelo ES)
+        self.desmontar_cache()
+        self.montar_cache(extras=True, redes={1: "Quinzenal", 3: "MENSAL", 2: "QUINZENAL", 12: "mensal",
+                                              10: "SEMANAL", 11: "SEMANAL", 13: "SEMANAL", 14: "SEMANAL"})
+        por, a = self.medir("efetividade", meta=30)
+        # BA (quintas): 3/9 os dois (1 pedido); 10/9 só o 12, porque o 2 comprou em 3/9 (1 pedido); 17/9 só o 2,
+        # porque o 12 comprou em 10/9 (nenhum); 24/9 só o 2 (o pedido do bloqueado): (0,5 + 1 + 0 + 1) ÷ 4
+        self.assertEqual((por[BA]["numerador"], por[BA]["denominador"], por[BA]["dias"]), (3, 5, 4))
+        self.assertAlmostEqual(por[BA]["realizado"], 0.625, places=4)
+        # ES (quartas): 2/9 os dois; 9/9 só o 3 (o 1 comprou em 2/9); 16, 23 e 30/9 só o 1 (o 3 comprou em 15/9)
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (1, 6, 5))
+        self.assertFalse(any("frequência" in x for x in a["avisos"]))
+        # cliente fora da previsão que compra conta como visita: o 2 (quinzenal, comprou em 3/9) compra também em
+        # 10/9. 10/9: o 12 e o 2, 2 pedidos (100%); 17/9 ninguém previsto (os dois compraram em 10/9): fica fora;
+        # 24/9 só o 2, com o pedido do bloqueado: (0,5 + 1 + 1) ÷ 3 dias
+        self.cur.execute("INSERT INTO _pedidos_venda (data, id_vendedor, id_cliente, tipo_cliente, tipopedido, "
+                         "cancelada, pedidos) VALUES ('2026-09-10', ?, 2, 'CLIENTE', 'PEDIDOVENDA', 0, 1)", [BA])
+        por, _ = self.medir("efetividade", meta=30)
+        self.assertEqual((por[BA]["numerador"], por[BA]["denominador"], por[BA]["dias"]), (4, 5, 3))
+        self.assertAlmostEqual(por[BA]["realizado"], 2.5 / 3, places=4)
+        # cache sem as redes (pacote do PC com o código anterior): todos contam como semanais, com aviso
+        self.desmontar_cache()
+        self.montar_cache(extras=True, rede=False)
+        por, a = self.medir("efetividade", meta=30)
+        self.assertEqual({v: por[v]["realizado"] for v in (ES, BA)}, {ES: 0.1, BA: 0.375})
+        self.assertIn("4 clientes ativos da carteira sem frequência de compra", a["avisos"][1])
 
     def test_mix_medio(self):
         por, a = self.medir("mix_medio")
@@ -950,6 +979,9 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         self.assertIn("pedidos de venda", cartoes[id_]["aviso"])
         self.assertIsNone(cartoes[fat]["aviso"])
         self.assertEqual(self.detalhe(fat)["linhas"][0]["resultado"], 1480)
+        # sem a rede dos clientes, também espera (a base não pode ser gravada com todos semanais)
+        self.calc.cache.sem_pedidos, self.calc.cache.sem_rede = False, True
+        self.assertIn("frequência de compra dos clientes", self.detalhe(id_)["aviso"])
 
     def test_migracao_010_mede_de_novo_a_base_da_efetividade(self):
         from bi.banco import MIGRACOES
