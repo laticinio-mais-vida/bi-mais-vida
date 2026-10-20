@@ -6,8 +6,9 @@ Como funciona:
   vendedores e com as regras das metas já aplicadas (equivalência de produto, grupos, categorias, motivos de
   devolução que descontam). A IA só consulta esse recorte: o que está fora dele não existe para ela, seja qual for
   o SQL. Arquivos, extensões e configurações ficam travados, e cada consulta tem tempo e linhas limitados.
-  Exceção: as ferramentas de campanha (listar, andamento e propor) usam bi/gestao.py, com o acesso da pessoa na
-  página Gestão, para darem os mesmos números da página; quem não tem a Gestão recebe um erro dentro delas.
+  Exceção: as ferramentas de ações (listar, andamento e propor) usam bi/gestao.py, com o acesso da pessoa na
+  página Gestão, para darem os mesmos números da página; quem não tem a Gestão recebe um erro dentro delas (e só o
+  administrador propõe ações).
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
 - Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). As
@@ -35,8 +36,8 @@ import pandas as pd
 from .banco import BancoForaDoAr
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
-from .indicadores import (BASES as BASES_CAMPANHA, COMPARAR as COMPARAR_CAMPANHA, FORMAS as FORMAS_CAMPANHA,
-                          MEDIDAS as MEDIDAS_CAMPANHA, TIPOS as TIPOS_CAMPANHA)
+from .indicadores import (BASES as BASES_CAMPANHA, FORMAS as FORMAS_CAMPANHA, MEDIDAS as MEDIDAS_CAMPANHA,
+                          TIPOS as TIPOS_CAMPANHA)
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
 
@@ -359,60 +360,64 @@ FERRAMENTAS = [
         "strict": True,
     },
     {
-        "name": "listar_campanhas",
-        "description": ("Campanhas da página Gestão de quem pergunta (o administrador vê todas), da mais nova para a "
-                        "mais antiga: código, nome, status, período, métrica, meta padrão e nº de vendedores. Use para "
-                        "achar a campanha citada ('a que eu criei', pelo nome)."),
+        "name": "listar_acoes",
+        "description": ("Ações e objetivos da página Gestão que quem pergunta vê (dos vendedores do acesso), dos mais "
+                        "novos para os mais antigos: código, tipo (ação ou objetivo), nome, região, situação, período, "
+                        "indicador, alvo e nº de vendedores. Use para achar a ação citada (pelo nome)."),
         "input_schema": _objeto({
             "texto": {"type": "string", "description": "parte do nome ou o código; vazio lista todas"},
-            "incluir_arquivadas": {"type": "boolean", "description": "true para incluir as arquivadas"},
-        }, ["texto", "incluir_arquivadas"]),
+            "incluir_encerradas": {"type": "boolean", "description": "true para incluir as já encerradas"},
+        }, ["texto", "incluir_encerradas"]),
         "strict": True,
     },
     {
-        "name": "andamento_campanha",
-        "description": ("Andamento de uma campanha por vendedor, exatamente como na página Gestão: realizado, meta, % "
-                        "atingido, situação (batida, no ritmo, atenção, abaixo, sem dados), projeção e quanto falta por "
-                        "dia útil quando o indicador acumula, numerador e denominador nas médias e percentuais, e o "
-                        "total. Efetividade e frequência vêm também abertas por área ou segmento; preço médio, por "
-                        "produto."),
+        "name": "andamento_acao",
+        "description": ("Andamento de uma ação por vendedor, exatamente como na página Gestão: a base (o mesmo "
+                        "indicador no período do mesmo tamanho logo antes do início), o alvo de cada um, o resultado "
+                        "(ao vivo enquanto a ação corre; congelado depois do fim), a classe (ok = alvo batido; mid = "
+                        "melhorou sem chegar ao alvo; bad = não passou da base), a situação pelo ritmo e o total. Num "
+                        "objetivo, o andamento da equipe da região contra o alvo da equipe."),
         "input_schema": _objeto({
-            "campanha": {"type": "integer", "description": "código da campanha (de listar_campanhas)"},
-        }, ["campanha"]),
+            "acao": {"type": "integer", "description": "código da ação ou do objetivo (de listar_acoes)"},
+        }, ["acao"]),
         "strict": True,
     },
     {
-        "name": "propor_campanha",
-        "description": ("Confere e monta o RASCUNHO de uma campanha nova, sem gravar: a pessoa cria pelo botão que "
-                        "aparece abaixo da resposta. Devolve o rascunho com os nomes, ou o erro para corrigir. Filtros "
-                        "que não vierem (ou vierem vazios) não limitam nada."),
+        "name": "propor_acao",
+        "description": ("Só para o administrador. Confere e monta o RASCUNHO de uma ação nova para vendedores de uma "
+                        "região, sem gravar: o administrador lança pelo botão que aparece abaixo da resposta. Devolve "
+                        "o rascunho com os nomes (e a base de cada vendedor, quando os dados já cobrem o período), ou o "
+                        "erro para corrigir. Filtros que não vierem (ou vierem vazios) não limitam nada."),
         "input_schema": _objeto({
-            "nome": {"type": "string", "description": "nome curto da campanha"},
-            "descricao": {"type": "string", "description": "objetivo e regras, em poucas linhas (pode ser vazio)"},
-            "premiacao": {"type": "string", "description": "prêmio, se houver (pode ser vazio)"},
-            "inicio": {"type": "string", "format": "date", "description": "primeiro dia (AAAA-MM-DD)"},
-            "fim": {"type": "string", "format": "date", "description": "último dia, inclusive (AAAA-MM-DD)"},
+            "nome": {"type": "string", "description": "nome curto da ação"},
+            "rotulo": {"type": "string", "description": "nome da etiqueta do vendedor, até 20 letras (ex.: Mix); vazio = o padrão"},
+            "descricao": {"type": "string", "description": "objetivo e combinados, em poucas linhas (pode ser vazio)"},
+            "regiao": {"type": "string", "enum": ["ES", "BA"], "description": "região da ação (o Edir é da BA)"},
+            "inicio": {"type": "string", "format": "date", "description": "primeiro dia (AAAA-MM-DD; padrão hoje)"},
+            "semanas": {"type": "integer", "description": "prazo em semanas (1 a 26); ou use fim"},
+            "fim": {"type": "string", "format": "date", "description": "último dia, inclusive (no lugar de semanas)"},
             "metrica": {"type": "string", "enum": list(TIPOS_CAMPANHA),
-                        "description": "o tipo de campanha (veja as instruções); personalizada usa medida e forma"},
+                        "description": "o indicador (veja as instruções); personalizada usa medida e forma"},
             "medida": {"type": "string", "enum": list(MEDIDAS_CAMPANHA), "description": "só na personalizada"},
-            "forma": {"type": "string", "enum": list(FORMAS_CAMPANHA), "description": "só na personalizada (padrão total)"},
-            "comparar": {"type": "string", "enum": list(COMPARAR_CAMPANHA),
-                         "description": "só na forma crescimento (padrão periodo_anterior)"},
+            "forma": {"type": "string", "enum": [f for f in FORMAS_CAMPANHA if f != "crescimento"],
+                      "description": "só na personalizada (padrão total)"},
             "clientes_base": {"type": "string", "enum": list(BASES_CAMPANHA),
                               "description": "quem conta (padrão todos); nunca_compraram e ja_compraram exigem produtos"},
             "dias_sem_compra": {"type": "integer", "description": "com clientes_base recuperados (padrão 90)"},
-            "meta_padrao": {"type": "number", "description": ("meta de cada vendedor, na unidade do indicador; "
-                                                              "percentual como número (80 = 80%); 0 = sem meta (só "
-                                                              "ranking); no preço médio não se usa")},
-            "metas": {"type": "array", "description": "metas diferentes da padrão, por vendedor",
+            "alvo_tipo": {"type": "string", "enum": ["fixo", "mais", "pct"],
+                          "description": ("mais = a base de cada vendedor + meta (nos percentuais, em pontos); pct = "
+                                          "a base + meta%; fixo = a meta para todos")},
+            "meta": {"type": "number", "description": ("o número do alvo, na unidade do indicador; percentual como "
+                                                       "número (80 = 80%); no preço médio não se usa")},
+            "metas": {"type": "array", "description": "alvo diferente do padrão, por vendedor (mesmo alvo_tipo)",
                       "items": _objeto({"id_vendedor": {"type": "integer"}, "meta": {"type": "number"}},
                                        ["id_vendedor", "meta"])},
             "metas_produto": {"type": "array", "description": "preço médio: o preço-alvo (R$ por unidade) de cada produto",
                               "items": _objeto({"id_produto": {"type": "integer"}, "meta": {"type": "number"}},
                                                ["id_produto", "meta"])},
-            "vendedores": {**_INTEIROS, "description": "códigos dos vendedores participantes (de buscar_vendedor)"},
+            "vendedores": {**_INTEIROS, "description": "códigos dos vendedores da ação (de buscar_vendedor)"},
             "equipes": {"type": "array", "items": {"type": "string", "enum": ["ES", "BA", "EDIR"]},
-                        "description": "inclui todos os vendedores ativos dessas equipes"},
+                        "description": "inclui todos os vendedores ativos dessas equipes (da região da ação)"},
             "produtos": {**_INTEIROS, "description": "códigos de produto (de buscar_produto)"},
             "linhas": {"type": "array", "items": {"type": "string"}, "description": "linhas de produto, como nos dados"},
             "categorias": {"type": "array", "items": {"type": "string"}, "description": "categorias das outras linhas"},
@@ -420,7 +425,7 @@ FERRAMENTAS = [
             "ufs": {"type": "array", "items": {"type": "string"}, "description": "UF do cliente (ES, BA...)"},
             "segmentos": {"type": "array", "items": {"type": "string"}, "description": "segmentos do cliente"},
             "areas": {"type": "array", "items": {"type": "string"}, "description": "áreas comerciais (rotas) do cliente"},
-        }, ["nome", "inicio", "fim", "metrica", "meta_padrao"]),
+        }, ["nome", "regiao", "metrica", "alvo_tipo", "meta"]),
         # Sem strict: com este esquema (o maior de todos) a API recusa o pedido inteiro ("compiled grammar is too
         # large"). A conferência é do servidor (bi/gestao.py validar), que devolve o erro para a IA corrigir.
         "strict": False,
@@ -474,7 +479,7 @@ class Ferramentas:
         self.cfg = cfg
         self.equipes = equipes
         self.gestao = gestao
-        self.rascunhos: list[dict] = []  # campanhas propostas nesta pergunta (a página mostra o botão de criar)
+        self.rascunhos: list[dict] = []  # ações propostas nesta pergunta (a página mostra o botão de lançar)
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
     def executar(self, nome: str, args: dict) -> tuple[dict, dict]:
@@ -491,8 +496,8 @@ class Ferramentas:
         except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada) as e:
             passo["erro"] = str(e).split("\n")[0][:500] if isinstance(e, duckdb.Error) else str(e)
             resultado = {"erro": passo["erro"]}
-        except BancoForaDoAr as e:  # as campanhas ficam no PostgreSQL
-            passo["erro"] = f"as campanhas não puderam ser lidas: {e.aviso}"
+        except BancoForaDoAr as e:  # as ações ficam no PostgreSQL
+            passo["erro"] = f"as ações não puderam ser lidas: {e.aviso}"
             resultado = {"erro": passo["erro"]}
         except Exception as e:  # argumento que a ferramenta não tem, ou defeito: a IA fica sabendo e segue
             log.exception("falha na ferramenta %s %s", nome, args)
@@ -697,35 +702,41 @@ class Ferramentas:
                      linhas=len(linhas))
         return resultado
 
-    # --- campanhas (página Gestão) -----------------------------------------------------
-    def _campanhas(self):
+    # --- ações e objetivos (página Gestão) ---------------------------------------------
+    def _acoes(self):
         if self.gestao is None:
-            raise ValueError("o acesso de quem pergunta não inclui a página Gestão, onde ficam as campanhas")
+            raise ValueError("o acesso de quem pergunta não inclui a página Gestão, onde ficam as ações")
         return self.gestao
 
-    def f_listar_campanhas(self, passo: dict, texto: str = "", incluir_arquivadas: bool = False) -> dict:
-        lista = self._campanhas().listar(texto, bool(incluir_arquivadas))
-        passo.update(colunas=["código", "campanha", "status", "início", "fim", "métrica"],
-                     amostra=[[c["id"], c["nome"], c["status"], c["inicio"], c["fim"], c["metrica"]] for c in lista[:10]],
+    def f_listar_acoes(self, passo: dict, texto: str = "", incluir_encerradas: bool = False) -> dict:
+        lista = self._acoes().listar(texto, bool(incluir_encerradas))
+        passo.update(colunas=["código", "nome", "tipo", "região", "situação", "início", "fim", "indicador"],
+                     amostra=[[c["id"], c["nome"], c["tipo"], c["regiao"], c["situacao"], c["inicio"], c["fim"],
+                               c["indicador"]] for c in lista[:10]],
                      linhas=len(lista))
         if not lista:
-            return {"campanhas": [], "aviso": "nenhuma campanha encontrada" + (" com esse texto" if texto else "")}
-        return {"campanhas": lista}
+            return {"acoes": [], "aviso": "nenhuma ação ou objetivo encontrado" + (" com esse texto" if texto else "")}
+        return {"acoes": lista}
 
-    def f_andamento_campanha(self, passo: dict, campanha: int) -> dict:
-        r = self._campanhas().andamento(int(campanha))
-        c = r["campanha"]
-        passo.update(colunas=["vendedor", "realizado", "meta", "%", "situação"],
-                     amostra=[[v["nome"], v["realizado"], v.get("meta"), v.get("pct"), v["status"]]
-                              for v in r["vendedores"][:10]],
-                     linhas=len(r["vendedores"]), resumo=f"#{c['id']} {c['nome']}")
+    def f_andamento_acao(self, passo: dict, acao: int) -> dict:
+        r = self._acoes().andamento(int(acao))
+        item = r["item"]
+        if "vendedores" in r:
+            passo.update(colunas=["vendedor", "base", "alvo", "resultado", "classe"],
+                         amostra=[[v["nome"], v.get("base"), v.get("alvo"), v.get("resultado"), v.get("classe")]
+                                  for v in r["vendedores"][:10]], linhas=len(r["vendedores"]))
+        else:
+            a = r["andamento_da_equipe"]
+            passo.update(colunas=["realizado", "alvo", "%", "situação"],
+                         amostra=[[a.get("realizado"), a.get("meta"), a.get("pct"), a.get("status")]], linhas=1)
+        passo["resumo"] = f"#{item['id']} {item['nome']}"
         return r
 
-    def f_propor_campanha(self, passo: dict, nome: str, inicio: str, fim: str, metrica: str, meta_padrao: float = 0,
-                          descricao: str = "", premiacao: str = "", medida=None, forma=None, comparar=None,
-                          clientes_base=None, dias_sem_compra=None, metas=None, metas_produto=None, vendedores=None,
-                          equipes=None, produtos=None, linhas=None, categorias=None, grupos=None, ufs=None,
-                          segmentos=None, areas=None) -> dict:
+    def f_propor_acao(self, passo: dict, nome: str, regiao: str, metrica: str, alvo_tipo: str = "fixo",
+                      meta: float = 0, rotulo: str = "", descricao: str = "", inicio=None, semanas=None, fim=None,
+                      medida=None, forma=None, clientes_base=None, dias_sem_compra=None, metas=None,
+                      metas_produto=None, vendedores=None, equipes=None, produtos=None, linhas=None, categorias=None,
+                      grupos=None, ufs=None, segmentos=None, areas=None) -> dict:
         individuais = {}
         for m in metas or []:
             try:
@@ -739,38 +750,42 @@ class Ferramentas:
             precos = [{"id": int(m["id_produto"]), "meta": m["meta"]} for m in metas_produto or []]
         except (KeyError, TypeError, ValueError):
             raise ValueError("metas_produto: use uma lista de {id_produto, meta}") from None
-        parametros = {k: v for k, v in {"medida": medida, "forma": forma, "comparar": comparar,
-                                        "clientes": clientes_base, "dias_sem_compra": dias_sem_compra}.items()
-                      if v not in (None, "")}
-        dados = {"nome": nome, "descricao": descricao, "premiacao": premiacao, "inicio": inicio, "fim": fim,
-                 "metrica": metrica, "parametros": parametros, "meta_padrao": meta_padrao, "vendedores": participantes,
-                 "metas_produto": precos,
+        parametros = {k: v for k, v in {"medida": medida, "forma": forma, "clientes": clientes_base,
+                                        "dias_sem_compra": dias_sem_compra}.items() if v not in (None, "")}
+        dados = {"nome": nome, "rotulo": rotulo, "descricao": descricao, "regiao": regiao, "inicio": inicio,
+                 "semanas": semanas, "fim": fim, "metrica": metrica, "parametros": parametros, "alvo_tipo": alvo_tipo,
+                 "meta_padrao": meta, "vendedores": participantes, "metas_produto": precos,
                  "filtros": {"produtos": produtos, "linhas": linhas, "categorias": categorias, "grupos": grupos,
                              "ufs": ufs, "segmentos": segmentos, "areas": areas}}
-        r = self._campanhas().propor(dados, equipes or [])
+        r = self._acoes().propor(dados, equipes or [])
         self.rascunhos.append(r)
         n = len(r["vendedores"])
         ind = r["indicador"]
-        passo.update(colunas=["rascunho", "período", "indicador", "meta padrão", "vendedores"],
-                     amostra=[[r["nome"], f"{r['inicio']} a {r['fim']}", ind["nome"], r["meta_padrao"], n]],
-                     linhas=1, resumo=(f"rascunho {r['id']} (ainda não criado): {r['nome']}, {ind['nome']}, "
-                                       f"{r['inicio']} a {r['fim']}, {n} vendedores"))
+        passo.update(colunas=["rascunho", "região", "período", "indicador", "alvo", "vendedores"],
+                     amostra=[[r["nome"], r["regiao"], f"{r['inicio']} a {r['fim']}", ind["nome"], r["texto_alvo"], n]],
+                     linhas=1, resumo=(f"rascunho {r['id']} (ainda não lançado): {r['nome']}, {r['regiao']}, "
+                                       f"{ind['nome']}, {r['inicio']} a {r['fim']}, alvo {r['texto_alvo']}, "
+                                       f"{n} vendedores"))
         nomes = r["nomes"]
         filtros = dict(r["filtros"])
         if filtros.get("produtos"):
             filtros["produtos"] = [f"{p} {nomes['produtos'].get(str(p), '')}".strip() for p in filtros["produtos"]]
         return {
-            "situacao": ("RASCUNHO, AINDA NÃO CRIADO. A pessoa confere e cria no botão 'Criar campanha' que aparece "
-                         "abaixo da sua resposta (ou ajusta em 'Revisar no painel')."),
+            "situacao": ("RASCUNHO, AINDA NÃO LANÇADO. O administrador confere e lança no botão 'Lançar ação' que "
+                         "aparece abaixo da sua resposta (ou ajusta em 'Revisar no painel')."),
             "rascunho": {
-                "nome": r["nome"], "periodo": f"{r['inicio']} a {r['fim']}", "indicador": ind["nome"],
-                "o_que_mede": ind["descricao"], "unidade": r["unidade"], "meta_padrao": r["meta_padrao"],
-                **({"meta_em_percentual": True} if ind["meta_em_pct"] else {}),
-                "descricao": r["descricao"], "premiacao": r["premiacao"], "filtros": filtros,
+                "nome": r["nome"], "rotulo": r["rotulo"], "regiao": r["regiao"],
+                "periodo": f"{r['inicio']} a {r['fim']}",
+                "periodo_da_base": f"{r['base_inicio']} a {r['base_fim']} (o mesmo tamanho, logo antes do início)",
+                "indicador": ind["nome"], "o_que_mede": ind["descricao"], "unidade": r["unidade"],
+                "alvo": r["texto_alvo"], **({"meta_em_percentual": True} if ind["meta_em_pct"] else {}),
+                "descricao": r["descricao"], "filtros": filtros,
                 **({"precos_alvo": [{"produto": f"{p['id']} {nomes['produtos'].get(str(p['id']), '')}".strip(),
                                      "meta": p["meta"]} for p in r["metas_produto"]]} if r["metas_produto"] else {}),
                 "vendedores": [{"id": v["id"], "nome": nomes["vendedores"].get(str(v["id"])),
-                                "meta": r["meta_padrao"] if v["meta"] is None else v["meta"]} for v in r["vendedores"]],
+                                "meta": r["meta_padrao"] if v["meta"] is None else v["meta"],
+                                **(r["bases"].get(str(v["id"])) or {"base": "ainda sem dados do período da base"})}
+                               for v in r["vendedores"]],
             },
         }
 
@@ -865,9 +880,12 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 - Clientes atendidos (positivação) = clientes distintos com venda no período. Venda média = faturamento ÷ clientes.
 - Quantidade só soma com sentido dentro do mesmo produto (unidades diferentes).
 
-# Campanhas (página Gestão)
-- Uma campanha mede um indicador por vendedor participante, num período, com uma meta padrão e ajustes por \
-vendedor. Tipos (metrica):
+# Ações e objetivos (página Gestão)
+- Uma ação mede um indicador por vendedor, numa região (ES ou BA; o Edir é da BA), num prazo (semanas, ou até uma \
+data). A base de cada vendedor é o mesmo indicador no período do mesmo tamanho logo antes do início, e o alvo de \
+cada um sai dela: alvo_tipo mais = base + meta (nos percentuais, em pontos); pct = base + meta%; fixo = a meta para \
+todos. Enquanto a ação corre entram as parciais de cada semana; no fim, o resultado de cada um contra a base e o \
+alvo. Um objetivo é o indicador da equipe da região num período, contra um alvo da equipe. Tipos (metrica):
   - positivacao: clientes distintos com venda. Recuperação de clientes = clientes_base recuperados, com \
 dias_sem_compra (padrão 90).
   - mix_medio: produtos da campanha levados por cliente positivado (média). "Clientes que nunca compraram X" = \
@@ -878,33 +896,33 @@ clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com 
   - preco_medio: preço-alvo de cada produto em metas_produto (R$ por unidade); a meta é estar no preço-alvo.
   - personalizada: para o resto, monte com medida (faturamento, volume, clientes ou produtos) e forma: total; \
 por_cliente (faturamento ou volume ÷ clientes positivados); pct_carteira (clientes da carteira que compraram; meta \
-em %); crescimento (sobre comparar periodo_anterior ou ano_anterior; meta em % de crescimento). Volume exige \
-produtos de uma unidade só.
+em %). Numa ação não existe a forma crescimento: "crescer X%" é alvo_tipo pct. Volume exige produtos de uma \
+unidade só.
 - Filtros de produto: produtos, linhas, categorias, grupos. Filtros de cliente: ufs, segmentos, areas (rotas). \
 Segmentos e áreas vão como estão nos dados: confira com consultar_sql (SELECT DISTINCT segmento FROM clientes) \
 se não tiver certeza.
 - Como traduzir o pedido, por exemplo:
-  - "positivar padarias" = positivacao, segmentos ["PADARIA"];
+  - "+1 no mix em 3 semanas para Rubens e Isaque" = mix_medio, alvo_tipo mais, meta 1, semanas 3;
+  - "subir a venda média em 10%" = personalizada, faturamento, por_cliente, alvo_tipo pct, meta 10;
+  - "positivar mais 5 padarias" = positivacao, segmentos ["PADARIA"], alvo_tipo mais, meta 5;
   - "recuperar clientes sem compra há 60 dias" = positivacao, clientes_base recuperados, dias_sem_compra 60;
   - "colocar o requeijão em quem nunca comprou" = mix_medio ou positivacao, produtos [requeijão], clientes_base \
 nunca_compraram;
-  - "efetividade de 80%" = efetividade, meta_padrao 80;
+  - "efetividade de 80%" = efetividade, alvo_tipo fixo, meta 80; "+5 pontos de efetividade" = alvo_tipo mais, meta 5;
   - "mussarela a R$ 32/kg e manteiga a R$ 9,50" = preco_medio, metas_produto;
-  - "vender 10% a mais que no mês passado" = personalizada, medida faturamento, forma crescimento, meta_padrao 10;
-  - "ticket por cliente" = personalizada, faturamento, por_cliente;
-  - "atender 60% da carteira" = personalizada, clientes, pct_carteira, meta_padrao 60;
-  - "vender R$ 50 mil" = personalizada, faturamento, total;
-  - "300 kg de mussarela" = personalizada, volume, total, com os produtos.
-- Para criar uma campanha, use propor_campanha: ela confere e monta um RASCUNHO, sem gravar. A pessoa cria no botão \
-"Criar campanha" que aparece abaixo da sua resposta. Nunca diga que a campanha foi criada: diga que o rascunho \
-está pronto para conferir e resuma o que ficou (período, indicador, meta, vendedores e filtros). Se faltar período, \
-o que medir ou vendedores, pergunte antes; o nome você pode sugerir. Vendedores e produtos citados pelo nome: códigos \
-com buscar_vendedor e buscar_produto; "todos de BA" = equipes ["BA"]. Se a ferramenta devolver erro, corrija e \
-chame de novo.
-- Cada pessoa só vê as campanhas que criou (o administrador vê todas). Para achar uma campanha ("a que eu criei", \
-pelo nome) use listar_campanhas, que também mostra se um rascunho já virou campanha; para o andamento por \
-vendedor, andamento_campanha (os números da página Gestão). Se houver mais de uma candidata, use a mais recente e \
-diga qual.
+  - "vender 10% a mais" = personalizada, faturamento, total, alvo_tipo pct, meta 10;
+  - "atender 60% da carteira" = personalizada, clientes, pct_carteira, alvo_tipo fixo, meta 60;
+  - "300 kg de mussarela" = personalizada, volume, total, alvo_tipo fixo, meta 300, com os produtos.
+- Só o administrador lança ações e objetivos. Para ele, use propor_acao: ela confere e monta um RASCUNHO, sem \
+gravar, e ele lança no botão "Lançar ação" que aparece abaixo da sua resposta. Nunca diga que a ação foi lançada: \
+diga que o rascunho está pronto para conferir e resuma o que ficou (região, prazo, indicador, alvo, vendedores e \
+filtros). Se faltar a região, o prazo, o que medir, o alvo ou os vendedores, pergunte antes; o nome você pode \
+sugerir. Vendedores e produtos citados pelo nome: códigos com buscar_vendedor e buscar_produto; "todos de BA" = \
+regiao BA, equipes ["BA"]. Se a ferramenta devolver erro, corrija e chame de novo. A quem não é administrador, \
+explique que só o administrador lança, e ofereça o andamento.
+- Quem tem a página vê as ações e os objetivos dos vendedores do acesso. Para achar uma ação (pelo nome) use \
+listar_acoes; para os números por vendedor (base, alvo, resultado), andamento_acao (os mesmos da página Gestão). Se \
+houver mais de uma candidata, use a mais recente e diga qual.
 
 # Tabelas para consultar_sql (DuckDB)
 {ESQUEMA}
@@ -1063,8 +1081,9 @@ class Assistente:
             self._cliente = anthropic.Anthropic(api_key=self.cfg.chave, max_retries=2, timeout=self.cfg.timeout)
         return self._cliente
 
-    def _contexto(self, usuario: dict, escopo: str, gestao: bool = False) -> str:
-        """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa)."""
+    def _contexto(self, usuario: dict, escopo: str, gestao=None) -> str:
+        """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa). gestao: o
+        ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão)."""
         cache, hoje = self.calc.cache, dt.date.today()
         data_ref = cache.data_ref()
         regras = self.calc.regras()
@@ -1078,7 +1097,8 @@ class Assistente:
                 f"em andamento até essa data.\n"
                 f"- Quem pergunta: {usuario['nome']} ({'administrador' if usuario['papel'] == 'admin' else 'visualizador'}); "
                 f"vê {escopo}.\n"
-                f"- Campanhas (página Gestão): {'pode criar e acompanhar' if gestao else 'o acesso não inclui'}.\n"
+                f"- Ações (página Gestão): "
+                f"{('pode lançar e acompanhar' if gestao.admin else 'pode acompanhar (só o administrador lança)') if gestao else 'o acesso não inclui'}.\n"
                 f"- Categorias das outras linhas: {', '.join(regras.categorias) or 'nenhuma'}.\n"
                 f"- Motivos de devolução que descontam: {descontam}.")
 
@@ -1208,7 +1228,7 @@ class Assistente:
         escopo = self.descrever_escopo(ids, vendedores, equipes)
         ferramentas = Ferramentas(self.recorte(ids), self.calc, self.cfg, equipes, gestao=gestao)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": self._contexto(usuario, escopo, gestao is not None)}]
+                  {"type": "text", "text": self._contexto(usuario, escopo, gestao)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}
         passos: list[dict] = []
         texto, aviso, erro, modelo, parada, ids_req = "", None, None, self.cfg.modelo, None, []
@@ -1291,16 +1311,16 @@ def _sem_prefixo(texto: str) -> str:
 
 
 # Ferramentas cujo resumo leva os primeiros achados (código e nome), para a próxima pergunta usar os códigos.
-ACHADOS = {"buscar_cliente": 3, "buscar_produto": 3, "buscar_vendedor": 3, "listar_campanhas": 5}
+ACHADOS = {"buscar_cliente": 3, "buscar_produto": 3, "buscar_vendedor": 3, "listar_acoes": 5}
 
 
 def _resumo_consultas(passos: list[dict]) -> str:
     """Linha por ferramenta usada, para a próxima pergunta saber o que já foi consultado (códigos achados etc.)."""
     linhas = []
     for p in passos:
-        # O rascunho de campanha leva todos os campos: no resumo vai só o que ficou (cabe no limite).
-        args = "" if p["ferramenta"] == "propor_campanha" else json.dumps(p["args"], ensure_ascii=False,
-                                                                           separators=(",", ":"))
+        # O rascunho de ação leva todos os campos: no resumo vai só o que ficou (cabe no limite).
+        args = "" if p["ferramenta"] == "propor_acao" else json.dumps(p["args"], ensure_ascii=False,
+                                                                       separators=(",", ":"))
         if p.get("resumo") and not p["erro"]:
             linhas.append(f"{p['ferramenta']}{args} -> {p['resumo']}")
         elif p["ferramenta"] in ACHADOS and p["amostra"] and not p["erro"]:

@@ -12,7 +12,7 @@ from bi.conversas import Conversas, NaoEncontrada, titulo_de
 from tests.apoio import TEM_PSYCOPG, BaseBanco
 
 MIGRACOES = ["001_conversas", "002_usuarios", "003_regras", "004_assistente_perguntas", "005_importar_arquivos",
-             "006_conversas_por_usuario", "007_gestao", "008_indicadores"]
+             "006_conversas_por_usuario", "007_gestao", "008_indicadores", "009_gestao_equipe"]
 
 
 def resposta(texto: str, consultas: str = "") -> dict:
