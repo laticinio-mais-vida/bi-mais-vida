@@ -769,7 +769,7 @@ function tabelaAcao(d) {
     <td>${x.base_pendente ? '<span class="fraco">aguardando os dados</span>' : x.base == null ? '<span class="fraco">sem dados</span>' : v(x.base)}</td>
     <td>${x.alvo == null ? "—" : v(x.alvo)}</td>
     <td>${x.resultado == null ? "—" : `<b>${v(x.resultado)}</b>`}${partes && x.numerador != null
-      ? `<small>${valorParte(ind, x.numerador)} ÷ ${valorParte(ind, x.denominador)}</small>` : ""}</td>
+      ? `<small>${textoPartes(ind, x)}</small>` : ""}</td>
     <td>${x.delta == null ? "—" : esc(deltaTexto(ind, x.delta, u))}</td>
     <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
       : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`).join("");
@@ -778,8 +778,14 @@ function tabelaAcao(d) {
       <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da ação" : "resultado provisório: os dados ainda não passaram do fim")
         : "resultado até agora; a situação considera o ritmo dos dias úteis"} · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados">
-      <thead><tr><th>Vendedor</th><th>Base</th><th>Alvo</th><th${partes ? ` title="${esc(ind.numerador)} ÷ ${esc(ind.denominador)}"` : ""}>Resultado</th><th>Sobre a base</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Vendedor</th><th>Base</th><th>Alvo</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th><th>Sobre a base</th><th>Situação</th></tr></thead>
       <tbody>${linhas}</tbody></table></div></section>`;
+}
+
+// "3 ÷ 8" embaixo do resultado; na efetividade (média dos dias), os pedidos, as visitas e os dias, que não se dividem.
+function textoPartes(ind, x) {
+  if (!ind.media_diaria) return `${valorParte(ind, x.numerador)} ÷ ${valorParte(ind, x.denominador)}`;
+  return `${plural(x.numerador, "pedido", "pedidos")} · ${plural(x.denominador, "visita", "visitas")} · média de ${plural(x.dias || 0, "dia", "dias")}`;
 }
 
 // A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos), enquanto a ação corre.
@@ -792,14 +798,14 @@ function aberturaAcao(d) {
   const comPartes = !!ind.numerador;
   const linhas = (ab?.linhas || []).map((x) => `<tr>
     <td class="nome-v">${esc(x.nome)}</td><td>${esc(valorIndicador(ind, x.valor, d.unidade))}</td>
-    ${comPartes ? `<td>${valorParte(ind, x.numerador)}</td><td>${valorParte(ind, x.denominador)}</td>` : ""}</tr>`).join("");
+    ${comPartes ? `<td>${valorParte(ind, x.numerador)}</td><td>${valorParte(ind, x.denominador)}</td>` : ""}${ind.media_diaria ? `<td>${x.dias ?? "—"}</td>` : ""}</tr>`).join("");
   return `<section class="cartao secao entra" style="--i:3">
     <div class="cartao-cab"><div><h3>${icone("funil")}Aberto por ${esc(ab ? ABERTURAS[ab.por].toLowerCase() : "…")}</h3>
       <p class="sub">os vendedores da ação juntos${ab?.mais ? ` · mostrando ${ab.linhas.length} de ${ab.linhas.length + ab.mais}` : ""}</p></div>
       <label class="campo"><select data-abrir aria-label="Abrir por" style="padding-left:14px">${opcoes}</select></label></div>
     ${ab ? `<div class="tabela-rolagem"><table class="dados">
-      <thead><tr><th>${esc(ABERTURAS[ab.por])}</th><th>${esc(ind.nome)}</th>${comPartes ? `<th>${esc(ind.numerador)}</th><th>${esc(ind.denominador)}</th>` : ""}</tr></thead>
-      <tbody>${linhas || `<tr><td colspan="4" class="fraco">Nada no período.</td></tr>`}</tbody></table></div>`
+      <thead><tr><th>${esc(ABERTURAS[ab.por])}</th><th${ind.media_diaria ? ` title="${esc(ind.descricao)}"` : ""}>${esc(ind.nome)}</th>${comPartes ? `<th>${esc(ind.numerador)}</th><th>${esc(ind.denominador)}</th>` : ""}${ind.media_diaria ? "<th>Dias com visita</th>" : ""}</tr></thead>
+      <tbody>${linhas || `<tr><td colspan="5" class="fraco">Nada no período.</td></tr>`}</tbody></table></div>`
       : `<p class="usu-nota">${icone("info")}<span>Escolha como abrir o resultado: por ${ind.aberturas.map((k) => ABERTURAS[k].toLowerCase()).join(", ")}.</span></p>`}
   </section>`;
 }

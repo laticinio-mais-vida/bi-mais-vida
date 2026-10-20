@@ -1157,7 +1157,7 @@ class Gestao:
                          "base_pendente": e["base_pendente"], "alvo": e["alvo"], "resultado": res,
                          "pct": _redondo(res / e["alvo"]) if res is not None and e["alvo"] else None,
                          "status": r.get("status"), "projecao": r.get("projecao"),
-                         "numerador": r.get("numerador"), "denominador": r.get("denominador"),
+                         "numerador": r.get("numerador"), "denominador": r.get("denominador"), "dias": r.get("dias"),
                          **({"produtos": r["produtos"]} if r.get("produtos") else {}),
                          **comparar(res, e["base"], e["alvo"])}
                 linhas.append(linha)
@@ -1165,7 +1165,7 @@ class Gestao:
             encerrada = estado["situacao"] == "encerrada"
             total = {"vendedores": len(linhas), "no_alvo": sum(1 for x in linhas if x["classe"] == "ok"),
                      "acima_da_base": sum(1 for x in linhas if x["classe"] in ("ok", "mid")),
-                     **({k_: a["total"][k_] for k_ in ("realizado", "numerador", "denominador", "distintos")
+                     **({k_: a["total"][k_] for k_ in ("realizado", "numerador", "denominador", "dias", "distintos")
                          if a and k_ in a["total"]})}
             item = {**publica(c), "situacao": estado["situacao"], "prazo": prazo(c, hoje),
                     "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada,
@@ -1630,14 +1630,14 @@ class ContextoGestao:
             if a is None:
                 raise SemDados(r.get("aviso") or "sem dados de vendas")
             return {**base, "andamento_da_equipe": {k: a.get(k) for k in (
-                "realizado", "meta", "pct", "status", "esperado", "projecao", "numerador", "denominador", "base",
+                "realizado", "meta", "pct", "status", "esperado", "projecao", "numerador", "denominador", "dias", "base",
                 "vendedores", "situacao") if a.get(k) is not None}}
         if r.get("aviso") and not r["linhas"]:
             raise SemDados(r["aviso"])
         base["janela_da_base"] = {"inicio": item["base_inicio"], "fim": item["base_fim"]}
         base["alvo"] = texto_alvo(item["alvo_tipo"], item["meta_padrao"], ind)
         campos = ("id", "nome", "equipe", "base", "alvo", "resultado", "pct", "classe", "delta", "delta_pct", "status",
-                  "numerador", "denominador")
+                  "numerador", "denominador", "dias")
         base["vendedores"] = [{k: x[k] for k in campos if x.get(k) is not None} for x in r["linhas"]]
         base["leitura_classe"] = "ok = alvo batido; mid = melhorou sobre a base sem chegar ao alvo; bad = não passou da base"
         base["total"] = r["total"]

@@ -173,25 +173,40 @@ class TestIndicadores(ComCache, unittest.TestCase):
     def medir(self, metrica, parametros=None, filtros=None, meta=0.0, data_ref=D(2026, 9, 30), abrir=None, **extra):
         c = {**self.campanha(metrica, filtros, meta, **{k: v for k, v in extra.items() if k in ("inicio", "fim")}),
              "parametros": parametros or {}, "metas_produto": extra.get("metas_produto")}
-        a = andamento(self.cur, c, self.regras, self.cal, data_ref, None, self.AREAS, abrir)
+        a = andamento(self.cur, c, self.regras, self.cal, data_ref, None, extra.get("areas", self.AREAS), abrir)
         return {v["id"]: v for v in a["vendedores"]}, a
 
     def test_efetividade(self):
         por, a = self.medir("efetividade", meta=30, abrir="padrao")
-        # ES: 2 pedidos (o cancelado, o orçamento, o da área sem dia e o de funcionário não contam) ÷ 2 clientes da
-        # ROTA 1 × 5 quartas; BA: 3 pedidos (um do bloqueado e um feito pelo ES na carteira dela) ÷ 2 × 4 quintas
-        self.assertEqual({v: (x["numerador"], x["denominador"], x["realizado"]) for v, x in por.items()},
-                         {ES: (2, 10, 0.2), BA: (3, 8, 0.375), EDIR: (0, 0, None)})
+        # a média da efetividade de cada dia com visita. ES: 2 clientes da ROTA 1 em cada uma das 5 quartas, com 1
+        # pedido na 1ª (2/9): 0,5 ÷ 5 dias. O pedido da terça (15/9) fica fora (dia sem visita), e o cancelado, o
+        # orçamento, o da área sem dia e o de funcionário não contam. BA: 2 visitas em cada uma das 4 quintas, com
+        # pedido em 3 delas (um do bloqueado e um feito pelo ES na carteira dela): 1,5 ÷ 4 dias
+        self.assertEqual({v: (x["numerador"], x["denominador"], x["dias"], x["realizado"]) for v, x in por.items()},
+                         {ES: (1, 10, 5, 0.1), BA: (3, 8, 4, 0.375), EDIR: (0, 0, 0, None)})
         self.assertEqual((por[ES]["meta"], por[ES]["status"], por[BA]["status"], por[EDIR]["status"]),
                          (0.3, "abaixo", "batida", "sem_dados"))
-        self.assertAlmostEqual(a["total"]["realizado"], 5 / 18, places=4)
-        self.assertEqual((a["total"]["numerador"], a["total"]["denominador"]), (5, 18))
-        self.assertEqual({x["nome"]: x["valor"] for x in a["abertura"]["linhas"]}, {"ROTA 1": 0.2, "ROTA 2": 0.375})
+        self.assertAlmostEqual(a["total"]["realizado"], 2 / 9, places=4)  # 9 dias com visita: 0,5 + 3 × 0,5
+        self.assertEqual((a["total"]["numerador"], a["total"]["denominador"], a["total"]["dias"]), (4, 18, 9))
+        self.assertEqual({x["nome"]: (x["valor"], x["dias"]) for x in a["abertura"]["linhas"]},
+                         {"ROTA 1": (0.1, 5), "ROTA 2": (0.375, 4)})
         self.assertIn("4 clientes ativos da carteira ficaram fora", a["avisos"][0])  # ROTA 3 (2) e sem área (2)
-        self.assertEqual(a["indicador"]["formato"], "pct")
+        self.assertEqual((a["indicador"]["formato"], a["indicador"]["media_diaria"]), ("pct", True))
         por, _ = self.medir("efetividade", meta=30, data_ref=D(2026, 9, 15))
-        self.assertEqual({v: por[v]["realizado"] for v in (ES, BA)}, {ES: 0.5, BA: 0.5})  # 2 quartas e 2 quintas
+        self.assertEqual({v: por[v]["realizado"] for v in (ES, BA)}, {ES: 0.25, BA: 0.5})  # 2 quartas e 2 quintas
         self.assertEqual(por[BA]["status"], "no_ritmo")  # aberto: na meta é "no ritmo", não "batida"
+
+    def test_efetividade_media_dos_dias(self):
+        # ROTA 1 na terça e na quarta, ROTA 3 (os 2 hotéis do ES) na quarta: 2 visitas nas terças e 4 nas quartas
+        por, _ = self.medir("efetividade", meta=30, areas={1: [2, 3], 2: [4], 3: [3]})
+        es = por[ES]
+        # 15/9 (terça): 1 ÷ 2; 2/9 (quarta): 1 ÷ 4; os outros 8 dias, zero: (0,5 + 0,25) ÷ 10 dias = 7,5%. Pedidos do
+        # período ÷ visitas do período dariam 2 ÷ 30; com o pedido do sábado (5/9, dia sem visita), 3 ÷ 30
+        self.assertEqual((es["numerador"], es["denominador"], es["dias"]), (2, 30, 10))
+        self.assertAlmostEqual(es["realizado"], 0.075, places=4)
+        # semana sem nenhum dia de visita (sábado e domingo): sem efetividade, mesmo com pedido
+        por, _ = self.medir("efetividade", meta=30, inicio=D(2026, 9, 5), fim=D(2026, 9, 6), areas={3: [3]})
+        self.assertEqual((por[ES]["realizado"], por[ES]["dias"], por[ES]["status"]), (None, 0, "sem_dados"))
 
     def test_mix_medio(self):
         por, a = self.medir("mix_medio")
@@ -911,13 +926,14 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         id_ = self.criar("efetividade", regiao="ES", vendedores=[ES])
         fat = self.criar("faturamento", "Faturamento", regiao="ES", vendedores=[ES], alvo_tipo="mais", meta_padrao=100)
         d = self.detalhe(id_)
-        rubens, = d["linhas"]  # 2 pedidos ÷ 2 clientes da ROTA 1 × 5 quartas; em agosto, nenhum pedido
-        self.assertEqual((rubens["resultado"], rubens["base"], rubens["alvo"]), (0.2, 0, 0.3))
+        rubens, = d["linhas"]  # 1 pedido em 5 quartas com 2 visitas: 0,5 ÷ 5 dias; em agosto, nenhum pedido
+        self.assertEqual((rubens["resultado"], rubens["base"], rubens["alvo"], rubens["dias"]), (0.1, 0, 0.3, 5))
         self.assertEqual(d["abertura"]["por"], "area")  # a efetividade já abre por área
         self.assertIn("2 clientes", d["avisos"][0])  # a ROTA 3, pendente
-        # a ROTA 3 ganha a sexta: a conta é refeita (as contas guardadas dependem dos dias das áreas)
+        # a ROTA 3 ganha a sexta: a conta é refeita (as contas guardadas dependem dos dias das áreas). Entram 4 sextas
+        # sem pedido; o pedido do hotel foi num sábado (5/9) e continua fora
         self.gestao.definir_areas(self.chefe, {3: [5]})
-        self.assertAlmostEqual(self.detalhe(id_)["linhas"][0]["resultado"], 3 / 18, places=4)  # +1 pedido, +2 × 4 sextas
+        self.assertAlmostEqual(self.detalhe(id_)["linhas"][0]["resultado"], 0.5 / 9, places=4)
         # sem os pedidos no cache, só a efetividade fica sem números
         self.calc.cache.sem_pedidos = True
         d = self.detalhe(id_)
@@ -926,6 +942,23 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         self.assertIn("pedidos de venda", cartoes[id_]["aviso"])
         self.assertIsNone(cartoes[fat]["aviso"])
         self.assertEqual(self.detalhe(fat)["linhas"][0]["resultado"], 1480)
+
+    def test_migracao_010_mede_de_novo_a_base_da_efetividade(self):
+        from bi.banco import MIGRACOES
+        self.gestao.definir_areas(self.chefe, {1: [3], 2: [4]})
+        # base de 1 a 15/9: quartas 2/9 (1 pedido ÷ 2 visitas) e 9/9 (nenhum) = 25%; a conta antiga contava também
+        # o pedido da terça 15/9 e dava 2 ÷ 4 = 50%
+        id_ = self.criar("efetividade", regiao="ES", vendedores=[ES], inicio="2026-09-16", fim="2026-09-30")
+        self.assertEqual(self.detalhe(id_)["linhas"][0]["base"], 0.25)
+        with self.banco.conexao() as con:  # como a conta antiga tinha gravado
+            con.execute("UPDATE campanha_vendedores SET base = 0.5, base_num = 2, base_den = 4 WHERE campanha = %s", [id_])
+            con.execute("UPDATE gestao_eventos SET dados = dados || '{\"base\": 0.5}'::jsonb WHERE campanha = %s", [id_])
+            con.execute((MIGRACOES / "010_efetividade_media_diaria.sql").read_text(encoding="utf-8"))
+        self.assertEqual(self.detalhe(id_)["linhas"][0]["base"], 0.25)
+        with self.banco.conexao() as con:
+            dados, = con.execute("SELECT dados FROM gestao_eventos WHERE campanha = %s AND tipo = 'lancada'", [id_]).fetchone()
+            base_num, = con.execute("SELECT base_num FROM campanha_vendedores WHERE campanha = %s", [id_]).fetchone()
+        self.assertEqual((dados["base"], dados["base_pendente"], float(base_num)), (0.25, False, 1.0))
 
 
 class TestMigracao008(BaseBanco):
@@ -940,7 +973,7 @@ class TestMigracao008(BaseBanco):
             for nome, metrica in (("F", "faturamento"), ("V", "volume"), ("M", "mix"), ("P", "positivacao")):
                 con.execute("INSERT INTO campanhas (nome, inicio, fim, metrica, criada_por, criada_por_nome) VALUES "
                             "(%s, '2026-09-01', '2026-09-30', %s, %s, 'Ana')", [nome, metrica, dono])
-        self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe"])
+        self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe", "010_efetividade_media_diaria"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -970,7 +1003,7 @@ class TestMigracao009(BaseBanco):
                               "('Antiga', '2026-09-01', '2026-09-30', 'positivacao', %s, 'Ana') RETURNING id",
                               [dono]).fetchone()[0]
             con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor) VALUES (%s, 124)", [id_])
-        self.assertEqual(self.banco.migrar(), ["009_gestao_equipe"])
+        self.assertEqual(self.banco.migrar(), ["009_gestao_equipe", "010_efetividade_media_diaria"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

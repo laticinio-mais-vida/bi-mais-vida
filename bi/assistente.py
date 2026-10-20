@@ -890,7 +890,10 @@ alvo. Um objetivo é o indicador da equipe da região num período, contra um al
 dias_sem_compra (padrão 90).
   - mix_medio: produtos da campanha levados por cliente positivado (média). "Clientes que nunca compraram X" = \
 clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com os produtos.
-  - efetividade: pedidos ÷ visitas esperadas, pelos dias de atendimento das áreas, pela carteira do vendedor. A meta \
+  - efetividade: a média da efetividade de cada dia (pedidos do dia ÷ visitas esperadas no dia, pelos dias de \
+atendimento das áreas), pela carteira do vendedor; dias sem visita esperada (fim de semana) ficam fora da média, com \
+os pedidos deles. O numerador e o denominador que vêm junto (pedidos e visitas desses dias) não dão a média se \
+divididos: use o valor que vem pronto. A meta \
 é em % (80 = 80%); só aceita filtros de cliente (UF, segmento, área).
   - frequencia: semanas com compra por cliente positivado (média).
   - preco_medio: preço-alvo de cada produto em metas_produto (R$ por unidade); a meta é estar no preço-alvo.

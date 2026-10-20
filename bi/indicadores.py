@@ -4,10 +4,12 @@ recorte com todos os vendedores do Assistente (view faturamento: as mesmas regra
 Tipos prontos, com as contas do Power BI da empresa (MAIS VIDAS-PBIT.pbit):
 - positivacao: clientes distintos com venda no período.
 - mix_medio: produtos da campanha que cada cliente levou, somados, ÷ clientes positivados (com qualquer produto).
-- efetividade: pedidos de venda (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA) ÷ visitas esperadas, pelo
-  vendedor da carteira do cliente. Visitas esperadas: para cada dia do período, os clientes ativos (sem "PEDIDO
-  BLOQUEADO" no nome) das áreas atendidas nesse dia da semana. Os dias de cada área ficam no PostgreSQL
-  (areas_atendimento); cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso.
+- efetividade: a média da efetividade de cada dia do período, pelo vendedor da carteira do cliente. A de um dia:
+  pedidos de venda do dia (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA) ÷ visitas esperadas no dia, que são os
+  clientes ativos (sem "PEDIDO BLOQUEADO" no nome) das áreas atendidas nesse dia da semana. Dia sem visita esperada
+  (o fim de semana, por exemplo) fica fora da média, com os pedidos dele (decisão do usuário: o Power BI divide os
+  pedidos do período pelas visitas do período). Os dias de cada área ficam no PostgreSQL (areas_atendimento);
+  cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso.
 - frequencia: semanas com compra, somadas cliente a cliente, ÷ clientes positivados. A semana vai de domingo a
   sábado e é cortada na virada do mês, como o WEEKNUM do Power BI.
 - preco_medio: preço médio (venda líquida ÷ quantidade líquida) de cada produto contra o preço-alvo dele. Cada
@@ -179,8 +181,9 @@ def descritor(metrica: str, p: dict, unidade: str | None = None) -> dict:
                  rotulo_meta="produtos por cliente", numerador="Produtos levados (somando os clientes)",
                  denominador="Clientes positivados", aberturas=["area", "segmento"])
     elif metrica == "efetividade":
-        d.update(formato="pct", casas=1, comportamento="taxa", meta_em_pct=True,
-                 descricao="pedidos ÷ visitas esperadas pelos dias de atendimento das áreas, pela carteira do vendedor",
+        d.update(formato="pct", casas=1, comportamento="taxa", meta_em_pct=True, media_diaria=True,
+                 descricao="média da efetividade de cada dia (pedidos do dia ÷ visitas esperadas no dia, pelos dias de "
+                           "atendimento das áreas), pela carteira do vendedor; dias sem visita esperada ficam fora",
                  rotulo_meta="% de efetividade", numerador="Pedidos", denominador="Visitas esperadas",
                  aberturas=["area", "segmento"], abrir_padrao="area")
     elif metrica == "frequencia":
@@ -421,21 +424,25 @@ def _pct_carteira(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, a
     return r
 
 
-def visitas_por_area(inicio: dt.date, ate: dt.date, areas: dict[int, list[int]]) -> dict[int, int]:
-    """Quantas visitas cada cliente de cada área deveria receber no período (os dias de atendimento que caem nele)."""
-    n = Counter()
-    d = inicio
-    while d <= ate:
-        n[d.isoweekday()] += 1
-        d += dt.timedelta(days=1)
-    return {a: sum(n[x] for x in dias) for a, dias in areas.items() if dias}
+def _media_dos_dias(pedidos: Counter, visitas: Counter) -> dict:
+    """A efetividade de cada dia com visita esperada (pedidos do dia ÷ visitas do dia) e a média desses dias; num e
+    den somam só esses dias (o que a página mostra ao lado)."""
+    dias = sorted(d for d, n in visitas.items() if n)
+    return {"num": float(sum(pedidos[d] for d in dias)), "den": float(sum(visitas[d] for d in dias)),
+            "valor": sum(pedidos[d] / visitas[d] for d in dias) / len(dias) if dias else None, "dias": len(dias)}
 
 
 def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: dict[int, list[int]],
                  abrir: str | None = None) -> dict:
-    """Pedidos ÷ visitas esperadas, pelo vendedor da carteira. Cliente em área sem linha em areas_atendimento
-    (pendente) fica fora e entra no aviso; área com dias vazios (não atendida) fica fora sem aviso."""
-    peso = visitas_por_area(inicio, ate, areas)
+    """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos do
+    dia ÷ as visitas esperadas no dia. Dia sem visita esperada (o fim de semana, o dia sem área) fica fora da média,
+    com os pedidos dele. Cliente em área sem linha em areas_atendimento (pendente) fica fora e entra no aviso; área
+    com dias vazios (não atendida) fica fora sem aviso."""
+    dias_semana: dict[int, list[dt.date]] = {}
+    d = inicio
+    while d <= ate:
+        dias_semana.setdefault(d.isoweekday(), []).append(d)
+        d += dt.timedelta(days=1)
     onde_k, params_k = _carteira(c, ids)
     grupos = ("k.id_vendedor_carteira, k.id_area, COALESCE(k.area, '(sem área)'), "
               "COALESCE(k.segmento, '(sem segmento)')")
@@ -443,34 +450,38 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
         f"SELECT {grupos}, COUNT(*) FILTER (WHERE NOT COALESCE(k.inativo, false) AND NOT "
         f"contains(upper(COALESCE(k.cliente, '')), 'PEDIDO BLOQUEADO')) FROM clientes k WHERE {onde_k} "
         f"GROUP BY 1, 2, 3, 4", params_k).fetchall()]
-    pedidos = {(v, a, ar, s): n for v, a, ar, s, n in cur.execute(
-        f"SELECT {grupos}, SUM(p.pedidos) FROM _pedidos_venda p JOIN clientes k ON k.id_cliente = p.id_cliente "
-        f"WHERE p.tipo_cliente = 'CLIENTE' AND p.data BETWEEN ? AND ? AND p.cancelada = 0 "
-        f"AND p.tipopedido = 'PEDIDOVENDA' AND {onde_k} GROUP BY 1, 2, 3, 4", [inicio, ate, *params_k]).fetchall()}
+    pedidos: dict = {}
+    for v, a, ar, s, data, n in cur.execute(
+            f"SELECT {grupos}, p.data, SUM(p.pedidos) FROM _pedidos_venda p JOIN clientes k ON k.id_cliente = p.id_cliente "
+            f"WHERE p.tipo_cliente = 'CLIENTE' AND p.data BETWEEN ? AND ? AND p.cancelada = 0 "
+            f"AND p.tipopedido = 'PEDIDOVENDA' AND {onde_k} GROUP BY 1, 2, 3, 4, 5", [inicio, ate, *params_k]).fetchall():
+        pedidos.setdefault((v, a, ar, s), Counter())[data] += _numero(n)
     vend: dict = {}
-    total = {"num": 0.0, "den": 0.0}
+    total = (Counter(), Counter())  # (pedidos, visitas) por dia
     por: dict = {}
     sem_dia = 0
     for (v, area_id, area, seg), visitaveis in clientes:
         if area_id not in areas:  # área pendente
             sem_dia += visitaveis
             continue
-        if area_id not in peso:  # área marcada como não atendida
+        if not areas[area_id]:  # área marcada como não atendida
             continue
-        n_ped = _numero(pedidos.get((v, area_id, area, seg)))
-        n_vis = float(visitaveis * peso[area_id])
-        alvos = [vend.setdefault(v, {"num": 0.0, "den": 0.0}), total]
+        alvos = [vend.setdefault(v, (Counter(), Counter())), total]
         if abrir:
-            alvos.append(por.setdefault(area if abrir == "area" else seg, {"num": 0.0, "den": 0.0}))
-        for alvo in alvos:
-            alvo["num"] += n_ped
-            alvo["den"] += n_vis
-    r = {"vend": vend, "total": total, "avisos": []}
+            alvos.append(por.setdefault(area if abrir == "area" else seg, (Counter(), Counter())))
+        ped = pedidos.get((v, area_id, area, seg), Counter())
+        for p_dia, v_dia in alvos:
+            p_dia.update(ped)
+            if visitaveis:
+                for dia in areas[area_id]:
+                    for data in dias_semana.get(dia, ()):
+                        v_dia[data] += visitaveis
+    r = {"vend": {v: _media_dos_dias(*x) for v, x in vend.items()}, "total": _media_dos_dias(*total), "avisos": []}
     if sem_dia:
         r["avisos"].append(f"{sem_dia} cliente{'s' if sem_dia != 1 else ''} ativo{'s' if sem_dia != 1 else ''} da "
                            f"carteira {SEM_DIA}")
     if abrir in ("area", "segmento"):
-        r["abertura"] = [{"chave": k, "nome": k, **v} for k, v in por.items()]
+        r["abertura"] = [{"chave": k, "nome": k, **_media_dos_dias(*x)} for k, x in por.items()]
     return r
 
 
@@ -529,10 +540,13 @@ def medir(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: di
 
 
 def valor_de(comportamento: str, x: dict | None):
-    """O valor do indicador a partir do numerador e do denominador de medir() (soma: o numerador; média: a razão)."""
+    """O valor do indicador a partir do numerador e do denominador de medir() (soma: o numerador; média: a razão,
+    ou o valor que a conta já trouxe, como a média dos dias da efetividade)."""
     if x is None:
         return 0.0 if comportamento == "soma" else None
-    return x["num"] if comportamento == "soma" else _div(x["num"], x["den"])
+    if comportamento == "soma":
+        return x["num"]
+    return x["valor"] if "valor" in x else _div(x["num"], x["den"])
 
 
 # --- o andamento ------------------------------------------------------------------------------
@@ -595,6 +609,8 @@ def calcular(cur, campanha: dict, regras, cal, data_ref: dt.date, permitidos: fr
         nome, equipe = info.get(vid, (f"Vendedor {vid}", NOME_EQUIPE.get(grupo, grupo)))
         if desc["numerador"]:
             extra.update(numerador=_redondo((medido or {}).get("num", 0.0)), denominador=_redondo((medido or {}).get("den", 0.0)))
+        if desc.get("media_diaria"):
+            extra["dias"] = (medido or {}).get("dias", 0)
         if metrica == "preco_medio":
             extra["produtos"] = (medido or {}).get("produtos") or []
         linhas.append({"id": vid, "nome": nome, "equipe": equipe, "regiao": regiao, "meta_individual": v["meta"] is not None,
@@ -661,6 +677,8 @@ def _total(desc: dict, linhas: list[dict], m: dict, calendarios: dict, situacao:
     }
     if desc["numerador"]:
         t.update(numerador=_redondo(m["total"].get("num", 0.0)), denominador=_redondo(m["total"].get("den") or 0.0))
+    if desc.get("media_diaria"):
+        t["dias"] = m["total"].get("dias", 0)
     return t
 
 
@@ -694,6 +712,8 @@ def total_equipe(cur, objetivo: dict, ids: list[int], cal, data_ref: dt.date, re
     ind = bloco(desc["comportamento"], realizado, alvo, cal_r)
     if desc["numerador"]:
         extra.update(numerador=_redondo(m["total"].get("num", 0.0)), denominador=_redondo(m["total"].get("den") or 0.0))
+    if desc.get("media_diaria"):
+        extra["dias"] = m["total"].get("dias", 0)
     return {"indicador": desc, "unidade": unidade, "situacao": cal_r["situacao"], "vendedores": len(ids),
             "calendario": {**cal_r, "ritmo": round(cal_r["ritmo"], 4)}, "avisos": m.get("avisos", []),
             **{k: _redondo(x) for k, x in ind.items()}, **extra}
@@ -701,6 +721,7 @@ def total_equipe(cur, objetivo: dict, ids: list[int], cal, data_ref: dt.date, re
 
 def _abertura(por: str, linhas: list[dict], valor) -> dict:
     itens = [{"chave": x["chave"], "nome": x["nome"], "valor": _redondo(valor(x)), "numerador": _redondo(x["num"]),
-              **({"denominador": _redondo(x["den"])} if x.get("den") is not None else {})} for x in linhas]
+              **({"denominador": _redondo(x["den"])} if x.get("den") is not None else {}),
+              **({"dias": x["dias"]} if "dias" in x else {})} for x in linhas]
     itens.sort(key=lambda x: (x["valor"] is None, -(x["valor"] or 0), str(x["nome"])))
     return {"por": por, "rotulo": ABERTURAS[por], "linhas": itens[:MAX_ABERTURA], "mais": max(0, len(itens) - MAX_ABERTURA)}

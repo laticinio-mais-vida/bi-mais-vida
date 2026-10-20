@@ -303,7 +303,11 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
 
 - **Positivação:** clientes distintos com venda no período.
 - **Mix médio:** produtos escolhidos levados, somados cliente a cliente, ÷ todos os clientes positivados.
-- **Efetividade:** pedidos de venda ÷ visitas esperadas, pela carteira do vendedor.
+- **Efetividade:** a média da efetividade de cada dia, pela carteira do vendedor. A de um dia é pedidos de venda do
+  dia ÷ visitas esperadas no dia.
+  - Dia sem visita esperada (fim de semana, dia em que nenhuma área do vendedor é atendida) fica fora da média, com
+    os pedidos dele. Diferente do Power BI, que divide os pedidos do período pelas visitas do período: lá, os
+    pedidos de sábado e domingo entram sem visita, e numa ação curta isso distorce a conta.
   - Os pedidos vêm do ERP (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA).
   - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada dia de atendimento dela que cai no
     período. Feriados contam, como no Power BI.
