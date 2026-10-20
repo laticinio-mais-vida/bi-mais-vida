@@ -245,6 +245,12 @@ def periodo_base(inicio: dt.date, fim: dt.date, comparar: str) -> tuple[dt.date,
     return inicio - dt.timedelta(days=dias), inicio - dt.timedelta(days=1)
 
 
+def janela_base(inicio: dt.date, fim: dt.date) -> tuple[dt.date, dt.date]:
+    """Janela da base de uma ação (página Gestão): o mesmo número de dias, logo antes do início."""
+    dias = (fim - inicio).days + 1
+    return inicio - dt.timedelta(days=dias), inicio - dt.timedelta(days=1)
+
+
 def unidades(cur, filtros: dict, data_ref: dt.date) -> list[str]:
     """Unidades dos produtos que os filtros pegam (os escolhidos e os vendidos nos últimos 12 meses)."""
     onde, params = _onde(filtros, FILTROS_PRODUTO, "p.")
@@ -518,7 +524,15 @@ def medir(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: di
         for vid, v in r["vend"].items():
             v["base"] = base["vend"].get(vid, {}).get("num", 0.0)
         r["base"] = {vid: v["num"] for vid, v in base["vend"].items()}
+        r["base_total"] = base["total"]["num"]
     return r
+
+
+def valor_de(comportamento: str, x: dict | None):
+    """O valor do indicador a partir do numerador e do denominador de medir() (soma: o numerador; média: a razão)."""
+    if x is None:
+        return 0.0 if comportamento == "soma" else None
+    return x["num"] if comportamento == "soma" else _div(x["num"], x["den"])
 
 
 # --- o andamento ------------------------------------------------------------------------------
@@ -553,9 +567,7 @@ def calcular(cur, campanha: dict, regras, cal, data_ref: dt.date, permitidos: fr
         m = medir(cur, c, ids, inicio, ate, areas, abrir)
 
     def valor(x: dict | None):
-        if x is None:
-            return 0.0 if comportamento == "soma" else None
-        return x["num"] if comportamento == "soma" else _div(x["num"], x["den"])
+        return valor_de(comportamento, x)
 
     info = {}
     if ids:
@@ -650,6 +662,41 @@ def _total(desc: dict, linhas: list[dict], m: dict, calendarios: dict, situacao:
     if desc["numerador"]:
         t.update(numerador=_redondo(m["total"].get("num", 0.0)), denominador=_redondo(m["total"].get("den") or 0.0))
     return t
+
+
+def total_equipe(cur, objetivo: dict, ids: list[int], cal, data_ref: dt.date, regiao: str,
+                 areas: dict | None = None) -> dict:
+    """Objetivo da região (página Gestão): o indicador da equipe (o total de medir(), sem repetir clientes entre os
+    vendedores) contra o alvo da equipe (meta_padrao), com a situação pelo calendário da região. ids: os vendedores
+    que contam."""
+    metrica, p = normalizar(objetivo["metrica"], objetivo.get("parametros"))
+    c = {**objetivo, "metrica": metrica, "parametros": p, "metas_produto": objetivo.get("metas_produto") or []}
+    inicio, fim = c["inicio"], c["fim"]
+    unidade = ""
+    if p.get("medida") == "volume":
+        achadas = unidades(cur, c["filtros"], data_ref)
+        unidade = achadas[0] if len(achadas) == 1 else ("" if not achadas else "/".join(achadas))
+    desc = descritor(metrica, p, unidade)
+    m = {"total": {"num": 0.0, "den": None}, "avisos": []}
+    if ids:
+        m = medir(cur, c, ids, inicio, min(fim, data_ref), areas)
+    realizado = valor_de(desc["comportamento"], m["total"])
+    meta, extra = c["meta_padrao"], {}
+    if metrica == "preco_medio":
+        alvo = 1.0
+    elif p.get("forma") == "crescimento":
+        base = m.get("base_total") or 0.0
+        alvo = base * (1 + meta / 100) if base and meta else 0.0
+        extra["base"] = _redondo(base)
+    else:
+        alvo = meta / 100 if desc["meta_em_pct"] else meta
+    cal_r = calendario_periodo(cal, inicio, fim, regiao, data_ref)
+    ind = bloco(desc["comportamento"], realizado, alvo, cal_r)
+    if desc["numerador"]:
+        extra.update(numerador=_redondo(m["total"].get("num", 0.0)), denominador=_redondo(m["total"].get("den") or 0.0))
+    return {"indicador": desc, "unidade": unidade, "situacao": cal_r["situacao"], "vendedores": len(ids),
+            "calendario": {**cal_r, "ritmo": round(cal_r["ritmo"], 4)}, "avisos": m.get("avisos", []),
+            **{k: _redondo(x) for k, x in ind.items()}, **extra}
 
 
 def _abertura(por: str, linhas: list[dict], valor) -> dict:

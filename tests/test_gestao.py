@@ -231,6 +231,44 @@ class TestIndicadores(ComCache, unittest.TestCase):
         self.assertEqual(dias_do_nome("SALVADOR"), [])
 
 
+class TestObjetivo(ComCache, unittest.TestCase):
+    """O total da equipe dos objetivos da região (indicadores.total_equipe) e a janela da base das ações."""
+
+    def setUp(self):
+        self.montar_cache()
+
+    def tearDown(self):
+        self.desmontar_cache()
+
+    def total(self, metrica, ids, meta, regiao="ES", parametros=None, data_ref=D(2026, 9, 30), **datas):
+        from bi.indicadores import total_equipe
+        objetivo = {**SETEMBRO, **datas, "metrica": metrica, "parametros": parametros or {}, "filtros": {},
+                    "meta_padrao": meta}
+        return total_equipe(self.cur, objetivo, ids, self.cal, data_ref, regiao)
+
+    def test_janela_base(self):
+        from bi.indicadores import janela_base
+        self.assertEqual(janela_base(D(2026, 9, 1), D(2026, 9, 28)), (D(2026, 8, 4), D(2026, 8, 31)))
+        self.assertEqual(janela_base(D(2026, 9, 1), D(2026, 9, 21)), (D(2026, 8, 11), D(2026, 8, 31)))
+        self.assertEqual(janela_base(D(2026, 9, 1), D(2026, 9, 1)), (D(2026, 8, 31), D(2026, 8, 31)))
+
+    def test_total_da_equipe(self):
+        t = self.total("positivacao", [ES], 3)  # clientes 1 e 3 (o funcionário 7 não conta)
+        self.assertEqual((t["realizado"], t["meta"], t["status"], t["situacao"]), (2, 3, "abaixo", "fechado"))
+        self.assertAlmostEqual(t["pct"], 2 / 3, places=4)
+        fat = {"medida": "faturamento", "forma": "total"}
+        t = self.total("personalizada", [BA, EDIR], 6000, "BA", fat)
+        self.assertEqual((t["realizado"], t["status"], t["vendedores"]), (5450, "atencao", 2))
+        self.assertEqual(self.total("personalizada", [BA], 6000, "BA", fat)["realizado"], 4750)  # só os do acesso
+        # sem vendedores no acesso: zero na soma, sem dados na média
+        self.assertEqual(self.total("positivacao", [], 3)["realizado"], 0)
+        self.assertIsNone(self.total("mix_medio", [], 2)["realizado"])
+        # no meio do período, a soma usa o ritmo da região
+        t = self.total("personalizada", [BA, EDIR], 6000, "BA", fat, fim=D(2026, 10, 31))
+        self.assertEqual((t["situacao"], t["status"]), ("aberto", "no_ritmo"))
+        self.assertEqual(t["calendario"]["regiao"], "BA")
+
+
 class TestValidar(ComCache, unittest.TestCase):
     def setUp(self):
         self.montar_cache()
