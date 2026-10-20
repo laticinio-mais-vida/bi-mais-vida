@@ -11,7 +11,7 @@ Uso:
 O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões desta máquina; com
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
-Usuários, regras, conversas, o uso do Assistente e as campanhas da Gestão ficam no PostgreSQL de [postgres]
+Usuários, regras, conversas, o uso do Assistente e as ações da Gestão ficam no PostgreSQL de [postgres]
 (bi/banco.py), no PC e no VPS.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
-from bi.gestao import Gestao  # noqa: E402
+from bi.gestao import PRORROGAR, Gestao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
@@ -59,10 +59,17 @@ mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 # O navegador fechou a conexão (recarregou a página no meio da resposta): não é erro do painel.
 CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
-# Só o administrador usa: regras de cálculo, atualização forçada e cadastro de acessos.
+# Página Gestão: quem tem a página lê; só o administrador lança e muda ações, objetivos e observações.
+ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/vendedor", "/api/gestao/acao", "/api/gestao/catalogo",
+                    "/api/gestao/rascunho")
+ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gestao/acao/encerrar",
+                      "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
+                      "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
+                      "/api/gestao/notas", "/api/gestao/nota/excluir"}
+# Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
-               "/api/gestao/config"}
+               "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
 PAGINAS_HTML = ("/", "/index.html", "/login", "/login.html")
@@ -320,8 +327,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
 
     def _config_gestao(self) -> dict:
-        """Configuração da página Gestão: os vendedores que cada visualizador pode pôr nas campanhas e os dias de
-        atendimento das áreas comerciais (efetividade)."""
+        """Configuração da página Gestão: os vendedores que cada visualizador acompanha (as ações, os objetivos e o
+        histórico deles) e os dias de atendimento das áreas comerciais (efetividade)."""
         return {"vendedores": self.app.assistente.catalogo_vendedores(),
                 "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores(),
                 **self.app.gestao.config_areas()}
@@ -344,40 +351,53 @@ class Manipulador(BaseHTTPRequestHandler):
         if not self._pode_gestao(usuario):
             return
         gestao, escopo = self.app.gestao, escopo_gestao(usuario)
-        if caminho == "/api/gestao":
-            return self._json(gestao.listar(usuario, escopo, q.get("todas") == "1", q.get("arquivadas") == "1"))
+        if caminho == "/api/gestao":  # o quadro de uma região (sem região: a primeira do acesso)
+            return self._json(gestao.quadro(usuario, escopo, q.get("regiao")))
+        if caminho == "/api/gestao/vendedor":  # o histórico interno de um vendedor
+            return self._json(gestao.historico(usuario, escopo, q.get("id")))
+        if caminho == "/api/gestao/acao":  # ação ou objetivo; abrir: area, segmento ou produto (vazio = nenhuma)
+            return self._json(gestao.detalhe(usuario, escopo, q.get("id"), q.get("abrir", "padrao")))
         if caminho == "/api/gestao/catalogo":
             return self._json(gestao.catalogo(escopo))
-        if caminho == "/api/gestao/campanha":  # abrir: area, segmento ou produto (vazio = nenhuma)
-            return self._json(gestao.obter(usuario, q.get("id"), escopo, q.get("abrir", "padrao")))
         # /api/gestao/rascunho: o rascunho que o Assistente montou numa conversa da pessoa, para revisar na página
         rascunho = self.app.conversas.rascunho(usuario["id"], q.get("id"))
         if rascunho is None:
             raise NaoEncontrada("rascunho não encontrado; peça de novo ao Assistente")
-        criada = gestao.criadas_por_rascunho(usuario, [rascunho["id"]]).get(rascunho["id"])
-        return self._json({"rascunho": rascunho, "campanha": criada})
+        lancada = gestao.criadas_por_rascunho(usuario, [rascunho["id"]]).get(rascunho["id"])
+        return self._json({"rascunho": rascunho, "acao": lancada})
 
     def _mudar_gestao(self, usuario: dict, caminho: str, corpo: dict):
         if not self._pode_gestao(usuario):
             return
-        gestao, escopo = self.app.gestao, escopo_gestao(usuario)
-        if caminho == "/api/gestao/campanhas":
-            r = gestao.criar(usuario, corpo.get("campanha") or {}, escopo, corpo.get("rascunho"))
+        gestao = self.app.gestao
+        if caminho in ("/api/gestao/acoes", "/api/gestao/objetivos"):
+            tipo = "acao" if caminho == "/api/gestao/acoes" else "objetivo"
+            r = gestao.criar(usuario, corpo.get(tipo) or {}, tipo, corpo.get("rascunho"))
             if not r["ja_existia"]:
-                log.info("%s criou a campanha %s%s", usuario["login"], r["id"],
+                log.info("%s lançou %s %s%s", usuario["login"], "a ação" if tipo == "acao" else "o objetivo", r["id"],
                          " (rascunho do Assistente)" if corpo.get("rascunho") else "")
-            return self._json({"ok": True, "ja_existia": r["ja_existia"], **gestao.obter(usuario, r["id"], escopo)})
+            return self._json({"ok": True, **r})
+        if caminho == "/api/gestao/notas":
+            return self._json({"ok": True, "evento": gestao.anotar(usuario, corpo.get("id_vendedor"), corpo.get("texto"))})
+        if caminho == "/api/gestao/nota/excluir":
+            gestao.excluir_nota(usuario, corpo.get("id"))
+            return self._json({"ok": True})
         id_ = corpo.get("id")
-        if caminho == "/api/gestao/campanha/editar":
-            gestao.atualizar(usuario, id_, corpo.get("campanha") or {}, escopo)
-            return self._json({"ok": True, **gestao.obter(usuario, id_, escopo)})
-        if caminho == "/api/gestao/campanha/mover":
-            gestao.mover(usuario, id_, str(corpo.get("status") or ""), corpo.get("antes_de"))
-        elif caminho == "/api/gestao/campanha/arquivar":
+        tipo = "objetivo" if caminho.startswith("/api/gestao/objetivo/") else "acao"
+        oque = caminho.rsplit("/", 1)[-1]
+        if oque == "editar":
+            gestao.atualizar(usuario, id_, corpo.get(tipo) or {}, tipo)
+        elif oque == "encerrar":
+            gestao.encerrar(usuario, id_)
+            log.info("%s encerrou a ação %s", usuario["login"], id_)
+        elif oque == "prorrogar":
+            gestao.prorrogar(usuario, id_, corpo.get("dias", PRORROGAR))
+            log.info("%s prorrogou a ação %s", usuario["login"], id_)
+        elif oque == "arquivar":
             gestao.arquivar(usuario, id_, corpo.get("arquivada", True) is not False)
-        else:  # /api/gestao/campanha/excluir
+        else:  # excluir
             gestao.excluir(usuario, id_)
-            log.info("%s excluiu a campanha %s", usuario["login"], id_)
+            log.info("%s excluiu %s %s", usuario["login"], "a ação" if tipo == "acao" else "o objetivo", id_)
         return self._json({"ok": True})
 
     def _pode_assistente(self, usuario: dict) -> bool:
@@ -415,10 +435,10 @@ class Manipulador(BaseHTTPRequestHandler):
         if conversa is None and pendente is None:
             raise NaoEncontrada("conversa não encontrada; ela pode ter sido excluída")
         rascunhos = [r for m in (conversa or {}).get("mensagens", []) for r in m.get("rascunhos") or []]
-        if rascunhos and "gestao" in paginas_permitidas(usuario):  # os que já viraram campanha mostram o link
-            criadas = self.app.gestao.criadas_por_rascunho(usuario, [r["id"] for r in rascunhos])
+        if rascunhos and "gestao" in paginas_permitidas(usuario):  # os que já viraram ação mostram o link
+            lancadas = self.app.gestao.criadas_por_rascunho(usuario, [r["id"] for r in rascunhos])
             for r in rascunhos:
-                r["campanha"] = criadas.get(r["id"])
+                r["acao"] = lancadas.get(r["id"])
         return self._json({"conversa": conversa, "pendente": pendente})
 
     def _mudar_historico(self, usuario: dict, caminho: str, corpo: dict):
@@ -537,7 +557,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._ler_historico(usuario, url.path, q)
             if url.path == "/api/assistente/config":
                 return self._json(self._config_assistente())
-            if url.path in ("/api/gestao", "/api/gestao/catalogo", "/api/gestao/campanha", "/api/gestao/rascunho"):
+            if url.path in ROTAS_GESTAO_LER:
                 return self._ler_gestao(usuario, url.path, q)
             if url.path == "/api/gestao/config":
                 return self._json(self._config_gestao())
@@ -558,6 +578,8 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._banco_fora_do_ar(e)
         except NaoEncontrada as e:
             return self._erro(str(e), HTTPStatus.NOT_FOUND)
+        except PermissionError as e:  # ex.: região fora do acesso na Gestão
+            return self._erro(str(e), HTTPStatus.FORBIDDEN)
         except RuntimeError as e:
             return self._erro(str(e), HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, KeyError) as e:
@@ -608,8 +630,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 self.app.usuarios.definir_assistente(self._corpo_json().get("usuarios") or {})
                 log.info("%s salvou o acesso do Assistente", usuario["login"])
                 return self._json({"ok": True, **self._config_assistente()})
-            if url.path in ("/api/gestao/campanhas", "/api/gestao/campanha/editar", "/api/gestao/campanha/mover",
-                            "/api/gestao/campanha/arquivar", "/api/gestao/campanha/excluir"):
+            if url.path in ROTAS_GESTAO_MUDAR:
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":
                 return self._salvar_config_gestao(usuario, self._corpo_json())
@@ -632,7 +653,9 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._banco_fora_do_ar(e)
         except NaoEncontrada as e:
             return self._erro(str(e), HTTPStatus.NOT_FOUND)
-        except RuntimeError as e:  # dados ainda não prontos (ex.: criar campanha antes da primeira extração)
+        except PermissionError as e:  # ex.: só o administrador lança ações
+            return self._erro(str(e), HTTPStatus.FORBIDDEN)
+        except RuntimeError as e:  # dados ainda não prontos (ex.: lançar uma ação antes da primeira extração)
             return self._erro(str(e), HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, KeyError) as e:
             return self._erro(str(e))
