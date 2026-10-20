@@ -785,7 +785,7 @@ function tabelaAcao(d) {
 // "3 ÷ 8" embaixo do resultado; na efetividade (média dos dias), os pedidos, as visitas e os dias, que não se dividem.
 function textoPartes(ind, x) {
   if (!ind.media_diaria) return `${valorParte(ind, x.numerador)} ÷ ${valorParte(ind, x.denominador)}`;
-  return `${plural(x.numerador, "pedido", "pedidos")} · ${plural(x.denominador, "visita", "visitas")} · média de ${plural(x.dias || 0, "dia", "dias")}`;
+  return `${plural(x.numerador, "pedido na rota", "pedidos na rota")} · ${plural(x.denominador, "visita", "visitas")} · média de ${plural(x.dias || 0, "dia", "dias")}`;
 }
 
 // A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos), enquanto a ação corre.

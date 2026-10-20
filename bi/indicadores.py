@@ -5,9 +5,10 @@ Tipos prontos, com as contas do Power BI da empresa (MAIS VIDAS-PBIT.pbit):
 - positivacao: clientes distintos com venda no período.
 - mix_medio: produtos da campanha que cada cliente levou, somados, ÷ clientes positivados (com qualquer produto).
 - efetividade: a média da efetividade de cada dia do período, pelo vendedor da carteira do cliente. A de um dia:
-  pedidos de venda do dia (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA) ÷ visitas esperadas no dia, que são os
-  clientes ativos (sem "PEDIDO BLOQUEADO" no nome) das áreas atendidas nesse dia da semana. Dia sem visita esperada
-  (o fim de semana, por exemplo) fica fora da média, com os pedidos dele (decisão do usuário: o Power BI divide os
+  pedidos de venda na rota do dia (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA, de clientes das áreas atendidas
+  nesse dia da semana) ÷ visitas esperadas no dia, que são os clientes ativos (sem "PEDIDO BLOQUEADO" no nome) dessas
+  áreas. Pedido de cliente de área de outro dia não conta (o "Pedidos Fora de Rota" do Power BI) e dia sem visita
+  esperada (o fim de semana, por exemplo) fica fora da média (decisões do usuário: o Power BI divide todos os
   pedidos do período pelas visitas do período). Os dias de cada área ficam no PostgreSQL (areas_atendimento);
   cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso.
 - frequencia: semanas com compra, somadas cliente a cliente, ÷ clientes positivados. A semana vai de domingo a
@@ -182,9 +183,10 @@ def descritor(metrica: str, p: dict, unidade: str | None = None) -> dict:
                  denominador="Clientes positivados", aberturas=["area", "segmento"])
     elif metrica == "efetividade":
         d.update(formato="pct", casas=1, comportamento="taxa", meta_em_pct=True, media_diaria=True,
-                 descricao="média da efetividade de cada dia (pedidos do dia ÷ visitas esperadas no dia, pelos dias de "
-                           "atendimento das áreas), pela carteira do vendedor; dias sem visita esperada ficam fora",
-                 rotulo_meta="% de efetividade", numerador="Pedidos", denominador="Visitas esperadas",
+                 descricao="média da efetividade de cada dia (pedidos na rota do dia ÷ visitas esperadas no dia, pelos "
+                           "dias de atendimento das áreas), pela carteira do vendedor; pedido de cliente de área de "
+                           "outro dia não conta, e dias sem visita esperada ficam fora",
+                 rotulo_meta="% de efetividade", numerador="Pedidos na rota", denominador="Visitas esperadas",
                  aberturas=["area", "segmento"], abrir_padrao="area")
     elif metrica == "frequencia":
         d.update(formato="razao", casas=2, sufixo="semanas por cliente", comportamento="acumula_taxa",
@@ -425,8 +427,8 @@ def _pct_carteira(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, a
 
 
 def _media_dos_dias(pedidos: Counter, visitas: Counter) -> dict:
-    """A efetividade de cada dia com visita esperada (pedidos do dia ÷ visitas do dia) e a média desses dias; num e
-    den somam só esses dias (o que a página mostra ao lado)."""
+    """A efetividade de cada dia com visita esperada (pedidos na rota do dia ÷ visitas do dia) e a média desses dias;
+    num e den somam só esses dias (o que a página mostra ao lado)."""
     dias = sorted(d for d, n in visitas.items() if n)
     return {"num": float(sum(pedidos[d] for d in dias)), "den": float(sum(visitas[d] for d in dias)),
             "valor": sum(pedidos[d] / visitas[d] for d in dias) / len(dias) if dias else None, "dias": len(dias)}
@@ -434,10 +436,11 @@ def _media_dos_dias(pedidos: Counter, visitas: Counter) -> dict:
 
 def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: dict[int, list[int]],
                  abrir: str | None = None) -> dict:
-    """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos do
-    dia ÷ as visitas esperadas no dia. Dia sem visita esperada (o fim de semana, o dia sem área) fica fora da média,
-    com os pedidos dele. Cliente em área sem linha em areas_atendimento (pendente) fica fora e entra no aviso; área
-    com dias vazios (não atendida) fica fora sem aviso."""
+    """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos na
+    rota do dia (de clientes das áreas atendidas nesse dia da semana) ÷ as visitas esperadas no dia. Pedido de cliente
+    de área de outro dia não conta (o "fora de rota" do Power BI). Dia sem visita esperada (o fim de semana, o dia sem
+    área) fica fora da média. Cliente em área sem linha em areas_atendimento (pendente) fica fora e entra no aviso;
+    área com dias vazios (não atendida) fica fora sem aviso."""
     dias_semana: dict[int, list[dt.date]] = {}
     d = inicio
     while d <= ate:
@@ -469,7 +472,8 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
         alvos = [vend.setdefault(v, (Counter(), Counter())), total]
         if abrir:
             alvos.append(por.setdefault(area if abrir == "area" else seg, (Counter(), Counter())))
-        ped = pedidos.get((v, area_id, area, seg), Counter())
+        ped = Counter({data: n for data, n in pedidos.get((v, area_id, area, seg), {}).items()
+                       if data.isoweekday() in areas[area_id]})  # só na rota: no dia de atendimento da área
         for p_dia, v_dia in alvos:
             p_dia.update(ped)
             if visitaveis:

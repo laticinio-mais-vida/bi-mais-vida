@@ -204,6 +204,14 @@ class TestIndicadores(ComCache, unittest.TestCase):
         # período ÷ visitas do período dariam 2 ÷ 30; com o pedido do sábado (5/9, dia sem visita), 3 ÷ 30
         self.assertEqual((es["numerador"], es["denominador"], es["dias"]), (2, 30, 10))
         self.assertAlmostEqual(es["realizado"], 0.075, places=4)
+        # só os pedidos na rota do dia: com a ROTA 3 (os hotéis) na terça e a ROTA 1 na quarta, o pedido de terça
+        # 15/9 é de um cliente da ROTA 1 (fora da rota) e não conta; fica só o da quarta 2/9: 0,5 ÷ 10 dias
+        por, a = self.medir("efetividade", meta=30, areas={1: [3], 2: [4], 3: [2]}, abrir="area")
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (1, 20, 10))
+        self.assertAlmostEqual(por[ES]["realizado"], 0.05, places=4)
+        self.assertEqual(por[BA]["realizado"], 0.375)  # os pedidos da BA são todos de quinta, da ROTA 2
+        self.assertEqual({x["nome"]: x["valor"] for x in a["abertura"]["linhas"]},
+                         {"ROTA 1": 0.1, "ROTA 2": 0.375, "ROTA 3 (SEXTA)": 0.0})
         # semana sem nenhum dia de visita (sábado e domingo): sem efetividade, mesmo com pedido
         por, _ = self.medir("efetividade", meta=30, inicio=D(2026, 9, 5), fim=D(2026, 9, 6), areas={3: [3]})
         self.assertEqual((por[ES]["realizado"], por[ES]["dias"], por[ES]["status"]), (None, 0, "sem_dados"))
