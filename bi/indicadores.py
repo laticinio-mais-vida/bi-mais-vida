@@ -8,8 +8,8 @@ Tipos prontos, com as contas do Power BI da empresa (MAIS VIDAS-PBIT.pbit):
   pedidos de venda na rota do dia (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA, de clientes das áreas atendidas
   nesse dia da semana) ÷ visitas esperadas no dia, que são os clientes ativos (sem "PEDIDO BLOQUEADO" no nome) dessas
   áreas, pela frequência de compra (rede SEMANAL, QUINZENAL ou MENSAL no cadastro): o semanal sempre, o quinzenal sem
-  compra nos 7 dias antes, o mensal sem compra nos 21 dias antes; cliente fora da previsão que comprou no dia entra
-  como visita. Pedido de cliente de área de outro dia não conta (o "Pedidos Fora de Rota" do Power BI) e dia sem visita
+  compra nos 7 dias antes, o mensal sem compra nos 21 dias antes; o pedido de cliente fora da previsão conta, sem
+  ele entrar nas visitas (o dia pode passar de 100%). Pedido de cliente de área de outro dia não conta (o "Pedidos Fora de Rota" do Power BI) e dia sem visita
   esperada (o fim de semana, por exemplo) fica fora da média (decisões do usuário: o Power BI divide todos os
   pedidos do período pelas visitas do período). Os dias de cada área ficam no PostgreSQL (areas_atendimento);
   cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso.
@@ -464,9 +464,9 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
 
     Visita esperada pela frequência de compra do cliente (frequencia_semanas, da rede do cadastro): o semanal é
     esperado em todo dia de atendimento da área dele; o quinzenal, se não comprou nos 7 dias antes; o mensal, se não
-    comprou nos 21 dias antes (as três semanas anteriores). Cliente fora da previsão que comprou no dia conta como
-    visita (o pedido e a visita). Compra = pedido de venda (de qualquer vendedor e em qualquer dia). Cliente sem
-    frequência no cadastro conta como semanal."""
+    comprou nos 21 dias antes (as três semanas anteriores). O pedido de cliente fora da previsão conta, mas ele não
+    entra nas visitas (decisão do usuário): a efetividade de um dia pode passar de 100%. Compra = pedido de venda (de
+    qualquer vendedor e em qualquer dia). Cliente sem frequência no cadastro conta como semanal."""
     onde_k, params_k = _carteira(c, ids)
     grupos = ("k.id_vendedor_carteira AS v, k.id_area AS a, COALESCE(k.area, '(sem área)') AS ar, "
               "COALESCE(k.segmento, '(sem segmento)') AS s")
@@ -498,9 +498,7 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
                 f"AND p.data BETWEEN ? AND ?) "
                 f"SELECT v, a, ar, s, dia, COUNT(*) FROM esperados e WHERE semanas <= 1 OR NOT EXISTS ("
                 f"SELECT 1 FROM compras p WHERE p.id_cliente = e.id_cliente "
-                f"AND p.data BETWEEN e.dia - 7 * (e.semanas - 1) AND e.dia - 1) "
-                f"OR EXISTS (SELECT 1 FROM compras p WHERE p.id_cliente = e.id_cliente AND p.data = e.dia) "
-                f"GROUP BY 1, 2, 3, 4, 5",
+                f"AND p.data BETWEEN e.dia - 7 * (e.semanas - 1) AND e.dia - 1) GROUP BY 1, 2, 3, 4, 5",
                 [*com_rota[1], dias, *params_k, inicio - dt.timedelta(days=7 * (MAX_SEMANAS - 1)), ate]).fetchall():
             visitas.setdefault((v, a, ar, s), Counter())[data] += n
     vend: dict = {}

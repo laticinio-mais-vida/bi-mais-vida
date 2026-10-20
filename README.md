@@ -310,8 +310,9 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
     visitas; de 8 pedidos na segunda, 6 são de clientes da X e 2 de áreas de outros dias: 6 ÷ 10.
   - Visitas esperadas pela frequência de compra do cliente, que é a rede dele no cadastro do ERP (SEMANAL,
     QUINZENAL ou MENSAL): no dia de atendimento da área, entram todos os semanais, os quinzenais sem compra
-    (pedido de venda) nos 7 dias antes e os mensais sem compra nos 21 dias antes. Quem não estava previsto e comprou
-    no dia entra como visita (e o pedido conta). Cliente em outra rede conta como semanal, com aviso.
+    (pedido de venda) nos 7 dias antes e os mensais sem compra nos 21 dias antes. O pedido de quem não estava
+    previsto conta, mas o cliente não entra nas visitas: a efetividade de um dia pode passar de 100%. Cliente em
+    outra rede conta como semanal, com aviso.
   - Dia sem visita esperada (fim de semana, dia em que nenhuma área do vendedor é atendida) fica fora da média.
   - Diferente do Power BI, que divide todos os pedidos do período pelas visitas do período: lá, os pedidos fora de
     rota e os de sábado e domingo entram sem visita, e numa ação curta isso distorce a conta.
