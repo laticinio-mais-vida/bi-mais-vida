@@ -263,8 +263,8 @@ O que acompanhar:
 ### Banco de dados (PostgreSQL)
 
 O que o painel cria fica num PostgreSQL só dele, o container `bi_banco`: usuários, regras salvas nas páginas,
-conversas e uso do Assistente, as campanhas da página Gestão (migrações `007_gestao.sql` e `008_indicadores.sql`) e
-os dias de atendimento das áreas comerciais.
+conversas e uso do Assistente, as ações, os objetivos e o histórico da página Gestão (migrações `007_gestao.sql`,
+`008_indicadores.sql` e `009_gestao_equipe.sql`) e os dias de atendimento das áreas comerciais.
 
 - **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
   a internet e não fala com o app de promotoria.
@@ -379,6 +379,21 @@ e Personalizada) e passa a ler os **pedidos de venda** do ERP, para a efetividad
   cópia do banco feita antes da publicação, não só a pasta.
 - **Depois de publicar:** o administrador abre Gestão › Configurar › Dias de atendimento no site e completa as áreas
   pendentes (o PC e o site têm cada um a sua tabela, e vale a do site).
+
+#### Versão da Gestão da equipe (migração 009)
+
+Esta versão troca o quadro kanban de campanhas pela Gestão da equipe: ações por vendedor (com base, alvo e resultado
+congelado), objetivos da região e o histórico interno de cada vendedor. Só o administrador lança e muda; quem tem a
+página acompanha os vendedores do acesso.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 009** só acrescenta colunas (`tipo`, `regiao`, `alvo_tipo`, a janela da base, o resultado e a
+  `versao`) e a tabela `gestao_eventos`. Campanhas de antes, sem região, ficam arquivadas (no PC e no site não havia
+  nenhuma). Ensaie a migração antes de publicar, como nas outras com dados.
+- **Voltar atrás:** depois da 009, o código anterior não entende as ações. Voltar exige restaurar a cópia do banco
+  feita antes da publicação, não só a pasta.
+- **Depois de publicar:** o administrador confere em Gestão › Configurar quem acompanha quais vendedores (o acesso
+  de cada pessoa continua o mesmo de antes).
 
 #### Voltar as regras para uma versão anterior
 
