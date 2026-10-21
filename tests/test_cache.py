@@ -24,8 +24,8 @@ class TestPedidosNoCache(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def cache(self, pedidos=True, extras=False, rede=True, credito=True) -> Path:
-        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito)
+    def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True) -> Path:
+        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -68,6 +68,8 @@ class TestPedidosNoCache(unittest.TestCase):
         c = Cache(ini, self.pasta)
         self.assertEqual((c.sem_credito, c.sem_rede, c.desatualizado()), (True, False, True))
         c.info["credito_erro"] = "Table unknown CONTASRECEBER"
+        self.assertTrue(c.desatualizado())  # as parcelas também faltam e não têm erro registrado
+        c.info["parcelas_erro"] = "Table unknown CONTASRECEBER"
         self.assertFalse(c.desatualizado())
         c._con.close()
         con = duckdb.connect(str(arquivo))
@@ -76,6 +78,31 @@ class TestPedidosNoCache(unittest.TestCase):
         with self.assertRaises(ValueError) as e:
             Cache.conferir(arquivo)
         self.assertIn("titulos_receber", str(e.exception))
+
+    def test_parcelas_opcionais(self):
+        # cache do PC com o código anterior (crédito sem as parcelas): vale, o crédito funciona e o PC extrai de novo
+        # uma vez para trazê-las
+        arquivo = self.cache(parcelas=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_parcelas, c.sem_credito, c.desatualizado()), (True, False, True))
+        c.info["parcelas_erro"] = "Table unknown PARCELASCONTASRECEBER"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE titulos_parcelas (id INTEGER)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("titulos_parcelas", str(e.exception))
 
     def test_conferir_aceita_sem_pedidos_mas_nao_errados(self):
         Cache.conferir(self.cache(pedidos=True))

@@ -1365,21 +1365,45 @@ body.sem-rolagem { overflow: hidden; }
 /* ---------- Reavaliação de Crédito ---------- */
 .cr-busca { position: relative; display: inline-flex; }
 .cr-busca .campo, .cr-busca .campo input { width: 340px; max-width: 100%; }
-.cr-busca .campo.com-filtro input { border-color: color-mix(in srgb, var(--laranja) 55%, var(--linha)); background: var(--acento-suave); }
-.cr-busca .campo.com-filtro .ic-campo { color: var(--acento-tinta); }
 .cr-sugestoes { width: 420px; max-height: min(420px, 60vh); overflow: auto; padding: 6px; }
 .cr-op { width: 100%; border: 0; background: none; text-align: left; color: var(--tinta); font: inherit; }
 .cr-op.ativo { background: var(--acento-suave); }
+.cr-marca { flex: none; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--linha-forte); display: grid; place-items: center; }
+.cr-marca .ic { width: 14px; height: 14px; opacity: 0; color: #fff; stroke-width: 3; }
+.cr-marca.sim { background: var(--laranja); border-color: var(--laranja); }
+.cr-marca.sim .ic { opacity: 1; }
+.cr-escolhidos { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 4px 2px; }
+.cr-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 360px; padding: 3px 3px 3px 12px; border-radius: 999px; background: var(--acento-suave); color: var(--acento-tinta); font-size: 13px; font-weight: 700; }
+.cr-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-chip button { flex: none; width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: inherit; display: grid; place-items: center; cursor: pointer; }
+.cr-chip button:hover, .cr-chip button:focus-visible { background: color-mix(in srgb, var(--laranja) 25%, transparent); outline: none; }
+.cr-chip button .ic { width: 14px; height: 14px; }
+.cr-chip-soma { margin-left: 4px; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; }
+.cr-negativo { color: var(--ruim); font-weight: 700; }
+.cr-pago-nota { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--ok); font-size: 12.5px; font-weight: 600; cursor: default; }
+.cr-pago-nota .ic { flex: none; width: 15px; height: 15px; }
+.cr-ordem { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.cr-ordem:hover, .cr-ordem.ativa { color: var(--acento-tinta); }
+.cr-ordem:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 4px; }
+.cr-seta { font-size: 10px; opacity: .4; }
+.cr-ordem.ativa .cr-seta { opacity: 1; }
+.cr-pago-cel small { display: block; color: var(--tinta-3); font-size: 11.5px; }
+.cr-pago { color: var(--ok); font-weight: 700; }
+.cr-cliente.cr-cliente-varios { padding: 0 0 14px; }
+.cr-varios .cr-nome { text-align: left; font-weight: 600; }
+.cr-varios .cr-nome small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 11.5px; }
 .cr-cliente { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
 .cr-cliente-icone { flex: none; width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: #fff; background: var(--k-cli); }
 .cr-cliente-nome { min-width: 0; flex: 1; }
 .cr-cliente-nome b { display: block; font-family: var(--f-titulo); font-size: 18px; overflow-wrap: anywhere; }
 .cr-cliente-nome small { display: block; color: var(--tinta-3); font-size: 13px; margin-top: 2px; }
 .cr-cliente-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.kpi-valor.cr-negativo { color: var(--ruim); }
 .cr-titulos .cr-nome, .cr-titulos th.esq { text-align: left; }
 .cr-titulos .cr-nome { font-weight: 600; }
-.cr-titulos .cr-quebra { white-space: normal; min-width: 220px; max-width: 320px; line-height: 1.3; }
+.cr-titulos .cr-quebra { white-space: normal; min-width: 160px; max-width: 220px; line-height: 1.3; }
+table.dados.cr-titulos { font-size: 13px; }
+table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
+.cr-titulos td .status { white-space: normal; line-height: 1.2; }
 .cr-titulos .cr-nome small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 11.5px; }
 .cr-titulos td:last-child, .cr-titulos th:last-child { text-align: left; }
 .cr-titulos td .status { padding: 3px 9px 3px 6px; font-size: 12px; }

@@ -554,9 +554,11 @@ class Manipulador(BaseHTTPRequestHandler):
                     return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
                 if url.path == "/api/credito/busca":
                     return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""))})
+                # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
-                return self._json(self.app.credito.calcular(inteiro("cliente"), inteiro("mes"), inteiro("ano"),
-                                                            inteiro("vendedor")))
+                return self._json(self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"),
+                                                            inteiro("vendedor"), ordem=q.get("ordem") or None,
+                                                            sentido=q.get("sentido") or None))
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":

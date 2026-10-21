@@ -72,6 +72,12 @@ TABELAS_CREDITO = {
                         "quitacao DATE, quitado INTEGER, total DOUBLE"),
     "clientes_credito": "id INTEGER, limite DOUBLE, prazo VARCHAR",
 }
+# As parcelas de cada título (PARCELASCONTASRECEBER): quantas são, quantas já foram quitadas e quanto do título já foi
+# pago (o valor das parcelas quitadas mais o que entrou numa parcela paga em parte; juros e abatimento ficam fora).
+# Grupo à parte do crédito: um cache sem ela (PC com o código anterior) vale, e a página conta tudo como não pago.
+TABELAS_PARCELAS = {
+    "titulos_parcelas": "id INTEGER, parcelas INTEGER, pagas INTEGER, pago DOUBLE",
+}
 
 
 def _data(v):
@@ -117,6 +123,7 @@ class Cache:
         self.sem_pedidos = False  # faltam os pedidos de venda (só a efetividade das campanhas precisa)
         self.sem_rede = False  # falta a rede (frequência) dos clientes: a efetividade conta todos como semanais
         self.sem_credito = False  # faltam os títulos a receber e os limites (só a Reavaliação de Crédito precisa)
+        self.sem_parcelas = False  # faltam as parcelas dos títulos: o crédito conta tudo como não pago
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -149,6 +156,7 @@ class Cache:
         sem_pedidos = _tabela_diferente(con, TABELAS_PEDIDOS) is not None
         sem_rede = _tabela_diferente(con, TABELAS_REDE) is not None
         sem_credito = _tabela_diferente(con, TABELAS_CREDITO) is not None
+        sem_parcelas = _tabela_diferente(con, TABELAS_PARCELAS) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -159,6 +167,7 @@ class Cache:
             self.sem_pedidos = sem_pedidos
             self.sem_rede = sem_rede
             self.sem_credito = sem_credito
+            self.sem_parcelas = sem_parcelas
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -179,7 +188,8 @@ class Cache:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -200,8 +210,8 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes ou crédito que não deu para ler (pedidos_erro, rede_erro, credito_erro) esperam a próxima cópia, em vez
-        de extrair tudo de novo a cada minuto."""
+        redes, crédito ou parcelas que não deu para ler (pedidos_erro, rede_erro, credito_erro, parcelas_erro) esperam
+        a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -210,6 +220,7 @@ class Cache:
                 or (self.sem_pedidos and not self.info.get("pedidos_erro"))
                 or (self.sem_rede and not self.info.get("rede_erro"))
                 or (self.sem_credito and not self.info.get("credito_erro"))
+                or (self.sem_parcelas and not self.info.get("parcelas_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -231,8 +242,9 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede e crédito: a leitura pode ter falhado
-            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO}.items() if k in dados}
+            # pedidos, rede, crédito e parcelas: a leitura pode ter falhado
+            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO,
+                                           **TABELAS_PARCELAS}.items() if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
@@ -253,6 +265,8 @@ class Cache:
                 con.execute("CREATE INDEX ix_pv ON pedidos_venda (data)")
             if "titulos_receber" in opcionais:
                 con.execute("CREATE INDEX ix_tr ON titulos_receber (id_cliente)")
+            if "titulos_parcelas" in opcionais:
+                con.execute("CREATE INDEX ix_tp ON titulos_parcelas (id)")
             self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
@@ -400,6 +414,22 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler os títulos a receber (a Reavaliação de Crédito fica sem dados): %s", e)
                 credito_erro = str(e)[:300]
+            # As parcelas dos mesmos títulos (boleto dividido em 7, 14, 21 dias...), também à parte.
+            self.estado["etapa"] = "Lendo as parcelas dos títulos"
+            parcelas_erro = None
+            try:
+                dados["titulos_parcelas"] = [
+                    (i, int(n or 0), int(pg or 0), float(v or 0)) for i, n, pg, v in bd.consulta(
+                        "SELECT p.ID_CONTARECEBER, COUNT(*), SUM(CASE WHEN p.QUITADO = 1 THEN 1 ELSE 0 END), "
+                        "SUM(CASE WHEN p.QUITADO = 1 THEN p.VALORRECEBER "
+                        "WHEN COALESCE(p.VALORRECEBIDO, 0) < p.VALORRECEBER THEN COALESCE(p.VALORRECEBIDO, 0) "
+                        "ELSE p.VALORRECEBER END) "
+                        "FROM PARCELASCONTASRECEBER p JOIN CONTASRECEBER c ON c.ID_CONTARECEBER = p.ID_CONTARECEBER "
+                        "WHERE c.DATACANCELAMENTO IS NULL AND c.TIPOCLIENTE = 'CLIENTE' AND c.ORIGEM = 'VENDA' "
+                        "GROUP BY p.ID_CONTARECEBER")]
+            except Exception as e:
+                log.warning("não deu para ler as parcelas dos títulos (o crédito conta tudo como não pago): %s", e)
+                parcelas_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -413,5 +443,6 @@ class Cache:
             *([("pedidos_erro", pedidos_erro)] if pedidos_erro else []),
             *([("rede_erro", rede_erro)] if rede_erro else []),
             *([("credito_erro", credito_erro)] if credito_erro else []),
+            *([("parcelas_erro", parcelas_erro)] if parcelas_erro else []),
         ]
         return dados

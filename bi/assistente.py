@@ -270,20 +270,28 @@ class Recorte:
     @staticmethod
     def _titulos(con: duckdb.DuckDBPyConnection, cache, filtro: str, params: list) -> None:
         """Os títulos a receber dos vendedores do acesso (o vendedor do título), como na página Reavaliação de
-        Crédito: dias de atraso e situação contados até o dia da extração."""
+        Crédito: dias de atraso e situação contados até o dia da extração, e o valor já pago das parcelas."""
         if cache.sem_credito:
             con.execute("CREATE TABLE _titulos (id_titulo INTEGER, id_cliente INTEGER, id_vendedor INTEGER, "
                         "emissao DATE, vencimento DATE, quitacao DATE, quitado BOOLEAN, valor DOUBLE, "
-                        "dias_atraso INTEGER)")
+                        "parcelas INTEGER, parcelas_pagas INTEGER, valor_pago DOUBLE, dias_atraso INTEGER)")
         else:
-            titulos = cache.df("SELECT id AS id_titulo, id_cliente, id_vendedor, emissao, vencimento, quitacao, "
-                               "quitado::BOOLEAN AS quitado, total AS valor FROM titulos_receber" + filtro, params)
+            # Sem as parcelas no cache (PC com o código anterior): só o título quitado conta como pago.
+            junta, parcelas = ("", "1, t.quitado, CASE WHEN t.quitado = 1 THEN t.total ELSE 0 END") \
+                if cache.sem_parcelas else (" LEFT JOIN titulos_parcelas p ON p.id = t.id",
+                                            "COALESCE(p.parcelas, 1), COALESCE(p.pagas, t.quitado), "
+                                            "COALESCE(p.pago, CASE WHEN t.quitado = 1 THEN t.total ELSE 0 END)")
+            titulos = cache.df("SELECT t.id AS id_titulo, t.id_cliente, t.id_vendedor, t.emissao, t.vencimento, "
+                               "t.quitacao, t.quitado::BOOLEAN AS quitado, t.total AS valor, "
+                               f"{parcelas} FROM titulos_receber t{junta}" + filtro, params)
+            titulos.columns = [*titulos.columns[:8], "parcelas", "parcelas_pagas", "valor_pago"]
             v = cache.info.get("extraido_em")
             hoje = dt.datetime.fromisoformat(v).date() if v else dt.date.today()
             con.register("df_tmp", titulos)
             con.execute("CREATE TABLE _titulos AS SELECT id_titulo, id_cliente, id_vendedor, "
                         "CAST(emissao AS DATE) AS emissao, CAST(vencimento AS DATE) AS vencimento, "
-                        "CAST(quitacao AS DATE) AS quitacao, quitado, valor, "
+                        "CAST(quitacao AS DATE) AS quitacao, quitado, valor, CAST(parcelas AS INTEGER) AS parcelas, "
+                        "CAST(parcelas_pagas AS INTEGER) AS parcelas_pagas, valor_pago, "
                         "CAST(datediff('day', CAST(vencimento AS DATE), CASE WHEN quitado THEN CAST(quitacao AS DATE) "
                         "ELSE ? END) AS INTEGER) AS dias_atraso FROM df_tmp ORDER BY emissao", [hoje])
             con.unregister("df_tmp")
@@ -296,7 +304,8 @@ class Recorte:
             SELECT t.id_titulo, t.id_cliente, COALESCE(n.cliente, 'Cliente cód. ' || t.id_cliente) AS cliente,
                    t.id_vendedor, COALESCE(v.vendedor, 'Vendedor ' || t.id_vendedor) AS vendedor, t.emissao,
                    year(t.emissao) AS ano, month(t.emissao) AS mes, t.vencimento, t.quitacao, t.quitado, t.valor,
-                   t.dias_atraso,
+                   t.parcelas, t.parcelas_pagas, t.valor_pago,
+                   CASE WHEN t.quitado THEN 0 ELSE t.valor - t.valor_pago END AS saldo, t.dias_atraso,
                    CASE WHEN t.quitado THEN CASE WHEN t.dias_atraso > {TOLERANCIA} THEN 'quitado com atraso'
                                                  ELSE 'quitado' END
                         WHEN t.dias_atraso > {TOLERANCIA} THEN 'inadimplente'
@@ -781,16 +790,19 @@ class Ferramentas:
     def f_credito_cliente(self, passo: dict, id_cliente: int, ano: int | None = None, mes: int | None = None) -> dict:
         if self.credito is None:
             raise ValueError("o acesso de quem pergunta não inclui a página Reavaliação de Crédito")
-        d = self.credito.calcular(int(id_cliente), int(mes) if mes else None, int(ano) if ano else None, None,
+        d = self.credito.calcular([int(id_cliente)], int(mes) if mes else None, int(ano) if ano else None, None,
                                   set(self.ids) if self.ids is not None else None)
-        c, k = d["cliente"], d["cartoes"]
-        enxuto = lambda t: {"titulo": t["id"], "emissao": t["emissao"], "vencimento": t["vencimento"],  # noqa: E731
-                            "quitacao": t["quitacao"], "valor": _valor(t["valor"]), "dias_atraso": t["dias_atraso"],
-                            "situacao": t["situacao"].replace("_", " "), "vendedor": t["vendedor"]}
+        c, k = d["clientes"][0], d["cartoes"]
+        enxuto = lambda t: {  # noqa: E731
+            "titulo": t["id"], "emissao": t["emissao"], "vencimento": t["vencimento"], "quitacao": t["quitacao"],
+            "valor": _valor(t["valor"]), "valor_ja_pago": _valor(t["pago"]),
+            **({"parcelas_pagas": f"{t['pagas']} de {t['parcelas']}"} if t["parcelas"] > 1 else {}),
+            "dias_atraso": t["dias_atraso"], "situacao": t["situacao"].replace("_", " "), "vendedor": t["vendedor"]}
         abertos = [enxuto(t) for t in d["titulos"]["linhas"] if not t["quitado"]]
         resultado = {
             "cliente": {"id": c["id"], "nome": c["nome"], "vendedor_carteira": c["carteira"], "prazo": c["prazo"],
-                        "limite_credito": _valor(c["limite"]), "em_aberto": _valor(c["em_aberto"]),
+                        "limite_credito": _valor(c["limite"]), "titulos_em_aberto": _valor(c["titulos_abertos"]),
+                        "ja_pago_em_parcelas": _valor(c["pago_parcelas"]), "em_aberto": _valor(c["em_aberto"]),
                         "limite_restante": _valor(c["restante"]), "pct_limite_usado": _valor(c["usado"])},
             "periodo_das_compras": ("todo o histórico" if not (ano or mes) else
                                     f"emissão em {f'{MESES[int(mes) - 1]} de ' if mes else ''}{ano or 'todos os anos'}"),
@@ -807,6 +819,8 @@ class Ferramentas:
                                   "limite, em aberto e restante são do cliente inteiro")
         if len(abertos) > 30:
             resultado["aviso_abertos"] = f"{len(abertos)} títulos em aberto; mostrando os 30 mais recentes"
+        if d["avisos"]:
+            resultado["aviso_parcelas"] = " ".join(d["avisos"])
         passo.update(sql=None, colunas=["cliente", "limite", "em aberto", "restante"],
                      amostra=[[c["nome"], _valor(c["limite"]), _valor(c["em_aberto"]), _valor(c["restante"])]],
                      linhas=len(abertos))
@@ -946,9 +960,11 @@ metas_produto — metas de volume (planilha METAS PRODUTOS.xlsx): ano, mes, id_v
   produto, meta_volume
 titulos_receber — só para quem tem a página Reavaliação de Crédito: os títulos a receber de venda a cliente, não
   cancelados, de todo o histórico, pelo vendedor do título: id_titulo, id_cliente, cliente, id_vendedor, vendedor,
-  emissao, ano, mes (da emissão), vencimento, quitacao (vazia = em aberto), quitado, valor, dias_atraso (quitado:
-  quitação − vencimento; em aberto: hoje − vencimento; negativo = antes do vencimento), situacao ('a vencer',
-  'vencido', 'inadimplente', 'quitado', 'quitado com atraso')
+  emissao, ano, mes (da emissão), vencimento (o da última parcela), quitacao (vazia = em aberto), quitado, valor,
+  parcelas (quantas o boleto tem), parcelas_pagas, valor_pago (parcelas quitadas + o que entrou numa parcela paga em
+  parte), saldo (em aberto: valor − valor_pago; quitado: 0), dias_atraso (quitado: quitação − vencimento; em aberto:
+  hoje − vencimento; negativo = antes do vencimento), situacao ('a vencer', 'vencido', 'inadimplente', 'quitado',
+  'quitado com atraso')
 
 Exemplos:
 -- venda líquida de um cliente por mês em 2026
@@ -1002,8 +1018,9 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 ferramenta credito_cliente); para os outros eles não existem: diga que o acesso não inclui crédito.
 - Para um cliente, use credito_cliente: dá os números da página. Compras = títulos a receber de venda (valor, \
 quantidade, ticket médio = valor ÷ quantidade), pela emissão. Pontualidade = títulos quitados até 7 dias depois do \
-vencimento ÷ títulos quitados. Inadimplência = títulos em aberto vencidos há mais de 7 dias. Limite restante = \
-limite do cadastro − todos os títulos em aberto do cliente (negativo = passou do limite).
+vencimento ÷ títulos quitados. Inadimplência = títulos em aberto vencidos há mais de 7 dias (pelo valor do título). \
+Limite restante = limite do cadastro − o saldo de todos os títulos em aberto do cliente, isto é, sem as parcelas \
+já pagas dos boletos divididos (negativo = passou do limite).
 - "Hoje", nos dias de atraso, é o dia da extração dos dados.
 
 # Ações e objetivos (página Gestão)

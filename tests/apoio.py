@@ -24,7 +24,8 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import TABELAS, TABELAS_CREDITO, TABELAS_DETALHE, TABELAS_PEDIDOS, TABELAS_REDE, Cache
+from bi.cache import (TABELAS, TABELAS_CREDITO, TABELAS_DETALHE, TABELAS_PARCELAS, TABELAS_PEDIDOS, TABELAS_REDE,
+                      Cache)
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -77,17 +78,23 @@ TITULOS = [
     (402, 4, EDIR, D(7190, 12, 13), D(7190, 12, 13), D(2026, 1, 10), 1, 10.0),  # data digitada errada no ERP
 ]
 LIMITES = [(1, 5000.0, "28 DIAS"), (2, 2000.0, "A VISTA"), (3, 1000.0, "07 DIAS"), (4, 0.0, None), (7, 0.0, None)]
+# Parcelas (título, parcelas, pagas, já pago). Os títulos sem linha aqui são de uma parcela só, como os do ERP que
+# não têm nada pago em parte. O 102 foi pago em 2 parcelas; o 103 é um boleto em 2 com a 1ª paga; o 105 recebeu
+# R$ 100 numa parcela paga em parte.
+PARCELAS = [(102, 2, 2, 500.0), (103, 2, 1, 650.0), (105, 1, 0, 100.0)]
 
 
 def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
-               redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True) -> Calculadora:
+               redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True,
+               parcelas: bool = True) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
-    credito: False = cache sem os títulos a receber e os limites (ver TITULOS)."""
+    credito: False = cache sem os títulos a receber e os limites (ver TITULOS); parcelas: False = sem as parcelas."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
-                          **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {})}.items():
+                          **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
+                          **(TABELAS_PARCELAS if credito and parcelas else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -169,6 +176,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     if credito:
         con.executemany("INSERT INTO titulos_receber VALUES (?, ?, ?, ?, ?, ?, ?, ?)", TITULOS)
         con.executemany("INSERT INTO clientes_credito VALUES (?, ?, ?)", LIMITES)
+        if parcelas:
+            con.executemany("INSERT INTO titulos_parcelas VALUES (?, ?, ?, ?)", PARCELAS)
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),
         ("banco_copia", "2026-10-01T07:00"), ("inicio", "2026-01-01")])

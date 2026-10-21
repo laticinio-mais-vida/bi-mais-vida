@@ -50,8 +50,8 @@ O Assistente precisa também de `pip install anthropic`, só onde for usado. No 
 O sistema copia do banco só o que as páginas usam (vendas, clientes atendidos, devoluções e cadastros, desde
 2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora. Para o Assistente, o
 cache também guarda as vendas e devoluções por cliente e por dia, e a cidade, a UF, a área e o segmento de cada
-cliente. Para a Reavaliação de Crédito, guarda os títulos a receber de venda (de todo o histórico) e o limite de
-crédito e o prazo de cada cliente.
+cliente. Para a Reavaliação de Crédito, guarda os títulos a receber de venda (de todo o histórico), as parcelas de
+cada um (quantas, quantas pagas e quanto já foi pago) e o limite de crédito e o prazo de cada cliente.
 
 - **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
   atualiza o cache em segundo plano (cerca de 40 segundos). O botão **Atualizar dados** força a leitura na hora.
@@ -395,18 +395,27 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 A página **Reavaliação Credito** do Power BI, para avaliar o crédito de um cliente: quanto ele compra, se paga em
 dia, quanto deve e quanto ainda cabe no limite.
 
-- **Filtros:** cliente (busca por nome ou código, sem acento nem caixa), mês, ano e vendedor. Mês e ano valem pela
-  **data de emissão** do título; mês sem ano vale para aquele mês em todos os anos. O vendedor é o **do título**, não
-  o da carteira do cliente (como no Power BI).
+- **Filtros:** um ou mais clientes, mês, ano e vendedor.
+  - **Clientes:** a busca acha por nome ou código, sem acento nem caixa. Cada cliente marcado vira uma etiqueta, e a
+    lista fica aberta para marcar outros da mesma busca (ex.: as lojas de uma rede). Com vários clientes, os limites e
+    o que está em aberto **somam**, e o topo mostra cada cliente com o limite e o restante dele.
+  - **Mês e ano** valem pela **data de emissão** do título; mês sem ano vale para aquele mês em todos os anos.
+  - **Vendedor:** o **do título**, não o da carteira do cliente (como no Power BI).
 - **Cartões:**
   - **Valor total das compras**, **Quantidade de compras** e **Ticket médio** (valor ÷ quantidade);
   - **Pontualidade:** títulos quitados até 7 dias depois do vencimento ÷ títulos quitados;
   - **Limite de crédito**, com o **prazo** (a opção de pagamento do cadastro) e o vendedor da carteira;
-  - **Inadimplência:** títulos em aberto vencidos há mais de 7 dias;
-  - **Limite restante:** limite − todos os títulos em aberto do cliente, com o quanto do limite está em uso.
-- **Títulos:** um por linha, do mais recente ao mais antigo, com emissão, vencimento, quitação, valor, dias de atraso
-  e a situação (a vencer, vencido, inadimplente, quitado, quitado com atraso). Sem cliente escolhido, mostra os 500
-  mais recentes do filtro.
+  - **Inadimplência:** títulos em aberto vencidos há mais de 7 dias, pelo valor do título;
+  - **Limite restante:** limite − o que ainda está em aberto (todos os títulos em aberto do cliente, menos as parcelas
+    já pagas), com o quanto do limite está em uso e quanto de parcelas pagas voltou para o limite.
+- **Títulos:** um por linha, com emissão, vencimento, quitação, valor, **valor já pago**, dias de atraso e a situação
+  (a vencer, vencido, inadimplente, quitado, quitado com atraso).
+  - **Ordenar:** clique no nome de qualquer coluna; de novo, para inverter. A ordem vale para todos os títulos do
+    filtro, não só para os que aparecem. Sem ordem escolhida, vai do mais recente ao mais antigo.
+  - Sem cliente escolhido, mostra os 500 primeiros do filtro na ordem escolhida.
+- **Valor já pago** (não existe no Power BI): nos boletos divididos (7, 14, 21 dias…), o valor das parcelas já
+  quitadas mais o que entrou numa parcela paga em parte, com "1 de 3 parcelas". Juros e abatimento não contam. O
+  vencimento do título é o da última parcela.
 - **Base:** os títulos a receber de venda a cliente (origem VENDA, tipo CLIENTE) que não foram cancelados, o mesmo
   filtro de todas as medidas da página no Power BI. Os dias de atraso contam até o dia da extração dos dados.
 - **Quem vê:** quem tem a página marcada em Usuários vê todos os clientes e vendedores; ela não tem configuração.
@@ -414,12 +423,15 @@ dia, quanto deve e quanto ainda cabe no limite.
 Diferenças em relação ao Power BI, combinadas com o usuário:
 
 1. **Pontualidade em %.** No Power BI o cartão tem formato de número inteiro e mostra só 0 ou 1.
-2. **Limite restante sem o período.** No Power BI, com mês e ano escolhidos, só os títulos em aberto emitidos no
-   período eram descontados, e o restante parecia maior. Aqui desconta todos os títulos em aberto do cliente.
-3. **Limite, restante e prazo só com um cliente escolhido.** Sem cliente, o Power BI somava o limite de todos os
-   clientes e ignorava o filtro de vendedor nesses cartões.
-4. **Tabela de títulos:** um título por linha, em vez da matriz por data que somava os dias de atraso dos títulos do
-   mesmo dia.
+2. **Limite restante sem o período e com as parcelas pagas.** No Power BI, com mês e ano escolhidos, só os títulos em
+   aberto emitidos no período eram descontados, e o restante parecia maior. Aqui desconta todos os títulos em aberto
+   do cliente, e as parcelas já pagas dos boletos divididos voltam para o limite (no Power BI, o título inteiro
+   continuava descontado até a última parcela).
+3. **Limite, restante e prazo só com cliente escolhido.** Sem cliente, o Power BI somava o limite de todos os
+   clientes e ignorava o filtro de vendedor nesses cartões. Aqui dá para escolher vários clientes, e os limites deles
+   somam.
+4. **Tabela de títulos:** um título por linha, ordenável por qualquer coluna, com o valor já pago, em vez da matriz
+   por data que somava os dias de atraso dos títulos do mesmo dia.
 5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que
    não existe mais no modelo.
 
@@ -576,10 +588,10 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber, as parcelas e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
-| `bi/credito.py` | página Reavaliação de Crédito: cartões, títulos e busca de cliente |
+| `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, e a busca de cliente |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
