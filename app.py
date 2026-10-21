@@ -549,11 +549,13 @@ class Manipulador(BaseHTTPRequestHandler):
                                                                  permitidos, equipes))
                 except SemVendedores as e:
                     return self._erro(str(e), HTTPStatus.FORBIDDEN)
-            if url.path in ("/api/credito", "/api/credito/busca"):
+            if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise"):
                 if "credito" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
                 if url.path == "/api/credito/busca":
                     return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""))})
+                if url.path == "/api/credito/analise":  # cliente=12&limite=80000: o parecer de um limite total novo
+                    return self._json(self.app.credito.analisar(q.get("cliente"), q.get("limite")))
                 # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
                 return self._json(self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"),

@@ -502,12 +502,14 @@ FERRAMENTAS = [
         "description": ("Reavaliação de crédito de um cliente: os números da página Reavaliação de Crédito (limite, "
                         "prazo, títulos em aberto, limite restante, compras, ticket médio, pontualidade, "
                         "inadimplência) e os títulos em aberto e os mais recentes. Ano e mês (opcionais) filtram as "
-                        "compras pela emissão; limite, em aberto e restante são sempre de hoje. Só para quem tem a "
-                        "página."),
+                        "compras pela emissão; limite, em aberto e restante são sempre de hoje. Com novo_limite, traz "
+                        "também o parecer da página sobre esse limite. Só para quem tem a página."),
         "input_schema": _objeto({
             "id_cliente": {"type": "integer", "description": "código do cliente (use buscar_cliente antes)"},
             "ano": {"type": "integer", "description": "ano de emissão (opcional)"},
             "mes": {"type": "integer", "description": "mês de emissão, 1 a 12 (opcional)"},
+            "novo_limite": {"type": "number", "description": ("limite total novo pedido para o cliente, em R$ "
+                                                              "(opcional): traz o parecer sobre ele")},
         }, ["id_cliente"]),
         "strict": True,
     },
@@ -787,7 +789,8 @@ class Ferramentas:
         return resultado
 
     # --- crédito (página Reavaliação de Crédito) ---------------------------------------
-    def f_credito_cliente(self, passo: dict, id_cliente: int, ano: int | None = None, mes: int | None = None) -> dict:
+    def f_credito_cliente(self, passo: dict, id_cliente: int, ano: int | None = None, mes: int | None = None,
+                          novo_limite: float | None = None) -> dict:
         if self.credito is None:
             raise ValueError("o acesso de quem pergunta não inclui a página Reavaliação de Crédito")
         d = self.credito.calcular([int(id_cliente)], int(mes) if mes else None, int(ano) if ano else None, None,
@@ -821,6 +824,20 @@ class Ferramentas:
             resultado["aviso_abertos"] = f"{len(abertos)} títulos em aberto; mostrando os 30 mais recentes"
         if d["avisos"]:
             resultado["aviso_parcelas"] = " ".join(d["avisos"])
+        if novo_limite:
+            # O parecer da página: o histórico inteiro do cliente, como lá (quem tem a página vê todos os títulos dele).
+            a = self.credito.analisar(c["id"], novo_limite)
+            resultado["parecer_novo_limite"] = {
+                "limite_pedido": _valor(a["pedido"]),
+                "parecer": {"indicado": "Indicado", "ressalvas": "Indicado com ressalvas",
+                            "nao_indicado": "Não indicado"}[a["parecer"]],
+                "criterios": [{"criterio": x["titulo"], "resultado": x["status"], "detalhe": x["detalhe"]}
+                              for x in a["criterios"]],
+                "limite_sugerido": _valor(a["limite_sugerido"]),
+                "maior_saldo_em_aberto_12_meses": _valor(a["numeros"]["maior_saldo"]),
+                "compras_por_mes_12_meses": _valor(a["numeros"]["compras_mes"]),
+                "prazo_real_dias": a["numeros"]["prazo_real"],
+            }
         passo.update(sql=None, colunas=["cliente", "limite", "em aberto", "restante"],
                      amostra=[[c["nome"], _valor(c["limite"]), _valor(c["em_aberto"]), _valor(c["restante"])]],
                      linhas=len(abertos))
@@ -1021,6 +1038,9 @@ quantidade, ticket médio = valor ÷ quantidade), pela emissão. Pontualidade = 
 vencimento ÷ títulos quitados. Inadimplência = títulos em aberto vencidos há mais de 7 dias (pelo valor do título). \
 Limite restante = limite do cadastro − o saldo de todos os títulos em aberto do cliente, isto é, sem as parcelas \
 já pagas dos boletos divididos (negativo = passou do limite).
+- Para avaliar um pedido de limite (liberar, aumentar), chame credito_cliente com novo_limite = o limite total \
+pedido e repita o parecer, os motivos e o limite sugerido: é a regra da página (Indicado, Indicado com ressalvas ou \
+Não indicado). Não use outro critério nem dê outro veredito; a decisão final é de quem libera o crédito.
 - "Hoje", nos dias de atraso, é o dia da extração dos dados.
 
 # Ações e objetivos (página Gestão)

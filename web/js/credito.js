@@ -1,7 +1,8 @@
 // Página Reavaliação de Crédito: a página "Reavaliação Credito" do Power BI. Compras, pontualidade e inadimplência
 // pelos títulos a receber de venda (mês e ano pela emissão, vendedor do título); limite, prazo e restante de um ou
-// mais clientes (os limites somam), com as parcelas já pagas dos boletos divididos. A conta e a ordem da tabela
-// ficam no servidor (bi/credito.py); aqui é a apresentação.
+// mais clientes (os limites somam), com as parcelas já pagas dos boletos divididos. Com um cliente, o parecer de um
+// limite total novo (Indicado, com ressalvas ou Não indicado). A conta, a regra do parecer e a ordem da tabela ficam
+// no servidor (bi/credito.py); aqui é a apresentação.
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { anel } from "./graficos.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
@@ -30,25 +31,29 @@ const ORDEM_PADRAO = { coluna: "emissao", sentido: "desc" };
 const maiuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 let ctx = null;
-const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordem: null, dados: null, pedido: 0, busca: 0 };
+// limite: o limite total pedido no parecer (some ao trocar de cliente); analise: o pedido do parecer em andamento.
+const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordem: null, limite: null, dados: null, pedido: 0,
+  busca: 0, analise: 0 };
 
 export function montarCredito(container, contexto) {
   ctx = contexto;
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const num = (t) => (t && Number.isInteger(Number(t)) && Number(t) > 0 ? Number(t) : null);
+  const valor = (t) => (t && Number.isFinite(Number(t)) && Number(t) > 0 ? Number(t) : null);
   const ordem = (t) => {
     const [coluna, sentido] = String(t || "").split("-");
     return COLUNAS.some((c) => c.chave === coluna) && ["asc", "desc"].includes(sentido) ? { coluna, sentido } : null;
   };
-  if (["c", "m", "a", "v", "o"].some((k) => q.has(k))) {
+  if (["c", "m", "a", "v", "o", "l"].some((k) => q.has(k))) {
     Object.assign(estado, {
       clientes: (q.get("c") || "").split(",").map(num).filter(Boolean).map((id) => ({ id, nome: "" })),
       mes: num(q.get("m")), ano: num(q.get("a")), vendedor: num(q.get("v")), ordem: ordem(q.get("o")),
+      limite: valor(q.get("l")),
     });
   } else if (!estado.dados) {
     const s = ler("mv-credito", {});
     Object.assign(estado, { clientes: Array.isArray(s.c) ? s.c.filter((c) => num(c?.id)) : [], mes: num(s.m),
-      ano: num(s.a), vendedor: num(s.v), ordem: ordem(s.o) });
+      ano: num(s.a), vendedor: num(s.v), ordem: ordem(s.o), limite: valor(s.l) });
   }
   estado.dados = null;
 
@@ -90,7 +95,7 @@ export function montarCredito(container, contexto) {
   sel("#cr-ano", "ano");
   sel("#cr-vendedor", "vendedor");
   container.querySelector("#cr-limpar").addEventListener("click", () => {
-    Object.assign(estado, { clientes: [], mes: null, ano: null, vendedor: null });
+    Object.assign(estado, { clientes: [], mes: null, ano: null, vendedor: null, limite: null });
     container.querySelector("#cr-cliente").value = "";
     desenharEscolhidos();
     carregar();
@@ -120,7 +125,8 @@ export function recarregarCredito() { if (ctx) carregar(true); }
 
 function atualizarUrl() {
   const o = estado.ordem;
-  guardar("mv-credito", { c: estado.clientes, m: estado.mes, a: estado.ano, v: estado.vendedor, o: o ? `${o.coluna}-${o.sentido}` : null });
+  guardar("mv-credito", { c: estado.clientes, m: estado.mes, a: estado.ano, v: estado.vendedor, o: o ? `${o.coluna}-${o.sentido}` : null,
+    l: estado.limite });
   if (!location.hash.startsWith("#/credito")) return; // trocou de página enquanto carregava
   const p = new URLSearchParams();
   if (estado.clientes.length) p.set("c", estado.clientes.map((c) => c.id).join(","));
@@ -128,6 +134,7 @@ function atualizarUrl() {
   if (estado.ano) p.set("a", estado.ano);
   if (estado.vendedor) p.set("v", estado.vendedor);
   if (o) p.set("o", `${o.coluna}-${o.sentido}`);
+  if (estado.limite && estado.clientes.length === 1) p.set("l", estado.limite);
   history.replaceState(null, "", `#/credito${p.toString() ? "?" + p : ""}`);
   const limpar = document.getElementById("cr-limpar");
   if (limpar) limpar.hidden = !estado.clientes.length && !estado.mes && !estado.ano && !estado.vendedor;
@@ -174,11 +181,12 @@ async function carregar(silencioso = false, soTabela = false) {
     conteudo.innerHTML = render(d);
     posRender(conteudo);
     ligarOrdem(document.getElementById("cr-tabela"));
+    ligarAnalise();
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || estado.ordem)) {
       // filtro guardado neste navegador que não vale mais (cliente apagado, ano fora dos dados): volta a todos
-      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordem: null });
+      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordem: null, limite: null });
       desenharEscolhidos();
       toast(e.message, "erro");
       return carregar(silencioso);
@@ -218,6 +226,7 @@ function desenharEscolhidos() {
 
 let esperaCarregar = null;
 function mudouClientes() {
+  estado.limite = null; // o limite pedido era de outro cliente
   desenharEscolhidos();
   clearTimeout(esperaCarregar); // marcando vários seguidos na lista, carrega uma vez só
   esperaCarregar = setTimeout(() => carregar(), 350);
@@ -358,6 +367,7 @@ function render(d) {
   const k = d.cartoes, cr = d.credito, n = d.clientes.length;
   const periodo = descricaoFiltro(d);
   let h = n ? cabecalhoClientes(d) : "";
+  if (n === 1) h += cartaoAnalise(d, 2);
   h += `<section class="kpis secao n4">
     ${kpiValor(1, "var(--s-fat)", "Valor total das compras", "moeda", k.valor, "moeda", periodo)}
     ${kpiValor(2, "var(--s-out)", "Quantidade de compras", "recibo", k.quantidade, "num", "títulos a receber de venda")}
@@ -414,6 +424,7 @@ function cabecalhoClientes(d) {
       <div class="cr-cliente-nome"><b>${d.clientes.length} clientes</b><small>os limites e o que está em aberto somam</small></div>
       <div class="cr-cliente-chips">${chipsSituacao(d)}</div>
     </div>
+    <p class="cr-analise-dica">${icone("escudo")}Para analisar um limite novo, deixe só um cliente escolhido.</p>
     <div class="tabela-rolagem"><table class="dados cr-varios">
       <thead><tr><th>Cliente</th><th>Prazo</th><th>Limite</th><th>Em aberto</th><th>Restante</th></tr></thead>
       <tbody>${d.clientes.map((c) => `<tr>
@@ -540,6 +551,157 @@ function tabela(d, i, animar = true) {
   </section>`;
 }
 
+// ---------- parecer de um limite novo (a regra é do servidor: Credito.analisar) ----------
+const PARECER = {
+  indicado: { rotulo: "Indicado", classe: "no_ritmo", cor: "ok", icone: "certo" },
+  ressalvas: { rotulo: "Indicado com ressalvas", classe: "atencao", cor: "mid", icone: "alerta" },
+  nao_indicado: { rotulo: "Não indicado", classe: "abaixo", cor: "bad", icone: "x" },
+};
+const ICONE_CRITERIO = { ok: "certo", atencao: "alerta", bloqueio: "x" };
+const vezes = (v) => `${fmt.num(v, 1)}×`;
+
+// "80.000", "80.000,50", "R$ 80000" ou "80000.5" -> número; null quando não é um valor positivo.
+function lerValor(texto) {
+  let s = String(texto || "").replace(/[^\d.,]/g, "");
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (!/^\d+\.\d{1,2}$/.test(s)) s = s.replace(/\./g, ""); // ponto de milhar, não de centavos
+  const v = Number(s);
+  return s && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function cartaoAnalise(d, i) {
+  const c = d.clientes[0];
+  const inicial = estado.limite ?? (c.limite > 0 ? c.limite : null);
+  return `
+  <section class="cartao secao entra cr-analise" style="--i:${i}">
+    <div class="cartao-cab">
+      <div><h3>${icone("escudo")}Analisar novo limite</h3>
+        <p class="sub">Digite o limite total que o cliente vai ter. A análise usa todo o histórico dele, de qualquer vendedor, sem os filtros de mês, ano e vendedor.</p></div>
+    </div>
+    <form class="cr-analise-form" id="cr-analise-form" novalidate>
+      <label class="campo sem-seta"><span class="ic-campo">${icone("moeda")}</span>
+        <input type="text" id="cr-limite" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Limite pedido, em R$"
+          aria-label="Limite total pedido, em reais" value="${inicial ? fmt.num(inicial, 2) : ""}"></label>
+      <button class="btn primario" type="submit">${icone("escudo")}Analisar</button>
+      <span class="cr-analise-atual">limite de hoje: <b>${c.limite > 0 ? fmt.moeda2(c.limite) : "sem limite no cadastro"}</b></span>
+    </form>
+    <div id="cr-analise-resultado" aria-live="polite"></div>
+  </section>`;
+}
+
+function ligarAnalise() {
+  const form = document.getElementById("cr-analise-form");
+  if (!form) return;
+  const campo = form.querySelector("#cr-limite");
+  const pedir = (v) => {
+    estado.limite = v;
+    campo.value = fmt.num(v, 2);
+    atualizarUrl();
+    analisar();
+  };
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = lerValor(campo.value);
+    if (!v) {
+      toast("Digite o limite total pedido, em reais.", "erro");
+      campo.focus();
+      return;
+    }
+    pedir(v);
+  });
+  // "Analisar R$ X": o limite sugerido vira o pedido
+  document.getElementById("cr-analise-resultado").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-usar]");
+    if (b) pedir(Number(b.dataset.usar));
+  });
+  if (estado.limite) analisar(); // veio do link ou deste navegador
+}
+
+async function analisar() {
+  const alvo = document.getElementById("cr-analise-resultado");
+  if (!alvo || estado.clientes.length !== 1 || !estado.limite) return;
+  const pedido = ++estado.analise;
+  if (alvo.childElementCount) alvo.classList.add("recarregando");
+  else alvo.innerHTML = `<div class="esqueleto" style="height:240px"></div>`;
+  try {
+    const a = await api(`/api/credito/analise?cliente=${estado.clientes[0].id}&limite=${estado.limite}`);
+    if (pedido !== estado.analise) return;
+    alvo.innerHTML = parecer(a);
+  } catch (e) {
+    if (pedido !== estado.analise) return;
+    alvo.innerHTML = `<div class="aviso">${icone("alerta")}<span>Não foi possível analisar: ${esc(e.message)}</span></div>`;
+  } finally {
+    if (pedido === estado.analise) alvo.classList.remove("recarregando");
+  }
+}
+
+function sugestao(a) {
+  const n = a.numeros, r = a.regra;
+  if (a.limite_sugerido == null) return "";
+  const base = `${r.folga_ok}× o maior saldo em aberto dos últimos 12 meses (${fmt.moeda(n.maior_saldo)})`;
+  if (a.limite_sugerido <= n.limite_atual) {
+    return `<div class="cr-sugerido">${icone("info")}<p>O limite de hoje (${fmt.moeda(n.limite_atual)}) já cobre o que o
+      histórico sustenta: ${fmt.moeda(a.limite_sugerido)}, ${base}.</p></div>`;
+  }
+  const outro = Math.abs(a.limite_sugerido - a.pedido) >= 0.01;
+  return `<div class="cr-sugerido">${icone("info")}<p>O histórico sustenta um limite de até <b>${fmt.moeda(a.limite_sugerido)}</b>:
+    ${base}, arredondado para cima.</p>
+    ${outro ? `<button type="button" class="btn" data-usar="${a.limite_sugerido}">Analisar ${fmt.moeda(a.limite_sugerido)}</button>` : ""}</div>`;
+}
+
+function parecer(a) {
+  const p = PARECER[a.parecer], n = a.numeros;
+  const variacao = n.limite_atual > 0 ? a.pedido / n.limite_atual - 1 : null;
+  const comparado = variacao == null ? "hoje sem limite no cadastro"
+    : Math.abs(variacao) < 0.0005 ? "o mesmo de hoje"
+    : `${variacao > 0 ? "+" : "−"}${fmt.pct(Math.abs(variacao), 0)} sobre o de hoje (${fmt.moeda(n.limite_atual)})`;
+  const numero = (rotulo, valor, sub = "") => `<div><span>${rotulo}</span><b>${valor}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  return `
+  <div class="cr-parecer ${p.cor} entra" style="--i:0">
+    <div class="cr-parecer-cab">
+      <span class="status ${p.classe}">${icone(p.icone)}${p.rotulo}</span>
+      <span class="cr-parecer-pedido">limite pedido <b>${fmt.moeda2(a.pedido)}</b> · ${comparado}</span>
+    </div>
+    <ul class="cr-criterios">${a.criterios.map((c) => `
+      <li class="${c.status}"><span class="cr-crit-ic">${icone(ICONE_CRITERIO[c.status])}</span>
+        <div><b>${esc(c.titulo)}</b><span>${esc(c.detalhe)}</span></div></li>`).join("")}
+    </ul>
+    ${sugestao(a)}
+    <div class="cr-parecer-numeros">
+      ${numero("Maior saldo em aberto (12 meses)", fmt.moeda(n.maior_saldo),
+        n.maior_saldo_em ? `em ${fmt.data(n.maior_saldo_em)}` : "")}
+      ${numero("Limite pedido ÷ maior saldo", n.pedido_vezes_maior_saldo == null ? "—" : vezes(n.pedido_vezes_maior_saldo))}
+      ${numero("Compras por mês (12 meses)", fmt.moeda(n.compras_mes))}
+      ${numero("Prazo real", n.prazo_real == null ? "—" : `${fmt.num(n.prazo_real)} dias`,
+        n.prazo_real == null ? "" : "mediana entre a emissão e o vencimento")}
+      ${numero("Em aberto hoje", fmt.moeda(n.em_aberto),
+        `${fmt.num(n.qtd_abertos)} título${n.qtd_abertos === 1 ? "" : "s"}, menos as parcelas pagas`)}
+    </div>
+    ${(a.avisos || []).map((x) => `<div class="aviso">${icone("alerta")}<span>${esc(x)}</span></div>`).join("")}
+    <p class="cr-parecer-nota">Regra fixa da página, sem IA: os mesmos dados dão sempre a mesma resposta. Dados até
+      ${fmt.data(a.hoje)}. A decisão final é de quem libera o crédito.</p>
+  </div>`;
+}
+
+function comoParecer(r) {
+  if (!r) return "";
+  const pct = (v) => fmt.pct(v, 0);
+  return `
+          <li><b>Parecer de um limite novo</b> (com um cliente escolhido): o limite total que o cliente vai ter, contra
+            o histórico inteiro dele (qualquer vendedor, sem os filtros de mês, ano e vendedor) nos últimos 12 meses até o
+            dia da extração. É uma regra fixa, sem IA. <b>Não indicado</b>: título em aberto vencido há mais de
+            ${r.tolerancia} dias, pontualidade abaixo de ${pct(r.pontual_min)} ou limite pedido acima de ${r.folga_max}× o
+            maior saldo em aberto. <b>Indicado com ressalvas</b>: vencido há até ${r.tolerancia} dias; pontualidade abaixo
+            de ${pct(r.pontual_ok)} ou menos de ${r.min_quitados} títulos quitados; cliente há menos de ${r.meses_cliente}
+            meses; limite pedido acima do que o histórico sustenta (${r.folga_ok}× o maior saldo em aberto, arredondado
+            para cima em ${fmt.moeda(r.arredondar)}); já deve mais que o limite pedido; ou
+            nenhuma compra há mais de ${r.dias_sem_compra} dias. Senão, <b>Indicado</b>. Um limite igual ou menor que o de
+            hoje não conta como aumento. <b>Maior saldo em aberto</b>: o máximo que o cliente deveu ao mesmo tempo nos 12
+            meses, pelo valor dos títulos (sem descontar as parcelas: não temos a data de cada uma). <b>Limite
+            sugerido</b>: o que o histórico sustenta (${r.folga_ok}× esse saldo, arredondado); não aparece
+            com inadimplência nem com pontualidade abaixo de ${pct(r.pontual_min)}.</li>`;
+}
+
 function comoCalcula(d, i) {
   return `
   <section class="cartao secao entra metodo" style="--i:${i}">
@@ -565,6 +727,7 @@ function comoCalcula(d, i) {
             emitidos no período entravam, e as parcelas pagas não voltavam). Negativo = passou do limite. Com vários clientes
             escolhidos, os limites e o que está em aberto somam. Limite, utilizado, prazo e restante só aparecem com cliente
             escolhido.</li>
+          ${comoParecer(d.regra_parecer)}
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. A ordem vale para todos os

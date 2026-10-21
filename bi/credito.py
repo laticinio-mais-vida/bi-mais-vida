@@ -16,15 +16,39 @@ Diferenças aprovadas em relação ao Power BI:
 Além do Power BI: o valor já pago de cada título (boleto dividido em parcelas, tabela titulos_parcelas do cache).
 As parcelas pagas saem do que está em aberto e voltam para o limite restante.
 
+O parecer de um limite novo (analisar): quem digita o limite total que o cliente vai ter recebe Indicado, Indicado com
+ressalvas ou Não indicado, com os motivos. É uma regra fixa (sem IA: a mesma resposta para os mesmos dados) sobre o
+histórico inteiro do cliente, de qualquer vendedor e sem os filtros da página; os limites dela estão logo abaixo.
+
 "Hoje" é o dia da extração, para os dias de atraso baterem com a foto dos dados.
 """
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 from .cache import Cache
 
 TOLERANCIA = 7  # dias depois do vencimento em que o pagamento ainda é pontual e o atraso ainda não é inadimplência
+# A regra do parecer (analisar). Inadimplência hoje sempre bloqueia.
+JANELA = 365         # dias de histórico para a pontualidade, o maior saldo em aberto e as compras
+PONTUAL_OK = 0.9     # pontualidade a partir da qual o critério passa (as mesmas faixas de cor do cartão)
+PONTUAL_MIN = 0.7    # abaixo disso, não indicado
+MIN_QUITADOS = 5     # menos títulos quitados na janela que isso: pouco para medir a pontualidade
+MESES_CLIENTE = 6    # tempo de cliente (pelo primeiro título) abaixo do qual fica a ressalva
+DIAS_SEM_COMPRA = 90
+FOLGA_OK = 2         # limite pedido até 2x o maior saldo em aberto da janela (arredondado): passa; é o sugerido
+FOLGA_MAX = 3        # acima de 3x: não indicado
+ARREDONDAR = 500     # o teto de 2x (e o limite sugerido) sobe para o múltiplo de R$ 500 seguinte
+# Os mesmos limites para a página (o "como calcula" e o texto do limite sugerido).
+REGRA = {"janela_dias": JANELA, "pontual_ok": PONTUAL_OK, "pontual_min": PONTUAL_MIN, "min_quitados": MIN_QUITADOS,
+         "meses_cliente": MESES_CLIENTE, "dias_sem_compra": DIAS_SEM_COMPRA, "folga_ok": FOLGA_OK,
+         "folga_max": FOLGA_MAX, "arredondar": ARREDONDAR, "tolerancia": TOLERANCIA}
+CRITERIOS = {  # chave -> nome na página, na ordem em que aparecem
+    "inadimplencia": "Inadimplência", "pontualidade": "Pontualidade nos últimos 12 meses",
+    "tempo": "Tempo de cliente", "folga": "Limite pedido × o que já usou", "em_aberto": "Em aberto hoje",
+    "recente": "Compras recentes",
+}
 MAX_TITULOS = 500
 MAX_BUSCA = 30
 MAX_CLIENTES = 100
@@ -42,6 +66,32 @@ GRAVIDADE = (f"CASE WHEN x.quitado = 1 THEN CASE WHEN x.dias > {TOLERANCIA} THEN
 
 def _marcas(ids) -> str:
     return ",".join("?" * len(ids))
+
+
+def _reais(v: float) -> str:
+    return "R$ " + f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _pct(v: float) -> str:
+    return f"{v * 100:.1f}".replace(".", ",") + "%"
+
+
+def _plural(n: int, um: str, varios: str) -> str:
+    return f"{n} {um if n == 1 else varios}"
+
+
+def _meses(de: dt.date, ate: dt.date) -> int:
+    """Meses completos de `de` até `ate`."""
+    return (ate.year - de.year) * 12 + ate.month - de.month - (ate.day < de.day)
+
+
+def _ha(meses: int) -> str:
+    if meses < 1:
+        return "há menos de um mês"
+    anos, resto = divmod(meses, 12)
+    if not anos:
+        return f"há {_plural(meses, 'mês', 'meses')}"
+    return f"há {_plural(anos, 'ano', 'anos')}" + (f" e {_plural(resto, 'mês', 'meses')}" if resto else "")
 
 
 def situacao(quitado: bool, dias: int) -> str:
@@ -188,6 +238,7 @@ class Credito:
                 "quitados": quitados, "quitados_atrasados": atrasados, "inadimplencia": inadimplencia,
             },
             "titulos": {"linhas": titulos, "total": quantidade, "mostrando": len(titulos)},
+            "regra_parecer": REGRA,
             "avisos": avisos,
         }
 
@@ -236,3 +287,159 @@ class Credito:
             "SELECT DISTINCT year(emissao) AS a FROM titulos_receber WHERE year(emissao) <= ? ORDER BY a DESC",
             [hoje.year])]
         return {"vendedores": vendedores, "anos": anos}
+
+    # --- parecer de um limite novo ---------------------------------------------------------
+    def analisar(self, cliente: int | str, limite_pedido: float | str) -> dict:
+        """Parecer sobre o limite total novo de um cliente, pela regra do topo do módulo. Cada critério sai "ok",
+        "atencao" ou "bloqueio": qualquer bloqueio dá "nao_indicado"; qualquer atenção, "ressalvas". Vale o histórico
+        inteiro do cliente (de qualquer vendedor, sem mês nem ano); a janela de JANELA dias termina hoje (a extração).
+        Cliente ou limite pedido que não são números (vêm do endereço), limite sem valor positivo ou cliente que não
+        existe -> ValueError."""
+        self._conferir()
+        try:
+            cliente = int(cliente)
+        except (TypeError, ValueError):
+            raise ValueError("escolha um cliente para analisar") from None
+        try:
+            pedido = float(limite_pedido)
+        except (TypeError, ValueError):
+            raise ValueError("informe o limite pedido, maior que zero") from None
+        if not math.isfinite(pedido) or pedido <= 0:
+            raise ValueError("informe o limite pedido, maior que zero")
+        hoje = self.hoje()
+        inicio = hoje - dt.timedelta(days=JANELA)  # a janela começa no dia seguinte
+        inadimplente = hoje - dt.timedelta(days=TOLERANCIA)
+        nomes = self.nomes_vendedores()
+        junta, pago, _, _ = self._parcelas()
+        c = self._clientes([cliente], nomes, junta, pago)[0]
+
+        # Datas de emissão digitadas no futuro (ano 7190) ficam fora do histórico; a inadimplência é de todo título
+        # em aberto, como no cartão.
+        na_janela = "emissao > ? AND emissao <= ?"
+        (primeiro, ultimo, inad_qtd, inad_valor, venc_qtd, venc_valor, quitados, pontuais, atraso_medio, compras,
+         prazo_real) = self.cache.consulta(
+            "SELECT MIN(emissao) FILTER (WHERE emissao <= ?), MAX(emissao) FILTER (WHERE emissao <= ?), "
+            "COUNT(*) FILTER (WHERE quitado = 0 AND vencimento < ?), "
+            "COALESCE(SUM(total) FILTER (WHERE quitado = 0 AND vencimento < ?), 0), "
+            "COUNT(*) FILTER (WHERE quitado = 0 AND vencimento < ? AND vencimento >= ?), "
+            "COALESCE(SUM(total) FILTER (WHERE quitado = 0 AND vencimento < ? AND vencimento >= ?), 0), "
+            f"COUNT(*) FILTER (WHERE quitado = 1 AND {na_janela}), "
+            f"COUNT(*) FILTER (WHERE quitado = 1 AND {na_janela} AND quitacao <= vencimento + {TOLERANCIA}), "
+            "AVG(datediff('day', vencimento, quitacao)) "
+            f"  FILTER (WHERE quitado = 1 AND {na_janela} AND quitacao > vencimento + {TOLERANCIA}), "
+            f"COALESCE(SUM(total) FILTER (WHERE {na_janela}), 0), "
+            f"MEDIAN(datediff('day', emissao, vencimento)) FILTER (WHERE {na_janela}) "
+            "FROM titulos_receber WHERE id_cliente = ?",
+            [hoje, hoje, inadimplente, inadimplente, hoje, inadimplente, hoje, inadimplente,
+             *[inicio, hoje] * 5, c["id"]])[0]
+
+        # O maior saldo em aberto da janela: o saldo só sobe nos dias de emissão, então basta olhar esses dias e o
+        # primeiro dia da janela (o que já vinha de antes). Pelo valor do título: o cache não tem a data das parcelas.
+        pico = self.cache.consulta(
+            "WITH t AS (SELECT emissao, quitacao, total FROM titulos_receber WHERE id_cliente = ? AND emissao <= ?), "
+            "d AS (SELECT CAST(? AS DATE) AS dia UNION SELECT DISTINCT emissao FROM t WHERE emissao > ?) "
+            "SELECT d.dia, SUM(t.total) AS saldo FROM d JOIN t ON t.emissao <= d.dia "
+            "  AND (t.quitacao IS NULL OR t.quitacao > d.dia) "
+            "GROUP BY d.dia ORDER BY saldo DESC, d.dia DESC LIMIT 1",
+            [c["id"], hoje, inicio + dt.timedelta(days=1), inicio])
+        pico_em, pico = pico[0] if pico else (None, 0.0)
+
+        criterios = []
+
+        def criterio(chave: str, status: str, detalhe: str) -> None:
+            criterios.append({"chave": chave, "status": status, "titulo": CRITERIOS[chave], "detalhe": detalhe})
+
+        if inad_qtd:
+            criterio("inadimplencia", "bloqueio",
+                     f"{_plural(inad_qtd, 'título em aberto vencido', 'títulos em aberto vencidos')} há mais de "
+                     f"{TOLERANCIA} dias: {_reais(inad_valor)}.")
+        elif venc_qtd:
+            criterio("inadimplencia", "atencao",
+                     f"{_plural(venc_qtd, 'título vencido', 'títulos vencidos')} há até {TOLERANCIA} dias "
+                     f"({_reais(venc_valor)}): ainda dentro da tolerância.")
+        else:
+            criterio("inadimplencia", "ok", "Nenhum título vencido em aberto.")
+
+        pontualidade = pontuais / quitados if quitados else None
+        if quitados < MIN_QUITADOS:
+            criterio("pontualidade", "atencao",
+                     "Nenhum título quitado: não dá para medir." if not quitados else
+                     f"Só {_plural(quitados, 'título quitado', 'títulos quitados')}: pouco para medir.")
+        else:
+            atraso = (f"; os atrasados foram pagos, em média, {atraso_medio:.0f} dias depois do vencimento"
+                      if atraso_medio is not None else "")
+            texto = (f"{_pct(pontualidade)} dos títulos pagos até {TOLERANCIA} dias depois do vencimento "
+                     f"({pontuais} de {quitados}){atraso}.")
+            if pontualidade < PONTUAL_MIN:
+                criterio("pontualidade", "bloqueio", texto)
+            elif pontualidade < PONTUAL_OK:
+                criterio("pontualidade", "atencao", texto)
+            else:
+                criterio("pontualidade", "ok", texto)
+
+        meses = _meses(primeiro, hoje) if primeiro else None
+        if primeiro is None:
+            criterio("tempo", "atencao", "Nenhum título a receber: cliente sem compras a prazo.")
+        elif meses < MESES_CLIENTE:
+            criterio("tempo", "atencao", f"Primeiro título em {primeiro:%d/%m/%Y}, {_ha(meses)}: cliente novo.")
+        else:
+            criterio("tempo", "ok", f"Primeiro título em {primeiro:%d/%m/%Y}, {_ha(meses)}.")
+
+        # O que o histórico sustenta: FOLGA_OK x o maior saldo, arredondado para cima. É também o limite sugerido,
+        # que assim sempre passa neste critério.
+        teto = math.ceil(round(FOLGA_OK * pico / ARREDONDAR, 6)) * ARREDONDAR if pico > 0 else 0
+        vezes = pedido / pico if pico > 0 else None
+        if pedido <= c["limite"]:
+            criterio("folga", "ok", f"Não é aumento: o limite de hoje é {_reais(c['limite'])}.")
+        elif vezes is None:
+            criterio("folga", "bloqueio", "O cliente não teve nada em aberto nos últimos 12 meses.")
+        else:
+            texto = (f"O limite pedido é {f'{vezes:.1f}'.replace('.', ',')} vezes o maior saldo em aberto dos últimos "
+                     f"12 meses ({_reais(pico)} em {pico_em:%d/%m/%Y}); o histórico sustenta até {_reais(teto)}.")
+            if pedido <= teto:
+                criterio("folga", "ok", texto)
+            elif vezes > FOLGA_MAX:
+                criterio("folga", "bloqueio", texto)
+            else:
+                criterio("folga", "atencao", texto)
+
+        if c["em_aberto"] > pedido:
+            criterio("em_aberto", "atencao", f"{_reais(c['em_aberto'])}, mais que o limite pedido: o limite novo já "
+                     "começaria estourado.")
+        else:
+            criterio("em_aberto", "ok", f"{_reais(c['em_aberto'])}, {_pct(c['em_aberto'] / pedido)} do limite pedido.")
+
+        if ultimo is None:
+            criterio("recente", "atencao", "Nenhum título a receber de venda.")
+        elif (hoje - ultimo).days > DIAS_SEM_COMPRA:
+            criterio("recente", "atencao", f"Última compra em {ultimo:%d/%m/%Y}, há {(hoje - ultimo).days} dias: o "
+                     "histórico pode não mostrar a situação de hoje.")
+        else:
+            criterio("recente", "ok", f"Última compra em {ultimo:%d/%m/%Y}.")
+
+        status = {x["status"] for x in criterios}
+        bloqueios = {x["chave"] for x in criterios if x["status"] == "bloqueio"}
+        # Sugere o que o histórico sustenta, menos quando o problema é como o cliente paga.
+        sugerido = teto if teto and not bloqueios & {"inadimplencia", "pontualidade"} else None
+        avisos = []
+        if self.cache.sem_parcelas:
+            avisos.append("As parcelas dos títulos ainda não chegaram do computador da empresa: o que está em aberto "
+                          "ainda não desconta as parcelas pagas.")
+        return {
+            "hoje": hoje,
+            "cliente": {"id": c["id"], "nome": c["nome"], "carteira": c["carteira"], "prazo": c["prazo"]},
+            "pedido": pedido,
+            "parecer": "nao_indicado" if "bloqueio" in status else "ressalvas" if "atencao" in status else "indicado",
+            "criterios": criterios,
+            "limite_sugerido": sugerido,
+            "numeros": {
+                "limite_atual": c["limite"], "em_aberto": c["em_aberto"], "qtd_abertos": c["qtd_abertos"],
+                "maior_saldo": pico, "maior_saldo_em": pico_em, "pedido_vezes_maior_saldo": vezes,
+                "inadimplencia": inad_valor, "titulos_inadimplentes": inad_qtd,
+                "pontualidade": pontualidade, "quitados": quitados, "quitados_pontuais": pontuais,
+                "atraso_medio": atraso_medio, "compras_mes": compras / 12, "prazo_real": prazo_real,
+                "primeiro_titulo": primeiro, "ultimo_titulo": ultimo, "meses_cliente": meses,
+            },
+            "regra": REGRA,
+            "avisos": avisos,
+        }

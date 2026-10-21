@@ -1411,11 +1411,53 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-titulos td:last-child, .cr-titulos th:last-child { text-align: left; }
 .cr-titulos td .status { padding: 3px 9px 3px 6px; font-size: 12px; }
 .cr-dias.atraso { color: var(--ruim); font-weight: 700; }
+/* parecer de um limite novo */
+.cr-analise .cartao-cab { margin-bottom: 12px; }
+.cr-analise-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.cr-analise-form .campo input { width: 230px; font-variant-numeric: tabular-nums; }
+.cr-analise-atual { color: var(--tinta-3); font-size: 13px; }
+.cr-analise-atual b { color: var(--tinta-2); font-variant-numeric: tabular-nums; }
+.cr-analise-dica { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; color: var(--tinta-3); font-size: 13px; }
+.cr-analise-dica .ic { width: 16px; height: 16px; flex: none; color: var(--acento); }
+#cr-analise-resultado:not(:empty) { margin-top: 16px; }
+.cr-parecer {
+  --c: var(--linha-forte);
+  padding: 16px 18px; border-radius: 16px; border: 1px solid var(--linha); border-left: 4px solid var(--c); background: var(--surface);
+}
+.cr-parecer.ok { --c: var(--ok-forte); }
+.cr-parecer.mid { --c: var(--atencao-forte); }
+.cr-parecer.bad { --c: var(--ruim-forte); }
+.cr-parecer-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 14px; }
+.cr-parecer-cab .status { font-size: 14px; padding: 6px 14px 6px 10px; }
+.cr-parecer-cab .status .ic { width: 17px; height: 17px; }
+.cr-parecer-pedido { color: var(--tinta-2); font-size: 13.5px; }
+.cr-parecer-pedido b { color: var(--tinta); font-variant-numeric: tabular-nums; }
+.cr-criterios { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px 22px; }
+.cr-criterios li { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.4; }
+.cr-criterios b { display: block; font-size: 13.5px; }
+.cr-criterios li span:not(.cr-crit-ic) { color: var(--tinta-2); }
+.cr-crit-ic { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; }
+.cr-crit-ic .ic { width: 15px; height: 15px; stroke-width: 2.4; }
+.cr-criterios .ok .cr-crit-ic { background: var(--ok-bg); color: var(--ok); }
+.cr-criterios .atencao .cr-crit-ic { background: var(--atencao-bg); color: var(--atencao); }
+.cr-criterios .bloqueio .cr-crit-ic { background: var(--ruim-bg); color: var(--ruim); }
+.cr-sugerido { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 16px; padding: 10px 14px; border-radius: 12px; background: var(--acento-suave); font-size: 13.5px; }
+.cr-sugerido > .ic { flex: none; color: var(--acento); }
+.cr-sugerido p { flex: 1; min-width: min(100%, 240px); margin: 0; }
+.cr-sugerido .btn { height: 34px; padding: 0 12px; font-size: 13px; }
+.cr-parecer-numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 10px 18px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--linha); font-size: 12.5px; }
+.cr-parecer-numeros span, .cr-parecer-numeros small { display: block; color: var(--tinta-3); }
+.cr-parecer-numeros b { display: block; margin-top: 2px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.cr-parecer-numeros small { font-size: 11.5px; margin-top: 1px; }
+.cr-parecer .aviso { margin: 14px 0 0; }
+.cr-parecer-nota { margin: 14px 0 0; color: var(--tinta-3); font-size: 12px; }
 @media (max-width: 860px) {
   .cr-busca, .cr-busca .campo, .cr-busca .campo input, #pagina-credito .filtros .campo, #pagina-credito .filtros .campo select { width: 100%; }
   .cr-sugestoes { width: 100%; }
   .cr-cliente { flex-wrap: wrap; }
   .cr-cliente-chips { justify-content: flex-start; }
+  .cr-analise-form .campo, .cr-analise-form .campo input { width: 100%; }
+  .cr-analise-form .btn { flex: 1; justify-content: center; }
 }
 
 /* ---------- Assistente (chat) ---------- */

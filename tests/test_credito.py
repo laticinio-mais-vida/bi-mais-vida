@@ -18,7 +18,7 @@ import duckdb
 from bi import credito as modulo
 from bi.assistente import Ferramentas
 from bi.credito import Credito
-from tests.apoio import BA, EDIR, NOMES, criar_assistente, criar_calc
+from tests.apoio import BA, EDIR, ES, NOMES, criar_assistente, criar_calc
 
 D = dt.date
 
@@ -165,6 +165,150 @@ class TestTitulos(Base):
                 self.credito.calcular(**args)
 
 
+class TestParecer(Base):
+    """O parecer de um limite novo (Credito.analisar). Hoje = 01/10/2026; a janela de 12 meses começa em 02/10/2025."""
+
+    def inserir(self, titulos=(), clientes=(), limites=()):
+        """Mais linhas no cache do teste (aberto só para leitura): fecha, grava e abre de novo."""
+        cache = self.calc.cache
+        cache._con.close()
+        con = duckdb.connect(str(cache.arquivo))
+        for tabela, linhas in (("titulos_receber", titulos), ("clientes", clientes), ("clientes_credito", limites)):
+            if linhas:
+                con.executemany(f"INSERT INTO {tabela} VALUES ({','.join('?' * len(linhas[0]))})", linhas)
+        con.close()
+        cache._abrir()
+
+    def emporio(self, atrasados: int = 0, ultimo_mes: int = 9, limite: float = 3000.0):
+        """Cliente 50, desde 2024, com 2 títulos de R$ 1.000 por mês na janela (dias 5 e 12, de nov/2025 até o
+        ultimo_mes de 2026, ou até set/2026), a 14 dias, pagos no vencimento. Os dois se cruzam uma semana: o maior
+        saldo em aberto é R$ 2.000. atrasados: quantos dos últimos foram pagos 10 dias depois do vencimento."""
+        meses = [(2025, 11), (2025, 12)] + [(2026, m) for m in range(1, ultimo_mes + 1)]
+        titulos = [(5000, 50, ES, D(2024, 1, 5), D(2024, 1, 19), D(2024, 1, 19), 1, 800.0)]  # fora da janela
+        for n, (a, m) in enumerate((a, m) for a, m in meses for _ in (0, 1)):
+            emissao = D(a, m, 5 if n % 2 == 0 else 12)
+            vencimento = emissao + dt.timedelta(days=14)
+            atraso = 10 if n >= 2 * len(meses) - atrasados else 0
+            titulos.append((5001 + n, 50, ES, emissao, vencimento, vencimento + dt.timedelta(days=atraso), 1, 1000.0))
+        self.inserir(titulos, [(50, "EMPORIO BOM", ES)], [(50, limite, "14 DIAS")])
+        return len(titulos) - 1  # títulos na janela
+
+    def status(self, a) -> dict:
+        return {c["chave"]: c["status"] for c in a["criterios"]}
+
+    def test_indicado(self):
+        n = self.emporio()
+        a = self.credito.analisar(50, 4000)  # 2x o maior saldo: ainda passa
+        self.assertEqual(a["parecer"], "indicado")
+        self.assertEqual(set(self.status(a).values()), {"ok"})
+        self.assertEqual([c["chave"] for c in a["criterios"]], list(modulo.CRITERIOS))
+        x = a["numeros"]
+        self.assertEqual((x["maior_saldo"], x["maior_saldo_em"], x["pedido_vezes_maior_saldo"]),
+                         (2000.0, D(2026, 9, 12), 2.0))  # empate: o dia mais recente
+        self.assertEqual((x["quitados"], x["quitados_pontuais"], x["pontualidade"], x["atraso_medio"]), (n, n, 1.0, None))
+        self.assertEqual((x["primeiro_titulo"], x["ultimo_titulo"], x["meses_cliente"]),
+                         (D(2024, 1, 5), D(2026, 9, 12), 32))
+        self.assertAlmostEqual(x["compras_mes"], n * 1000 / 12)
+        self.assertEqual((x["prazo_real"], x["em_aberto"], x["limite_atual"]), (14, 0.0, 3000.0))
+        self.assertEqual((a["limite_sugerido"], a["pedido"], a["hoje"]), (4000, 4000.0, D(2026, 10, 1)))
+        self.assertEqual(a["cliente"], {"id": 50, "nome": "EMPORIO BOM", "carteira": "Rubens", "prazo": "14 DIAS"})
+        self.assertEqual((a["avisos"], a["regra"]), ([], modulo.REGRA))
+        self.assertIn("2 anos e 8 meses", a["criterios"][2]["detalhe"])
+
+    def test_limite_pedido_contra_o_maior_saldo(self):
+        self.emporio()
+        a = self.credito.analisar(50, 5000)  # 2,5x
+        self.assertEqual((a["parecer"], self.status(a)["folga"]), ("ressalvas", "atencao"))
+        self.assertIn("2,5 vezes o maior saldo em aberto", a["criterios"][3]["detalhe"])
+        self.assertIn("R$ 2.000,00 em 12/09/2026", a["criterios"][3]["detalhe"])
+        a = self.credito.analisar(50, 6000.01)  # acima de 3x: não indicado, mas o sugerido aparece
+        self.assertEqual((a["parecer"], self.status(a)["folga"], a["limite_sugerido"]), ("nao_indicado", "bloqueio", 4000))
+        a = self.credito.analisar(50, 3000)  # o mesmo de hoje: não é aumento
+        self.assertEqual((a["parecer"], a["criterios"][3]["detalhe"]),
+                         ("indicado", "Não é aumento: o limite de hoje é R$ 3.000,00."))
+
+    def test_maior_saldo_conta_o_que_vinha_de_antes_da_janela(self):
+        self.emporio()
+        # emitido antes da janela e pago só em dezembro: no 1º dia dela (02/10/2025) o saldo já era R$ 9.000
+        self.inserir([(5900, 50, ES, D(2025, 9, 1), D(2025, 9, 15), D(2025, 12, 1), 1, 9000.0)])
+        x = self.credito.analisar(50, 4000)["numeros"]
+        self.assertEqual((x["maior_saldo"], x["maior_saldo_em"]), (11000.0, D(2025, 11, 12)))
+
+    def test_pontualidade_media(self):
+        n = self.emporio(atrasados=3)
+        a = self.credito.analisar(50, 4000)
+        self.assertEqual((a["parecer"], self.status(a)["pontualidade"]), ("ressalvas", "atencao"))
+        self.assertEqual((a["numeros"]["quitados_pontuais"], a["numeros"]["atraso_medio"]), (n - 3, 10))
+        self.assertIn(f"({n - 3} de {n}); os atrasados foram pagos, em média, 10 dias", a["criterios"][1]["detalhe"])
+
+    def test_pontualidade_baixa_tira_o_sugerido(self):
+        self.emporio(atrasados=7)  # 15 de 22: abaixo de 70%
+        a = self.credito.analisar(50, 4000)
+        self.assertEqual((a["parecer"], self.status(a)["pontualidade"], a["limite_sugerido"]),
+                         ("nao_indicado", "bloqueio", None))
+
+    def test_sem_compra_recente_e_vencido_ha_poucos_dias(self):
+        self.emporio(ultimo_mes=5)  # última compra em 12/05/2026
+        self.inserir([(5950, 50, BA, D(2026, 5, 20), D(2026, 9, 27), None, 0, 300.0)])  # vencido há 4 dias
+        a = self.credito.analisar(50, 4000)
+        s = self.status(a)
+        self.assertEqual((a["parecer"], s["recente"], s["inadimplencia"]), ("ressalvas", "atencao", "atencao"))
+        self.assertIn("Última compra em 20/05/2026, há 134 dias", a["criterios"][5]["detalhe"])
+        self.assertEqual(a["criterios"][0]["detalhe"],
+                         "1 título vencido há até 7 dias (R$ 300,00): ainda dentro da tolerância.")
+
+    def test_cliente_inadimplente(self):
+        a = self.credito.analisar(1, 6000)
+        s = self.status(a)
+        self.assertEqual(a["parecer"], "nao_indicado")
+        self.assertEqual((s["inadimplencia"], s["pontualidade"], s["tempo"], s["folga"], s["em_aberto"], s["recente"]),
+                         ("bloqueio", "atencao", "ok", "bloqueio", "ok", "ok"))
+        self.assertEqual(a["criterios"][0]["detalhe"], "1 título em aberto vencido há mais de 7 dias: R$ 1.300,00.")
+        self.assertEqual(a["criterios"][1]["detalhe"], "Só 2 títulos quitados: pouco para medir.")  # o 106 é de antes
+        x = a["numeros"]
+        # 28/09: 103, 104 e 105 em aberto (o vencido e o inadimplente pelo valor do título)
+        self.assertEqual((x["maior_saldo"], x["maior_saldo_em"], x["em_aberto"]), (1900.0, D(2026, 9, 28), 1150.0))
+        self.assertEqual((x["inadimplencia"], x["titulos_inadimplentes"], a["limite_sugerido"]), (1300.0, 1, None))
+        self.assertEqual(self.credito.analisar(1, 5000)["criterios"][3]["status"], "ok")  # o mesmo limite de hoje
+
+    def test_ja_deve_mais_que_o_pedido(self):
+        a = self.credito.analisar(2, 2000)  # deve 2.500 com limite de 2.000
+        self.assertEqual(self.status(a)["em_aberto"], "atencao")
+        self.assertIn("R$ 2.500,00, mais que o limite pedido", a["criterios"][4]["detalhe"])
+
+    def test_sem_historico(self):
+        a = self.credito.analisar(3, 2000)  # nenhum título
+        s = self.status(a)
+        self.assertEqual((a["parecer"], s["tempo"], s["folga"], s["recente"], s["pontualidade"]),
+                         ("nao_indicado", "atencao", "bloqueio", "atencao", "atencao"))
+        self.assertEqual((a["numeros"]["maior_saldo"], a["numeros"]["pedido_vezes_maior_saldo"], a["limite_sugerido"]),
+                         (0.0, None, None))
+        self.assertEqual(self.credito.analisar(3, 500)["parecer"], "ressalvas")  # abaixo do limite de hoje
+
+    def test_data_digitada_errada_fica_fora(self):
+        a = self.credito.analisar(4, 1000)  # o 402 (ano 7190) não é o primeiro nem o último título
+        x = a["numeros"]
+        self.assertEqual((x["primeiro_titulo"], x["ultimo_titulo"], x["meses_cliente"], x["quitados"]),
+                         (D(2026, 9, 5), D(2026, 9, 5), 0, 1))
+        self.assertIn("há menos de um mês: cliente novo", a["criterios"][2]["detalhe"])
+        self.assertEqual((x["maior_saldo"], a["limite_sugerido"], a["parecer"]), (700.0, 1500, "ressalvas"))
+        # o teto de 2x é arredondado para cima (1.400 -> 1.500): o sugerido sempre passa, mesmo acima de 2x
+        a = self.credito.analisar(4, 1500)
+        self.assertEqual((self.status(a)["folga"], a["numeros"]["pedido_vezes_maior_saldo"] > 2), ("ok", True))
+        self.assertIn("o histórico sustenta até R$ 1.500,00", a["criterios"][3]["detalhe"])
+        self.assertEqual(self.status(self.credito.analisar(4, 1500.01))["folga"], "atencao")
+
+    def test_parametros_invalidos(self):
+        for cliente, limite in ((1, 0), (1, -10), (1, "abc"), (1, "nan"), (1, "inf"), (1, None), (999, 1000),
+                                ("x", 1000), (None, 1000)):
+            with self.assertRaises(ValueError, msg=(cliente, limite)):
+                self.credito.analisar(cliente, limite)
+        self.assertEqual(self.credito.analisar("1", "6000.5")["pedido"], 6000.5)  # do endereço da página
+
+    def test_a_pagina_leva_a_regra(self):
+        self.assertEqual(self.credito.calcular([1])["regra_parecer"], modulo.REGRA)
+
+
 class TestBusca(Base):
     def test_busca_por_nome_e_codigo(self):
         self.assertEqual([c["id"] for c in self.credito.buscar("merc")], [1, 4])
@@ -187,6 +331,8 @@ class TestSemParcelas(Base):
         pago = {t["id"]: (t["pago"], t["parcelas"]) for t in d["titulos"]["linhas"]}
         self.assertEqual((pago[102], pago[103], pago[105]), ((500.0, 1), (0.0, 1), (0.0, 1)))
         self.assertEqual(self.ids(clientes=[1], ordem="pago", sentido="desc")[:2], [101, 106])
+        p = self.credito.analisar(1, 6000)
+        self.assertEqual((p["numeros"]["em_aberto"], len(p["avisos"])), (1900.0, 1))
         a = criar_assistente(self.pasta, self.calc)
         saldo = a.recorte(None, credito=True).cursor().execute(
             "SELECT saldo FROM titulos_receber WHERE id_titulo = 103").fetchone()[0]
@@ -198,9 +344,10 @@ class TestSemCredito(Base):
 
     def test_cache_sem_as_tabelas(self):
         self.assertTrue(self.calc.cache.sem_credito)
-        with self.assertRaises(RuntimeError) as e:
-            self.credito.calcular([1])
-        self.assertIn("ainda não chegaram", str(e.exception))
+        for conta in (lambda: self.credito.calcular([1]), lambda: self.credito.analisar(1, 6000)):
+            with self.assertRaises(RuntimeError) as e:
+                conta()
+            self.assertIn("ainda não chegaram", str(e.exception))
         self.calc.cache.info["credito_erro"] = "Table unknown CONTASRECEBER"
         with self.assertRaises(RuntimeError) as e:
             self.credito.buscar("merc")
@@ -251,6 +398,22 @@ class TestAssistente(Base):
         self.assertEqual(list(abertos), [105, 104, 103])
         self.assertEqual((abertos[103]["valor_ja_pago"], abertos[103]["parcelas_pagas"]), (650.0, "1 de 2"))
         self.assertNotIn("parcelas_pagas", abertos[104])
+        self.assertNotIn("parecer_novo_limite", res)
+
+    def test_parecer_de_um_limite_novo(self):
+        a = criar_assistente(self.pasta, self.calc)
+        # acesso só da BA: o parecer é o da página, com o histórico inteiro do cliente
+        f = Ferramentas(a.recorte(a.ids_do_escopo(None, {"BA"}), credito=True), self.calc, a.cfg, {"BA"},
+                        credito=a.credito)
+        res, p = f.executar("credito_cliente", {"id_cliente": 1, "novo_limite": 6000})
+        self.assertIsNone(p["erro"])
+        x, pagina = res["parecer_novo_limite"], self.credito.analisar(1, 6000)
+        self.assertEqual((x["parecer"], x["limite_pedido"], x["limite_sugerido"]), ("Não indicado", 6000.0, None))
+        self.assertEqual([c["detalhe"] for c in x["criterios"]], [c["detalhe"] for c in pagina["criterios"]])
+        self.assertEqual((x["criterios"][0]["criterio"], x["criterios"][0]["resultado"]), ("Inadimplência", "bloqueio"))
+        self.assertEqual(x["maior_saldo_em_aberto_12_meses"], 1900.0)
+        _, p = f.executar("credito_cliente", {"id_cliente": 1, "novo_limite": -5})
+        self.assertIn("maior que zero", p["erro"])
 
     def test_acesso_restrito_so_ve_os_titulos_dos_seus(self):
         a = criar_assistente(self.pasta, self.calc)
