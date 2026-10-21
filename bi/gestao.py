@@ -594,7 +594,8 @@ class Gestao:
 
     def _recorte(self):
         self._conferir_dados()
-        return self.assistente.recorte(None)
+        # Só as consultas da Gestão rodam aqui; com o crédito, divide o recorte com o Assistente do administrador.
+        return self.assistente.recorte(None, credito=True)
 
     def _cursor(self):
         return self._recorte().cursor()

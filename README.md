@@ -50,7 +50,8 @@ O Assistente precisa também de `pip install anthropic`, só onde for usado. No 
 O sistema copia do banco só o que as páginas usam (vendas, clientes atendidos, devoluções e cadastros, desde
 2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora. Para o Assistente, o
 cache também guarda as vendas e devoluções por cliente e por dia, e a cidade, a UF, a área e o segmento de cada
-cliente.
+cliente. Para a Reavaliação de Crédito, guarda os títulos a receber de venda (de todo o histórico) e o limite de
+crédito e o prazo de cada cliente.
 
 - **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
   atualiza o cache em segundo plano (cerca de 40 segundos). O botão **Atualizar dados** força a leitura na hora.
@@ -194,6 +195,7 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - buscar cliente, produto ou vendedor pelo nome;
   - resumo de vendas por período, com filtros e agrupamentos;
   - metas e realizado (os mesmos números da página Metas);
+  - crédito de um cliente (os mesmos números da Reavaliação de Crédito; só para quem tem essa página);
   - para o resto, uma consulta SQL que só lê os dados.
 - **As regras são as das metas.**
   - Faturamento líquido = vendas não canceladas − devoluções dos motivos marcados, pela data de entrada.
@@ -258,7 +260,9 @@ O botão **Configurar** da página (só administradores) tem duas seções:
 ### Privacidade
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
-pela API para treinar modelos. CPF/CNPJ, telefone, endereço e limite de crédito não estão no cache e não vão.
+pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cache e não vão. O limite de crédito, o
+prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
+Crédito; para os outros, esses dados nem existem na cópia que a IA consulta.
 
 ## Página Gestão
 
@@ -386,6 +390,39 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 - No detalhe de uma ação, **Perguntar ao Assistente** abre uma conversa nova com a pergunta escrita (não envia
   sozinho).
 
+## Página Reavaliação de Crédito
+
+A página **Reavaliação Credito** do Power BI, para avaliar o crédito de um cliente: quanto ele compra, se paga em
+dia, quanto deve e quanto ainda cabe no limite.
+
+- **Filtros:** cliente (busca por nome ou código, sem acento nem caixa), mês, ano e vendedor. Mês e ano valem pela
+  **data de emissão** do título; mês sem ano vale para aquele mês em todos os anos. O vendedor é o **do título**, não
+  o da carteira do cliente (como no Power BI).
+- **Cartões:**
+  - **Valor total das compras**, **Quantidade de compras** e **Ticket médio** (valor ÷ quantidade);
+  - **Pontualidade:** títulos quitados até 7 dias depois do vencimento ÷ títulos quitados;
+  - **Limite de crédito**, com o **prazo** (a opção de pagamento do cadastro) e o vendedor da carteira;
+  - **Inadimplência:** títulos em aberto vencidos há mais de 7 dias;
+  - **Limite restante:** limite − todos os títulos em aberto do cliente, com o quanto do limite está em uso.
+- **Títulos:** um por linha, do mais recente ao mais antigo, com emissão, vencimento, quitação, valor, dias de atraso
+  e a situação (a vencer, vencido, inadimplente, quitado, quitado com atraso). Sem cliente escolhido, mostra os 500
+  mais recentes do filtro.
+- **Base:** os títulos a receber de venda a cliente (origem VENDA, tipo CLIENTE) que não foram cancelados, o mesmo
+  filtro de todas as medidas da página no Power BI. Os dias de atraso contam até o dia da extração dos dados.
+- **Quem vê:** quem tem a página marcada em Usuários vê todos os clientes e vendedores; ela não tem configuração.
+
+Diferenças em relação ao Power BI, combinadas com o usuário:
+
+1. **Pontualidade em %.** No Power BI o cartão tem formato de número inteiro e mostra só 0 ou 1.
+2. **Limite restante sem o período.** No Power BI, com mês e ano escolhidos, só os títulos em aberto emitidos no
+   período eram descontados, e o restante parecia maior. Aqui desconta todos os títulos em aberto do cliente.
+3. **Limite, restante e prazo só com um cliente escolhido.** Sem cliente, o Power BI somava o limite de todos os
+   clientes e ignorava o filtro de vendedor nesses cartões.
+4. **Tabela de títulos:** um título por linha, em vez da matriz por data que somava os dias de atraso dos títulos do
+   mesmo dia.
+5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que
+   não existe mais no modelo.
+
 ## Banco de dados
 
 O painel usa dois bancos, cada um para uma coisa:
@@ -437,8 +474,9 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
-abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). Quem foi cadastrado
-antes da página Projeções existir continua só com Metas até o administrador marcar a página nova.
+abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
+Reavaliação de Crédito não tem configuração: quem tem a página vê todos os clientes. Quem foi cadastrado antes de uma
+página existir não a recebe sozinho: o administrador marca a página nova.
 
 Exemplos (em Metas › Configurar › Acesso por usuário):
 
@@ -454,7 +492,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -531,15 +569,17 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 3. **Total da meta de venda média:** é meta de faturamento ÷ meta de clientes. O Power BI somava as médias
    de cada vendedor.
 4. **Vendas com data errada no futuro** (ex.: ano 7190) ficam de fora.
+5. **Reavaliação de Crédito:** veja as diferenças na [seção da página](#página-reavaliação-de-crédito).
 
 ## Arquivos
 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, vêm em grupos à parte: se a leitura falhar, o resto segue) |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
+| `bi/credito.py` | página Reavaliação de Crédito: cartões, títulos e busca de cliente |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |

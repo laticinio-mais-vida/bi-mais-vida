@@ -9,6 +9,9 @@ Como funciona:
   Exceção: as ferramentas de ações (listar, andamento e propor) usam bi/gestao.py, com o acesso da pessoa na
   página Gestão, para darem os mesmos números da página; quem não tem a Gestão recebe um erro dentro delas (e só o
   administrador propõe ações).
+- Crédito: os títulos a receber e o limite de crédito só entram no recorte de quem tem a página Reavaliação de
+  Crédito (para os outros, as tabelas e colunas nem existem); a ferramenta credito_cliente usa bi/credito.py, com
+  os títulos dos vendedores do acesso, para dar os números da página.
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
 - Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). As
@@ -36,6 +39,7 @@ import pandas as pd
 from .banco import BancoForaDoAr
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
+from .credito import TOLERANCIA, Credito
 from .indicadores import (BASES as BASES_CAMPANHA, FORMAS as FORMAS_CAMPANHA, MEDIDAS as MEDIDAS_CAMPANHA,
                           TIPOS as TIPOS_CAMPANHA, semanas_da_frequencia)
 from .metas import MESES, Calculadora, nome_bonito
@@ -95,20 +99,23 @@ def _marcas(ids) -> str:
 
 
 class Recorte:
-    """DuckDB em memória com as linhas dos vendedores do acesso (ids None = todos), montado uma vez e travado."""
+    """DuckDB em memória com as linhas dos vendedores do acesso (ids None = todos), montado uma vez e travado.
+    credito: com os títulos a receber e o limite de crédito (só para quem tem a página Reavaliação de Crédito)."""
 
-    def __init__(self, calc: Calculadora, nomes: dict[int, str], ids: frozenset[int] | None):
+    def __init__(self, calc: Calculadora, nomes: dict[int, str], ids: frozenset[int] | None, credito: bool = False):
         self.ids = ids
+        self.credito = credito
         self.memo: dict = {}  # contas guardadas por quem usa o recorte (o quadro da Gestão); some com ele
         t0 = time.time()
-        self.con = self._montar(calc, nomes, ids)
+        self.con = self._montar(calc, nomes, ids, credito)
         self.segundos = round(time.time() - t0, 2)
 
     def cursor(self) -> duckdb.DuckDBPyConnection:
         return self.con.cursor()
 
     @staticmethod
-    def _montar(calc: Calculadora, nomes: dict[int, str], ids: frozenset[int] | None) -> duckdb.DuckDBPyConnection:
+    def _montar(calc: Calculadora, nomes: dict[int, str], ids: frozenset[int] | None,
+                credito: bool) -> duckdb.DuckDBPyConnection:
         cache, regras = calc.cache, calc.regras()
         filtro, params = ("", []) if ids is None else (f" WHERE id_vendedor IN ({_marcas(ids)})", sorted(ids))
         vendas = cache.df("SELECT data, id_vendedor, id_cliente, tipocliente AS tipo_cliente, id_produto, valor, "
@@ -152,10 +159,17 @@ class Recorte:
         # A rede (e a frequência de compra que ela diz, para a efetividade da Gestão) é opcional no cache: sem ela, fica
         # vazia (conta como semanal).
         rede = ("CAST(NULL AS VARCHAR)", "") if cache.sem_rede else ("r.rede", " LEFT JOIN clientes_rede r ON r.id = c.id")
+        # O limite e o prazo do cadastro só para quem tem a página Reavaliação de Crédito.
+        if not credito:
+            limite = ("", "")
+        elif cache.sem_credito:
+            limite = (", CAST(NULL AS DOUBLE) AS limite_credito, CAST(NULL AS VARCHAR) AS prazo", "")
+        else:
+            limite = (", k.limite AS limite_credito, k.prazo", " LEFT JOIN clientes_credito k ON k.id = c.id")
         clientes = cache.df(
             "SELECT c.id AS id_cliente, c.nome AS cliente, d.razao_social, d.cidade, d.uf, d.id_area, d.area, d.segmento, "
             "d.inativo::BOOLEAN AS inativo, d.data_cadastro, NULLIF(c.id_vendedor, 0) AS id_vendedor_carteira, "
-            f"{rede[0]} AS rede FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id{rede[1]}")
+            f"{rede[0]} AS rede{limite[0]} FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id{rede[1]}{limite[1]}")
         clientes["vendedor_carteira"] = clientes["id_vendedor_carteira"].map(
             lambda v: None if pd.isna(v) else nomes.get(int(v), f"Vendedor {int(v)}"))
         clientes["frequencia_semanas"] = clientes["rede"].map(semanas_da_frequencia).astype("Int32")
@@ -206,6 +220,7 @@ class Recorte:
             SELECT c.id_cliente, c.cliente, c.razao_social, c.cidade, c.uf, c.id_area, c.area, c.segmento, c.inativo,
                    c.data_cadastro, c.id_vendedor_carteira, c.vendedor_carteira, k.primeira_compra, k.ultima_compra,
                    COALESCE(k.venda_bruta_12m, 0) AS venda_bruta_12m, c.rede, c.frequencia_semanas
+                   {", c.limite_credito, c.prazo" if credito else ""}
             FROM _clientes c LEFT JOIN compras k USING (id_cliente) {so_do_acesso}""", [desde_12m])
         con.execute("DROP TABLE _clientes")
         nome_cliente = ("CASE m.tipo_cliente WHEN 'CLIENTE' THEN COALESCE(c.cliente, 'Cliente cód. ' || m.id_cliente) "
@@ -245,10 +260,49 @@ class Recorte:
                    m.id_cliente, {nome_cliente} AS cliente, m.tipo_cliente, m.pedidos
             FROM _pedidos m LEFT JOIN vendedores v ON v.id_vendedor = m.id_vendedor
             LEFT JOIN clientes c ON c.id_cliente = m.id_cadastro""")
+        if credito:
+            Recorte._titulos(con, cache, filtro, params)
         # Daqui em diante: nada de arquivo, extensão nova ou mudança de configuração.
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
         return con
+
+    @staticmethod
+    def _titulos(con: duckdb.DuckDBPyConnection, cache, filtro: str, params: list) -> None:
+        """Os títulos a receber dos vendedores do acesso (o vendedor do título), como na página Reavaliação de
+        Crédito: dias de atraso e situação contados até o dia da extração."""
+        if cache.sem_credito:
+            con.execute("CREATE TABLE _titulos (id_titulo INTEGER, id_cliente INTEGER, id_vendedor INTEGER, "
+                        "emissao DATE, vencimento DATE, quitacao DATE, quitado BOOLEAN, valor DOUBLE, "
+                        "dias_atraso INTEGER)")
+        else:
+            titulos = cache.df("SELECT id AS id_titulo, id_cliente, id_vendedor, emissao, vencimento, quitacao, "
+                               "quitado::BOOLEAN AS quitado, total AS valor FROM titulos_receber" + filtro, params)
+            v = cache.info.get("extraido_em")
+            hoje = dt.datetime.fromisoformat(v).date() if v else dt.date.today()
+            con.register("df_tmp", titulos)
+            con.execute("CREATE TABLE _titulos AS SELECT id_titulo, id_cliente, id_vendedor, "
+                        "CAST(emissao AS DATE) AS emissao, CAST(vencimento AS DATE) AS vencimento, "
+                        "CAST(quitacao AS DATE) AS quitacao, quitado, valor, "
+                        "CAST(datediff('day', CAST(vencimento AS DATE), CASE WHEN quitado THEN CAST(quitacao AS DATE) "
+                        "ELSE ? END) AS INTEGER) AS dias_atraso FROM df_tmp ORDER BY emissao", [hoje])
+            con.unregister("df_tmp")
+        # Nomes do cadastro inteiro: um título antigo pode ser de cliente fora da tabela clientes do recorte.
+        con.register("df_tmp", cache.df("SELECT id AS id_cliente, nome AS cliente FROM clientes"))
+        con.execute("CREATE TABLE _nomes_clientes AS SELECT * FROM df_tmp")
+        con.unregister("df_tmp")
+        con.execute(f"""
+            CREATE VIEW titulos_receber AS
+            SELECT t.id_titulo, t.id_cliente, COALESCE(n.cliente, 'Cliente cód. ' || t.id_cliente) AS cliente,
+                   t.id_vendedor, COALESCE(v.vendedor, 'Vendedor ' || t.id_vendedor) AS vendedor, t.emissao,
+                   year(t.emissao) AS ano, month(t.emissao) AS mes, t.vencimento, t.quitacao, t.quitado, t.valor,
+                   t.dias_atraso,
+                   CASE WHEN t.quitado THEN CASE WHEN t.dias_atraso > {TOLERANCIA} THEN 'quitado com atraso'
+                                                 ELSE 'quitado' END
+                        WHEN t.dias_atraso > {TOLERANCIA} THEN 'inadimplente'
+                        WHEN t.dias_atraso > 0 THEN 'vencido' ELSE 'a vencer' END AS situacao
+            FROM _titulos t LEFT JOIN _nomes_clientes n USING (id_cliente)
+            LEFT JOIN vendedores v ON v.id_vendedor = t.id_vendedor""")
 
 
 def _metas_vendedor(calc: Calculadora, ids):
@@ -435,6 +489,20 @@ FERRAMENTAS = [
         "strict": False,
     },
     {
+        "name": "credito_cliente",
+        "description": ("Reavaliação de crédito de um cliente: os números da página Reavaliação de Crédito (limite, "
+                        "prazo, títulos em aberto, limite restante, compras, ticket médio, pontualidade, "
+                        "inadimplência) e os títulos em aberto e os mais recentes. Ano e mês (opcionais) filtram as "
+                        "compras pela emissão; limite, em aberto e restante são sempre de hoje. Só para quem tem a "
+                        "página."),
+        "input_schema": _objeto({
+            "id_cliente": {"type": "integer", "description": "código do cliente (use buscar_cliente antes)"},
+            "ano": {"type": "integer", "description": "ano de emissão (opcional)"},
+            "mes": {"type": "integer", "description": "mês de emissão, 1 a 12 (opcional)"},
+        }, ["id_cliente"]),
+        "strict": True,
+    },
+    {
         "name": "consultar_sql",
         "description": ("Executa UMA consulta SELECT (DuckDB) nas tabelas descritas nas instruções, para o que as "
                         "outras ferramentas não resolvem. Somente leitura; devolve até 200 linhas."),
@@ -475,14 +543,17 @@ def _palavras(texto: str) -> list[str]:
 class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
-    def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None):
-        """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão)."""
+    def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None,
+                 credito: Credito | None = None):
+        """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão).
+        credito: bi/credito.py (None = o acesso não inclui a página Reavaliação de Crédito)."""
         self.cur = recorte.cursor()
         self.ids = recorte.ids
         self.calc = calc
         self.cfg = cfg
         self.equipes = equipes
         self.gestao = gestao
+        self.credito = credito
         self.rascunhos: list[dict] = []  # ações propostas nesta pergunta (a página mostra o botão de lançar)
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
@@ -706,6 +777,41 @@ class Ferramentas:
                      linhas=len(linhas))
         return resultado
 
+    # --- crédito (página Reavaliação de Crédito) ---------------------------------------
+    def f_credito_cliente(self, passo: dict, id_cliente: int, ano: int | None = None, mes: int | None = None) -> dict:
+        if self.credito is None:
+            raise ValueError("o acesso de quem pergunta não inclui a página Reavaliação de Crédito")
+        d = self.credito.calcular(int(id_cliente), int(mes) if mes else None, int(ano) if ano else None, None,
+                                  set(self.ids) if self.ids is not None else None)
+        c, k = d["cliente"], d["cartoes"]
+        enxuto = lambda t: {"titulo": t["id"], "emissao": t["emissao"], "vencimento": t["vencimento"],  # noqa: E731
+                            "quitacao": t["quitacao"], "valor": _valor(t["valor"]), "dias_atraso": t["dias_atraso"],
+                            "situacao": t["situacao"].replace("_", " "), "vendedor": t["vendedor"]}
+        abertos = [enxuto(t) for t in d["titulos"]["linhas"] if not t["quitado"]]
+        resultado = {
+            "cliente": {"id": c["id"], "nome": c["nome"], "vendedor_carteira": c["carteira"], "prazo": c["prazo"],
+                        "limite_credito": _valor(c["limite"]), "em_aberto": _valor(c["em_aberto"]),
+                        "limite_restante": _valor(c["restante"]), "pct_limite_usado": _valor(c["usado"])},
+            "periodo_das_compras": ("todo o histórico" if not (ano or mes) else
+                                    f"emissão em {f'{MESES[int(mes) - 1]} de ' if mes else ''}{ano or 'todos os anos'}"),
+            "compras": {"valor": _valor(k["valor"]), "quantidade": k["quantidade"], "ticket_medio": _valor(k["ticket"]),
+                        "pontualidade": _valor(k["pontualidade"]), "quitados": k["quitados"],
+                        "quitados_com_atraso": k["quitados_atrasados"],
+                        "inadimplencia": _valor(k["inadimplencia"])},
+            "titulos_em_aberto": abertos[:30],
+            "ultimos_titulos": [enxuto(t) for t in d["titulos"]["linhas"][:10]],
+            "dias_contados_ate": d["hoje"],
+        }
+        if self.ids is not None:
+            resultado["aviso"] = ("compras, pontualidade e títulos só dos vendedores do acesso de quem pergunta; "
+                                  "limite, em aberto e restante são do cliente inteiro")
+        if len(abertos) > 30:
+            resultado["aviso_abertos"] = f"{len(abertos)} títulos em aberto; mostrando os 30 mais recentes"
+        passo.update(sql=None, colunas=["cliente", "limite", "em aberto", "restante"],
+                     amostra=[[c["nome"], _valor(c["limite"]), _valor(c["em_aberto"]), _valor(c["restante"])]],
+                     linhas=len(abertos))
+        return resultado
+
     # --- ações e objetivos (página Gestão) ---------------------------------------------
     def _acoes(self):
         if self.gestao is None:
@@ -829,7 +935,8 @@ pedidos — notas de venda por dia, vendedor e cliente: data, ano, mes, id_vende
 clientes — cadastro (só tipo CLIENTE): id_cliente, cliente, razao_social, cidade, uf, id_area, area (rota
   comercial), segmento, inativo, data_cadastro, id_vendedor_carteira, vendedor_carteira, primeira_compra,
   ultima_compra, venda_bruta_12m, rede (do cadastro; as redes SEMANAL, QUINZENAL e MENSAL são a frequência de
-  compra), frequencia_semanas (1, 2 ou 4, pela rede; vazio = a rede não é uma frequência)
+  compra), frequencia_semanas (1, 2 ou 4, pela rede; vazio = a rede não é uma frequência); para quem tem a página
+  Reavaliação de Crédito, também limite_credito e prazo (a opção de pagamento do cadastro)
 produtos — id_produto, produto, linha, unidade, inativo, grupo ('mussarela', 'outras' ou 'fora'), categoria
 vendedores — id_vendedor, vendedor, nome_erp, equipe ('ES', 'BA', 'Edir', 'Outros'), supervisor, inativo
 motivos — id_motivo, motivo, desconta (se a devolução por esse motivo desconta das vendas)
@@ -837,6 +944,11 @@ metas_vendedor — metas mensais (planilha METAS.xlsx): ano, mes, id_vendedor, v
   meta_mussarela, meta_outras, meta_clientes
 metas_produto — metas de volume (planilha METAS PRODUTOS.xlsx): ano, mes, id_vendedor, vendedor, id_produto,
   produto, meta_volume
+titulos_receber — só para quem tem a página Reavaliação de Crédito: os títulos a receber de venda a cliente, não
+  cancelados, de todo o histórico, pelo vendedor do título: id_titulo, id_cliente, cliente, id_vendedor, vendedor,
+  emissao, ano, mes (da emissão), vencimento, quitacao (vazia = em aberto), quitado, valor, dias_atraso (quitado:
+  quitação − vencimento; em aberto: hoje − vencimento; negativo = antes do vencimento), situacao ('a vencer',
+  'vencido', 'inadimplente', 'quitado', 'quitado com atraso')
 
 Exemplos:
 -- venda líquida de um cliente por mês em 2026
@@ -884,6 +996,15 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 'CLIENTE' ao usar um código de cliente.
 - Clientes atendidos (positivação) = clientes distintos com venda no período. Venda média = faturamento ÷ clientes.
 - Quantidade só soma com sentido dentro do mesmo produto (unidades diferentes).
+
+# Crédito (página Reavaliação de Crédito)
+- Só quem tem a página vê os dados de crédito (a tabela titulos_receber, limite_credito e prazo em clientes, e a \
+ferramenta credito_cliente); para os outros eles não existem: diga que o acesso não inclui crédito.
+- Para um cliente, use credito_cliente: dá os números da página. Compras = títulos a receber de venda (valor, \
+quantidade, ticket médio = valor ÷ quantidade), pela emissão. Pontualidade = títulos quitados até 7 dias depois do \
+vencimento ÷ títulos quitados. Inadimplência = títulos em aberto vencidos há mais de 7 dias. Limite restante = \
+limite do cadastro − todos os títulos em aberto do cliente (negativo = passou do limite).
+- "Hoje", nos dias de atraso, é o dia da extração dos dados.
 
 # Ações e objetivos (página Gestão)
 - Uma ação mede um indicador por vendedor, numa região (ES ou BA; o Edir é da BA), num prazo (semanas, ou até uma \
@@ -967,6 +1088,7 @@ class Assistente:
         self.registro = registro
         self._cliente = cliente
         self.conversas = conversas
+        self.credito = Credito(calc.cache, nomes_vendedores)
         self._recortes: collections.OrderedDict = collections.OrderedDict()
         self._trava_recortes = threading.Lock()
         self._completo: tuple | None = None  # (chave, Recorte) com todos os vendedores: vaga própria, ver recorte()
@@ -1002,18 +1124,19 @@ class Assistente:
         mais = f" e mais {len(lista) - 6}" if len(lista) > 6 else ""
         return f"{len(lista)} vendedor{'es' if len(lista) != 1 else ''}: {', '.join(lista[:6])}{mais}"
 
-    def recorte(self, ids: frozenset[int] | None) -> Recorte:
-        """O recorte do acesso, guardado enquanto os dados e as regras não mudam. O de todos os vendedores (ids
-        None) tem vaga própria, fora do limite [ia] recortes: a página Gestão usa ele o tempo todo (filtrando os
-        vendedores no SQL), e assim não derruba o recorte de quem está perguntando ao Assistente."""
+    def recorte(self, ids: frozenset[int] | None, credito: bool = False) -> Recorte:
+        """O recorte do acesso, guardado enquanto os dados e as regras não mudam. credito: com os títulos e o limite
+        (só para quem tem a página Reavaliação de Crédito). O de todos os vendedores com crédito tem vaga própria,
+        fora do limite [ia] recortes: a página Gestão usa ele o tempo todo (filtrando os vendedores no SQL), e assim
+        não derruba o recorte de quem está perguntando ao Assistente."""
         cache = self.calc.cache
         cfg = json.dumps(self.calc.configuracao.atual(), sort_keys=True)
         chave = (cache.info.get("extraido_em"), hashlib.sha1(cfg.encode()).hexdigest(),
-                 self.calc.metas.versao, self.calc.metas_produtos.versao, ids)
-        if ids is None:
+                 self.calc.metas.versao, self.calc.metas_produtos.versao, ids, credito)
+        if ids is None and credito:
             with self._trava_completo:  # dois pedidos juntos montam uma vez só
                 if self._completo is None or self._completo[0] != chave:
-                    r = Recorte(self.calc, self.nomes_vendedores(), None)
+                    r = Recorte(self.calc, self.nomes_vendedores(), None, credito=True)
                     log.info("recorte com todos os vendedores montado em %.1f s", r.segundos)
                     self._completo = (chave, r)
                 return self._completo[1]
@@ -1021,8 +1144,9 @@ class Assistente:
             if chave in self._recortes:
                 self._recortes.move_to_end(chave)
                 return self._recortes[chave]
-        r = Recorte(self.calc, self.nomes_vendedores(), ids)
-        log.info("recorte do Assistente montado em %.1f s (%d vendedores)", r.segundos, len(ids))
+        r = Recorte(self.calc, self.nomes_vendedores(), ids, credito)
+        log.info("recorte do Assistente montado em %.1f s (%s vendedores%s)", r.segundos,
+                 "todos os" if ids is None else len(ids), ", com crédito" if credito else "")
         with self._trava_recortes:
             self._recortes[chave] = r
             for antiga in [k for k in self._recortes if k[:4] != chave[:4]]:
@@ -1094,9 +1218,10 @@ class Assistente:
             self._cliente = anthropic.Anthropic(api_key=self.cfg.chave, max_retries=2, timeout=self.cfg.timeout)
         return self._cliente
 
-    def _contexto(self, usuario: dict, escopo: str, gestao=None) -> str:
+    def _contexto(self, usuario: dict, escopo: str, gestao=None, credito: bool = False) -> str:
         """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa). gestao: o
-        ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão)."""
+        ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão). credito: se o acesso inclui a
+        página Reavaliação de Crédito."""
         cache, hoje = self.calc.cache, dt.date.today()
         data_ref = cache.data_ref()
         regras = self.calc.regras()
@@ -1112,8 +1237,16 @@ class Assistente:
                 f"vê {escopo}.\n"
                 f"- Ações (página Gestão): "
                 f"{('pode lançar e acompanhar' if gestao.admin else 'pode acompanhar (só o administrador lança)') if gestao else 'o acesso não inclui'}.\n"
+                f"- Crédito (página Reavaliação de Crédito): "
+                f"{'o acesso inclui' + self._dados_credito() if credito else 'o acesso não inclui'}.\n"
                 f"- Categorias das outras linhas: {', '.join(regras.categorias) or 'nenhuma'}.\n"
                 f"- Motivos de devolução que descontam: {descontam}.")
+
+    def _dados_credito(self) -> str:
+        cache = self.calc.cache
+        if cache.sem_credito:
+            return ", mas os títulos ainda não chegaram do computador da empresa"
+        return f"; títulos e dias de atraso até {self.credito.hoje():%d/%m/%Y} (dia da extração)"
 
     @staticmethod
     def _historico(mensagens: list) -> list[dict]:
@@ -1145,10 +1278,11 @@ class Assistente:
         return saida
 
     def perguntar(self, usuario: dict, conversa_id, pergunta, vendedores: set[int] | None,
-                  equipes: set[str] | None, gestao=None) -> dict:
+                  equipes: set[str] | None, gestao=None, credito: bool = False) -> dict:
         """Pergunta numa conversa do histórico (sem conversa_id, começa uma nova). A pergunta e a resposta são
         gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas.
-        gestao: bi/gestao.py ContextoGestao de quem pergunta, para as ferramentas de campanha (None = sem a página)."""
+        gestao: bi/gestao.py ContextoGestao de quem pergunta, para as ferramentas de campanha (None = sem a página).
+        credito: se o acesso inclui a página Reavaliação de Crédito (os dados de crédito)."""
         pergunta = str(pergunta or "").strip()
         if not pergunta:
             raise ErroAssistente("escreva uma pergunta")
@@ -1179,7 +1313,7 @@ class Assistente:
 
         return self.responder(usuario, anteriores + [{"papel": "usuario", "texto": pergunta}], vendedores, equipes,
                               pendente={"conversa": conversa_id, "nova": not anteriores, "pergunta": pergunta},
-                              guardar=guardar, gestao=gestao)
+                              guardar=guardar, gestao=gestao, credito=credito)
 
     def pendente(self, usuario: int) -> dict | None:
         """A pergunta que ainda está sendo respondida para esta pessoa (de outra aba ou de antes de recarregar a
@@ -1191,7 +1325,7 @@ class Assistente:
             return {**{k: p[k] for k in ("conversa", "nova", "pergunta")}, "segundos": round(time.time() - p["inicio"])}
 
     def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None,
-                  pendente: dict | None = None, guardar=None, gestao=None) -> dict:
+                  pendente: dict | None = None, guardar=None, gestao=None, credito: bool = False) -> dict:
         """mensagens: a conversa inteira, terminando na pergunta (perguntar() monta a partir do histórico).
         pendente: o que pendente() mostra enquanto a pergunta roda. guardar(resultado): grava a resposta antes de
         liberar a pessoa; devolve o "conversa"."""
@@ -1220,7 +1354,7 @@ class Assistente:
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
                 r = self._responder(usuario, api_mensagens, vendedores, equipes, (pendente or {}).get("conversa"),
-                                    gestao)
+                                    gestao, credito)
             finally:
                 self._vagas.release()
             r["restantes"] = None if admin else max(0, self.cfg.limite_diario - perguntas - 1)
@@ -1232,16 +1366,17 @@ class Assistente:
                 self._ocupados.pop(dono, None)
 
     def _responder(self, usuario, api_mensagens, vendedores, equipes, conversa: str | None = None,
-                   gestao=None) -> dict:
+                   gestao=None, credito: bool = False) -> dict:
         t0 = time.time()
         pergunta = _sem_prefixo(api_mensagens[-1]["content"])
         ids = self.ids_do_escopo(vendedores, equipes)
         if ids is not None and not ids:
             raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
         escopo = self.descrever_escopo(ids, vendedores, equipes)
-        ferramentas = Ferramentas(self.recorte(ids), self.calc, self.cfg, equipes, gestao=gestao)
+        ferramentas = Ferramentas(self.recorte(ids, credito), self.calc, self.cfg, equipes, gestao=gestao,
+                                  credito=self.credito if credito else None)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": self._contexto(usuario, escopo, gestao)}]
+                  {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}
         passos: list[dict] = []
         texto, aviso, erro, modelo, parada, ids_req = "", None, None, self.cfg.modelo, None, []

@@ -4,12 +4,13 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", assistente: "conversa", gestao: "quadro" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", assistente: "conversa", gestao: "quadro", credito: "cartao" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   assistente: "Perguntas sobre os dados, respondidas por IA",
   gestao: "Objetivos, ações e o histórico de cada vendedor",
+  credito: "Limite, compras, pontualidade e títulos de cada cliente",
 };
 const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", assistente: "config-assistente", gestao: "config-gestao" }; // rota do Configurar de cada página
 
@@ -73,6 +74,7 @@ function resumoCurto(u) {
 
 // O que a pessoa vê dentro de cada página, como está salvo na configuração da página (só leitura aqui).
 function dentroDaPagina(u, pagina) {
+  if (pagina === "credito") return { texto: "todos os clientes e vendedores (a página não tem configuração)" };
   if (pagina === "metas") {
     if (!u.visoes?.length) return { texto: "ainda sem abas: a página fica vazia até você escolher", aviso: true };
     const vend = u.vendedores ? plural(u.vendedores.length, "vendedor", "vendedores") : "todos os vendedores";
@@ -254,7 +256,7 @@ function desenharPermissoes() {
     const d = dentroDaPagina(u, p);
     return `<li class="${d.aviso ? "aviso-nota" : ""}">${icone(d.aviso ? "alerta" : ICONE_PAGINA[p] || "alvo")}
       <span><b>${esc(tituloPagina(p))}:</b> ${esc(d.texto)}</span>
-      <a href="#/${CONFIG_PAGINA[p]}?u=${encodeURIComponent(u.login)}">${icone("ajustes")}Configurar</a></li>`;
+      ${CONFIG_PAGINA[p] ? `<a href="#/${CONFIG_PAGINA[p]}?u=${encodeURIComponent(u.login)}">${icone("ajustes")}Configurar</a>` : ""}</li>`;
   }).join("") : "";
   alvo.innerHTML = `
     <h3 class="usu-titulo">Páginas que pode ver</h3>

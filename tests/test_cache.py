@@ -24,8 +24,8 @@ class TestPedidosNoCache(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def cache(self, pedidos=True, extras=False, rede=True) -> Path:
-        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede)
+    def cache(self, pedidos=True, extras=False, rede=True, credito=True) -> Path:
+        calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -52,6 +52,30 @@ class TestPedidosNoCache(unittest.TestCase):
         with self.assertRaises(ValueError) as e:
             Cache.conferir(arquivo)
         self.assertIn("clientes_rede", str(e.exception))
+
+    def test_credito_opcional(self):
+        # sem os títulos e os limites (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-los
+        arquivo = self.cache(credito=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_credito, c.sem_rede, c.desatualizado()), (True, False, True))
+        c.info["credito_erro"] = "Table unknown CONTASRECEBER"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE titulos_receber (id INTEGER, total DOUBLE)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("titulos_receber", str(e.exception))
 
     def test_conferir_aceita_sem_pedidos_mas_nao_errados(self):
         Cache.conferir(self.cache(pedidos=True))

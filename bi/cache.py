@@ -48,7 +48,8 @@ TABELAS_DETALHE = {
     "devolucoes_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
                                   "id_produto INTEGER, id_motivo INTEGER, cancelada BOOLEAN, valor DOUBLE, "
                                   "quantidade DOUBLE"),
-    # Sem CPF/CNPJ, telefone, endereço ou limite de crédito: estes dados vão para a IA do Assistente.
+    # Sem CPF/CNPJ, telefone ou endereço: estes dados vão para a IA do Assistente. O limite de crédito fica à parte,
+    # em TABELAS_CREDITO.
     "clientes_detalhes": ("id INTEGER, razao_social VARCHAR, cidade VARCHAR, uf VARCHAR, id_area INTEGER, "
                           "area VARCHAR, id_segmento INTEGER, segmento VARCHAR, inativo INTEGER, data_cadastro DATE"),
 }
@@ -62,6 +63,14 @@ TABELAS_PEDIDOS = {
 # compra, para as visitas esperadas da efetividade. Opcional como os pedidos: sem ela, todo cliente conta como semanal.
 TABELAS_REDE = {
     "clientes_rede": "id INTEGER, rede VARCHAR",
+}
+# Crédito, para a página Reavaliação de Crédito (e o Assistente de quem tem a página). Os títulos a receber de venda
+# a cliente que não foram cancelados (o filtro de todas as medidas da página no Power BI), desde o primeiro, e o
+# limite e o prazo (OPCAOPAGAMENTO) de cada cliente. Opcional como os pedidos.
+TABELAS_CREDITO = {
+    "titulos_receber": ("id INTEGER, id_cliente INTEGER, id_vendedor INTEGER, emissao DATE, vencimento DATE, "
+                        "quitacao DATE, quitado INTEGER, total DOUBLE"),
+    "clientes_credito": "id INTEGER, limite DOUBLE, prazo VARCHAR",
 }
 
 
@@ -107,6 +116,7 @@ class Cache:
         self.sem_detalhe = False  # falta o detalhe por cliente do Assistente (Metas e Projeções funcionam)
         self.sem_pedidos = False  # faltam os pedidos de venda (só a efetividade das campanhas precisa)
         self.sem_rede = False  # falta a rede (frequência) dos clientes: a efetividade conta todos como semanais
+        self.sem_credito = False  # faltam os títulos a receber e os limites (só a Reavaliação de Crédito precisa)
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -138,6 +148,7 @@ class Cache:
         sem_detalhe = _tabela_diferente(con, TABELAS_DETALHE) is not None
         sem_pedidos = _tabela_diferente(con, TABELAS_PEDIDOS) is not None
         sem_rede = _tabela_diferente(con, TABELAS_REDE) is not None
+        sem_credito = _tabela_diferente(con, TABELAS_CREDITO) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -147,6 +158,7 @@ class Cache:
             self.sem_detalhe = sem_detalhe
             self.sem_pedidos = sem_pedidos
             self.sem_rede = sem_rede
+            self.sem_credito = sem_credito
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -160,13 +172,14 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente e os pedidos podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de estar no
-        formato atual."""
+        cliente, os pedidos, a rede e o crédito podem faltar (pacote do PC com o código anterior), mas, se vierem,
+        têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -186,9 +199,9 @@ class Cache:
             self._abrir()
 
     def desatualizado(self) -> bool:
-        """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos
-        ou redes que não deu para ler (pedidos_erro, rede_erro) esperam a próxima cópia, em vez de extrair tudo de
-        novo a cada minuto."""
+        """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
+        redes ou crédito que não deu para ler (pedidos_erro, rede_erro, credito_erro) esperam a próxima cópia, em vez
+        de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -196,6 +209,7 @@ class Cache:
         return (self._con is None or self.antigo or self.sem_detalhe
                 or (self.sem_pedidos and not self.info.get("pedidos_erro"))
                 or (self.sem_rede and not self.info.get("rede_erro"))
+                or (self.sem_credito and not self.info.get("credito_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -217,8 +231,8 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos e rede: a leitura pode ter falhado
-            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE}.items() if k in dados}
+            # pedidos, rede e crédito: a leitura pode ter falhado
+            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO}.items() if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
@@ -237,6 +251,8 @@ class Cache:
             con.execute("CREATE INDEX ix_dci ON devolucoes_clientes_itens (data)")
             if pedidos:
                 con.execute("CREATE INDEX ix_pv ON pedidos_venda (data)")
+            if "titulos_receber" in opcionais:
+                con.execute("CREATE INDEX ix_tr ON titulos_receber (id_cliente)")
             self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
@@ -366,6 +382,24 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler as redes dos clientes (a efetividade conta todos como semanais): %s", e)
                 rede_erro = str(e)[:300]
+            # Títulos a receber e limites (Reavaliação de Crédito), também à parte. Todo o histórico, como no Power
+            # BI; a data de emissão vem com hora zero, e as datas digitadas erradas (ano 7190) ficam como estão.
+            self.estado["etapa"] = "Lendo os títulos a receber"
+            credito_erro = None
+            try:
+                titulos = [
+                    (i, c, v, _data(e), _data(ve), _data(q), int(qt or 0), float(t or 0))
+                    for i, c, v, e, ve, q, qt, t in bd.consulta(
+                        "SELECT ID_CONTARECEBER, ID_CLIENTE, COALESCE(ID_VENDEDOR, 0), CAST(DATAEMISSAO AS DATE), "
+                        "CAST(VENCIMENTO AS DATE), CAST(DATAQUITACAO AS DATE), QUITADO, TOTAL FROM CONTASRECEBER "
+                        "WHERE DATACANCELAMENTO IS NULL AND TIPOCLIENTE = 'CLIENTE' AND ORIGEM = 'VENDA'")]
+                limites = [(i, float(lim or 0), p) for i, lim, p in bd.consulta(
+                    "SELECT c.ID_CLIENTE, c.LIMITECREDITO, o.NOME FROM CLIENTES c "
+                    "LEFT JOIN OPCAOPAGAMENTO o ON o.ID_OPCAO = c.ID_OPCAOPAGAMENTO")]
+                dados["titulos_receber"], dados["clientes_credito"] = titulos, limites
+            except Exception as e:
+                log.warning("não deu para ler os títulos a receber (a Reavaliação de Crédito fica sem dados): %s", e)
+                credito_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -378,5 +412,6 @@ class Cache:
             ("inicio", self.inicio.isoformat()),
             *([("pedidos_erro", pedidos_erro)] if pedidos_erro else []),
             *([("rede_erro", rede_erro)] if rede_erro else []),
+            *([("credito_erro", credito_erro)] if credito_erro else []),
         ]
         return dados

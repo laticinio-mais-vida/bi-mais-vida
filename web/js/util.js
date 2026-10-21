@@ -58,6 +58,8 @@ const ICONES = {
   arquivo: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v10.5h14V9M10 13h4"/>',
   pontos: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
   bandeira: '<path d="M5 21V4"/><path d="M5 4.5c2.5-1.6 5-1.6 7 0s4.5 1.6 7 0v9c-2.5 1.6-5 1.6-7 0s-4.5-1.6-7 0"/>',
+  cartao: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 10h19M6.5 15h4"/>',
+  loja: '<path d="M3.5 9.5 5 4h14l1.5 5.5"/><path d="M3.5 9.5a2.8 2.8 0 0 0 5.6 0 2.8 2.8 0 0 0 5.8 0 2.8 2.8 0 0 0 5.6 0"/><path d="M5 12v8.5h14V12"/><path d="M10 20.5v-5h4v5"/>',
   foguete:'<path d="M12 15c-2-2-3-5-1-9 2-3 6-3.5 9-3.5 0 3-.5 7-3.5 9-4 2-7 1-9-1"/><path d="M9 13 5 14l2-4M11 15l-1 4 4-2"/><circle cx="15.5" cy="8.5" r="1.4"/>',
 };
 
@@ -87,6 +89,7 @@ const NF0 = nf(0, 0), NF1 = nf(1, 1), NF2 = nf(2, 2), NF01 = nf(0, 1);
 
 export const fmt = {
   moeda: (v) => (v == null || isNaN(v) ? "—" : "R$ " + NF0.format(Math.round(v))),
+  moeda2: (v) => (v == null || isNaN(v) ? "—" : "R$ " + NF2.format(v)),
   moedaC(v) {
     if (v == null || isNaN(v)) return "—";
     const a = Math.abs(v), s = v < 0 ? "−" : "";

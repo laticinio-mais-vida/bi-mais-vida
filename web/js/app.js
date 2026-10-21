@@ -4,6 +4,7 @@
 import { api, esc, fmt, icone, irParaLogin, ligarTema, preencherIcones, toast } from "./util.js";
 import { montarMetas, recarregarMetas } from "./metas.js";
 import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
+import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarAssistente } from "./assistente.js";
@@ -15,7 +16,7 @@ import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "gestao"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "gestao", "credito"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -86,6 +87,12 @@ const PAGINAS = {
     pendente: configGestaoTemAlteracoes,
     montar: (el) => montarConfigGestao(el),
   },
+  credito: {
+    nome: "Crédito",
+    titulo: "Reavaliação de Crédito",
+    montar: (el) => montarCredito(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("credito", d) }),
+    recarregar: recarregarCredito,
+  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel e quais páginas cada pessoa vê",
@@ -104,6 +111,7 @@ const TEXTO_SUBTITULO = {
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Objetivos, ações e o histórico de cada vendedor, por região",
+  credito: subtituloCredito,
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

@@ -24,7 +24,7 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import TABELAS, TABELAS_DETALHE, TABELAS_PEDIDOS, TABELAS_REDE, Cache
+from bi.cache import TABELAS, TABELAS_CREDITO, TABELAS_DETALHE, TABELAS_PEDIDOS, TABELAS_REDE, Cache
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -63,14 +63,31 @@ class PlanilhaFalsa:
         return self._linhas
 
 
+# Títulos a receber (id, cliente, vendedor do título, emissão, vencimento, quitação, quitado, total). Hoje, para o
+# crédito, é o dia da extração: 01/10/2026 (inadimplente = em aberto com vencimento antes de 24/09).
+TITULOS = [
+    (101, 1, ES, D(2026, 8, 1), D(2026, 8, 29), D(2026, 8, 30), 1, 1000.0),   # 1 dia depois: pontual
+    (102, 1, ES, D(2026, 8, 10), D(2026, 9, 7), D(2026, 9, 15), 1, 500.0),    # 8 dias: quitado com atraso
+    (103, 1, ES, D(2026, 9, 2), D(2026, 9, 23), None, 0, 1300.0),             # 8 dias em aberto: inadimplente
+    (104, 1, BA, D(2026, 9, 15), D(2026, 9, 24), None, 0, 200.0),             # 7 dias: vencido; vendedor da BA
+    (105, 1, ES, D(2026, 9, 28), D(2026, 10, 26), None, 0, 400.0),            # a vencer
+    (106, 1, ES, D(2025, 9, 5), D(2025, 10, 3), D(2025, 10, 10), 1, 600.0),   # 7 dias: ainda pontual; set/2025
+    (201, 2, BA, D(2026, 9, 3), D(2026, 9, 3), None, 0, 2500.0),              # passa do limite
+    (401, 4, EDIR, D(2026, 9, 5), D(2026, 10, 5), D(2026, 9, 30), 1, 700.0),  # pago antes do vencimento
+    (402, 4, EDIR, D(7190, 12, 13), D(7190, 12, 13), D(2026, 1, 10), 1, 10.0),  # data digitada errada no ERP
+]
+LIMITES = [(1, 5000.0, "28 DIAS"), (2, 2000.0, "A VISTA"), (3, 1000.0, "07 DIAS"), (4, 0.0, None), (7, 0.0, None)]
+
+
 def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
-               redes: dict[int, str] | None = None, rede: bool = True) -> Calculadora:
+               redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
-    redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes."""
+    redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
+    credito: False = cache sem os títulos a receber e os limites (ver TITULOS)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
-                          **(TABELAS_REDE if rede else {})}.items():
+                          **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -149,6 +166,9 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
             con.executemany("INSERT INTO clientes_rede VALUES (?, ?)", list(redes.items()))
     con.executemany("INSERT INTO clientes_detalhes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", detalhes)
     con.executemany("INSERT INTO motivos VALUES (?, ?)", [(1, "ERRO DE LANÇAMENTO"), (2, "RECUSA"), (3, "VENCIDO")])
+    if credito:
+        con.executemany("INSERT INTO titulos_receber VALUES (?, ?, ?, ?, ?, ?, ?, ?)", TITULOS)
+        con.executemany("INSERT INTO clientes_credito VALUES (?, ?, ?)", LIMITES)
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),
         ("banco_copia", "2026-10-01T07:00"), ("inicio", "2026-01-01")])

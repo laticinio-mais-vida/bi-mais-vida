@@ -45,6 +45,7 @@ from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
+from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
@@ -107,6 +108,7 @@ class Aplicacao:
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
         self.config_projecoes = ConfigProjecoes(self.banco)
         self.projetor = Projetor(self.calc, self.config_projecoes)
+        self.credito = Credito(self.cache, self.projetor._nomes_vendedores)
         self.conversas = Conversas(self.banco)
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas)
@@ -416,7 +418,8 @@ class Manipulador(BaseHTTPRequestHandler):
                   if "gestao" in paginas_permitidas(usuario) else None)
         try:
             return self._json(self.app.assistente.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"),
-                                                            vendedores, equipes, gestao))
+                                                            vendedores, equipes, gestao,
+                                                            "credito" in paginas_permitidas(usuario)))
         except ErroAssistente as e:
             log.warning("Assistente (%s): %s", usuario["login"], e)
             return self._erro(str(e), e.status)
@@ -546,6 +549,14 @@ class Manipulador(BaseHTTPRequestHandler):
                                                                  permitidos, equipes))
                 except SemVendedores as e:
                     return self._erro(str(e), HTTPStatus.FORBIDDEN)
+            if url.path in ("/api/credito", "/api/credito/busca"):
+                if "credito" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
+                if url.path == "/api/credito/busca":
+                    return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""))})
+                inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
+                return self._json(self.app.credito.calcular(inteiro("cliente"), inteiro("mes"), inteiro("ano"),
+                                                            inteiro("vendedor")))
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":
