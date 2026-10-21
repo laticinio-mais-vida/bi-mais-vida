@@ -4,7 +4,7 @@
 // ficam no servidor (bi/credito.py); aqui é a apresentação.
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { anel } from "./graficos.js";
-import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
+import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
 const SITUACAO = {
   a_vencer: { rotulo: "A vencer", classe: "sem_meta", icone: "calendario" },
@@ -75,7 +75,7 @@ export function montarCredito(container, contexto) {
     </div>
     <div id="cr-avisos"></div>
     <div id="cr-conteudo"><div class="grade secao">
-      <div class="kpis n3"><div class="esqueleto" style="height:150px"></div><div class="esqueleto" style="height:150px"></div><div class="esqueleto" style="height:150px"></div></div>
+      <div class="kpis n4"><div class="esqueleto" style="height:150px"></div><div class="esqueleto" style="height:150px"></div><div class="esqueleto" style="height:150px"></div><div class="esqueleto" style="height:150px"></div></div>
       <div class="kpis n4"><div class="esqueleto" style="height:190px"></div><div class="esqueleto" style="height:190px"></div><div class="esqueleto" style="height:190px"></div><div class="esqueleto" style="height:190px"></div></div>
       <div class="esqueleto" style="height:360px"></div></div>
     </div>`;
@@ -99,8 +99,13 @@ export function montarCredito(container, contexto) {
     const b = e.target.closest("[data-tirar]");
     if (b) tirarCliente(Number(b.dataset.tirar));
   });
-  // Ordenar a tabela: o servidor ordena o filtro inteiro (sem cliente, a tabela mostra só uma parte dos títulos).
-  container.querySelector("#cr-conteudo").addEventListener("click", (e) => {
+  carregar();
+}
+
+// Ordenar a tabela: o servidor ordena o filtro inteiro (sem cliente, a tabela mostra só uma parte dos títulos).
+// O clique fica no próprio cartão, que em tela cheia sai de #cr-conteudo.
+function ligarOrdem(card) {
+  card?.addEventListener("click", (e) => {
     const b = e.target.closest("[data-ordem]");
     if (!b) return;
     const atual = estado.ordem || ORDEM_PADRAO, col = COLUNAS.find((c) => c.chave === b.dataset.ordem);
@@ -109,7 +114,6 @@ export function montarCredito(container, contexto) {
       : { coluna: col.chave, sentido: col.sentido };
     carregar(false, true);
   });
-  carregar();
 }
 
 export function recarregarCredito() { if (ctx) carregar(true); }
@@ -129,13 +133,13 @@ function atualizarUrl() {
   if (limpar) limpar.hidden = !estado.clientes.length && !estado.mes && !estado.ano && !estado.vendedor;
 }
 
-// soTabela: só a ordem mudou; troca a tabela sem refazer (e reanimar) o resto da página.
+// soTabela: só a ordem mudou; troca a tabela sem refazer (e reanimar) o resto da página, e sem sair da tela cheia.
 async function carregar(silencioso = false, soTabela = false) {
   const conteudo = document.getElementById("cr-conteudo");
   if (!conteudo) return;
   const pedido = ++estado.pedido;
-  sairTelaCheia();
   const alvo = (soTabela && document.getElementById("cr-tabela")) || conteudo;
+  if (alvo === conteudo) sairTelaCheia();
   if (estado.dados) alvo.classList.add("recarregando");
   atualizarUrl();
   try {
@@ -158,12 +162,18 @@ async function carregar(silencioso = false, soTabela = false) {
     document.getElementById("cr-avisos").innerHTML = (d.avisos || [])
       .map((a) => `<div class="aviso">${icone("alerta")}<span>${esc(a)}</span></div>`).join("");
     if (alvo !== conteudo) {
-      alvo.outerHTML = tabela(d, 0, false);
-      posRender(document.getElementById("cr-tabela"));
+      // o cartão fica (com o botão e, se for o caso, em tela cheia); só o que tem dentro dele é trocado
+      const novo = document.createElement("template");
+      novo.innerHTML = tabela(d, 0, false);
+      const botao = alvo.querySelector(":scope > .btn-tela-cheia");
+      alvo.replaceChildren(...novo.content.querySelector("#cr-tabela").childNodes, ...(botao ? [botao] : []));
+      posRender(alvo);
+      reajustarTelaCheia();
       return;
     }
     conteudo.innerHTML = render(d);
     posRender(conteudo);
+    ligarOrdem(document.getElementById("cr-tabela"));
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || estado.ordem)) {
@@ -175,6 +185,7 @@ async function carregar(silencioso = false, soTabela = false) {
     }
     const ic = e.status === 403 ? "cadeado" : "alerta";
     const msg = e.status === 403 || e.status === 503 ? esc(e.message) : `Não foi possível carregar: ${esc(e.message)}`;
+    sairTelaCheia(); // a tabela em tela cheia (ao ordenar) também some
     conteudo.innerHTML = `<div class="cartao secao vazio">${icone(ic)}<p>${msg}</p></div>`;
     if (!silencioso && e.status !== 403 && e.status !== 503) toast(e.message, "erro");
   } finally {
@@ -314,24 +325,28 @@ export function textoSubtitulo(d) {
 const cab = (titulo, ic) =>
   `<div class="kpi-cab"><span class="kpi-rotulo"><span class="kpi-icone">${icone(ic)}</span>${esc(titulo)}</span>`;
 
+// Quantos caracteres o valor terá no fim da contagem: o CSS encolhe os longos (milhões) para caberem no cartão.
+const largura = (valor, formato) => ` style="--n:${fmt[formato](valor).length}"`;
+
 function kpiValor(i, cor, titulo, ic, valor, formato, meta, rodape = []) {
   return `
   <article class="cartao kpi kpi-simples entra" style="--i:${i};--cor:${cor}">
     ${cab(titulo, ic)}</div>
     <div class="kpi-corpo"><div>
-      ${valor == null ? `<div class="kpi-valor kpi-na">—</div>` : `<div class="kpi-valor" data-contar="${valor}" data-fmt="${formato}">0</div>`}
+      ${valor == null ? `<div class="kpi-valor kpi-na">—</div>`
+        : `<div class="kpi-valor" data-contar="${valor}" data-fmt="${formato}"${largura(valor, formato)}>0</div>`}
       <div class="kpi-meta">${meta}</div>
     </div></div>
     ${rodape.length ? `<div class="kpi-rodape">${rodape.map(([a, b]) => `<div class="linha-r"><span>${a}</span><b>${b}</b></div>`).join("")}</div>` : ""}
   </article>`;
 }
 
-function kpiSemCliente(i, cor, titulo, ic) {
+function kpiSemCliente(i, cor, titulo, ic, meta = "O limite e o prazo são do cadastro de cada cliente.") {
   return `
   <article class="cartao kpi kpi-simples entra" style="--i:${i};--cor:${cor}">
     ${cab(titulo, ic)}</div>
     <div class="kpi-corpo"><div><div class="kpi-valor kpi-na">Escolha um cliente</div>
-      <div class="kpi-meta">O limite e o prazo são do cadastro de cada cliente.</div></div></div>
+      <div class="kpi-meta">${meta}</div></div></div>
   </article>`;
 }
 
@@ -343,23 +358,25 @@ function render(d) {
   const k = d.cartoes, cr = d.credito, n = d.clientes.length;
   const periodo = descricaoFiltro(d);
   let h = n ? cabecalhoClientes(d) : "";
-  h += `<section class="kpis secao n3">
+  h += `<section class="kpis secao n4">
     ${kpiValor(1, "var(--s-fat)", "Valor total das compras", "moeda", k.valor, "moeda", periodo)}
     ${kpiValor(2, "var(--s-out)", "Quantidade de compras", "recibo", k.quantidade, "num", "títulos a receber de venda")}
     ${kpiValor(3, "var(--k-vm)", "Ticket médio", "etiqueta", k.ticket, "moeda", "valor ÷ quantidade de compras")}
+    ${kpiInadimplencia(4, k, periodo)}
   </section>`;
   h += `<section class="kpis secao n4">
-    ${kpiPontualidade(4, k)}
-    ${cr ? kpiValor(5, "var(--k-cli)", "Limite de crédito", "cartao", cr.limite, "moeda",
+    ${kpiPontualidade(5, k)}
+    ${cr ? kpiValor(6, "var(--k-cli)", "Limite de crédito", "cartao", cr.limite, "moeda",
       n > 1 ? `soma dos limites de ${n} clientes` : cr.limite > 0 ? "do cadastro do cliente" : "sem limite no cadastro",
       [["Prazo", umOuVarios(cr.prazos, "prazos diferentes")],
        ["Vendedor da carteira", umOuVarios(cr.carteiras, "vendedores")]])
-      : kpiSemCliente(5, "var(--k-cli)", "Limite de crédito", "cartao")}
-    ${kpiInadimplencia(6, k, periodo)}
-    ${cr ? kpiRestante(7, cr) : kpiSemCliente(7, "var(--s-mus)", "Limite restante", "escudo")}
+      : kpiSemCliente(6, "var(--k-cli)", "Limite de crédito", "cartao")}
+    ${cr ? kpiUtilizado(7, cr) : kpiSemCliente(7, "var(--s-out)", "Limite já utilizado", "tendencia",
+      "Tudo o que o cliente ainda tem em aberto.")}
+    ${cr ? kpiRestante(8, cr) : kpiSemCliente(8, "var(--s-mus)", "Limite restante", "escudo")}
   </section>`;
-  h += tabela(d, 8);
-  h += comoCalcula(d, 9);
+  h += tabela(d, 9);
+  h += comoCalcula(d, 10);
   return h;
 }
 
@@ -440,22 +457,30 @@ function kpiRestante(i, cr) {
   const meta = cr.limite > 0
     ? (passou ? `<b>passou ${fmt.moeda(-cr.restante)}</b> do limite` : `${fmt.pct(cr.usado, 0)} do limite em uso`)
     : "sem limite no cadastro";
-  const pago = cr.pago_parcelas > 0
-    ? `<div class="cr-pago-nota" data-tt="${esc(`Títulos em aberto: ${fmt.moeda2(cr.titulos_abertos)}<br>Parcelas já pagas: ${fmt.moeda2(cr.pago_parcelas)}<br>Ainda em aberto: ${fmt.moeda2(cr.em_aberto)}`)}">
-        ${icone("certo")}${fmt.moeda(cr.pago_parcelas)} de parcelas já pagas voltaram para o limite</div>` : "";
   return `
   <article class="cartao kpi kpi-simples entra" style="--i:${i};--cor:${cor}">
     ${cab("Limite restante", "escudo")}</div>
     <div class="kpi-corpo"><div>
-      <div class="kpi-valor${passou ? " cr-negativo" : ""}" data-contar="${cr.restante}" data-fmt="moeda">0</div>
+      <div class="kpi-valor${passou ? " cr-negativo" : ""}" data-contar="${cr.restante}" data-fmt="moeda"${largura(cr.restante, "moeda")}>0</div>
       <div class="kpi-meta">${meta}</div>
       <div class="medidor">
         <div class="medidor-trilho"><span class="enche" data-largura="${(Math.min(usado, escala) / escala) * 100}%"></span>${escala > 1 ? `<span class="alvo" style="left:${(1 / escala) * 100}%"></span>` : ""}</div>
-        <div class="medidor-escala"><span>em aberto ${fmt.moeda(cr.em_aberto)}</span><span>limite ${fmt.moeda(cr.limite)}</span></div>
+        <div class="medidor-escala"><span>utilizado ${fmt.moeda(cr.em_aberto)}</span><span>limite ${fmt.moeda(cr.limite)}</span></div>
       </div>
-      ${pago}
     </div></div>
   </article>`;
+}
+
+// Limite já utilizado: tudo o que o cliente ainda tem em aberto (os títulos em aberto menos as parcelas já pagas).
+function kpiUtilizado(i, cr) {
+  const titulos = `${fmt.num(cr.qtd_abertos)} título${cr.qtd_abertos === 1 ? "" : "s"} em aberto`;
+  const meta = cr.limite > 0 ? `${titulos} · ${fmt.pct(cr.usado, 0)} do limite` : titulos;
+  const rodape = cr.pago_parcelas > 0
+    ? [["Títulos em aberto", fmt.moeda(cr.titulos_abertos)],
+       ["Parcelas já pagas", `− ${fmt.moeda(cr.pago_parcelas)}`]]
+    : [];
+  return kpiValor(i, cr.limite > 0 && cr.restante < 0 ? "var(--ruim-forte)" : "var(--s-out)", "Limite já utilizado",
+    "tendencia", cr.em_aberto, "moeda", meta, rodape);
 }
 
 function celulaPago(l) {
@@ -534,10 +559,12 @@ function comoCalcula(d, i) {
           <li><b>Inadimplência:</b> soma dos títulos em aberto vencidos há mais de 7 dias, pelo valor do título.</li>
           <li><b>Valor já pago:</b> nos boletos divididos (7, 14, 21 dias…), o valor das parcelas já quitadas mais o que
             entrou numa parcela paga em parte. Juros e abatimento não contam. O vencimento do título é o da última parcela.</li>
-          <li><b>Limite restante:</b> limite do cadastro − o que ainda está em aberto: <b>todos</b> os títulos em aberto do
-            cliente, de qualquer emissão e vendedor, menos as parcelas já pagas (no Power BI, com mês e ano escolhidos, só os
+          <li><b>Limite já utilizado:</b> tudo o que o cliente ainda tem em aberto: <b>todos</b> os títulos em aberto dele,
+            de qualquer emissão e vendedor, menos as parcelas já pagas. Não depende do mês, do ano nem do vendedor.</li>
+          <li><b>Limite restante:</b> limite do cadastro − limite já utilizado (no Power BI, com mês e ano escolhidos, só os
             emitidos no período entravam, e as parcelas pagas não voltavam). Negativo = passou do limite. Com vários clientes
-            escolhidos, os limites e o que está em aberto somam. Limite, prazo e restante só aparecem com cliente escolhido.</li>
+            escolhidos, os limites e o que está em aberto somam. Limite, utilizado, prazo e restante só aparecem com cliente
+            escolhido.</li>
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. A ordem vale para todos os

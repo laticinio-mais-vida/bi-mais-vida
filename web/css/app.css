@@ -1363,6 +1363,11 @@ body.sem-rolagem { overflow: hidden; }
 }
 
 /* ---------- Reavaliação de Crédito ---------- */
+/* Quatro cartões por linha: o valor encolhe pelo número de caracteres (--n) para caber na largura do cartão. */
+#pagina-credito .kpi { container-type: inline-size; }
+#pagina-credito .kpi-simples .kpi-valor[style*="--n"] { font-size: min(40px, 100cqi / (var(--n) * .58)); }
+#pagina-credito .kpi-valor.kpi-na { white-space: normal; }
+#pagina-credito .kpi-rodape b { white-space: nowrap; }
 .cr-busca { position: relative; display: inline-flex; }
 .cr-busca .campo, .cr-busca .campo input { width: 340px; max-width: 100%; }
 .cr-sugestoes { width: 420px; max-height: min(420px, 60vh); overflow: auto; padding: 6px; }
@@ -1380,8 +1385,6 @@ body.sem-rolagem { overflow: hidden; }
 .cr-chip button .ic { width: 14px; height: 14px; }
 .cr-chip-soma { margin-left: 4px; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; }
 .cr-negativo { color: var(--ruim); font-weight: 700; }
-.cr-pago-nota { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--ok); font-size: 12.5px; font-weight: 600; cursor: default; }
-.cr-pago-nota .ic { flex: none; width: 15px; height: 15px; }
 .cr-ordem { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
 .cr-ordem:hover, .cr-ordem.ativa { color: var(--acento-tinta); }
 .cr-ordem:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 4px; }

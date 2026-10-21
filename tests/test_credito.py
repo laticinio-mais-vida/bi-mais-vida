@@ -56,8 +56,8 @@ class TestCartoes(Base):
         c = d["clientes"][0]
         self.assertEqual((c["nome"], c["carteira"], c["prazo"], c["limite"]), ("MERCADO DO JOAO", "Rubens", "28 DIAS", 5000.0))
         # em aberto: 103 + 104 + 105 = 1.900, menos as parcelas pagas do 103 (650) e do 105 (100)
-        self.assertEqual((c["titulos_abertos"], c["pago_parcelas"], c["em_aberto"], c["restante"]),
-                         (1900.0, 750.0, 1150.0, 3850.0))
+        self.assertEqual((c["qtd_abertos"], c["titulos_abertos"], c["pago_parcelas"], c["em_aberto"], c["restante"]),
+                         (3, 1900.0, 750.0, 1150.0, 3850.0))
         self.assertAlmostEqual(c["usado"], 0.23)
         self.assertEqual(d["credito"]["restante"], 3850.0)
         self.assertEqual(d["avisos"], [])
@@ -95,7 +95,8 @@ class TestCartoes(Base):
         self.assertEqual([c["id"] for c in d["clientes"]], [2, 1])
         self.assertEqual(d["filtros"]["clientes"], [2, 1])
         s = d["credito"]
-        self.assertEqual((s["limite"], s["em_aberto"], s["pago_parcelas"], s["restante"]), (7000.0, 3650.0, 750.0, 3350.0))
+        self.assertEqual((s["limite"], s["qtd_abertos"], s["em_aberto"], s["pago_parcelas"], s["restante"]),
+                         (7000.0, 4, 3650.0, 750.0, 3350.0))
         self.assertAlmostEqual(s["usado"], 3650 / 7000)
         self.assertEqual((s["prazos"], s["carteiras"]), (["28 DIAS", "A VISTA"], ["Rubens", "Thais"]))
         self.assertEqual((d["cartoes"]["valor"], d["cartoes"]["quantidade"]), (6500.0, 7))

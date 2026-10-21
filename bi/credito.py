@@ -200,25 +200,26 @@ class Credito:
         faltam = [c for c in clientes if c not in cadastro]
         if faltam:
             raise ValueError(f"cliente não encontrado: {', '.join(map(str, faltam))}")
-        abertos = {i: (total, pg) for i, total, pg in self.cache.consulta(
-            f"SELECT t.id_cliente, SUM(t.total), SUM({pago}) FROM titulos_receber t{junta} "
+        abertos = {i: (qtd, total, pg) for i, qtd, total, pg in self.cache.consulta(
+            f"SELECT t.id_cliente, COUNT(*), SUM(t.total), SUM({pago}) FROM titulos_receber t{junta} "
             f"WHERE t.id_cliente IN ({_marcas(clientes)}) AND t.quitacao IS NULL GROUP BY 1", clientes)}
         saida = []
         for c in clientes:
             nome, carteira, limite, prazo = cadastro[c]
-            total, pg = abertos.get(c, (0.0, 0.0))
+            qtd, total, pg = abertos.get(c, (0, 0.0, 0.0))
             limite = float(limite or 0)
             saida.append({
                 "id": c, "nome": nome, "carteira": nomes.get(carteira) if carteira else None, "prazo": prazo,
-                "limite": limite, "titulos_abertos": total, "pago_parcelas": pg, "em_aberto": total - pg,
-                "restante": limite - (total - pg), "usado": (total - pg) / limite if limite > 0 else None,
+                "limite": limite, "qtd_abertos": qtd, "titulos_abertos": total, "pago_parcelas": pg,
+                "em_aberto": total - pg, "restante": limite - (total - pg),
+                "usado": (total - pg) / limite if limite > 0 else None,
             })
         return saida
 
     @staticmethod
     def _soma(clientes: list[dict]) -> dict:
-        soma = {k: sum(c[k] for c in clientes) for k in ("limite", "titulos_abertos", "pago_parcelas", "em_aberto",
-                                                          "restante")}
+        soma = {k: sum(c[k] for c in clientes) for k in ("limite", "qtd_abertos", "titulos_abertos", "pago_parcelas",
+                                                          "em_aberto", "restante")}
         prazos = sorted({c["prazo"] or "não informado" for c in clientes})
         carteiras = sorted({c["carteira"] or "sem vendedor" for c in clientes})
         return {**soma, "usado": soma["em_aberto"] / soma["limite"] if soma["limite"] > 0 else None,

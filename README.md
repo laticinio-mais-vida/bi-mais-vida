@@ -406,8 +406,10 @@ dia, quanto deve e quanto ainda cabe no limite.
   - **Pontualidade:** títulos quitados até 7 dias depois do vencimento ÷ títulos quitados;
   - **Limite de crédito**, com o **prazo** (a opção de pagamento do cadastro) e o vendedor da carteira;
   - **Inadimplência:** títulos em aberto vencidos há mais de 7 dias, pelo valor do título;
-  - **Limite restante:** limite − o que ainda está em aberto (todos os títulos em aberto do cliente, menos as parcelas
-    já pagas), com o quanto do limite está em uso e quanto de parcelas pagas voltou para o limite.
+  - **Limite já utilizado:** tudo o que o cliente ainda tem em aberto (todos os títulos em aberto dele, de qualquer
+    emissão e vendedor, menos as parcelas já pagas), com quantos títulos são e quanto do limite isso usa. Quando há
+    parcelas pagas, mostra os títulos em aberto e o que já foi pago deles;
+  - **Limite restante:** limite − limite já utilizado.
 - **Títulos:** um por linha, com emissão, vencimento, quitação, valor, **valor já pago**, dias de atraso e a situação
   (a vencer, vencido, inadimplente, quitado, quitado com atraso).
   - **Ordenar:** clique no nome de qualquer coluna; de novo, para inverter. A ordem vale para todos os títulos do
@@ -429,7 +431,7 @@ Diferenças em relação ao Power BI, combinadas com o usuário:
    continuava descontado até a última parcela).
 3. **Limite, restante e prazo só com cliente escolhido.** Sem cliente, o Power BI somava o limite de todos os
    clientes e ignorava o filtro de vendedor nesses cartões. Aqui dá para escolher vários clientes, e os limites deles
-   somam.
+   somam. O cartão **Limite já utilizado** não existe no Power BI.
 4. **Tabela de títulos:** um título por linha, ordenável por qualquer coluna, com o valor já pago, em vez da matriz
    por data que somava os dias de atraso dos títulos do mesmo dia.
 5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que

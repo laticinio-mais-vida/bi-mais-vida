@@ -84,6 +84,11 @@ function entrar(card) {
   ajustar();
 }
 
+// O conteúdo do cartão em tela cheia mudou (ex.: a tabela foi reordenada): recalcula o tamanho.
+export function reajustarTelaCheia() {
+  ajustar();
+}
+
 function tecla(e) {
   if (e.key === "Escape") sairTelaCheia();
 }
