@@ -13,7 +13,7 @@ from tests.apoio import TEM_PSYCOPG, BaseBanco
 
 MIGRACOES = ["001_conversas", "002_usuarios", "003_regras", "004_assistente_perguntas", "005_importar_arquivos",
              "006_conversas_por_usuario", "007_gestao", "008_indicadores", "009_gestao_equipe",
-             "010_efetividade_media_diaria", "011_efetividade_pedido_fora_da_previsao"]
+             "010_efetividade_media_diaria", "011_efetividade_pedido_fora_da_previsao", "012_base_periodo"]
 
 
 def resposta(texto: str, consultas: str = "") -> dict:

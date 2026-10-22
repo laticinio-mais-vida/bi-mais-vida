@@ -263,8 +263,9 @@ O que acompanhar:
 ### Banco de dados (PostgreSQL)
 
 O que o painel cria fica num PostgreSQL só dele, o container `bi_banco`: usuários, regras salvas nas páginas,
-conversas e uso do Assistente, as ações, os objetivos e o histórico da página Gestão (migrações `007_gestao.sql`,
-`008_indicadores.sql` e `009_gestao_equipe.sql`) e os dias de atendimento das áreas comerciais.
+conversas e uso do Assistente, as campanhas, os objetivos e o histórico da página Gestão (migrações `007_gestao.sql`,
+`008_indicadores.sql`, `009_gestao_equipe.sql` e `012_base_periodo.sql`) e os dias de atendimento das áreas
+comerciais.
 
 - **Rede:** o banco fica numa rede Docker interna (`interno`) que só o painel enxerga. Ele não tem porta aberta para
   a internet e não fala com o app de promotoria.
@@ -394,6 +395,21 @@ página acompanha os vendedores do acesso.
   feita antes da publicação, não só a pasta.
 - **Depois de publicar:** o administrador confere em Gestão › Configurar quem acompanha quais vendedores (o acesso
   de cada pessoa continua o mesmo de antes).
+
+#### Versão da base por período fechado (migração 012)
+
+Na tela, "ação" volta a se chamar **campanha**. A base de cada vendedor passa a ser um período fechado escolhido no
+formulário (semana, quinzena, mês, trimestre, semestre ou ano, o último antes do início). A meta fica com dois tipos:
+Número (o valor a atingir) e Percentual (a base + X%). Os cards dos vendedores mostram só as campanhas em vigor,
+coloridas pelo % da meta, e o card da campanha ganha a barra da meta.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 012** só acrescenta a coluna `base_periodo` em `campanhas` (vazia nas campanhas que já existem, que
+  continuam com a base do mesmo tamanho, logo antes do início). Ensaie antes de publicar, como nas outras.
+- **Voltar atrás:** o código anterior ignora a coluna. As campanhas lançadas na versão nova mantêm a base gravada, mas
+  lá Prorrogar e Encerrar voltam a medir a base do mesmo tamanho, logo antes.
+- **Assistente:** a ferramenta `propor_acao` ganhou o parâmetro `base` e o `alvo_tipo` só aceita `fixo` e `pct`.
+  Depois de publicar, confira com uma pergunta curta de dentro do container (o modelo do VPS pode ser outro).
 
 #### Voltar as regras para uma versão anterior
 

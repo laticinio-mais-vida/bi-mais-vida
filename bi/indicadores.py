@@ -59,6 +59,8 @@ COMBINACOES = {  # medida -> formas aceitas (clientes no total é a Positivaçã
     "produtos": ("total",),
 }
 COMPARAR = {"periodo_anterior": "o período anterior", "ano_anterior": "o mesmo período do ano anterior"}
+PERIODOS_BASE = {"semana": "Semana", "quinzena": "Quinzena", "mes": "Mês", "trimestre": "Trimestre",
+                 "semestre": "Semestre", "ano": "Ano"}  # a janela da base de uma campanha (janela_fechada)
 BASES = {
     "todos": "todos os clientes", "novos": "clientes novos (sem compra antes do início)",
     "recuperados": "clientes recuperados", "nunca_compraram": "quem nunca tinha comprado os produtos da campanha",
@@ -267,9 +269,30 @@ def periodo_base(inicio: dt.date, fim: dt.date, comparar: str) -> tuple[dt.date,
 
 
 def janela_base(inicio: dt.date, fim: dt.date) -> tuple[dt.date, dt.date]:
-    """Janela da base de uma ação (página Gestão): o mesmo número de dias, logo antes do início."""
+    """Janela da base das campanhas de antes da 012 (base_periodo vazio): o mesmo número de dias, logo antes do
+    início."""
     dias = (fim - inicio).days + 1
     return inicio - dt.timedelta(days=dias), inicio - dt.timedelta(days=1)
+
+
+def janela_fechada(inicio: dt.date, periodo: str) -> tuple[dt.date, dt.date]:
+    """Janela da base de uma campanha (página Gestão): o último período fechado que termina antes do início. Semana
+    de segunda a domingo; quinzena de 1 a 15 ou de 16 ao fim do mês; trimestre e semestre do ano civil."""
+    if periodo not in PERIODOS_BASE:
+        raise ValueError(f"período da base desconhecido: {periodo!r} (use {', '.join(PERIODOS_BASE)})")
+    ontem = inicio - dt.timedelta(days=1)
+    if periodo == "semana":
+        fim = ontem - dt.timedelta(days=ontem.isoweekday() % 7)  # o último domingo antes do início
+        return fim - dt.timedelta(days=6), fim
+    if periodo == "quinzena":
+        if inicio.day > 15:
+            return inicio.replace(day=1), inicio.replace(day=15)
+        fim = inicio.replace(day=1) - dt.timedelta(days=1)
+        return fim.replace(day=16), fim
+    meses = {"mes": 1, "trimestre": 3, "semestre": 6, "ano": 12}[periodo]
+    n = inicio.year * 12 + (inicio.month - 1) // meses * meses - meses  # o primeiro mês do período anterior
+    de = dt.date(n // 12, n % 12 + 1, 1)
+    return de, dt.date(inicio.year, (inicio.month - 1) // meses * meses + 1, 1) - dt.timedelta(days=1)
 
 
 def unidades(cur, filtros: dict, data_ref: dt.date) -> list[str]:

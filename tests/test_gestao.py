@@ -1,6 +1,6 @@
 """Página Gestão (bi/gestao.py): os indicadores sobre o cache sintético, a conferência do que vem da página ou do
-Assistente, a base, o alvo e o resultado das ações, as ações e os objetivos no PostgreSQL e as ferramentas de ações
-do Assistente.
+Assistente, a base, a meta e o resultado das campanhas, as campanhas e os objetivos no PostgreSQL e as ferramentas de
+campanhas do Assistente.
 
 Os testes com o banco precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
 from __future__ import annotations
@@ -346,6 +346,32 @@ class TestObjetivo(ComCache, unittest.TestCase):
         self.assertEqual(janela_base(D(2026, 9, 1), D(2026, 9, 21)), (D(2026, 8, 11), D(2026, 8, 31)))
         self.assertEqual(janela_base(D(2026, 9, 1), D(2026, 9, 1)), (D(2026, 8, 31), D(2026, 8, 31)))
 
+    def test_janela_fechada(self):
+        from bi.indicadores import janela_fechada
+        casos = {  # (início, período) -> o último período fechado antes do início
+            (D(2026, 10, 22), "semana"): (D(2026, 10, 12), D(2026, 10, 18)),  # quinta: a semana de seg a dom antes
+            (D(2026, 10, 19), "semana"): (D(2026, 10, 12), D(2026, 10, 18)),  # segunda: a semana logo antes
+            (D(2026, 10, 18), "semana"): (D(2026, 10, 5), D(2026, 10, 11)),   # domingo: a semana dele ainda não fechou
+            (D(2026, 10, 22), "quinzena"): (D(2026, 10, 1), D(2026, 10, 15)),
+            (D(2026, 10, 16), "quinzena"): (D(2026, 10, 1), D(2026, 10, 15)),
+            (D(2026, 10, 15), "quinzena"): (D(2026, 9, 16), D(2026, 9, 30)),
+            (D(2026, 3, 1), "quinzena"): (D(2026, 2, 16), D(2026, 2, 28)),
+            (D(2026, 10, 22), "mes"): (D(2026, 9, 1), D(2026, 9, 30)),
+            (D(2026, 10, 1), "mes"): (D(2026, 9, 1), D(2026, 9, 30)),
+            (D(2026, 1, 5), "mes"): (D(2025, 12, 1), D(2025, 12, 31)),
+            (D(2026, 10, 22), "trimestre"): (D(2026, 7, 1), D(2026, 9, 30)),
+            (D(2026, 9, 30), "trimestre"): (D(2026, 4, 1), D(2026, 6, 30)),
+            (D(2026, 2, 1), "trimestre"): (D(2025, 10, 1), D(2025, 12, 31)),
+            (D(2026, 10, 22), "semestre"): (D(2026, 1, 1), D(2026, 6, 30)),
+            (D(2026, 6, 30), "semestre"): (D(2025, 7, 1), D(2025, 12, 31)),
+            (D(2026, 10, 22), "ano"): (D(2025, 1, 1), D(2025, 12, 31)),
+            (D(2026, 1, 1), "ano"): (D(2025, 1, 1), D(2025, 12, 31)),
+        }
+        for (inicio, periodo), esperado in casos.items():
+            self.assertEqual(janela_fechada(inicio, periodo), esperado, (inicio, periodo))
+        with self.assertRaises(ValueError):
+            janela_fechada(D(2026, 10, 22), "dia")
+
     def test_total_da_equipe(self):
         t = self.total("positivacao", [ES], 3)  # clientes 1 e 3 (o funcionário 7 não conta)
         self.assertEqual((t["realizado"], t["meta"], t["status"], t["situacao"]), (2, 3, "abaixo", "fechado"))
@@ -370,10 +396,11 @@ class TestValidar(ComCache, unittest.TestCase):
     def tearDown(self):
         self.desmontar_cache()
 
-    def validar(self, permitidos=None, tipo="acao", inicio_dados=None, **mudancas):
+    def validar(self, permitidos=None, tipo="acao", inicio_dados=None, antes=None, **mudancas):
         dados = {"nome": "  Mussarela   de setembro ", "regiao": "BA", "inicio": "2026-09-01", "fim": "2026-09-30",
                  "metrica": "faturamento", "meta_padrao": 1000, "vendedores": [EDIR, {"id": BA, "meta": 500}], **mudancas}
-        return validar(dados, self.cur, self.regras, permitidos, D(2026, 9, 30), inicio_dados, tipo, D(2026, 9, 1))
+        return validar(dados, self.cur, self.regras, permitidos, D(2026, 9, 30), inicio_dados, tipo, D(2026, 9, 1),
+                       antes)
 
     def erro(self, texto, **mudancas):
         with self.assertRaises(ValueError) as e:
@@ -387,20 +414,23 @@ class TestValidar(ComCache, unittest.TestCase):
                                         "ufs": ["ES"]})
         self.assertEqual(d["vendedores"], [{"id": EDIR, "meta": None}, {"id": BA, "meta": 500.0}])  # o Edir é da BA
         self.assertEqual((d["inicio"], d["fim"]), (D(2026, 9, 1), D(2026, 9, 30)))
-        self.assertEqual((d["base_inicio"], d["base_fim"]), (D(2026, 8, 2), D(2026, 8, 31)))  # 30 dias logo antes
+        self.assertEqual((d["base_periodo"], d["base_inicio"], d["base_fim"]),
+                         ("mes", D(2026, 8, 1), D(2026, 8, 31)))  # sem período da base: o mês fechado antes
         self.assertEqual((d["tipo"], d["regiao"], d["alvo_tipo"], d["rotulo"]), ("acao", "BA", "fixo", "Faturamento"))
         self.assertNotIn("categorias", d["filtros"])  # filtro vazio não fica
 
     def test_prazo_e_regiao(self):
-        d = self.validar(fim=None, semanas=3)
-        self.assertEqual((d["fim"], d["base_inicio"], d["base_fim"]), (D(2026, 9, 21), D(2026, 8, 11), D(2026, 8, 31)))
+        d = self.validar(fim=None, semanas=3)  # a base não depende do prazo: agosto inteiro
+        self.assertEqual((d["fim"], d["base_inicio"], d["base_fim"]), (D(2026, 9, 21), D(2026, 8, 1), D(2026, 8, 31)))
+        d = self.validar(base_periodo="Trimestre")
+        self.assertEqual((d["base_periodo"], d["base_inicio"], d["base_fim"]), ("trimestre", D(2026, 4, 1), D(2026, 6, 30)))
         d = self.validar(inicio=None, fim=None, semanas="1")  # sem início: começa hoje
         self.assertEqual((d["inicio"], d["fim"]), (D(2026, 9, 1), D(2026, 9, 7)))
         self.erro("prazo", fim=None)
         self.erro("1 a 26 semanas", fim=None, semanas=30)
         self.erro("até 26 semanas", fim="2027-03-31")
         self.erro("região", regiao="")
-        self.erro("Edir (85) é da equipe Edir; Thais (141) é da equipe BA: esta ação é da região ES", regiao="ES")
+        self.erro("Edir (85) é da equipe Edir; Thais (141) é da equipe BA: esta campanha é da região ES", regiao="ES")
         self.assertEqual(self.validar(regiao="es", vendedores=[ES])["regiao"], "ES")
 
     def test_erros(self):
@@ -414,12 +444,26 @@ class TestValidar(ComCache, unittest.TestCase):
         self.erro("linha não encontrada", filtros={"linhas": ["chocolate"]})
         self.erro("categoria", filtros={"categorias": ["Sorvete"]})
         self.erro("filtro desconhecido", filtros={"cidades": ["Serra"]})
-        self.erro("alvo", meta_padrao=-1)
-        self.erro("dê o alvo", meta_padrao=0)
-        self.erro("quanto a mais", meta_padrao=0, alvo_tipo="mais")
-        self.erro("alvo_tipo", alvo_tipo="dobro")
+        self.erro("a meta deve ser um número", meta_padrao=-1)
+        self.erro("dê a meta", meta_padrao=0)
+        self.erro("o percentual sobre a base", meta_padrao=0, alvo_tipo="pct")
+        self.erro("alvo_tipo deve ser fixo", alvo_tipo="dobro")
+        self.erro("alvo_tipo deve ser fixo", alvo_tipo="mais")  # base + N: só nas campanhas de antes
+        self.erro("período da base", base_periodo="dia")
+        self.erro("só das campanhas de antes", base_periodo="logo_antes")
         self.erro("rótulo", rotulo="x" * 21)
         self.assertEqual(self.validar(rotulo="  Mussa  ")["rotulo"], "Mussa")
+
+    def test_campanha_de_antes(self):
+        """Na edição de uma campanha de antes da 012, a base "logo antes" e a meta "base + N" continuam valendo."""
+        antes = {"base_periodo": None, "alvo_tipo": "mais"}
+        d = self.validar(antes=antes, base_periodo="logo_antes", alvo_tipo="mais")
+        self.assertEqual((d["base_periodo"], d["base_inicio"], d["base_fim"], d["alvo_tipo"]),
+                         (None, D(2026, 8, 2), D(2026, 8, 31), "mais"))
+        d = self.validar(antes=antes, base_periodo="semana")  # pode trocar pela regra nova
+        self.assertEqual((d["base_periodo"], d["base_inicio"], d["base_fim"]), ("semana", D(2026, 8, 24), D(2026, 8, 30)))
+        with self.assertRaises(ValueError):  # a campanha nova não volta para a regra de antes
+            self.validar(antes={"base_periodo": "mes", "alvo_tipo": "fixo"}, base_periodo="logo_antes")
 
     def test_volume_precisa_da_mesma_unidade(self):
         self.erro("filtro de produto", metrica="volume")
@@ -448,32 +492,33 @@ class TestValidar(ComCache, unittest.TestCase):
                   metas_produto=[{"id": 32, "meta": 30}])
         self.erro("preço-alvo", metrica="preco_medio")
         self.erro("preço-alvo do produto 27", metrica="preco_medio", metas_produto=[{"id": 27, "meta": 0}])
-        d = self.validar(metrica="preco_medio", alvo_tipo="mais",
+        d = self.validar(metrica="preco_medio", alvo_tipo="pct",
                          metas_produto=[{"id": 3643, "meta": 9.5}, {"id": 32, "meta": 30}])
         self.assertEqual(d["metas_produto"], [{"id": 11469, "meta": 9.5}, {"id": 32, "meta": 30.0}])
         self.assertEqual((d["meta_padrao"], d["alvo_tipo"], d["vendedores"][1]["meta"]), (100.0, "fixo", None))
         d = self.validar(metrica="positivacao", filtros={"areas": ["rota 1"], "segmentos": ["padaria"]})
         self.assertEqual(d["filtros"], {"segmentos": ["PADARIA"], "areas": ["ROTA 1"]})
         self.erro("área comercial não encontrada", metrica="positivacao", filtros={"areas": ["ROTA 9"]})
-        # numa ação o alvo já sai da base: crescimento só no objetivo
+        # numa campanha a meta já sai da base: crescimento só no objetivo
         crescer = {"medida": "faturamento", "forma": "crescimento"}
         self.erro("alvo_tipo pct", metrica="personalizada", parametros=crescer)
         o = self.validar(tipo="objetivo", metrica="personalizada", parametros=crescer, meta_padrao=10, vendedores=[])
         self.assertEqual((o["tipo"], o["vendedores"], o["base_inicio"], o["rotulo"]), ("objetivo", [], None, "Crescimento"))
         with self.assertRaises(ValueError) as e:
-            self.validar(tipo="objetivo", alvo_tipo="mais")
-        self.assertIn("alvo fixo para a equipe", str(e.exception))
+            self.validar(tipo="objetivo", alvo_tipo="pct")
+        self.assertIn("meta fixa para a equipe", str(e.exception))
 
     def test_historico_da_base_e_do_crescimento(self):
         inicio = D(2026, 1, 1)
         recuperados = {"clientes": "recuperados", "dias_sem_compra": 200}
-        self.validar(inicio_dados=inicio, metrica="positivacao", parametros=recuperados)  # corte: 02/08, a janela
+        self.validar(inicio_dados=inicio, metrica="positivacao", parametros=recuperados)  # corte: 01/08, a janela
         with self.assertRaises(ValueError) as e:
             self.validar(inicio_dados=inicio, metrica="positivacao", parametros={**recuperados, "dias_sem_compra": 250})
         self.assertIn("histórico", str(e.exception))
-        with self.assertRaises(ValueError) as e:  # a base de janeiro cai antes do histórico
+        with self.assertRaises(ValueError) as e:  # a base de janeiro (dezembro) cai antes do histórico
             self.validar(inicio_dados=inicio, inicio="2026-01-10", fim=None, semanas=4)
-        self.assertIn("a base desta ação (13/12/2025 a 09/01/2026", str(e.exception))
+        self.assertIn("a base desta campanha (dezembro/2025) começa antes do histórico", str(e.exception))
+        self.validar(inicio_dados=inicio, inicio="2026-01-12", fim=None, semanas=4, base_periodo="semana")  # 05 a 11/01
         crescer = {"medida": "faturamento", "forma": "crescimento", "comparar": "ano_anterior"}
         with self.assertRaises(ValueError) as e:
             self.validar(tipo="objetivo", inicio_dados=inicio, metrica="personalizada", parametros=crescer,
@@ -516,7 +561,7 @@ class TestFerramentasDeAcao(ComCache, unittest.TestCase):
         self.assertEqual(r["rascunho"]["vendedores"][0]["base"], 0)  # nenhuma bebida láctea em agosto
         self.assertEqual(r["rascunho"]["filtros"]["produtos"], ["11469 BEBIDA LACTEA 500G"])
         self.assertEqual((r["rascunho"]["unidade"], r["rascunho"]["regiao"]), ("UN", "BA"))
-        self.assertIn("2026-08-02 a 2026-08-31", r["rascunho"]["periodo_da_base"])
+        self.assertEqual(r["rascunho"]["periodo_da_base"], "agosto/2026 (2026-08-01 a 2026-08-31)")
         rascunho, = f.rascunhos
         self.assertEqual((rascunho["metrica"], rascunho["parametros"]["medida"], rascunho["inicio"]),
                          ("personalizada", "volume", "2026-09-01"))
@@ -542,20 +587,29 @@ class TestFerramentasDeAcao(ComCache, unittest.TestCase):
         self.assertEqual((r["rascunho"]["indicador"], r["rascunho"]["meta_em_percentual"]), ("Preço médio", True))
         self.assertEqual(r["rascunho"]["precos_alvo"], [{"produto": "32 QUEIJO MUSSARELA 4KG", "meta": 31.0}])
         self.assertEqual(f.rascunhos[-1]["metas_produto"], [{"id": 32, "meta": 31.0}])
-        r, p = f.executar("propor_acao", {**base, "metrica": "positivacao", "alvo_tipo": "mais", "meta": 1,
+        r, p = f.executar("propor_acao", {**base, "metrica": "positivacao", "alvo_tipo": "fixo", "meta": 3,
                                           "clientes_base": "recuperados", "dias_sem_compra": 60, "areas": ["rota 1"]})
         self.assertIsNone(p["erro"])
         self.assertEqual((f.rascunhos[-1]["parametros"], f.rascunhos[-1]["filtros"], f.rascunhos[-1]["fim"]),
                          ({"clientes": "recuperados", "dias_sem_compra": 60}, {"areas": ["ROTA 1"]}, "2026-09-21"))
-        self.assertEqual(r["rascunho"]["alvo"], "+1 sobre a base de cada um")
-        self.assertEqual(r["rascunho"]["vendedores"][0]["alvo"], 1)  # base 0 em agosto
+        self.assertEqual((r["rascunho"]["meta"], f.rascunhos[-1]["base_periodo"]), ("3 (clientes por vendedor)", "mes"))
+        self.assertEqual((r["rascunho"]["vendedores"][0]["base"], r["rascunho"]["vendedores"][0]["alvo"]), (0, 3))
+        r, p = f.executar("propor_acao", {**base, "metrica": "mix_medio", "alvo_tipo": "pct", "meta": 10,
+                                          "base": "trimestre"})
+        self.assertIsNone(p["erro"])
+        self.assertEqual((r["rascunho"]["meta"], r["rascunho"]["periodo_da_base"]),
+                         ("+10% sobre a base de cada um", "o trimestre de abril a junho/2026 (2026-04-01 a 2026-06-30)"))
+        _, p = f.executar("propor_acao", {**base, "metrica": "mix_medio", "alvo_tipo": "mais", "meta": 1})
+        self.assertIn("alvo_tipo deve ser fixo", p["erro"])
         _, p = f.executar("propor_acao", {**base, "metrica": "personalizada", "medida": "faturamento",
                                           "forma": "crescimento", "alvo_tipo": "pct", "meta": 10})
         self.assertIn("alvo_tipo pct", p["erro"])
         # o enum da ferramenta acompanha os tipos de bi/indicadores.py
         from bi.indicadores import TIPOS
+        from bi.indicadores import PERIODOS_BASE
         propor = next(t for t in FERRAMENTAS if t["name"] == "propor_acao")["input_schema"]["properties"]
         self.assertEqual(propor["metrica"]["enum"], list(TIPOS))
+        self.assertEqual((propor["base"]["enum"], propor["alvo_tipo"]["enum"]), (list(PERIODOS_BASE), ["fixo", "pct"]))
 
     def test_equipes(self):
         f = self.ferramentas()
@@ -599,11 +653,11 @@ class TestFerramentasDeAcao(ComCache, unittest.TestCase):
         conversas = ConversasFalsas()
         a = criar_assistente(self.pasta, self.calc, cliente=api, conversas=conversas)
         ctx = Gestao(None, self.calc, a).contexto(USUARIO_ADMIN, (None, None))
-        r = a.perguntar(USUARIO_ADMIN, None, "crie uma ação de bebida láctea em setembro", None, None, ctx)
+        r = a.perguntar(USUARIO_ADMIN, None, "crie uma campanha de bebida láctea em setembro", None, None, ctx)
         rascunho, = r["rascunhos"]
         self.assertEqual(rascunho["nome"], "Bebidas BA")
         self.assertIn(f"propor_acao -> rascunho {rascunho['id']}", r["consultas"])
-        self.assertIn("Ações (página Gestão): pode lançar e acompanhar", api.pedidos[0]["system"][1]["text"])
+        self.assertIn("Campanhas (página Gestão): pode lançar e acompanhar", api.pedidos[0]["system"][1]["text"])
         gravada, = conversas.dados.values()
         self.assertEqual(gravada["mensagens"][1]["rascunhos"][0]["id"], rascunho["id"])
         # quem não é administrador acompanha
@@ -626,8 +680,8 @@ HOJE = D(2026, 10, 1)
 
 
 class TestAcoesNoBanco(ComCache, BaseBanco):
-    """Ações e objetivos no PostgreSQL: base, alvo, resultado congelado, parciais, prorrogar, encerrar, histórico,
-    observações e quem pode o quê. O cache vai até 30/09/2026; hoje é 01/10/2026."""
+    """Campanhas e objetivos no PostgreSQL: base, meta, resultado congelado, parciais, prorrogar, encerrar, histórico,
+    observações, a prévia da base e quem pode o quê. O cache vai até 30/09/2026; hoje é 01/10/2026."""
 
     def setUp(self):
         super().setUp()
@@ -642,9 +696,9 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         super().tearDown()
 
     def dados(self, nome="Mussarela BA", **mudancas):
-        # 01 a 28/09 (4 semanas): base de 04 a 31/08 (a BA vendeu 4.000 em 10/08); alvo = base + 1.000
+        # 01 a 28/09 (4 semanas): base em agosto (a BA vendeu 4.000 em 10/08); meta = base + 25%
         return {"nome": nome, "regiao": "BA", "inicio": "2026-09-01", "fim": "2026-09-28", "metrica": "faturamento",
-                "alvo_tipo": "mais", "meta_padrao": 1000, "vendedores": [BA, EDIR], **mudancas}
+                "base_periodo": "mes", "alvo_tipo": "pct", "meta_padrao": 25, "vendedores": [BA, EDIR], **mudancas}
 
     def criar(self, nome="Mussarela BA", tipo="acao", **mudancas):
         return self.gestao.criar(self.chefe, self.dados(nome, **mudancas), tipo)["id"]
@@ -673,16 +727,18 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         # 01 a 28/09: BA 5.000 − 250 de devolução (o 999 fica fora); Edir 700. Os dados passam do fim: congela.
         self.assertEqual((acao["situacao"], acao["no_alvo"], acao["com_resultado"], acao["provisorio"]),
                          ("encerrada", 0, 2, False))
+        # a barra da meta: só a Thais tem meta (o Edir tem base 0, e 25% sobre 0 não dá meta): 4.750 de 5.000
+        self.assertEqual((acao["meta_pct"], acao["com_meta"]), (0.95, 1))
         self.assertEqual(self.vendedores(id_), {BA: (4000, True, 4750), EDIR: (0, True, 700)})
         self.quadro()  # ler de novo não congela outra vez
         self.assertEqual(self.contar("gestao_eventos", "tipo = 'resultado'"), 2)
         thais = next(v for v in self.quadro()["vendedores"] if v["id"] == BA)
-        self.assertEqual([(e["rotulo"], e["classe"], e["delta"]) for e in thais["acoes"]], [("Faturamento", "mid", 750)])
+        self.assertEqual((thais["acoes"], thais["em_vigor"]), ([], 0))  # o card do vendedor só mostra as em vigor
         h = self.historico(BA)
         self.assertEqual([e["tipo"] for e in h["eventos"]], ["lancada", "parcial", "parcial", "parcial", "resultado"])
         lancada, *parciais, resultado = h["eventos"]
-        self.assertEqual((lancada["data"], lancada["dados"]["base"], lancada["dados"]["alvo"], lancada["dados"]["vendedores"]),
-                         ("2026-09-01", 4000, 5000, 2))
+        self.assertEqual((lancada["data"], lancada["dados"]["base"], lancada["dados"]["alvo"], lancada["dados"]["vendedores"],
+                          lancada["dados"]["base_periodo"]), ("2026-09-01", 4000, 5000, 2, "mes"))
         self.assertEqual([(p["data"], p["dados"]["valor"]) for p in parciais],
                          [("2026-09-08", 5000), ("2026-09-15", 4750), ("2026-09-22", 4750)])
         self.assertEqual((resultado["data"], resultado["dados"]["classe"], resultado["dados"]["caminho"], resultado["atual"]),
@@ -690,26 +746,32 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual((h["vendedor"]["nome"], h["vendedor"]["regiao"], h["em_vigor"]), ("Thais", "BA", 0))
         d = self.gestao.detalhe(self.chefe, (None, None), id_)
         self.assertEqual({x["id"]: (x["base"], x["alvo"], x["resultado"], x["classe"]) for x in d["linhas"]},
-                         {BA: (4000, 5000, 4750, "mid"), EDIR: (0, 1000, 700, "mid")})
+                         {BA: (4000, 5000, 4750, "mid"), EDIR: (0, None, 700, "mid")})
+        self.assertEqual(d["item"]["base_periodo"], "mes")
 
     def test_parciais_e_alvo_batido(self):
-        # ES, positivação, 3 semanas: base de 11 a 31/08 = 0; clientes 1 (02/09) e 3 (15/09); o funcionário não conta
-        id_ = self.criar("Positivar ES", regiao="ES", metrica="positivacao", fim=None, semanas=3, meta_padrao=1,
-                         vendedores=[ES])
-        rubens, = self.quadro(regiao="ES")["vendedores"]
-        self.assertEqual([(e["classe"], e["delta"]) for e in rubens["acoes"]], [("ok", 2)])
+        # ES, positivação, 3 semanas, meta de 1 cliente: base em agosto = 0; clientes 1 (02/09) e 3 (15/09); o
+        # funcionário não conta
+        id_ = self.criar("Positivar ES", regiao="ES", metrica="positivacao", fim=None, semanas=3, alvo_tipo="fixo",
+                         meta_padrao=1, vendedores=[ES])
+        acao, = self.quadro(regiao="ES")["acoes"]
+        self.assertEqual(acao["meta_pct"], 2)  # 2 clientes para uma meta de 1: 200%
         h = self.historico(ES)
+        resultado, = [e for e in h["eventos"] if e["tipo"] == "resultado"]
+        self.assertEqual((resultado["dados"]["classe"], resultado["dados"]["delta"]), ("ok", 2))
         self.assertEqual([e["dados"]["valor"] for e in h["eventos"] if e["tipo"] == "parcial"], [1, 1])
         with self.banco.conexao() as con:
             parciais, = con.execute("SELECT parciais FROM campanha_vendedores WHERE campanha = %s", [id_]).fetchone()
         self.assertEqual([p["valor"] for p in parciais], [1, 1])
 
     def test_base_pendente(self):
-        # começa em 05/10: a janela (28/09 a 04/10) ainda não tem dados
-        id_ = self.criar("Futura", inicio="2026-10-05", fim=None, semanas=1, vendedores=[BA])
+        # começa na segunda 05/10, com a base na semana antes (28/09 a 04/10): os dados ainda não a cobrem
+        id_ = self.criar("Futura", inicio="2026-10-05", fim=None, semanas=1, vendedores=[BA], base_periodo="semana",
+                         alvo_tipo="fixo", meta_padrao=1000)
         self.assertEqual(self.vendedores(id_), {BA: (None, False, None)})
         acao, = self.quadro()["acoes"]
-        self.assertEqual((acao["situacao"], acao["base_pendente"], acao["prazo"]["comeca_em"]), ("planejada", True, 4))
+        self.assertEqual((acao["situacao"], acao["base_pendente"], acao["prazo"]["comeca_em"], acao["meta_pct"]),
+                         ("planejada", True, 4, None))
         lancada, = self.historico(BA)["eventos"]
         self.assertTrue(lancada["dados"]["base_pendente"])
         self.assertLessEqual(lancada["data"], "2026-10-05")  # o dia do lançamento (ou o início, se já começou)
@@ -720,9 +782,41 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual((lancada["dados"]["base"], lancada["dados"]["alvo"], lancada["dados"]["base_pendente"]),
                          (0, 1000, False))
 
-    def test_prorrogar_refaz_a_base(self):
+    def test_prorrogar_mantem_a_base(self):
+        # 2 semanas: base em agosto = 4.000, meta 5.000; resultado 4.750
+        id_ = self.criar("Curta", fim="2026-09-14", vendedores=[BA])
+        self.quadro()
+        self.assertEqual(self.vendedores(id_), {BA: (4000, True, 4750)})
+        self.gestao.prorrogar(self.chefe, id_)
+        # 4 semanas: a base continua a de agosto; o resultado volta a correr e congela de novo
+        self.assertEqual(self.vendedores(id_), {BA: (4000, True, None)})
+        acao, = self.quadro()["acoes"]
+        self.assertEqual((acao["fim"], acao["no_alvo"]), ("2026-09-28", 0))
+        self.assertEqual(self.eventos(BA, id_), ["lancada", "resultado", "prorrogada", "resultado"])
+        prorrogada = next(e for e in self.historico(BA)["eventos"] if e["tipo"] == "prorrogada")
+        self.assertEqual({k: prorrogada["dados"][k] for k in ("fim_antes", "fim", "base_antes", "base", "alvo_antes", "alvo",
+                                                              "base_pendente")},
+                         {"fim_antes": "2026-09-14", "fim": "2026-09-28", "base_antes": 4000, "base": 4000,
+                          "alvo_antes": 5000, "alvo": 5000, "base_pendente": False})
+
+    def virar_antiga(self, id_, base_inicio, base_fim, meta=1000):
+        """Põe a campanha como as de antes da 012 (base do mesmo tamanho logo antes e meta "base + N"), já medida."""
+        with self.banco.conexao() as con:
+            con.execute("UPDATE campanhas SET base_periodo = NULL, alvo_tipo = 'mais', meta_padrao = %s, base_inicio = %s, "
+                        "base_fim = %s, versao = versao + 1 WHERE id = %s", [meta, base_inicio, base_fim, id_])
+            con.execute("UPDATE campanha_vendedores SET base = NULL, base_num = NULL, base_den = NULL, base_em = NULL "
+                        "WHERE campanha = %s", [id_])
+            con.execute("UPDATE gestao_eventos SET dados = dados || %s::jsonb WHERE campanha = %s",
+                        [json.dumps({"base_periodo": None, "base_inicio": base_inicio, "base_fim": base_fim,
+                                     "alvo_tipo": "mais", "base_pendente": True}), id_])
+
+    def test_prorrogar_refaz_a_base_da_campanha_antiga(self):
         # 2 semanas: base de 18 a 31/08 = 0, alvo 1.000; resultado 4.750 (alvo batido)
         id_ = self.criar("Curta", fim="2026-09-14", vendedores=[BA])
+        self.virar_antiga(id_, "2026-08-18", "2026-08-31")
+        # a edição de uma campanha de antes aceita a base "logo antes" e a meta "base + N"
+        self.gestao.atualizar(self.chefe, id_, self.dados("Curta de antes", fim="2026-09-14", vendedores=[BA],
+                                                          base_periodo="logo_antes", alvo_tipo="mais", meta_padrao=1000))
         self.quadro()
         self.assertEqual(self.vendedores(id_), {BA: (0, True, 4750)})
         self.gestao.prorrogar(self.chefe, id_)
@@ -744,7 +838,7 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
     def test_encerrar(self):
         id_ = self.criar("Longa", fim="2026-10-31", vendedores=[BA])
         self.assertEqual(self.quadro()["acoes"][0]["situacao"], "em_vigor")
-        self.gestao.encerrar(self.chefe, id_)  # o fim vira 30/09 (os dados); a base, 02 a 31/08
+        self.gestao.encerrar(self.chefe, id_)  # o fim vira 30/09 (os dados); a base continua agosto
         acao, = self.quadro()["acoes"]
         self.assertEqual((acao["situacao"], acao["fim"], acao["no_alvo"]), ("encerrada", "2026-09-30", 0))
         self.assertEqual(self.vendedores(id_), {BA: (4000, True, 4750)})
@@ -767,40 +861,81 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
 
     def test_editar(self):
         id_ = self.criar(vendedores=[BA])
-        self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA, EDIR], meta_padrao=500))
+        self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA, EDIR], meta_padrao=50))
         self.assertEqual(self.eventos(EDIR, id_), ["lancada"])
         self.assertEqual(self.eventos(BA, id_), ["lancada", "editada"])
-        with self.banco.conexao() as con:  # (sem ler o histórico, que congelaria a ação já vencida)
+        with self.banco.conexao() as con:  # (sem ler o histórico, que congelaria a campanha já vencida)
             editada, = con.execute("SELECT dados FROM gestao_eventos WHERE tipo = 'editada'").fetchone()
-        self.assertEqual((editada["mudou"], editada["alvo_antes"], editada["alvo"]), (["alvo"], 5000, 4500))
-        self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA], fim="2026-09-14", meta_padrao=500))
-        self.assertEqual(self.vendedores(id_), {BA: (0, True, None)})  # a base acompanha o prazo (18 a 31/08)
+        self.assertEqual((editada["mudou"], editada["alvo_antes"], editada["alvo"]), (["meta"], 5000, 6000))
+        self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA], fim="2026-09-14", meta_padrao=50))
+        self.assertEqual(self.vendedores(id_), {BA: (4000, True, None)})  # o prazo mudou, a base (agosto) não
         self.assertEqual(self.eventos(EDIR, id_), ["lancada", "removido"])
+        self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA], fim="2026-09-14", meta_padrao=50,
+                                                          base_periodo="quinzena"))
+        self.assertEqual(self.vendedores(id_), {BA: (0, True, None)})  # a base nova: 16 a 31/08
+        with self.banco.conexao() as con:
+            mudou = [d["mudou"] for (d,) in con.execute("SELECT dados FROM gestao_eventos WHERE tipo = 'editada' "
+                                                       "AND id_vendedor = %s ORDER BY id", [BA])]
+        self.assertEqual(mudou, [["meta"], ["prazo"], ["base"]])
         self.quadro()  # congela
         with self.assertRaises(ValueError) as e:
-            self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA], fim="2026-09-14", meta_padrao=900))
+            self.gestao.atualizar(self.chefe, id_, self.dados(vendedores=[BA], fim="2026-09-14", meta_padrao=90,
+                                                              base_periodo="quinzena"))
         self.assertIn("já tem resultado", str(e.exception))
-        self.gestao.atualizar(self.chefe, id_, self.dados("Novo nome", vendedores=[BA], fim="2026-09-14", meta_padrao=500))
+        self.gestao.atualizar(self.chefe, id_, self.dados("Novo nome", vendedores=[BA], fim="2026-09-14", meta_padrao=50,
+                                                          base_periodo="quinzena"))
         self.assertEqual(self.quadro()["acoes"][0]["nome"], "Novo nome")
         with self.assertRaises(ValueError):
             self.gestao.atualizar(self.chefe, id_, self.dados(regiao="ES", vendedores=[ES]))
 
-    def test_quadro_vendedores_e_faturamento(self):
+    def test_quadro_vendedores_e_etiquetas(self):
         es = self.quadro(regiao="ES")
-        self.assertEqual((es["regioes"], es["regiao"], es["pode_editar"], es["mes_faturamento"]),
-                         (["ES", "BA"], "ES", True, {"ano": 2026, "mes": 9}))
-        self.assertEqual([(v["id"], v["nome"], v["faturamento_pct"]) for v in es["vendedores"]], [(ES, "Rubens", 0.74)])
+        self.assertEqual((es["regioes"], es["regiao"], es["pode_editar"]), (["ES", "BA"], "ES", True))
+        self.assertEqual([(v["id"], v["nome"], v["acoes"]) for v in es["vendedores"]], [(ES, "Rubens", [])])
+        self.assertNotIn("faturamento_pct", es["vendedores"][0])
         ba = self.quadro()  # a equipe é quem tem meta no mês (planilha METAS): o Edir não tem em setembro
-        self.assertEqual({v["id"]: v["faturamento_pct"] for v in ba["vendedores"]}, {BA: 0.7917})
-        self.criar("Do Edir", vendedores=[EDIR], fim="2026-10-31")  # numa ação em vigor ele aparece, sem meta
-        self.assertEqual({v["id"]: (v["faturamento_pct"], v["em_vigor"]) for v in self.quadro()["vendedores"]},
-                         {BA: (0.7917, 0), EDIR: (None, 1)})
+        self.assertEqual([v["id"] for v in ba["vendedores"]], [BA])
+        # numa campanha em vigor o Edir aparece; a etiqueta traz o % da meta até agora (700 de 1.000)
+        fat = self.criar("Do Edir", vendedores=[EDIR], fim="2026-10-31", alvo_tipo="fixo", meta_padrao=1000)
+        # mix médio (média): Thais 1 produto por cliente para uma meta de 4 (25%); Edir 1 para 2 (50%)
+        mix = self.criar("Mix", metrica="mix_medio", vendedores=[{"id": BA, "meta": 4}, EDIR], fim="2026-10-31",
+                         alvo_tipo="fixo", meta_padrao=2)
+        q = self.quadro()
+        self.assertEqual({v["id"]: v["em_vigor"] for v in q["vendedores"]}, {BA: 1, EDIR: 2})
+        edir = next(v for v in q["vendedores"] if v["id"] == EDIR)
+        self.assertEqual([(e["id"], e["rotulo"], e["resultado"], e["alvo"], e["pct"]) for e in edir["acoes"]],
+                         [(fat, "Faturamento", 700, 1000, 0.7), (mix, "Mix", 1, 2, 0.5)])
+        cartoes = {a["id"]: a for a in q["acoes"]}
+        self.assertEqual((cartoes[fat]["meta_pct"], cartoes[fat]["com_meta"]), (0.7, 1))
+        self.assertEqual((cartoes[mix]["meta_pct"], cartoes[mix]["com_meta"]), (0.375, 2))  # a média dos %, não 2 ÷ 6
         with self.assertRaises(ValueError):
             self.quadro(regiao="SP")
 
+    def test_previa_da_base(self):
+        dados = {"regiao": "BA", "inicio": "2026-09-01", "semanas": 4, "metrica": "faturamento", "base_periodo": "mes"}
+        p = self.gestao.previa_base(self.chefe, dados, [BA, EDIR, ES])  # o Rubens é do ES: fica fora
+        self.assertEqual((p["vendedores"], p["media"], p["texto"], p["pendente"], p["base_inicio"]),
+                         ({str(BA): 4000, str(EDIR): 0}, 2000, "agosto/2026", False, "2026-08-01"))
+        p = self.gestao.previa_base(self.chefe, {**dados, "base_periodo": "trimestre"}, [BA])
+        self.assertEqual((p["vendedores"], p["media"], p["texto"]), ({str(BA): 0}, 0, "o trimestre de abril a junho/2026"))
+        p = self.gestao.previa_base(self.chefe, {**dados, "inicio": "2026-10-05", "base_periodo": "semana"}, [BA])
+        self.assertEqual((p["pendente"], p["vendedores"], p["media"], p["base_fim"]), (True, {}, None, "2026-10-04"))
+        p = self.gestao.previa_base(self.chefe, {**dados, "metrica": "mix_medio"}, [BA, EDIR])
+        self.assertEqual((p["vendedores"], p["indicador"]["nome"]), ({str(BA): 1, str(EDIR): None}, "Mix médio"))
+        with self.assertRaises(ValueError):
+            self.gestao.previa_base(self.chefe, {**dados, "base_periodo": "dia"}, [BA])
+        with self.assertRaises(ValueError):
+            self.gestao.previa_base(self.chefe, {**dados, "base_periodo": "logo_antes"}, [BA])
+        id_ = self.criar(vendedores=[BA])  # a edição de uma campanha de antes pode manter a base "logo antes"
+        self.virar_antiga(id_, "2026-08-04", "2026-08-31")
+        p = self.gestao.previa_base(self.chefe, {**dados, "id": id_, "base_periodo": "logo_antes"}, [BA])
+        self.assertEqual((p["base_periodo"], p["base_inicio"], p["vendedores"]), (None, "2026-08-04", {str(BA): 4000}))
+        with self.assertRaises(PermissionError):
+            self.gestao.previa_base(self.ana, dados, [BA])
+
     def test_quem_pode_o_que(self):
         so_rubens = ({ES}, None)
-        id_es = self.criar("Do Rubens", regiao="ES", metrica="positivacao", meta_padrao=1, vendedores=[ES])
+        id_es = self.criar("Do Rubens", regiao="ES", metrica="positivacao", meta_padrao=10, vendedores=[ES])
         self.criar("Da Thais", vendedores=[BA])
         for fazer in (lambda: self.gestao.criar(self.ana, self.dados(), "acao"),
                       lambda: self.gestao.atualizar(self.ana, id_es, self.dados()),
@@ -836,7 +971,7 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         self.assertEqual(len(self.quadro()["acoes"]), 1)
         self.gestao.excluir(self.chefe, id_)
         self.assertEqual((self.contar("campanhas"), self.contar("campanha_vendedores")), (0, 0))
-        self.assertEqual(self.eventos(BA), ["nota"])  # os eventos da ação saem; a observação fica
+        self.assertEqual(self.eventos(BA), ["nota"])  # os eventos da campanha saem; a observação fica
 
     def test_objetivo_da_regiao(self):
         self.calc.metas.dados().append({"mes": D(2026, 9, 1), "id_vendedor": EDIR, "vendedor": "EDIR", "meta_fat": 1000.0,
@@ -874,13 +1009,15 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
                         gestao=self.gestao.contexto(self.ana, ({BA}, None)))
         r, p = f.executar("listar_acoes", {"texto": "mussarela", "incluir_encerradas": True})
         self.assertEqual([c["id"] for c in r["acoes"]], [id_])
-        self.assertEqual((r["acoes"][0]["vendedores"], r["acoes"][0]["alvo"]), (1, "+1.000 sobre a base de cada um"))
+        self.assertEqual((r["acoes"][0]["vendedores"], r["acoes"][0]["meta"], r["acoes"][0]["tipo"]),
+                         (1, "+25% sobre a base de cada um", "campanha"))
         r, _ = f.executar("listar_acoes", {"texto": "", "incluir_encerradas": False})
         self.assertEqual(r["acoes"], [])  # as duas já terminaram
         r, p = f.executar("andamento_acao", {"acao": id_})
         self.assertIsNone(p["erro"])
-        self.assertEqual([(v["id"], v["base"], v["alvo"], v["resultado"], v["classe"]) for v in r["vendedores"]],
+        self.assertEqual([(v["id"], v["base"], v["meta"], v["resultado"], v["classe"]) for v in r["vendedores"]],
                          [(BA, 4000, 5000, 4750, "mid")])  # só a Thais no acesso
+        self.assertEqual((r["meta"], r["janela_da_base"]["periodo"]), ("+25% sobre a base de cada um", "agosto/2026"))
         self.assertEqual((r["fora_do_acesso"], p["resumo"]), (1, f"#{id_} Mussarela de setembro"))
         r, p = f.executar("andamento_acao", {"acao": objetivo})
         self.assertEqual(r["andamento_da_equipe"]["realizado"], 4750)
@@ -931,7 +1068,7 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         rubens, = d["linhas"]  # julho congelado: índice 1310 ÷ 1250; em junho, sem venda (sem base)
         self.assertAlmostEqual(rubens["resultado"], 1310 / 1250, places=4)
         self.assertEqual((rubens["base"], rubens["alvo"], rubens["classe"]), (None, 1.0, "ok"))
-        id_ = self.criar("positivacao", parametros={"clientes": "recuperados", "dias_sem_compra": 22}, alvo_tipo="mais",
+        id_ = self.criar("positivacao", parametros={"clientes": "recuperados", "dias_sem_compra": 22}, alvo_tipo="fixo",
                          meta_padrao=1)
         d = self.detalhe(id_)
         self.assertEqual(d["item"]["parametros"], {"clientes": "recuperados", "dias_sem_compra": 22})
@@ -961,7 +1098,7 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
     def test_efetividade(self):
         self.gestao.definir_areas(self.chefe, {1: [3], 2: [4]})
         id_ = self.criar("efetividade", regiao="ES", vendedores=[ES])
-        fat = self.criar("faturamento", "Faturamento", regiao="ES", vendedores=[ES], alvo_tipo="mais", meta_padrao=100)
+        fat = self.criar("faturamento", "Faturamento", regiao="ES", vendedores=[ES], alvo_tipo="pct", meta_padrao=10)
         d = self.detalhe(id_)
         rubens, = d["linhas"]  # 1 pedido em 5 quartas com 2 visitas: 0,5 ÷ 5 dias; em agosto, nenhum pedido
         self.assertEqual((rubens["resultado"], rubens["base"], rubens["alvo"], rubens["dias"]), (0.1, 0, 0.3, 5))
@@ -988,7 +1125,8 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         self.gestao.definir_areas(self.chefe, {1: [3], 2: [4]})
         # base de 1 a 15/9: quartas 2/9 (1 pedido ÷ 2 visitas) e 9/9 (nenhum) = 25%; a conta antiga contava também
         # o pedido da terça 15/9 e dava 2 ÷ 4 = 50%
-        id_ = self.criar("efetividade", regiao="ES", vendedores=[ES], inicio="2026-09-16", fim="2026-09-30")
+        id_ = self.criar("efetividade", regiao="ES", vendedores=[ES], inicio="2026-09-16", fim="2026-09-30",
+                         base_periodo="quinzena")
         self.assertEqual(self.detalhe(id_)["linhas"][0]["base"], 0.25)
         with self.banco.conexao() as con:  # como a conta antiga tinha gravado
             con.execute("UPDATE campanha_vendedores SET base = 0.5, base_num = 2, base_den = 4 WHERE campanha = %s", [id_])
@@ -1014,7 +1152,7 @@ class TestMigracao008(BaseBanco):
                 con.execute("INSERT INTO campanhas (nome, inicio, fim, metrica, criada_por, criada_por_nome) VALUES "
                             "(%s, '2026-09-01', '2026-09-30', %s, %s, 'Ana')", [nome, metrica, dono])
         self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe", "010_efetividade_media_diaria",
-                                               "011_efetividade_pedido_fora_da_previsao"])
+                                               "011_efetividade_pedido_fora_da_previsao", "012_base_periodo"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1045,7 +1183,7 @@ class TestMigracao009(BaseBanco):
                               [dono]).fetchone()[0]
             con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor) VALUES (%s, 124)", [id_])
         self.assertEqual(self.banco.migrar(), ["009_gestao_equipe", "010_efetividade_media_diaria",
-                                               "011_efetividade_pedido_fora_da_previsao"])
+                                               "011_efetividade_pedido_fora_da_previsao", "012_base_periodo"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()
@@ -1065,6 +1203,10 @@ class TestMigracao009(BaseBanco):
                                          "VALUES (124, 'nota', '  ', 'Ana')",
             "gestao_eventos_acao_check": "INSERT INTO gestao_eventos (id_vendedor, tipo, criada_por_nome) "
                                          "VALUES (124, 'lancada', 'Ana')",
+            "campanhas_base_periodo_check": "UPDATE campanhas SET base_periodo = 'dia'",
+            "campanhas_base_periodo_tipo_check": "INSERT INTO campanhas (tipo, nome, regiao, inicio, fim, metrica, "
+                                                 "base_periodo, criada_por_nome) VALUES ('objetivo', 'O', 'BA', "
+                                                 "'2026-09-01', '2026-09-30', 'positivacao', 'mes', 'Ana')",
         }
         for nome, sql in recusas.items():
             with self.assertRaises(Exception, msg=nome) as e:

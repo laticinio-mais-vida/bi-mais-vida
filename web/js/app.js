@@ -110,7 +110,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
-  gestao: () => "Objetivos, ações e o histórico de cada vendedor, por região",
+  gestao: () => "Objetivos, campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,
 };
 

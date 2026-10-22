@@ -37,7 +37,7 @@
   --k-vm: #002E5D;
 
   /* status (reservados: sempre com ícone e texto) */
-  --ok: #1B7F38; --ok-forte: #2A9C46; --ok-bg: #E4F4E8;
+  --ok: #1B7F38; --ok-forte: #2A9C46; --ok-bg: #E4F4E8; --ok-intenso: #0B5A22; /* acima da meta (Gestão) */
   --atencao: #8A5A00; --atencao-forte: #E8A800; --atencao-bg: #FFF4CC;
   --ruim: #C42B31; --ruim-forte: #E7373C; --ruim-bg: #FDE7E7;
   --neutro-bg: #EEF1F5;
@@ -83,7 +83,7 @@
   --k-cli: #3FB27A;
   --k-vm: #8FB4FF;
 
-  --ok: #5BD07A; --ok-forte: #4CC36A; --ok-bg: rgba(76, 195, 106, .15);
+  --ok: #5BD07A; --ok-forte: #4CC36A; --ok-bg: rgba(76, 195, 106, .15); --ok-intenso: #2EF27A;
   --atencao: #F5C842; --atencao-forte: #F2C230; --atencao-bg: rgba(242, 194, 48, .15);
   --ruim: #FF7B7F; --ruim-forte: #FF6B6F; --ruim-bg: rgba(255, 107, 111, .15);
   --neutro-bg: rgba(255, 255, 255, .06);
@@ -1622,7 +1622,7 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-obj-novo { grid-auto-flow: column; place-content: center; align-items: center; min-height: 84px; border-style: dashed; background: none; color: var(--tinta-3); font-weight: 700; }
 .ge-obj-novo .ic { width: 18px; height: 18px; color: var(--acento); }
 
-/* ações da região */
+/* campanhas da região */
 .ge-acoes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .ge-acao {
   --c: var(--acento);
@@ -1647,8 +1647,16 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-no-alvo { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .ge-no-alvo.ok { background: var(--ok-bg); color: var(--ok); }
 .ge-no-alvo.zero { background: var(--ruim-bg); color: var(--ruim); }
+/* a segunda barra: o andamento contra a meta (--m vem de corMeta: vermelho, amarelo ou verde, mais forte acima de 100%) */
+.ge-meta { position: relative; height: 6px; margin: 8px 0 2px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.ge-meta { overflow: visible; }
+.ge-meta i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 999px; background: var(--m, var(--linha-forte)); transition: width 1.1s var(--suave);
+  box-shadow: 0 0 calc(var(--i, 0) * 10px) calc(var(--i, 0) * 1px) var(--m, transparent); }
+.ge-meta-texto { font-size: 12px; font-weight: 700; color: color-mix(in srgb, var(--m, var(--tinta-3)) 62%, var(--tinta)); font-variant-numeric: tabular-nums; }
+.ge-meta-texto small { font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
+.ge-meta-texto.fraco { color: var(--tinta-3); font-weight: 600; }
 
-/* etiquetas das ações (texto e sinal sempre; a cor só reforça) */
+/* etiquetas das campanhas (texto e sinal sempre; a cor só reforça) */
 .ge-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; background: var(--neutro-bg); color: var(--tinta-2); }
 .ge-pill .ic { width: 12px; height: 12px; stroke-width: 2.4; }
 .ge-pill.vigor { background: var(--acento-suave); color: var(--acento-tinta); }
@@ -1656,6 +1664,8 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-pill.ok { background: var(--ok-bg); color: var(--ok); }
 .ge-pill.mid { background: var(--atencao-bg); color: var(--atencao); }
 .ge-pill.bad { background: var(--ruim-bg); color: var(--ruim); }
+.ge-pill.meta { background: color-mix(in srgb, var(--c) calc(15% + var(--i, 0) * 22%), var(--surface)); color: color-mix(in srgb, var(--c) 60%, var(--tinta));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) calc(35% + var(--i, 0) * 30%), transparent); font-variant-numeric: tabular-nums; }
 .ge-pill.pop { animation: ge-pop .5s var(--mola) both; }
 @keyframes ge-pop { 0% { opacity: 0; transform: scale(.6); } 70% { transform: scale(1.12); } 100% { opacity: 1; transform: none; } }
 
@@ -1668,9 +1678,13 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
   transition: transform .25s var(--mola), box-shadow .2s, border-color .2s;
 }
 .ge-vend:hover { transform: translateY(-1px); box-shadow: var(--sombra-2); }
-.ge-vend:focus-visible, .ge-acao:focus-visible, .ge-obj:focus-visible { outline: 3px solid var(--azul); outline-offset: 2px; }
+.ge-vend-cab:focus-visible, .ge-acao:focus-visible, .ge-obj:focus-visible { outline: 3px solid var(--azul); outline-offset: 2px; }
+.ge-vend-cab:focus-visible { border-radius: 10px; }
 .ge-vend.marcado { border-color: var(--laranja); box-shadow: 0 0 0 3px var(--acento-suave), var(--sombra-1); }
-.ge-vend-cab { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ge-vend-cab {
+  display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
 .ge-vend-cab b { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ge-avatar {
   width: 30px; height: 30px; flex: none; border-radius: 50%; display: grid; place-items: center;
@@ -1684,8 +1698,20 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-vend-fat { font-size: 12px; color: var(--tinta-3); }
 .ge-pills { display: flex; flex-wrap: wrap; gap: 4px; }
 .ge-sem-acao { font-size: 11.5px; color: var(--tinta-3); }
+/* com o formulário da campanha aberto: a base de cada um e, nos marcados, a meta */
+.ge-vend-base, .ge-vend-meta { font-size: 12.5px; color: var(--tinta-2); }
+.ge-vend-base b, .ge-vend-meta b { color: var(--tinta); font-variant-numeric: tabular-nums; }
+.ge-vend-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-top: 6px; border-top: 1px dashed var(--linha); }
+.ge-vend-meta small { color: var(--tinta-3); }
+.ge-vend-meta .ge-link { font-size: 12px; }
+.ge-meta-propria { display: inline-flex; align-items: center; gap: 4px; cursor: default; }
+.ge-meta-propria input {
+  width: 78px; height: 30px; padding: 0 8px; border-radius: 9px; border: 1px solid var(--linha-forte); background: var(--surface);
+  font: 600 13px var(--f-texto); color: var(--tinta); font-variant-numeric: tabular-nums;
+}
+.ge-meta-propria input:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
 
-/* ação em lote: o formulário em linha, acima dos quadrados */
+/* campanha em lote: o formulário em linha, acima dos quadrados */
 .ge-form { margin-bottom: 14px; border-color: color-mix(in srgb, var(--acento) 45%, var(--linha)); scroll-margin-top: 90px; }
 .ge-form-cab { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 6px 12px; margin-bottom: 12px; }
 .ge-form-cab b { display: block; font-family: var(--f-titulo); font-size: 16px; }
@@ -1701,6 +1727,13 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-alvo-linha { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 6px; }
 .ge-alvo-linha[hidden] { display: none; }
 .ge-previa { color: var(--acento-tinta); font-weight: 600; }
+.ge-base-media {
+  display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 10px 12px; border-radius: 12px;
+  background: var(--surface-2); font-size: 13px; line-height: 1.45; color: var(--tinta-2); transition: opacity .2s;
+}
+.ge-base-media b { color: var(--tinta); font-variant-numeric: tabular-nums; }
+.ge-base-media .ic { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--acento); }
+.ge-base-media.carregando { opacity: .6; }
 .ge-mais { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--linha); }
 .ge-mais summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
 .ge-mais summary::-webkit-details-marker { display: none; }
@@ -1764,12 +1797,14 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-link { padding: 0; border: 0; background: none; color: var(--acento-tinta); font: inherit; font-weight: 700; cursor: pointer; }
 .ge-link:hover { text-decoration: underline; }
 
-/* detalhe da ação */
+/* detalhe da campanha */
 .ge-det-tit { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .ge-det-resumo { margin: 12px 0 0; font-size: 13.5px; font-weight: 600; color: var(--tinta-2); }
 tr.ge-clicavel { cursor: pointer; }
 tr.ge-clicavel td small { display: block; font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
 tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--surface-2); }
+.ge-pct { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--c) calc(15% + var(--i, 0) * 22%), var(--surface)); color: color-mix(in srgb, var(--c) 60%, var(--tinta)); }
 
 /* painel de andamento da ação */
 .camp-detalhe { border-top: 4px solid var(--c); scroll-margin-top: 16px; }

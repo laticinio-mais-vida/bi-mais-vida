@@ -5,7 +5,7 @@ Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtro
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
-(Claude). A página **Gestão** acompanha a equipe por região: objetivos, ações por vendedor (com base, alvo e resultado) e o
+(Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
@@ -269,38 +269,50 @@ Crédito; para os outros, esses dados nem existem na cópia que a IA consulta.
 A **Gestão da equipe**, separada por região (**ES** e **BA**; o Edir é da BA, com o calendário dela):
 
 - no topo, os **objetivos do período** da região;
-- abaixo, as **ações**, com o tempo que falta (aviso quando faltam 5 dias ou menos) e, nas encerradas, quantos
-  vendedores ficaram no alvo;
-- e um **quadrado por vendedor** da equipe, com o % da meta de faturamento do mês (o mesmo da página Metas) e uma
-  etiqueta por ação: em vigor (bandeira) ou encerrada, com a diferença sobre a base (verde = alvo batido, amarelo =
-  melhorou sem chegar ao alvo, vermelho = não passou da base).
+- abaixo, as **campanhas**, com duas barras: o tempo que falta (aviso quando faltam 5 dias ou menos) e o andamento
+  contra a meta (nas encerradas, o resultado final e quantos vendedores ficaram na meta);
+- e um **quadrado por vendedor** da equipe, com uma etiqueta por campanha em vigor e o % da meta dele até agora.
+
+As cores do andamento seguem o % da meta, sem olhar o prazo: vermelho abaixo de 90%, amarelo de 90% a 99% e verde a
+partir de 100%, cada vez mais forte até 150%. Na barra da campanha, o % é a soma dos resultados ÷ a soma das metas
+nos indicadores que somam (positivação, faturamento, volume) e a média do % de cada vendedor nos que são médias (mix,
+efetividade, frequência, preço médio); quem ainda não tem meta (base aguardando os dados) fica de fora.
 
 A equipe é quem tem meta no mês na planilha METAS, como na página Metas: contas da casa (venda interna, funcionário,
-produtor) ficam fora. Quem está numa ação em vigor aparece mesmo sem meta.
+produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
 
-### Ações
+### Campanhas
 
-- **Lançar:** **Nova ação** liga a seleção no quadro: marque os vendedores e preencha o formulário que aparece acima
-  dos quadrados (ação, indicador, prazo e alvo; em **Mais opções**, início, etiqueta, descrição e os filtros). A mesma
-  ação vai para todos os marcados. No histórico de um vendedor, o botão **Ação** abre o formulário só com ele.
-- **Base:** o mesmo indicador, medido para cada vendedor num período do **mesmo tamanho da ação, logo antes do
-  início** (ação de 3 semanas: as 3 semanas antes). Fica gravada no lançamento e não muda com os dados novos. Se os
-  dados ainda não cobrem esse período (ação que começa no futuro), a base fica pendente e entra sozinha quando eles
-  chegarem.
-- **Alvo:** a base + N (nos percentuais, em pontos), a base + X%, ou um valor fixo para todos. No preço médio, é o
-  preço-alvo de cada produto (100%).
-- **Enquanto corre:** o histórico mostra a parcial de cada semana completa; o detalhe da ação (clicar no cartão
-  dela) mostra base, alvo, resultado até agora e a situação pelo ritmo dos dias úteis, por vendedor.
+- **Lançar:** **Nova campanha** liga a seleção no quadro: marque os vendedores e preencha o formulário que aparece
+  acima dos quadrados (nome, indicador, prazo, base e meta; em **Mais opções**, início, etiqueta, descrição e os
+  filtros). A mesma campanha vai para todos os marcados. No histórico de um vendedor, o botão **Campanha** abre o
+  formulário só com ele.
+- **Base:** o mesmo indicador, medido para cada vendedor no período fechado escolhido: **semana** (segunda a domingo),
+  **quinzena** (1 a 15 ou 16 ao fim do mês), **mês**, **trimestre**, **semestre** ou **ano**, sempre o último que
+  termina antes do início (campanha que começa em 22/10 com base mês: setembro inteiro). A base é o período inteiro,
+  sem ajuste ao tamanho da campanha. Fica gravada no lançamento e não muda com os dados novos. Se os dados ainda não
+  cobrem o período (campanha que começa no futuro), a base fica pendente e entra sozinha quando eles chegarem.
+  - Enquanto o formulário está aberto, ele mostra a média da equipe na base (e a dos marcados) e cada quadrado mostra
+    a base do vendedor; nos marcados, também a meta, com o botão **Meta própria** para dar uma meta diferente a ele.
+    Ao fechar o formulário, isso some.
+  - Campanhas de antes (migração 012) continuam com a base do mesmo tamanho, logo antes do início.
+- **Meta:** **Número** (o valor que cada um precisa atingir, igual para todos) ou **Percentual** (a base de cada um +
+  X%). No preço médio, é o preço-alvo de cada produto (100%). Campanhas de antes podem ter a meta "base + N", que só
+  aparece na edição delas.
+- **Enquanto corre:** o histórico mostra a parcial de cada semana completa; o detalhe da campanha (clicar no cartão
+  dela) mostra base, meta, resultado até agora, o % da meta e a situação pelo ritmo dos dias úteis, por vendedor.
 - **Resultado:** quando os dados passam um dia do fim, o resultado de cada vendedor congela e entra no histórico
-  dele, com a base, o alvo e a diferença. Até lá, aparece como provisório.
-- **Encerrar** (antes do fim) e **Prorrogar 2 semanas** valem para a ação inteira, com todos os vendedores. Ao mudar o
-  prazo, a base é medida de novo no novo tamanho, e o histórico registra o antes e o depois.
-- **Editar:** nome, etiqueta e descrição mudam sempre; alvo, prazo, indicador e vendedores só antes do resultado
-  congelar (vendedor que entra ganha a base dele; o que sai fica com o registro no histórico).
-- **Arquivar** tira a ação do quadro (o histórico dos vendedores continua). **Excluir** apaga a ação e os registros
-  dela no histórico; as observações ficam. As encerradas saem do quadro sozinhas 30 dias depois do fim.
+  dele, com a base, a meta e a diferença. Até lá, aparece como provisório.
+- **Encerrar** (antes do fim) e **Prorrogar 2 semanas** valem para a campanha inteira, com todos os vendedores. A base
+  continua a mesma (nas campanhas de antes, ela é medida de novo no novo tamanho), e o histórico registra o antes e o
+  depois.
+- **Editar:** nome, etiqueta e descrição mudam sempre; meta, prazo, base, indicador e vendedores só antes do
+  resultado congelar (vendedor que entra ganha a base dele; o que sai fica com o registro no histórico). Mudar o
+  início ou o período da base mede a base de novo; mudar só o prazo, não.
+- **Arquivar** tira a campanha do quadro (o histórico dos vendedores continua). **Excluir** apaga a campanha e os
+  registros dela no histórico; as observações ficam. As encerradas saem do quadro sozinhas 30 dias depois do fim.
 
-### O que uma ação mede
+### O que uma campanha mede
 
 Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Personalizada (a conta fica em
 `bi/indicadores.py`):
@@ -319,7 +331,7 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
     outra rede conta como semanal, com aviso.
   - Dia sem visita esperada (fim de semana, dia em que nenhuma área do vendedor é atendida) fica fora da média.
   - Diferente do Power BI, que divide todos os pedidos do período pelas visitas do período: lá, os pedidos fora de
-    rota e os de sábado e domingo entram sem visita, e numa ação curta isso distorce a conta.
+    rota e os de sábado e domingo entram sem visita, e numa campanha curta isso distorce a conta.
   - Os pedidos vêm do ERP (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA).
   - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada dia de atendimento dela que cai no
     período. Feriados contam, como no Power BI.
@@ -332,7 +344,7 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
   vendeu ÷ o que teria vendido as mesmas quantidades nos preços-alvo (100% = no alvo).
 - **Personalizada:** faturamento, venda média por cliente, volume (produtos de uma unidade só), volume por cliente,
   % da carteira que comprou ou produtos distintos. Nos objetivos há também o crescimento sobre o período anterior
-  ou o mesmo período do ano anterior (numa ação, "crescer X%" é o alvo + X% sobre a base).
+  ou o mesmo período do ano anterior (numa campanha, "crescer X%" é a meta Percentual: X% sobre a base).
 
 - **Quem conta:** todos os clientes, ou só os novos (sem compra antes do início), os recuperados (sem compra há N dias
   ou mais; padrão 90), quem nunca comprou os produtos escolhidos ou quem já comprava. Na base, o "antes" é o começo
@@ -345,21 +357,21 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
 
 ### Objetivos do período
 
-O indicador da equipe da região num período (por exemplo, mix médio da equipe em outubro e novembro), contra um
-alvo da equipe. A conta é da equipe toda junta, sem repetir clientes entre os vendedores. A equipe é quem tem meta
+O indicador da equipe da região num período (por exemplo, mix médio da equipe em outubro e novembro), contra uma
+meta da equipe. A conta é da equipe toda junta, sem repetir clientes entre os vendedores. A equipe é quem tem meta
 nos meses do objetivo. Quem vê só parte da equipe vê a conta dos vendedores do acesso, com o aviso "conta só os seus
 N de M vendedores".
 
 ### Histórico interno do vendedor
 
-Clicar num vendedor abre o histórico dele, como uma conversa: cada ação lançada (com a base e o alvo dele), as
-parciais de cada semana, o resultado com as barras de base, alvo e resultado, e as **observações** (combinados,
+Clicar num vendedor abre o histórico dele, como uma conversa: cada campanha lançada (com a base e a meta dele), as
+parciais de cada semana, o resultado com as barras de base, meta e resultado, e as **observações** (combinados,
 conversas) que o administrador escreve no campo de baixo. É só controle interno: o vendedor não vê.
 
 ### Quem vê o quê
 
-- **Só o administrador** lança, edita, encerra, prorroga e exclui ações, cria objetivos e escreve observações.
-- Quem tem a página liberada **acompanha**: vê as ações, os objetivos e o histórico (com as observações) dos
+- **Só o administrador** lança, edita, encerra, prorroga e exclui campanhas, cria objetivos e escreve observações.
+- Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
 - O acesso de cada pessoa se escolhe no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou
   **Só alguns**, como em Projeções e no Assistente.

@@ -1,4 +1,4 @@
-// O "Indicador medido" das ações e dos objetivos da página Gestão: a predefinição (um tipo pronto ou uma
+// O "Indicador medido" das campanhas e dos objetivos da página Gestão: a predefinição (um tipo pronto ou uma
 // combinação da Personalizada), quem conta (base de clientes), a comparação do crescimento (só nos objetivos), os
 // produtos com o preço-alvo (preço médio) e os filtros de produto e de cliente. Monta em qualquer contêiner; quem
 // usa lê valor() na hora de gravar. A conferência de verdade é do servidor (bi/gestao.py validar).
@@ -141,7 +141,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
       textos.push(u.length > 1 ? `Os produtos escolhidos têm unidades diferentes (${u.join(", ")}): em volume use uma só.`
         : "Em volume, escolha produtos, linha, categoria ou grupo com uma unidade só (a quantidade não soma kg com unidade).");
     }
-    if (preset.forma === "crescimento") textos.push("O alvo é o crescimento sobre o período de comparação, para a equipe toda.");
+    if (preset.forma === "crescimento") textos.push("A meta é o crescimento sobre o período de comparação, para a equipe toda.");
     if (preset.forma === "pct_carteira") textos.push("Conta os clientes ativos da carteira de cada vendedor que compraram no período, de qualquer vendedor.");
     if (preset.metrica === "efetividade") textos.push("A média da efetividade de cada dia: pedidos na rota do dia ÷ visitas esperadas no dia, pelos dias de atendimento das áreas (Gestão › Configurar), pela carteira de cada vendedor. Só contam os pedidos de clientes das áreas atendidas naquele dia. As visitas seguem a frequência de compra (rede do cadastro): semanais sempre, quinzenais sem compra nos 7 dias antes, mensais sem compra nos 21 dias antes; o pedido de quem não estava previsto conta, sem ele entrar nas visitas. Dias sem visita esperada (fim de semana) e clientes em áreas sem dia ficam fora.");
     if (preset.metrica === "frequencia") textos.push("Semanas de domingo a sábado, cortadas na virada do mês, como no Power BI.");

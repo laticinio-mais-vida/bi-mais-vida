@@ -1,29 +1,32 @@
 // Página Gestão ("Gestão da equipe"), separada por região (ES e BA; o Edir é da BA). No topo, os objetivos do
-// período da região; abaixo, as ações (com o tempo que falta e, nas encerradas, quantos ficaram no alvo) e um
-// quadrado por vendedor do acesso, com o % da meta de faturamento do mês e uma etiqueta por ação. Clicar no
-// vendedor abre o histórico interno dele (as ações com a base e o alvo dele, as observações, a parcial de cada
-// semana e o resultado); clicar numa ação abre o andamento dela por vendedor.
-// Só o administrador lança ações (marcando vendedores no quadro: a mesma ação para todos), cria objetivos, escreve
-// observações, encerra e prorroga; quem tem a página acompanha os vendedores do acesso. A conta é toda no servidor
-// (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
-// por #/gestao?rascunho=<id> e abre o formulário já preenchido.
+// período da região; abaixo, as campanhas (com o tempo que falta e o andamento contra a meta) e um quadrado por
+// vendedor do acesso, com uma etiqueta por campanha em vigor, colorida pelo % da meta. Clicar no vendedor abre o
+// histórico interno dele (as campanhas com a base e a meta dele, as observações, a parcial de cada semana e o
+// resultado); clicar numa campanha abre o andamento dela por vendedor.
+// Só o administrador lança campanhas (marcando vendedores no quadro: a mesma campanha para todos), cria objetivos,
+// escreve observações, encerra e prorroga; quem tem a página acompanha os vendedores do acesso. Enquanto o
+// formulário da campanha está aberto, os quadrados mostram a base de cada um (no período da base escolhido) e, nos
+// marcados, a meta, com a opção de uma meta própria. A conta é toda no servidor (bi/gestao.py), que manda o descritor
+// do indicador: a página só formata. O rascunho que o Assistente monta chega por #/gestao?rascunho=<id> e abre o
+// formulário já preenchido.
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
-import { ABERTURAS, ALVOS, definirCatalogo, deltaTexto, duracaoTexto, iniciais, periodoTexto, textoAlvo, textoBase, textoFiltros,
+import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, corMeta, definirCatalogo, deltaTexto, duracaoTexto,
+         iniciais, intensidadeMeta, janelaFechada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase,
          textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { construtorIndicador } from "./construtorindicador.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
 const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
-const CLASSE = { ok: "Alvo batido", mid: "Melhorou sobre a base", bad: "Abaixo da base", sem_alvo: "Sem alvo para comparar", sem_dados: "Sem dados" };
+const CLASSE = { ok: "Meta batida", mid: "Melhorou sobre a base", bad: "Abaixo da base", sem_alvo: "Sem meta para comparar", sem_dados: "Sem dados" };
 const SITUACAO = { planejada: "Planejada", em_vigor: "Em vigor", encerrada: "Encerrada" };
 const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
-const DESCARTAR = "Descartar o que foi preenchido nesta ação?";
+const DESCARTAR = "Descartar o que foi preenchido nesta campanha?";
 
 let ctx = null, raiz = null, ligado = false;
 const estado = {
   regiao: ler("mv-gestao-regiao", null), quadro: null, catalogo: null, erroCatalogo: null,
   vista: "grade", vendedor: null, historico: null, acao: null, detalhe: null, abrir: null, // o que o corpo mostra
-  selecao: null, form: null, // lançando (ou editando) uma ação: os vendedores marcados e o formulário em linha
+  selecao: null, form: null, // lançando (ou editando) uma campanha: os vendedores marcados e o formulário em linha
   recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
 };
 let dlg = null, formObj = null;
@@ -62,15 +65,26 @@ function periodoCurto(inicio, fim) {
   if (d === 1 && fim === fimDoMes(inicio)) return MESES[m - 1];
   return `${fmt.dataCurta(inicio)} a ${fmt.dataCurta(fim)}`;
 }
-// "nas 3 semanas antes", "no dia antes": o tamanho da janela da base.
-function janelaTexto(inicio, fim) {
+// "em agosto/2026", "na semana de 12/10 a 18/10", "no trimestre jul a set/2026"; nas campanhas de antes (sem período),
+// o tamanho da janela: "nas 3 semanas antes", "no dia antes".
+function janelaTexto(periodo, inicio, fim) {
+  if (periodo && periodo !== BASE_ANTIGA) {
+    const t = textoPeriodoBase(periodo, inicio, fim);
+    return { semana: `na semana de ${t}`, quinzena: `na quinzena de ${t}`, mes: `em ${t}`, ano: `em ${t}` }[periodo]
+      || `no ${PERIODOS_BASE[periodo].toLowerCase()} ${t}`;
+  }
   const t = duracaoTexto(inicio, fim);
   if (t === "1 semana") return "na semana antes";
   if (t === "1 dia") return "no dia antes";
   return `${t.endsWith("semanas") ? "nas" : "nos"} ${t} antes`;
 }
+// A janela das campanhas de antes: o mesmo número de dias, logo antes do início.
+function janelaAntiga(inicio, fim) {
+  const dias = Math.round((Date.parse(fim) - Date.parse(inicio)) / 864e5) + 1;
+  return [somar(inicio, -dias), somar(inicio, -1)];
+}
 function rotuloClasse(classe, caminho) {
-  if (classe === "mid" && caminho != null) return `${fmt.num(Math.max(0, Math.min(1, caminho)) * 100)}% do caminho até o alvo`;
+  if (classe === "mid" && caminho != null) return `${fmt.num(Math.max(0, Math.min(1, caminho)) * 100)}% do caminho até a meta`;
   return CLASSE[classe] || CLASSE.sem_dados;
 }
 const acaoDoQuadro = (id) => (estado.quadro?.acoes || []).find((a) => a.id === id);
@@ -97,7 +111,7 @@ export function montarGestao(container, contexto) {
         <div><b>Gestão da equipe</b><small id="g-hoje">&nbsp;</small></div></div>
       <div class="filtros">
         <div class="seg-mini ge-regioes" role="group" aria-label="Região" id="g-regioes"></div>
-        ${ctx.admin ? `<button class="btn primario" type="button" data-nova>${icone("mais")}Nova ação</button>
+        ${ctx.admin ? `<button class="btn primario" type="button" data-nova>${icone("mais")}Nova campanha</button>
           <a class="btn btn-config" href="#/config-gestao" title="Quem acompanha quais vendedores e os dias de atendimento das áreas">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
@@ -141,7 +155,7 @@ function atualizarUrl() {
   history.replaceState(null, "", `#/gestao${p.toString() ? `?${p}` : ""}`);
 }
 
-// Ao voltar para a página o quadro é lido de novo (uma ação lançada pelo Assistente aparece); um link de dentro do
+// Ao voltar para a página o quadro é lido de novo (uma campanha lançada pelo Assistente aparece); um link de dentro do
 // painel (#/gestao?a=12, ?rascunho=…) abre o que pede. Ao sair, a janela do objetivo fecha (se tinha alterações, o
 // roteador já perguntou).
 function aoMudarHash() {
@@ -201,7 +215,7 @@ async function carregarCatalogo() {
   return estado.catalogo;
 }
 
-// O histórico do vendedor ou o detalhe da ação (o corpo da página, no lugar dos quadrados).
+// O histórico do vendedor ou o detalhe da campanha (o corpo da página, no lugar dos quadrados).
 async function carregarVista({ rolar = false, silencioso = false } = {}) {
   const el = raiz.querySelector("#g-corpo");
   const pedido = ++estado.pedidoVista;
@@ -286,9 +300,9 @@ function desenharAcoes() {
   if (!d?.regiao) { el.innerHTML = ""; return; }
   const acoes = d.acoes || [];
   const vigor = acoes.filter((a) => a.situacao === "em_vigor").length;
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("bandeira")}Ações da região ${d.regiao}</h3><span class="ge-contagem">${fmt.num(vigor)} em vigor</span></div>
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("bandeira")}Campanhas da região ${d.regiao}</h3><span class="ge-contagem">${fmt.num(vigor)} em vigor</span></div>
     ${acoes.length ? `<div class="ge-acoes">${acoes.map(cartaoAcao).join("")}</div>`
-      : `<p class="ge-vazio">${icone("info")}<span>Nenhuma ação lançada nesta região${ctx.admin ? ". Use Nova ação para marcar os vendedores e lançar." : "."}</span></p>`}`;
+      : `<p class="ge-vazio">${icone("info")}<span>Nenhuma campanha lançada nesta região${ctx.admin ? ". Use Nova campanha para marcar os vendedores e lançar." : "."}</span></p>`}`;
   animarEntradas(el);
 }
 
@@ -300,14 +314,27 @@ function cartaoAcao(a, i) {
     : plan ? `Começa em ${pz.comeca_em === 1 ? "1 dia" : `${pz.comeca_em} dias`}`
     : pz.faltam === 0 ? "Termina hoje" : acaba ? `Termina em ${pz.faltam === 1 ? "1 dia" : `${pz.faltam} dias`}` : `Faltam ${pz.faltam} dias`;
   const extras = [a.provisorio ? "provisório" : "", a.base_pendente ? "base aguardando os dados" : ""].filter(Boolean).join(" · ");
-  const noAlvo = enc && a.com_resultado ? `<span class="ge-no-alvo ${a.no_alvo ? "ok" : "zero"}">${a.no_alvo} de ${a.vendedores} no alvo</span>` : "";
+  const noAlvo = enc && a.com_resultado ? `<span class="ge-no-alvo ${a.no_alvo ? "ok" : "zero"}">${a.no_alvo} de ${a.vendedores} na meta</span>` : "";
   const classe = enc ? "encerrada" : plan ? "planejada" : acaba ? "acaba" : "em-vigor";
   return `<button type="button" class="ge-acao ${classe} ${estado.vista === "acao" && estado.acao === a.id ? "atual" : ""} entra" style="--i:${i + 1}" data-acao="${a.id}">
     <span class="ge-acao-cab"><b>${esc(a.nome)}</b>${noAlvo}</span>
     <span class="ge-acao-info">${plural(a.vendedores, "vendedor", "vendedores")}, até ${fmt.dataCurta(a.fim)}</span>
     <span class="ge-tempo"><i data-largura="${largura}%"></i></span>
     <span class="ge-prazo">${esc(texto)}${extras ? `<small> · ${esc(extras)}</small>` : ""}</span>
+    ${barraMeta(a)}
   </button>`;
+}
+
+// A segunda barra do cartão: o andamento da campanha contra a meta (a largura para em 100%; acima disso, o verde fica
+// mais forte). Soma: a soma dos resultados ÷ a soma das metas; médias: a média do % de cada vendedor.
+function barraMeta(a) {
+  if (a.situacao === "planejada") return `<span class="ge-meta"><i></i></span><span class="ge-meta-texto fraco">Meta: ainda não começou</span>`;
+  const pct = a.meta_pct;
+  if (pct == null) return `<span class="ge-meta"><i></i></span><span class="ge-meta-texto fraco">Meta: ${a.base_pendente ? "aguardando a base" : "sem números ainda"}</span>`;
+  const conta = a.indicador?.comportamento === "soma" ? "soma dos resultados ÷ soma das metas" : "média do % da meta de cada vendedor";
+  const quem = a.com_meta < a.vendedores ? ` · ${a.com_meta} de ${a.vendedores} com meta` : "";
+  return `<span class="ge-meta" style="--m:${corMeta(pct)};--i:${intensidadeMeta(pct)}" title="${esc(conta)}"><i data-largura="${Math.max(0, Math.min(1, pct)) * 100}%"></i></span>
+    <span class="ge-meta-texto" style="--m:${corMeta(pct)}">${a.situacao === "encerrada" ? "Resultado: " : ""}${fmt.pct(pct, 0)} da meta<small>${esc(quem)}</small></span>`;
 }
 
 function desenharCorpo() {
@@ -323,37 +350,103 @@ function desenharGrade() {
   const el = raiz.querySelector("#g-grade");
   if (!el) return;
   const d = estado.quadro, vend = d.vendedores || [];
-  const mes = d.mes_faturamento ? `% da meta de faturamento de ${MESES[d.mes_faturamento.mes - 1]}` : "";
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${mes ? ` · ${mes}` : ""}</span></div>
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${estado.form ? " · a base de cada um no período escolhido" : ""}</span></div>
     ${vend.length ? `<div class="ge-grade ${estado.selecao ? "selecionando" : ""}">${vend.map(quadrado).join("")}</div>`
       : `<p class="ge-vazio">${icone("info")}<span>Nenhum vendedor da região no seu acesso.</span></p>`}`;
 }
 
+// O quadrado do vendedor. Com o formulário da campanha aberto: a base dele e, se marcado, a meta (com a meta própria);
+// fora dele: as campanhas em vigor. O topo é o botão (marca/desmarca ou abre o histórico); o resto do quadrado também
+// responde ao clique, menos os campos da meta própria (data-parar).
 function quadrado(v) {
   const sel = estado.selecao, marcado = !!sel?.has(v.id);
-  const fat = v.faturamento_pct == null ? "Sem meta de faturamento no mês" : `Faturamento ${fmt.pct(v.faturamento_pct, 0)} da meta`;
-  const pills = v.acoes.map(etiqueta).join("") || `<span class="ge-sem-acao">Sem ação em vigor</span>`;
-  return `<button type="button" class="ge-vend ${marcado ? "marcado" : ""}" data-vendedor="${v.id}" ${sel ? `role="checkbox" aria-checked="${marcado}"` : ""} aria-label="${esc(v.nome)}">
-    <span class="ge-vend-cab"><span class="ge-avatar" style="--c:${corAvatar(v.id)}">${esc(iniciais(v.nome))}</span><b>${esc(v.nome)}</b>
-      ${sel ? `<span class="ge-caixa">${marcado ? icone("visto") : ""}</span>` : ""}</span>
-    <span class="ge-vend-fat">${esc(fat)}${v.inativo ? " · inativo" : ""}</span>
-    <span class="ge-pills">${pills}</span></button>`;
+  const corpo = estado.form ? baseDoQuadrado(v, marcado)
+    : `<span class="ge-pills">${v.acoes.map(etiqueta).join("") || `<span class="ge-sem-acao">Sem campanha em vigor</span>`}</span>`;
+  return `<div class="ge-vend ${marcado ? "marcado" : ""} ${estado.form ? "com-base" : ""}" data-vendedor="${v.id}">
+    <button type="button" class="ge-vend-cab" data-vendedor="${v.id}" ${sel ? `role="checkbox" aria-checked="${marcado}"` : ""} aria-label="${esc(v.nome)}${sel ? "" : ": abrir o histórico"}">
+      <span class="ge-avatar" style="--c:${corAvatar(v.id)}">${esc(iniciais(v.nome))}</span><b>${esc(v.nome)}</b>
+      ${sel ? `<span class="ge-caixa">${marcado ? icone("visto") : ""}</span>` : ""}</button>
+    ${v.inativo ? `<span class="ge-vend-fat">inativo no ERP</span>` : ""}
+    ${corpo}</div>`;
 }
 
+function redesenharQuadrado(id) {
+  const v = (estado.quadro?.vendedores || []).find((x) => x.id === id), card = raiz.querySelector(`.ge-vend[data-vendedor="${id}"]`);
+  if (!v || !card) return;
+  const foco = document.activeElement?.closest?.(".ge-vend") === card;
+  card.outerHTML = quadrado(v);
+  if (foco) raiz.querySelector(`.ge-vend[data-vendedor="${id}"] .ge-vend-cab`)?.focus();
+}
+
+// A base do vendedor no período escolhido (da prévia do servidor) e, nos marcados, a meta dele.
+function baseDoQuadrado(v, marcado) {
+  const f = estado.form, p = f.previa, ind = p?.indicador;
+  let base = null, linha;
+  if (f.erroPrevia) linha = `<span class="fraco">Base: —</span>`;
+  else if (!p) linha = `<span class="fraco">Base: calculando…</span>`;
+  else if (p.pendente) linha = `<span class="fraco">Base: aguardando os dados</span>`;
+  else {
+    base = p.vendedores[String(v.id)] ?? null;
+    linha = `Base: <b>${base == null ? "sem dados" : esc(valorIndicador(ind, base, p.unidade, true))}</b>`;
+  }
+  return `<span class="ge-vend-base">${linha}</span>${marcado ? `<span class="ge-vend-meta" data-meta-de="${v.id}">${metaDoQuadrado(v, base)}</span>` : ""}`;
+}
+
+function metaDoQuadrado(v, base) {
+  const f = estado.form, p = f.previa, form = raiz.querySelector("#g-form");
+  const ind = p?.indicador || f.construtor?.descritor();
+  if (!ind) return "";
+  if (ind.tipo === "preco_medio") return `Meta: <b>no preço-alvo</b>`;
+  const tipo = form?.querySelector('[name="alvo_tipo"]')?.value || f.dados.alvo_tipo;
+  const padrao = form?.querySelector('[name="meta"]')?.value ?? "";
+  const propria = f.metas.get(v.id);
+  const meta = propria ?? (padrao === "" ? null : Number(padrao));
+  const alvo = p && !p.pendente ? alvoDe(ind, tipo, base, meta) : tipo === "fixo" ? alvoDe(ind, tipo, null, meta) : null;
+  const texto = alvo != null ? esc(valorIndicador(ind, alvo, p?.unidade || ind.unidade, true))
+    : meta == null ? "—" : tipo === "pct" && p && !p.pendente ? "sem base" : "—";
+  const sufixo = tipo === "pct" && meta != null ? ` <small>(+${esc(fmt.num(meta, 1))}%)</small>` : "";
+  const aberta = propria != null || f.abertas.has(v.id);
+  const unidade = tipo === "fixo" ? (ind.meta_em_pct ? "%" : "") : "%";
+  const controle = aberta
+    ? `<span class="ge-meta-propria" data-parar><input type="number" min="0" step="any" inputmode="decimal" data-meta-v="${v.id}" value="${propria ?? ""}"
+        placeholder="${esc(padrao || "meta")}" aria-label="Meta própria de ${esc(v.nome)}">${unidade ? `<small>${unidade}</small>` : ""}
+        <button type="button" class="ge-x" data-tirar-meta="${v.id}" title="Voltar à meta padrão" aria-label="Voltar à meta padrão">${icone("x")}</button></span>`
+    : `<button type="button" class="ge-link" data-meta-propria="${v.id}">Meta própria</button>`;
+  return `<span class="ge-vend-alvo">Meta${propria != null ? " própria" : ""}: <b>${texto}</b>${sufixo}</span>${controle}`;
+}
+
+// Só o texto da meta dos marcados (a meta padrão ou o tipo mudou): os campos abertos ficam como estão.
+function atualizarMetasQuadrados() {
+  const f = estado.form;
+  if (!f) return;
+  raiz.querySelectorAll(".ge-vend-meta[data-meta-de]").forEach((el) => {
+    const id = Number(el.dataset.metaDe), v = (estado.quadro?.vendedores || []).find((x) => x.id === id);
+    const alvo = el.querySelector(".ge-vend-alvo");
+    if (!v || !alvo) return;
+    const p = f.previa, base = p && !p.pendente ? (p.vendedores[String(id)] ?? null) : null;
+    const tmp = document.createElement("span");
+    tmp.innerHTML = metaDoQuadrado(v, base);
+    alvo.replaceWith(tmp.querySelector(".ge-vend-alvo"));
+  });
+}
+
+// Fora do formulário: uma etiqueta por campanha em vigor, com o % da meta até agora.
 function etiqueta(e) {
   const pop = estado.recem === e.id ? " pop" : "";
-  if (e.situacao === "em_vigor") return `<span class="ge-pill vigor${pop}" title="Em vigor até ${fmt.dataCurta(e.fim)}">${icone("bandeira")}${esc(e.rotulo)}</span>`;
-  if (e.situacao === "planejada") return `<span class="ge-pill planejada${pop}" title="Ainda não começou">${icone("calendario")}${esc(e.rotulo)}</span>`;
   const a = acaoDoQuadro(e.id);
-  const delta = a && e.delta != null ? deltaTexto(a.indicador, e.delta, a.unidade) : "";
-  const cls = ["ok", "mid", "bad"].includes(e.classe) ? e.classe : "";
-  return `<span class="ge-pill ${cls}${pop}" title="${esc(rotuloClasse(e.classe))}${e.provisorio ? " (provisório)" : ""}">${esc(e.rotulo)}${delta ? ` ${esc(delta)}` : ""}</span>`;
+  if (e.pct == null || !a) {
+    const porque = e.base_pendente ? "aguardando a base" : "sem meta ou sem números ainda";
+    return `<span class="ge-pill${pop}" title="${esc(`${porque} · até ${fmt.dataCurta(e.fim)}`)}">${icone("bandeira")}${esc(e.rotulo)}</span>`;
+  }
+  const titulo = `${fmt.pct(e.pct, 0)} da meta (${valorIndicador(a.indicador, e.resultado, a.unidade, true)} de ${valorIndicador(a.indicador, e.alvo, a.unidade, true)}) · até ${fmt.dataCurta(e.fim)}`;
+  return `<span class="ge-pill meta${pop}" style="--c:${corMeta(e.pct)};--i:${intensidadeMeta(e.pct)}" title="${esc(titulo)}">${esc(e.rotulo)} · ${fmt.pct(e.pct, 0)}</span>`;
 }
 
-// ---------- ação em lote: marcar os vendedores e lançar ----------
+// ---------- campanha em lote: marcar os vendedores e lançar ----------
 function padraoAcao() {
   return { nome: "", rotulo: "", descricao: "", inicio: estado.quadro?.hoje || hojeLocal(), fim: null, semanas: 3,
-           metrica: "mix_medio", parametros: {}, filtros: {}, alvo_tipo: "mais", meta_padrao: "", metas_produto: [] };
+           base_periodo: "mes", metrica: "mix_medio", parametros: {}, filtros: {}, alvo_tipo: "fixo", meta_padrao: "",
+           metas_produto: [] };
 }
 
 function formMudou() {
@@ -361,7 +454,7 @@ function formMudou() {
   return !!(f && f.orig && JSON.stringify(coletarForm()) !== f.orig);
 }
 
-// Antes de trocar o que o corpo mostra: confirma se há uma ação preenchida e sai do modo de seleção.
+// Antes de trocar o que o corpo mostra: confirma se há uma campanha preenchida e sai do modo de seleção.
 function podeSairDoForm() {
   if (!estado.form) return true;
   if (formMudou() && !confirm(DESCARTAR)) return false;
@@ -373,9 +466,13 @@ async function entrarSelecao(ids = [], dados = null, extra = {}) {
   if (!ctx.admin || !estado.quadro?.regiao) return;
   if (estado.form && formMudou() && !confirm(DESCARTAR)) return;
   estado.selecao = new Set(ids);
+  const d = { ...padraoAcao(), ...(dados || {}) };
+  const antiga = !!extra.id && d.base_periodo == null; // campanha de antes da 012: pode manter a base "logo antes"
+  if (d.base_periodo == null) d.base_periodo = antiga ? BASE_ANTIGA : "mes";
   estado.form = { id: extra.id || null, rascunho: extra.rascunho || null, nomes: extra.nomes || {}, construtor: null, orig: null,
-                  dados: { ...padraoAcao(), ...(dados || {}) },
-                  metas: new Map((dados?.vendedores || []).map((v) => [v.id, v.meta ?? null])) };
+                  dados: d, antiga, metas: new Map((dados?.vendedores || []).map((v) => [v.id, v.meta ?? null])),
+                  abertas: new Set(), previa: null, erroPrevia: null, carregandoPrevia: false, pedidoPrevia: 0,
+                  chavePrevia: null, timerPrevia: null };
   if (estado.vista !== "grade") {
     estado.vista = "grade";
     estado.historico = estado.detalhe = null;
@@ -390,6 +487,7 @@ async function entrarSelecao(ids = [], dados = null, extra = {}) {
 
 function sairSelecao() {
   if (estado.form && formMudou() && !confirm(DESCARTAR)) return;
+  clearTimeout(estado.form?.timerPrevia);
   estado.form = estado.selecao = null;
   const el = raiz.querySelector("#g-form");
   if (el) el.innerHTML = "";
@@ -399,20 +497,15 @@ function sairSelecao() {
 function alternar(id) {
   const s = estado.selecao;
   if (s.has(id)) s.delete(id); else s.add(id);
-  const card = raiz.querySelector(`.ge-vend[data-vendedor="${id}"]`);
-  if (card) {
-    const m = s.has(id);
-    card.classList.toggle("marcado", m);
-    card.setAttribute("aria-checked", m);
-    card.querySelector(".ge-caixa").innerHTML = m ? icone("visto") : "";
-  }
+  redesenharQuadrado(id);
   contarSelecao();
+  desenharMedia();
 }
 
 function contarSelecao() {
   const n = estado.selecao?.size || 0, f = estado.form;
   const t = raiz.querySelector("#gf-titulo"), b = raiz.querySelector("[data-lancar] span");
-  if (t) t.textContent = f?.id ? `Editar ação · ${plural(n, "vendedor", "vendedores")}` : `Nova ação para ${plural(n, "vendedor", "vendedores")}`;
+  if (t) t.textContent = f?.id ? `Editar campanha · ${plural(n, "vendedor", "vendedores")}` : `Nova campanha para ${plural(n, "vendedor", "vendedores")}`;
   if (b) b.textContent = f?.id ? "Salvar alterações" : `Lançar para ${n}`;
   if (n) erroForm("");
 }
@@ -427,22 +520,24 @@ async function montarForm() {
         <span class="fraco">${f.rascunho ? "Rascunho do Assistente: confira e lance. " : ""}Marque os vendedores no quadro abaixo.</span></div>
       <span class="ge-pill">região ${esc(estado.quadro.regiao)}</span></div>
     <div class="ge-campos">
-      <label class="campo-form"><span>Ação</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Aumentar mix médio" autocomplete="off"></label>
+      <label class="campo-form"><span>Campanha</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Aumentar mix médio" autocomplete="off"></label>
       <div class="ge-indicador" id="gf-indicador"><div class="esqueleto" style="height:66px"></div></div>
       <label class="campo-form"><span>Prazo</span><span class="campo"><select name="prazo" style="padding-left:14px"></select></span></label>
-      <div class="campo-form ge-alvo"><span>Alvo <small id="gf-unidade"></small></span>
-        <span class="ge-alvo-linha"><span class="campo"><select name="alvo_tipo" aria-label="Tipo de alvo" style="padding-left:14px">${Object.entries(ALVOS)
-          .map(([k, n]) => `<option value="${k}" ${k === (d.alvo_tipo || "mais") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></span>
-          <input name="meta" type="number" min="0" step="any" inputmode="decimal" value="${d.meta_padrao ?? ""}" placeholder="quanto" aria-label="Número do alvo"></span>
+      <label class="campo-form"><span>Base <small>(período fechado antes do início)</small></span><span class="campo"><select name="base_periodo" style="padding-left:14px"></select></span></label>
+      <div class="campo-form ge-alvo"><span>Meta <small id="gf-unidade"></small></span>
+        <span class="ge-alvo-linha"><span class="campo"><select name="alvo_tipo" aria-label="Tipo de meta" style="padding-left:14px">${Object.entries({ ...METAS, ...(d.alvo_tipo === "mais" ? META_ANTIGA : {}) })
+          .map(([k, n]) => `<option value="${k}" ${k === (d.alvo_tipo || "fixo") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></span>
+          <input name="meta" type="number" min="0" step="any" inputmode="decimal" value="${d.meta_padrao ?? ""}" placeholder="quanto" aria-label="Valor da meta"></span>
         <small class="ge-previa" id="gf-previa"></small></div>
     </div>
+    <p class="ge-base-media" id="gf-base" aria-live="polite"></p>
     <div id="gf-precos"></div>
     <details class="ge-mais"><summary>${icone("ajustes")}Mais opções: início, etiqueta, descrição, produtos e clientes que contam</summary>
       <div class="ge-campos">
         <label class="campo-form"><span>Início</span><input type="date" name="inicio" value="${esc(d.inicio)}"></label>
         <label class="campo-form" id="gf-fim-bloco" ${f.semanas ? "hidden" : ""}><span>Fim</span><input type="date" name="fim" value="${esc(d.fim || somar(d.inicio, 20))}"></label>
         <label class="campo-form"><span>Etiqueta no quadro <small>(até 20 letras)</small></span><input name="rotulo" maxlength="20" value="${esc(d.rotulo || "")}" autocomplete="off"></label>
-        <label class="campo-form ge-largo"><span>Descrição <small>(opcional)</small></span><textarea name="descricao" rows="2" maxlength="2000" placeholder="Objetivo e combinados da ação">${esc(d.descricao || "")}</textarea></label>
+        <label class="campo-form ge-largo"><span>Descrição <small>(opcional)</small></span><textarea name="descricao" rows="2" maxlength="2000" placeholder="Objetivo e combinados da campanha">${esc(d.descricao || "")}</textarea></label>
       </div>
       <div id="gf-filtros"></div>
     </details>
@@ -453,14 +548,20 @@ async function montarForm() {
     </div>
   </section>`;
   desenharPrazos(f.semanas ? String(f.semanas) : "data");
+  desenharBases(d.base_periodo);
   contarSelecao();
+  desenharMedia();
   animarEntradas(alvo);
   const cat = await carregarCatalogo();
   if (estado.form !== f) return; // cancelou ou abriu outra enquanto o catálogo vinha
   if (!cat) {
     alvo.querySelector("#gf-indicador").innerHTML = `<p class="usu-nota aviso-nota">${icone("alerta")}<span>Não foi possível carregar produtos e clientes: ${esc(estado.erroCatalogo)}</span></p>`;
+    f.erroPrevia = "sem o catálogo de produtos e clientes";
+    desenharMedia();
+    desenharGrade();
     return;
   }
+  desenharBases(); // agora com o começo do histórico (os períodos antes dele ficam bloqueados)
   f.construtor = construtorIndicador(alvo.querySelector("#gf-indicador"), {
     catalogo: cat, inicial: d, nomes: f.nomes, filtrosEm: alvo.querySelector("#gf-filtros"), precosEm: alvo.querySelector("#gf-precos"),
     aoMudar: atualizarAlvo,
@@ -480,19 +581,120 @@ function desenharPrazos(valor) {
   el.value = atual;
 }
 
+// Os períodos da base, com as datas de cada um a partir do início escolhido. Os que começam antes do histórico do
+// cache ficam bloqueados; a campanha de antes da 012 ganha a opção de manter a regra dela.
+function desenharBases(valor) {
+  const f = estado.form, form = raiz.querySelector("#g-form"), el = form?.querySelector('[name="base_periodo"]');
+  if (!f || !el) return;
+  const atual = valor || el.value || f.dados.base_periodo;
+  const inicio = form.querySelector('[name="inicio"]').value || estado.quadro.hoje;
+  const desde = estado.catalogo?.inicio_dados;
+  const opcoes = Object.entries(PERIODOS_BASE).map(([k, n]) => {
+    const [de, ate] = janelaFechada(inicio, k);
+    const antes = !!desde && de < desde;
+    return `<option value="${k}" ${antes ? "disabled" : ""}>${n} · ${esc(textoPeriodoBase(k, de, ate))}${antes ? " (antes do histórico)" : ""}</option>`;
+  });
+  if (f.antiga) {
+    const [de, ate] = janelaAntiga(inicio, fimDoForm());
+    opcoes.push(`<option value="${BASE_ANTIGA}">Mesmo tamanho, logo antes (antigo) · ${fmt.dataCurta(de)} a ${fmt.dataCurta(ate)}</option>`);
+  }
+  el.innerHTML = opcoes.join("");
+  el.value = atual;
+  if (!el.value || el.selectedOptions[0]?.disabled) el.value = [...el.options].find((o) => !o.disabled)?.value || "";
+}
+
+function fimDoForm() {
+  const form = raiz.querySelector("#g-form"), val = (n) => form.querySelector(`[name="${n}"]`).value;
+  const inicio = val("inicio") || estado.quadro.hoje;
+  return val("prazo") === "data" ? (val("fim") || inicio) : somar(inicio, 7 * Number(val("prazo")) - 1);
+}
+
 function atualizarAlvo() {
   const f = estado.form, form = raiz.querySelector("#g-form");
   if (!f?.construtor || !form) return;
   const pr = f.construtor.preset(), desc = f.construtor.descritor();
   const preco = pr.metrica === "preco_medio";
   const tipo = form.querySelector('[name="alvo_tipo"]').value;
+  const unidade = f.construtor.unidadeAlvo() || "valor";
   form.querySelector(".ge-alvo-linha").hidden = preco;
-  form.querySelector("#gf-unidade").textContent = preco ? "" : tipo === "pct" ? "(% sobre a base)"
-    : `(${f.construtor.unidadeAlvo() || "valor"}${tipo === "mais" && pr.pct ? ", em pontos" : ""})`;
-  const meta = form.querySelector('[name="meta"]').value;
+  form.querySelector("#gf-unidade").textContent = preco ? "" : tipo === "pct" ? "(% sobre a base de cada um)"
+    : tipo === "mais" ? `(${unidade} a mais sobre a base${pr.pct ? ", em pontos" : ""})` : `(${unidade} a atingir)`;
+  const campo = form.querySelector('[name="meta"]');
+  campo.step = tipo === "fixo" && ["clientes", "produtos"].includes(pr.formato) ? "1" : "any";
+  const meta = campo.value;
   form.querySelector("#gf-previa").textContent = preco ? "No preço-alvo de cada produto (100%)."
     : meta !== "" ? `${capitalizar(textoAlvo(desc, tipo, Number(meta), desc.unidade))}.` : "";
   form.querySelector('[name="rotulo"]').placeholder = pr.rotulo;
+  atualizarMetasQuadrados();
+  agendarPrevia();
+}
+
+// ---------- prévia da base (o servidor mede; nada é gravado) ----------
+function corpoPrevia() {
+  const f = estado.form, d = coletarForm();
+  return { campanha: { id: f.id, regiao: d.regiao, inicio: d.inicio, semanas: d.semanas, fim: d.fim, base_periodo: d.base_periodo,
+                       metrica: d.metrica, parametros: d.parametros, filtros: d.filtros, metas_produto: d.metas_produto },
+           ids: (estado.quadro?.vendedores || []).map((v) => v.id) };
+}
+
+// Pede a base de novo quando o que a muda mudou (o indicador, os filtros, os preços, a base, o início ou o prazo).
+function agendarPrevia() {
+  const f = estado.form;
+  if (!f?.construtor) return;
+  const corpo = corpoPrevia(), chave = JSON.stringify(corpo);
+  if (chave === f.chavePrevia) return;
+  f.chavePrevia = chave;
+  clearTimeout(f.timerPrevia);
+  const { metrica, metas_produto: precos } = corpo.campanha;
+  if (metrica === "preco_medio" && (!precos.length || precos.some((p) => !(p.meta > 0)))) {
+    f.previa = null;
+    f.erroPrevia = "dê o preço-alvo de cada produto para ver a base";
+    desenharMedia();
+    desenharGrade();
+    return;
+  }
+  f.carregandoPrevia = true;
+  desenharMedia();
+  f.timerPrevia = setTimeout(() => buscarPrevia(f, corpo), 400);
+}
+
+async function buscarPrevia(f, corpo) {
+  const n = ++f.pedidoPrevia;
+  try {
+    const p = await api("/api/gestao/base", { json: corpo });
+    if (estado.form !== f || n !== f.pedidoPrevia) return;
+    f.previa = p;
+    f.erroPrevia = null;
+  } catch (e) {
+    if (estado.form !== f || n !== f.pedidoPrevia) return;
+    f.previa = null;
+    f.erroPrevia = e.message;
+  }
+  f.carregandoPrevia = false;
+  desenharMedia();
+  desenharGrade();
+}
+
+// "Média da equipe na base (agosto/2026): 4,1 produtos por cliente · dos 3 marcados: 4,4".
+function desenharMedia() {
+  const f = estado.form, el = raiz.querySelector("#gf-base");
+  if (!f || !el) return;
+  const p = f.previa;
+  el.classList.toggle("carregando", !!f.carregandoPrevia);
+  if (f.erroPrevia) { el.innerHTML = `${icone("info")}<span>Base: ${esc(f.erroPrevia)}</span>`; return; }
+  if (!p) { el.innerHTML = `${icone("grafico")}<span>Calculando a base de cada vendedor…</span>`; return; }
+  const periodo = textoPeriodoBase(p.base_periodo, p.base_inicio, p.base_fim);
+  if (p.pendente) {
+    el.innerHTML = `${icone("calendario")}<span>Base ${esc(periodo)}: os dados vão até ${fmt.dataCurta(p.data_ref)}; a base de cada um é medida quando o período fechar.</span>`;
+    return;
+  }
+  if (p.aviso) { el.innerHTML = `${icone("alerta")}<span>${esc(capitalizar(p.aviso))}</span>`; return; }
+  const valor = (x) => esc(valorIndicador(p.indicador, x, p.unidade));
+  const marcados = [...(estado.selecao || [])].map((id) => p.vendedores[String(id)]).filter((x) => x != null);
+  const media = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
+  const dos = marcados.length && marcados.length < Object.keys(p.vendedores).length
+    ? ` · dos ${plural(marcados.length, "marcado", "marcados")}: <b>${valor(media(marcados))}</b>` : "";
+  el.innerHTML = `${icone("grafico")}<span>Média da equipe na base (${esc(periodo)}): <b>${p.media == null ? "sem dados" : valor(p.media)}</b>${dos}</span>`;
 }
 
 function coletarForm() {
@@ -504,7 +706,8 @@ function coletarForm() {
   const preco = ind.metrica === "preco_medio";
   return {
     nome: val("nome").trim(), rotulo: val("rotulo").trim(), descricao: val("descricao").trim(), regiao: estado.quadro?.regiao,
-    inicio: val("inicio"), ...(prazo === "data" ? { fim: val("fim") } : { semanas: Number(prazo) }), ...ind,
+    inicio: val("inicio"), ...(prazo === "data" ? { fim: val("fim") } : { semanas: Number(prazo) }),
+    base_periodo: val("base_periodo") || f.dados.base_periodo, ...ind,
     alvo_tipo: preco ? "fixo" : val("alvo_tipo"), meta_padrao: preco ? 100 : (val("meta") === "" ? null : Number(val("meta"))),
     vendedores: [...(estado.selecao || [])].map((id) => ({ id, meta: f.metas.get(id) ?? null })),
   };
@@ -524,12 +727,12 @@ async function lancar() {
   if (!f.construtor) return erroForm("espere carregar os produtos e os clientes");
   const dados = coletarForm();
   if (!dados.vendedores.length) return erroForm("marque ao menos um vendedor");
-  if (!dados.nome) return erroForm("dê um nome à ação");
+  if (!dados.nome) return erroForm("dê um nome à campanha");
   if (dados.metrica === "preco_medio") {
     if (!dados.metas_produto.length) return erroForm("escolha os produtos do preço médio");
     if (dados.metas_produto.some((p) => !(p.meta > 0))) return erroForm("dê o preço-alvo de cada produto (R$ por unidade)");
   } else if (!(dados.meta_padrao > 0)) {
-    return erroForm("dê o alvo");
+    return erroForm("dê a meta");
   }
   const btn = raiz.querySelector("[data-lancar]");
   btn.disabled = true;
@@ -539,7 +742,8 @@ async function lancar() {
       ? await api("/api/gestao/acao/editar", { json: { id: f.id, acao: dados } })
       : await api("/api/gestao/acoes", { json: { acao: dados, rascunho: f.rascunho } });
     const id = f.id || r.id;
-    toast(f.id ? "Ação salva" : r.ja_existia ? "Este rascunho já tinha virado ação" : `Ação lançada para ${plural(dados.vendedores.length, "vendedor", "vendedores")}`);
+    toast(f.id ? "Campanha salva" : r.ja_existia ? "Este rascunho já tinha virado campanha" : `Campanha lançada para ${plural(dados.vendedores.length, "vendedor", "vendedores")}`);
+    clearTimeout(f.timerPrevia);
     estado.form = estado.selecao = null;
     raiz.querySelector("#g-form").innerHTML = "";
     estado.recem = id;
@@ -583,20 +787,20 @@ function desenharHistorico() {
     if (e.data !== dia) { corpo += `<div class="ge-dia"><span>${fmt.dataCurta(e.data)}</span></div>`; dia = e.data; }
     corpo += evento(e, h);
   }
-  if (!h.eventos.length) corpo = `<p class="ge-hist-vazio">${h.pode_editar ? "Nenhum registro ainda. Lance uma ação ou escreva uma observação." : "Nenhum registro ainda."}</p>`;
+  if (!h.eventos.length) corpo = `<p class="ge-hist-vazio">${h.pode_editar ? "Nenhum registro ainda. Lance uma campanha ou escreva uma observação." : "Nenhum registro ainda."}</p>`;
   el.innerHTML = `<section class="cartao ge-hist entra" style="--i:0">
     <header class="ge-hist-cab">
       <button class="btn icone" type="button" data-voltar title="Voltar ao quadro" aria-label="Voltar ao quadro">${icone("voltar")}</button>
       <span class="ge-avatar grande" style="--c:${corAvatar(v.id)}">${esc(iniciais(v.nome))}</span>
       <div class="ge-hist-quem"><b>${esc(v.nome)}</b>
-        <small>${esc(v.regiao || v.equipe || "")}, ${plural(h.em_vigor, "ação em vigor", "ações em vigor")}${v.inativo ? " · inativo no ERP" : ""}</small></div>
+        <small>${esc(v.regiao || v.equipe || "")}, ${plural(h.em_vigor, "campanha em vigor", "campanhas em vigor")}${v.inativo ? " · inativo no ERP" : ""}</small></div>
       <span class="ge-cadeado" title="O vendedor não vê este histórico">${icone("cadeado")}Só controle interno</span>
     </header>
     <div class="ge-hist-corpo">${corpo}</div>
     ${h.pode_editar ? `<div class="ge-hist-rodape">
       <textarea id="g-nota" rows="1" maxlength="2000" placeholder="Escreva uma observação sobre ${esc(primeiroNome(v.nome))}" aria-label="Observação sobre ${esc(v.nome)}"></textarea>
       <button class="btn primario icone" type="button" data-enviar-nota title="Gravar a observação" aria-label="Gravar a observação">${icone("enviar")}</button>
-      <button class="btn" type="button" data-acao-para="${v.id}" title="Lançar uma ação só para ${esc(v.nome)}">${icone("bandeira")}Ação</button>
+      <button class="btn" type="button" data-acao-para="${v.id}" title="Lançar uma campanha só para ${esc(v.nome)}">${icone("bandeira")}Campanha</button>
     </div>` : ""}
   </section>`;
   animarEntradas(el);
@@ -614,27 +818,33 @@ function evento(e, h) {
       return `<div class="ge-bolha dir"><p>${icone("lapis")}<span>${esc(e.texto)}</span></p>
         <small>${esc(e.autor)} · ${hora(e.criada_em)}${h.pode_editar ? `<button type="button" class="ge-x" data-excluir-nota="${e.id}" title="Apagar a observação" aria-label="Apagar a observação">${icone("x")}</button>` : ""}</small></div>`;
     case "lancada": {
+      const janela = janelaTexto(d.base_periodo, d.base_inicio, d.base_fim);
       const base = d.base_pendente ? `Base: aguardando os dados de ${fmt.dataCurta(d.base_inicio)} a ${fmt.dataCurta(d.base_fim)}`
-        : d.base == null ? `Base: sem dados ${janelaTexto(d.base_inicio, d.base_fim)}` : `Base: ${val(d.base)} ${janelaTexto(d.base_inicio, d.base_fim)}`;
-      const alvo = d.alvo == null ? (d.base_pendente ? "Alvo: sai da base, quando ela chegar" : "Alvo: sem base para calcular")
-        : `Alvo: ${val(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
-      return `<div class="ge-bolha esq"><b>${icone("bandeira")}Ação lançada: ${nome}</b>
-        <p>${base}<br>${alvo}${d.vendedores > 1 ? `<br>Mesma ação para ${d.vendedores} vendedores` : ""}</p>
-        <small>${esc(e.autor)}${a ? ` · <button type="button" class="ge-link" data-acao="${e.acao}">ver a ação</button>` : ""}</small></div>`;
+        : d.base == null ? `Base: sem dados ${janela}` : `Base: ${val(d.base)} ${janela}`;
+      const alvo = d.alvo == null ? (d.base_pendente ? "Meta: sai da base, quando ela chegar" : "Meta: sem base para calcular")
+        : `Meta: ${val(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
+      return `<div class="ge-bolha esq"><b>${icone("bandeira")}Campanha lançada: ${nome}</b>
+        <p>${base}<br>${alvo}${d.vendedores > 1 ? `<br>Mesma campanha para ${d.vendedores} vendedores` : ""}</p>
+        <small>${esc(e.autor)}${a ? ` · <button type="button" class="ge-link" data-acao="${e.acao}">ver a campanha</button>` : ""}</small></div>`;
     }
     case "parcial":
       return `<p class="ge-linha">${icone("grafico")}Parcial da semana ${d.semana}${a ? ` de ${esc(a.rotulo)}` : ""}: <b>${val(d.valor)}</b></p>`;
     case "resultado":
       return cartaoResultado(e, a, ind, u, h);
-    case "prorrogada":
-      return `<p class="ge-linha sistema">${icone("calendario")}${nome} prorrogada até ${fmt.dataCurta(d.fim)}${d.base_pendente ? "; a base nova aguarda os dados"
-        : `; base refeita ${janelaTexto(d.base_inicio, d.base_fim)}: ${val(d.base)}, alvo ${val(d.alvo)}`} · ${esc(e.autor)}</p>`;
+    case "prorrogada": {
+      const resto = d.base_pendente ? "; a base aguarda os dados"
+        : d.base_periodo ? `; a base continua a mesma, meta ${val(d.alvo)}`
+        : `; base refeita ${janelaTexto(null, d.base_inicio, d.base_fim)}: ${val(d.base)}, meta ${val(d.alvo)}`;
+      return `<p class="ge-linha sistema">${icone("calendario")}${nome} prorrogada até ${fmt.dataCurta(d.fim)}${resto} · ${esc(e.autor)}</p>`;
+    }
     case "encerrada":
       return `<p class="ge-linha sistema">${icone("certo")}${nome} encerrada em ${fmt.dataCurta(d.fim)}${d.fim_antes && d.fim_antes !== d.fim ? ` (ia até ${fmt.dataCurta(d.fim_antes)})` : ""} · ${esc(e.autor)}</p>`;
-    case "editada":
-      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc((d.mudou || []).join(", "))})${d.alvo != null ? `: alvo ${val(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
+    case "editada": {
+      const mudou = (d.mudou || []).map((x) => (x === "alvo" ? "meta" : x)).join(", ");
+      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc(mudou)})${d.alvo != null ? `: meta ${val(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
+    }
     case "removido":
-      return `<p class="ge-linha sistema">${icone("x")}Saiu da ação ${nome} · ${esc(e.autor)}</p>`;
+      return `<p class="ge-linha sistema">${icone("x")}Saiu da campanha ${nome} · ${esc(e.autor)}</p>`;
     default:
       return "";
   }
@@ -652,11 +862,11 @@ function cartaoResultado(e, a, ind, u, h) {
     ? `${esc(deltaTexto(ind, d.delta, u))} sobre a base${d.delta_pct != null
       ? ` (${d.delta_pct >= 0 ? "+" : "−"}${fmt.num(Math.abs(d.delta_pct) * 100, Math.abs(d.delta_pct) < 0.1 ? 1 : 0)}%)` : ""}` : "";
   const botoes = e.atual && h.pode_editar && a ? `<div class="ge-resultado-acoes">
-      ${e.provisorio ? `<button class="btn" type="button" data-encerrar="${a.id}">${icone("certo")}Encerrar ação</button>` : ""}
+      ${e.provisorio ? `<button class="btn" type="button" data-encerrar="${a.id}">${icone("certo")}Encerrar campanha</button>` : ""}
       <button class="btn" type="button" data-prorrogar="${a.id}">${icone("calendario")}Prorrogar 2 semanas</button></div>` : "";
   return `<div class="ge-resultado ${cls}">
     <div class="ge-resultado-cab"><b>${icone("ranking")}Resultado: ${esc(d.nome || a?.nome || "")}</b><span class="ge-pill ${cls}">${esc(rotuloClasse(cls, d.caminho))}</span></div>
-    ${barra("Base", d.base, "var(--s-ritmo)")}${barra("Alvo", d.alvo, "var(--linha-forte)")}${barra("Resultado", d.resultado, cor)}
+    ${barra("Base", d.base, "var(--s-ritmo)")}${barra("Meta", d.alvo, "var(--linha-forte)")}${barra("Resultado", d.resultado, cor)}
     ${delta ? `<p class="ge-delta">${delta}</p>` : ""}
     ${e.provisorio ? `<p class="ge-delta fraco">Provisório: os dados vão até ${fmt.dataCurta(h.data_ref)}; o resultado fecha quando passarem do fim.</p>` : ""}
     ${botoes}</div>`;
@@ -689,7 +899,7 @@ async function excluirNota(id) {
   }
 }
 
-// O botão "Ação" do histórico: volta ao quadro com o vendedor já marcado.
+// O botão "Campanha" do histórico: volta ao quadro com o vendedor já marcado.
 async function acaoPara(id) {
   const v = estado.historico?.vendedor;
   if (raiz.querySelector("#g-nota")?.value.trim() && !confirm("Descartar a observação que você escreveu?")) return;
@@ -700,7 +910,7 @@ async function acaoPara(id) {
   entrarSelecao([id]);
 }
 
-// ---------- detalhe da ação ----------
+// ---------- detalhe da campanha ----------
 function abrirAcao(id) {
   if (!podeSairDoForm()) return;
   estado.vista = "acao";
@@ -726,27 +936,28 @@ function desenharDetalhe() {
   const ind = d.indicador || it.indicador, u = d.unidade || "", m = visual(ind);
   const filtros = [...textoFiltros(it.filtros || {}), ...textoBase(ind)];
   const enc = it.situacao === "encerrada";
-  const resumo = enc ? `${d.total.no_alvo} de ${d.total.vendedores} no alvo · ${plural(d.total.acima_da_base, "acima da base", "acima da base")}`
+  const resumo = enc ? `${d.total.no_alvo} de ${d.total.vendedores} na meta · ${plural(d.total.acima_da_base, "acima da base", "acima da base")}`
     : it.situacao === "planejada" ? `${plural(d.total.vendedores, "vendedor", "vendedores")} · começa em ${fmt.dataCurta(it.inicio)}`
     : `${plural(d.total.vendedores, "vendedor", "vendedores")} · dados até ${fmt.dataCurta(d.data_ref)}`;
-  const pergunta = `Como está a ação #${it.id} “${it.nome}”, vendedor por vendedor?`;
+  const pergunta = `Como está a campanha #${it.id} “${it.nome}”, vendedor por vendedor?`;
   const botoes = d.pode_editar ? `
     <button class="btn" type="button" data-editar-acao="${it.id}">${icone("lapis")}<span>Editar</span></button>
     ${!it.congelado && it.situacao !== "planejada" ? `<button class="btn" type="button" data-encerrar="${it.id}">${icone("certo")}<span>Encerrar</span></button>` : ""}
     <button class="btn" type="button" data-prorrogar="${it.id}">${icone("calendario")}<span>Prorrogar 2 semanas</span></button>
     <button class="btn icone" type="button" data-arquivar-acao="${it.id}" data-arquivada="${it.arquivada ? "0" : "1"}" title="${it.arquivada ? "Voltar ao quadro" : "Arquivar (sai do quadro; o histórico fica)"}" aria-label="${it.arquivada ? "Tirar do arquivo" : "Arquivar"}">${icone("arquivo")}</button>
-    <button class="btn icone perigo" type="button" data-excluir-acao="${it.id}" title="Excluir a ação" aria-label="Excluir a ação">${icone("lixeira")}</button>` : "";
+    <button class="btn icone perigo" type="button" data-excluir-acao="${it.id}" title="Excluir a campanha" aria-label="Excluir a campanha">${icone("lixeira")}</button>` : "";
   const avisos = [d.aviso, ...(d.avisos || [])].filter(Boolean).map((t) => `<div class="aviso">${icone("alerta")}<span>${esc(t)}</span></div>`).join("");
   el.innerHTML = `<section class="cartao secao camp-detalhe entra" style="--i:0;--c:${m.cor}">
       <div class="cartao-cab">
         <div class="ge-det-tit"><button class="btn icone" type="button" data-voltar title="Voltar ao quadro" aria-label="Voltar ao quadro">${icone("voltar")}</button>
           <div><h2>${icone(m.icone)}${esc(it.nome)}</h2>
-            <p class="sub">${esc(ind.nome)} · ${esc(periodoTexto(it.inicio, it.fim))} · alvo ${esc(textoAlvo(ind, it.alvo_tipo, it.meta_padrao, u))} · lançada por ${esc(it.criada_por_nome)}</p></div></div>
+            <p class="sub">${esc(ind.nome)} · ${esc(periodoTexto(it.inicio, it.fim))} · meta ${esc(textoAlvo(ind, it.alvo_tipo, it.meta_padrao, u))} · lançada por ${esc(it.criada_por_nome)}</p></div></div>
         <div class="camp-acoes">${ctx.assistente ? `<a class="btn" href="#/assistente?q=${encodeURIComponent(pergunta)}" title="Abre o Assistente com a pergunta pronta">${icone("conversa")}<span>Perguntar ao Assistente</span></a>` : ""}${botoes}</div>
       </div>
       <div class="camp-chips">
         <span class="ge-pill ${enc ? "" : it.situacao === "planejada" ? "planejada" : "vigor"}">${esc(SITUACAO[it.situacao])}${it.provisorio ? " · provisório" : ""}</span>
-        <span class="chip">${icone("calendario")}base: ${esc(periodoTexto(it.base_inicio, it.base_fim))} (o mesmo tamanho, logo antes)</span>
+        <span class="chip">${icone("calendario")}base: ${esc(it.base_periodo ? `${textoPeriodoBase(it.base_periodo, it.base_inicio, it.base_fim)} (${PERIODOS_BASE[it.base_periodo].toLowerCase()} fechad${it.base_periodo === "semana" || it.base_periodo === "quinzena" ? "a" : "o"})`
+          : `${periodoTexto(it.base_inicio, it.base_fim)} (o mesmo tamanho, logo antes)`)}</span>
         ${(filtros.length ? filtros : ["todos os produtos e clientes"]).map((t) => `<span class="chip">${icone("funil")}${esc(t)}</span>`).join("")}
         ${it.arquivada ? `<span class="chip">${icone("arquivo")}arquivada</span>` : ""}
       </div>
@@ -759,7 +970,7 @@ function desenharDetalhe() {
 }
 
 function tabelaAcao(d) {
-  if (!d.linhas.length) return `<div class="cartao secao vazio">${icone("pessoas")}<p>Nenhum vendedor da ação no seu acesso.</p></div>`;
+  if (!d.linhas.length) return `<div class="cartao secao vazio">${icone("pessoas")}<p>Nenhum vendedor da campanha no seu acesso.</p></div>`;
   const it = d.item, ind = d.indicador, u = d.unidade;
   const v = (x) => esc(valorIndicador(ind, x, u));
   const enc = it.situacao === "encerrada";
@@ -770,15 +981,16 @@ function tabelaAcao(d) {
     <td>${x.alvo == null ? "—" : v(x.alvo)}</td>
     <td>${x.resultado == null ? "—" : `<b>${v(x.resultado)}</b>`}${partes && x.numerador != null
       ? `<small>${textoPartes(ind, x)}</small>` : ""}</td>
+    <td>${x.pct == null ? "—" : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
     <td>${x.delta == null ? "—" : esc(deltaTexto(ind, x.delta, u))}</td>
     <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
       : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`).join("");
   return `<section class="cartao secao entra" style="--i:2">
     <div class="cartao-cab"><div><h3>${icone("pessoas")}Por vendedor</h3>
-      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da ação" : "resultado provisório: os dados ainda não passaram do fim")
+      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim")
         : "resultado até agora; a situação considera o ritmo dos dias úteis"} · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados">
-      <thead><tr><th>Vendedor</th><th>Base</th><th>Alvo</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th><th>Sobre a base</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Vendedor</th><th>Base</th><th>Meta</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th><th>% da meta</th><th>Sobre a base</th><th>Situação</th></tr></thead>
       <tbody>${linhas}</tbody></table></div></section>`;
 }
 
@@ -788,7 +1000,7 @@ function textoPartes(ind, x) {
   return `${plural(x.numerador, "pedido na rota", "pedidos na rota")} · ${plural(x.denominador, "visita", "visitas")} · média de ${plural(x.dias || 0, "dia", "dias")}`;
 }
 
-// A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos), enquanto a ação corre.
+// A mesma conta aberta por área, segmento ou produto (os vendedores do acesso, juntos), enquanto a campanha corre.
 function aberturaAcao(d) {
   const ind = d.indicador;
   if (!ind.aberturas?.length || d.item.congelado || d.item.situacao === "planejada") return "";
@@ -801,7 +1013,7 @@ function aberturaAcao(d) {
     ${comPartes ? `<td>${valorParte(ind, x.numerador)}</td><td>${valorParte(ind, x.denominador)}</td>` : ""}${ind.media_diaria ? `<td>${x.dias ?? "—"}</td>` : ""}</tr>`).join("");
   return `<section class="cartao secao entra" style="--i:3">
     <div class="cartao-cab"><div><h3>${icone("funil")}Aberto por ${esc(ab ? ABERTURAS[ab.por].toLowerCase() : "…")}</h3>
-      <p class="sub">os vendedores da ação juntos${ab?.mais ? ` · mostrando ${ab.linhas.length} de ${ab.linhas.length + ab.mais}` : ""}</p></div>
+      <p class="sub">os vendedores da campanha juntos${ab?.mais ? ` · mostrando ${ab.linhas.length} de ${ab.linhas.length + ab.mais}` : ""}</p></div>
       <label class="campo"><select data-abrir aria-label="Abrir por" style="padding-left:14px">${opcoes}</select></label></div>
     ${ab ? `<div class="tabela-rolagem"><table class="dados">
       <thead><tr><th>${esc(ABERTURAS[ab.por])}</th><th${ind.media_diaria ? ` title="${esc(ind.descricao)}"` : ""}>${esc(ind.nome)}</th>${comPartes ? `<th>${esc(ind.numerador)}</th><th>${esc(ind.denominador)}</th>` : ""}${ind.media_diaria ? "<th>Dias com visita</th>" : ""}</tr></thead>
@@ -810,7 +1022,7 @@ function aberturaAcao(d) {
   </section>`;
 }
 
-// Preço médio: o preço de cada vendedor em cada produto, contra o preço-alvo (enquanto a ação corre).
+// Preço médio: o preço de cada vendedor em cada produto, contra o preço-alvo (enquanto a campanha corre).
 function gradePrecos(d) {
   const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const prods = d.produtos, ind = d.indicador;
@@ -839,11 +1051,11 @@ function gradePrecos(d) {
 // nome, quantos vendedores e o fim: do detalhe aberto, do histórico ou do quadro.
 function infoAcao(id) {
   const det = estado.detalhe?.item;
-  if (det && det.id === id) return { nome: det.nome, n: det.vendedores?.length || estado.detalhe.total.vendedores, fim: det.fim };
+  if (det && det.id === id) return { nome: det.nome, n: det.vendedores?.length || estado.detalhe.total.vendedores, fim: det.fim, antiga: !det.base_periodo };
   const h = estado.historico?.acoes?.[String(id)];
-  if (h) return { nome: h.nome, n: h.vendedores, fim: h.fim };
+  if (h) return { nome: h.nome, n: h.vendedores, fim: h.fim, antiga: !h.base_periodo };
   const q = acaoDoQuadro(id);
-  return q ? { nome: q.nome, n: q.total_vendedores, fim: q.fim } : { nome: `#${id}`, n: 0, fim: null };
+  return q ? { nome: q.nome, n: q.total_vendedores, fim: q.fim, antiga: !q.base_periodo } : { nome: `#${id}`, n: 0, fim: null, antiga: false };
 }
 const paraQuem = (n) => (n === 1 ? "o vendedor" : n ? `os ${n} vendedores` : "os vendedores");
 
@@ -852,7 +1064,7 @@ async function encerrar(id) {
   if (!confirm(`Encerrar “${a.nome}” para ${paraQuem(a.n)} dela? O resultado de cada um fica congelado${ate ? ` com os dados até ${fmt.dataCurta(ate)}` : ""}.`)) return;
   try {
     await api("/api/gestao/acao/encerrar", { json: { id } });
-    toast("Ação encerrada");
+    toast("Campanha encerrada");
     await recarregarTudo();
   } catch (e) {
     toast(e.message, "erro");
@@ -862,10 +1074,11 @@ async function encerrar(id) {
 async function prorrogar(id) {
   const a = infoAcao(id);
   const novo = a.fim ? ` (até ${fmt.dataCurta(somar(a.fim, 14))})` : "";
-  if (!confirm(`Prorrogar “${a.nome}” por 2 semanas para ${paraQuem(a.n)} dela${novo}? A base de cada um é medida de novo, no mesmo tamanho do novo prazo.`)) return;
+  const base = a.antiga ? "A base de cada um é medida de novo, no mesmo tamanho do novo prazo." : "A base de cada um continua a mesma.";
+  if (!confirm(`Prorrogar “${a.nome}” por 2 semanas para ${paraQuem(a.n)} dela${novo}? ${base}`)) return;
   try {
     await api("/api/gestao/acao/prorrogar", { json: { id, dias: 14 } });
-    toast("Ação prorrogada por 2 semanas");
+    toast("Campanha prorrogada por 2 semanas");
     await recarregarTudo();
   } catch (e) {
     toast(e.message, "erro");
@@ -875,7 +1088,7 @@ async function prorrogar(id) {
 async function arquivar(id, sim) {
   try {
     await api("/api/gestao/acao/arquivar", { json: { id, arquivada: sim } });
-    toast(sim ? "Ação arquivada: saiu do quadro (o histórico dos vendedores continua)" : "A ação voltou ao quadro");
+    toast(sim ? "Campanha arquivada: saiu do quadro (o histórico dos vendedores continua)" : "A campanha voltou ao quadro");
     await recarregarTudo();
   } catch (e) {
     toast(e.message, "erro");
@@ -884,10 +1097,10 @@ async function arquivar(id, sim) {
 
 async function excluirAcao(id) {
   const a = infoAcao(id);
-  if (!confirm(`Excluir “${a.nome}”? O histórico dos vendedores perde os registros desta ação (as observações ficam).`)) return;
+  if (!confirm(`Excluir “${a.nome}”? O histórico dos vendedores perde os registros desta campanha (as observações ficam).`)) return;
   try {
     await api("/api/gestao/acao/excluir", { json: { id } });
-    toast("Ação excluída");
+    toast("Campanha excluída");
     estado.vista = "grade";
     estado.detalhe = null;
     atualizarUrl();
@@ -915,11 +1128,11 @@ async function editarAcao(id) {
 // ---------- rascunho do Assistente ----------
 async function abrirRascunho(uuid) {
   atualizarUrl();
-  if (!ctx.admin) { toast("Só o administrador lança ações; peça a ele.", "erro"); return; }
+  if (!ctx.admin) { toast("Só o administrador lança campanhas; peça a ele.", "erro"); return; }
   try {
     const r = await api(`/api/gestao/rascunho?id=${encodeURIComponent(uuid)}`);
     if (r.acao) {
-      toast(`Este rascunho já virou a ação “${r.acao.nome}”`);
+      toast(`Este rascunho já virou a campanha “${r.acao.nome}”`);
       if (r.acao.regiao) estado.regiao = r.acao.regiao;
       estado.vista = "acao";
       estado.acao = r.acao.id;
@@ -936,7 +1149,11 @@ async function abrirRascunho(uuid) {
     }
     estado.regiao = regiao;
     await carregar(true);
-    entrarSelecao((d.vendedores || []).map((v) => v.id), { ...d, alvo_tipo: d.alvo_tipo || "fixo" }, { rascunho: d.id, nomes: d.nomes });
+    // rascunho de antes, com a meta "base + N" (que a campanha nova não tem): a meta fica para preencher
+    const antigo = d.alvo_tipo === "mais";
+    entrarSelecao((d.vendedores || []).map((v) => v.id),
+                  { ...d, alvo_tipo: antigo ? "fixo" : d.alvo_tipo || "fixo", ...(antigo ? { meta_padrao: "", vendedores: (d.vendedores || []).map((v) => ({ id: v.id, meta: null })) } : {}) },
+                  { rascunho: d.id, nomes: d.nomes });
   } catch (e) {
     toast(e.message, "erro");
   }
@@ -978,13 +1195,13 @@ async function abrirObjetivo(id) {
   formObj = { id: o?.id || null, regiao: o?.regiao || estado.quadro.regiao, construtor: null, orig: null };
   dlg.innerHTML = `<form novalidate>
     <h2 id="go-titulo">${icone("alvo")}${o ? "Editar objetivo" : "Novo objetivo do período"}</h2>
-    <p class="sub">Equipe ${esc(formObj.regiao)}: o indicador da equipe toda (sem repetir clientes entre os vendedores), contra um alvo da equipe.</p>
+    <p class="sub">Equipe ${esc(formObj.regiao)}: o indicador da equipe toda (sem repetir clientes entre os vendedores), contra uma meta da equipe.</p>
     <div class="cf-grade">
       <label class="campo-form largo"><span>Nome</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Mix médio da equipe" autocomplete="off"></label>
       <label class="campo-form"><span>Início</span><input type="date" name="inicio" value="${esc(d.inicio)}"></label>
       <label class="campo-form"><span>Fim</span><input type="date" name="fim" value="${esc(d.fim)}"></label>
       <div class="largo ge-indicador" id="go-indicador"><div class="esqueleto" style="height:66px"></div></div>
-      <label class="campo-form" id="go-meta-bloco"><span>Alvo da equipe <small id="go-unidade"></small></span>
+      <label class="campo-form" id="go-meta-bloco"><span>Meta da equipe <small id="go-unidade"></small></span>
         <input type="number" name="meta" min="0" step="any" inputmode="decimal" value="${d.meta_padrao ?? ""}"></label>
       <div class="largo" id="go-precos"></div>
       <div class="largo" id="go-filtros"></div>
@@ -1003,7 +1220,7 @@ async function abrirObjetivo(id) {
     const dados = coletarObjetivo();
     if (!dados.nome) return erro("dê um nome ao objetivo");
     if (!dados.inicio || !dados.fim) return erro("escolha o início e o fim");
-    if (dados.metrica !== "preco_medio" && !(dados.meta_padrao > 0)) return erro("dê o alvo da equipe");
+    if (dados.metrica !== "preco_medio" && !(dados.meta_padrao > 0)) return erro("dê a meta da equipe");
     const btn = f.querySelector('button[type="submit"]');
     btn.disabled = true;
     erro("");
@@ -1070,9 +1287,12 @@ function trocarRegiao(r) {
 function aoClicar(e) {
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
-    "[data-enviar-nota],[data-cancelar-form],[data-lancar]");
+    "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.metaPropria) return abrirMetaPropria(Number(ds.metaPropria));
+  if (ds.tirarMeta) return tirarMetaPropria(Number(ds.tirarMeta));
+  if ("parar" in ds) return; // o campo da meta própria: não marca nem desmarca o vendedor
   if (ds.regiao) return trocarRegiao(ds.regiao);
   if ("nova" in ds) return entrarSelecao([]);
   if (ds.objetivo) return abrirObjetivo(ds.objetivo);
@@ -1107,12 +1327,34 @@ function aoMudarCampo(e) {
       form.querySelector('[name="fim"]').focus();
     }
   }
-  if (t.name === "inicio") desenharPrazos();
+  if (t.name === "inicio") { desenharPrazos(); desenharBases(); }
+  if ((t.name === "prazo" || t.name === "fim") && estado.form?.antiga) desenharBases(); // a janela de antes segue o prazo
   if (t.name === "alvo_tipo") atualizarAlvo();
+  if (["inicio", "prazo", "fim", "base_periodo"].includes(t.name)) agendarPrevia();
 }
 
 function aoDigitar(e) {
   if (e.target.name === "meta" && e.target.closest("#g-form")) atualizarAlvo();
+  if (e.target.dataset.metaV && estado.form) {
+    estado.form.metas.set(Number(e.target.dataset.metaV), e.target.value === "" ? null : Number(e.target.value));
+    atualizarMetasQuadrados();
+  }
+}
+
+// A meta própria de um vendedor marcado: abre o campo no quadrado dele (o tipo é o da meta padrão).
+function abrirMetaPropria(id) {
+  estado.form?.abertas.add(id);
+  redesenharQuadrado(id);
+  raiz.querySelector(`[data-meta-v="${id}"]`)?.focus();
+}
+
+function tirarMetaPropria(id) {
+  const f = estado.form;
+  if (!f) return;
+  f.metas.set(id, null);
+  f.abertas.delete(id);
+  redesenharQuadrado(id);
+  raiz.querySelector(`.ge-vend[data-vendedor="${id}"] [data-meta-propria]`)?.focus();
 }
 
 function aoTeclar(e) {

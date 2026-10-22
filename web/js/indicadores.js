@@ -1,7 +1,7 @@
-// O que as ações e os objetivos da página Gestão medem (bi/indicadores.py), para a página e para o rascunho do
-// Assistente: os tipos, as predefinições do "Indicador medido", os filtros e como formatar valores, alvos e
-// diferenças. A conta é toda no servidor, que manda o descritor do indicador (nome, formato, como ler a meta).
-import { fmt } from "./util.js";
+// O que as campanhas e os objetivos da página Gestão medem (bi/indicadores.py), para a página e para o rascunho do
+// Assistente: os tipos, as predefinições do "Indicador medido", os filtros, a janela da base e como formatar valores,
+// metas e diferenças. A conta é toda no servidor, que manda o descritor do indicador (nome, formato, como ler a meta).
+import { MESES, fmt } from "./util.js";
 
 // Os tipos (bi/indicadores.py TIPOS) e os blocos da Personalizada.
 export const TIPOS = {
@@ -35,8 +35,8 @@ export const FILTROS = [
 ];
 export const NOME_GRUPO = { mussarela: "Mussarela", outras: "Outras linhas" };
 
-// O "Indicador medido": cada opção é um tipo pronto ou uma combinação da Personalizada. alvo: a unidade do alvo;
-// pct: o alvo é em % (80 = 80%); objetivo: só nos objetivos (numa ação o alvo já sai da base).
+// O "Indicador medido": cada opção é um tipo pronto ou uma combinação da Personalizada. alvo: a unidade da meta;
+// pct: a meta é em % (80 = 80%); objetivo: só nos objetivos (numa campanha a meta já sai da base).
 export const PRESETS = [
   { id: "positivacao", metrica: "positivacao", nome: "Positivação (clientes com compra)", rotulo: "Positivação", alvo: "clientes", formato: "clientes" },
   { id: "mix_medio", metrica: "mix_medio", nome: "Mix médio (produtos por cliente)", rotulo: "Mix", alvo: "produtos por cliente", formato: "razao" },
@@ -62,7 +62,73 @@ export function presetDe(metrica, p = {}) {
   return PRESETS.find((x) => x.id === `${p.medida}:${p.forma || "total"}`) || PRESETS.find((x) => x.id === "faturamento:total");
 }
 
-export const ALVOS = { mais: "+ sobre a base de cada um", pct: "+ % sobre a base de cada um", fixo: "Valor fixo para cada um" };
+// A meta da campanha: Número (o valor que cada um precisa atingir) ou Percentual (a base de cada um + X%). O "base + N"
+// só aparece ao editar uma campanha de antes que o usa.
+export const METAS = { fixo: "Número", pct: "Percentual" };
+export const META_ANTIGA = { mais: "Quanto a mais sobre a base (antigo)" };
+
+// A base (bi/indicadores.py PERIODOS_BASE e janela_fechada): o último período fechado que termina antes do início.
+// "logo_antes": a regra das campanhas de antes (o mesmo tamanho da campanha, logo antes do início).
+export const PERIODOS_BASE = { semana: "Semana", quinzena: "Quinzena", mes: "Mês", trimestre: "Trimestre", semestre: "Semestre", ano: "Ano" };
+export const BASE_ANTIGA = "logo_antes";
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// [início, fim] da base, em AAAA-MM-DD. Semana de segunda a domingo; quinzena de 1 a 15 ou de 16 ao fim do mês.
+export function janelaFechada(inicio, periodo) {
+  const [a, m, d] = inicio.split("-").map(Number);
+  if (periodo === "semana") {
+    const ontem = new Date(a, m - 1, d - 1);
+    const fim = new Date(a, m - 1, d - 1 - ontem.getDay()); // o último domingo antes do início (getDay: domingo = 0)
+    return [iso(new Date(fim.getFullYear(), fim.getMonth(), fim.getDate() - 6)), iso(fim)];
+  }
+  if (periodo === "quinzena") {
+    if (d > 15) return [iso(new Date(a, m - 1, 1)), iso(new Date(a, m - 1, 15))];
+    return [iso(new Date(a, m - 2, 16)), iso(new Date(a, m - 1, 0))];
+  }
+  const meses = { mes: 1, trimestre: 3, semestre: 6, ano: 12 }[periodo];
+  const primeiro = Math.floor((m - 1) / meses) * meses; // o mês (0 a 11) em que começa o período do início
+  return [iso(new Date(a, primeiro - meses, 1)), iso(new Date(a, primeiro, 0))];
+}
+
+// "setembro/2026", "jul a set/2026", "12/10 a 18/10", "2025"; sem período, as datas e a regra de antes.
+export function textoPeriodoBase(periodo, de, ate) {
+  if (!de || !ate) return "";
+  const [a, m] = de.split("-").map(Number), mf = Number(ate.split("-")[1]);
+  if (!periodo || periodo === BASE_ANTIGA) return `${fmt.dataCurta(de)} a ${fmt.data(ate)} (o mesmo tamanho, logo antes)`;
+  if (periodo === "mes") return `${MESES[m - 1]}/${a}`;
+  if (periodo === "ano") return String(a);
+  if (periodo === "trimestre" || periodo === "semestre") return `${MESES[m - 1].slice(0, 3)} a ${MESES[mf - 1].slice(0, 3)}/${ate.slice(0, 4)}`;
+  return `${fmt.dataCurta(de)} a ${fmt.dataCurta(ate)}`;
+}
+
+// A meta de um vendedor na unidade do valor (percentuais em fração), como gestao.alvo_de: Número = a meta; Percentual
+// = a base + X%; sem base (ou base 0 no Percentual), não há meta. Clientes e produtos arredondam para cima.
+export function alvoDe(ind, tipo, base, meta) {
+  if (ind.tipo === "preco_medio") return 1;
+  const n = Number(meta), escala = ind.meta_em_pct ? 100 : 1;
+  if (meta == null || meta === "" || isNaN(n) || !n) return null;
+  if (tipo === "fixo") return n / escala;
+  if (base == null || (tipo === "pct" && !base)) return null;
+  const alvo = tipo === "mais" ? base + n / escala : base * (1 + n / 100);
+  return ["clientes", "produtos"].includes(ind.formato) ? Math.ceil(alvo - 1e-9) : alvo;
+}
+
+// A cor do andamento contra a meta, pelo % que aparece: vermelho abaixo de 90%, amarelo de 90% a 99% e verde a partir
+// de 100%, cada vez mais intenso até 150%.
+export function corMeta(pct) {
+  if (pct == null || isNaN(pct)) return "var(--linha-forte)";
+  const p = Math.round(pct * 100);
+  if (p < 90) return "var(--ruim-forte)";
+  if (p < 100) return "var(--atencao-forte)";
+  const t = intensidadeMeta(pct);
+  return t ? `color-mix(in srgb, var(--ok-intenso) ${Math.round(t * 100)}%, var(--ok-forte))` : "var(--ok-forte)";
+}
+
+// De 0 (até 100%) a 1 (150% ou mais): o quanto a meta foi passada (o CSS usa em --i para reforçar o fundo e o brilho).
+export function intensidadeMeta(pct) {
+  if (pct == null || isNaN(pct)) return 0;
+  return Math.max(0, Math.min(1, (Math.round(pct * 100) - 100) / 50));
+}
 
 // Ícone e cor: o do tipo ou, na Personalizada, o da medida.
 export function visual(ind) {
@@ -121,7 +187,7 @@ export function metaDigitada(ind, v, unidade = "") {
   return ind.forma === "crescimento" ? `+${fmt.num(v, 1)}%` : `${fmt.num(v, 1)}%`;
 }
 
-// Como o alvo da ação aparece ("+1 sobre a base de cada um", "+10% sobre a base", "80% para cada um").
+// Como a meta da campanha aparece ("+10% sobre a base de cada um", "80% para cada um", "+1 sobre a base", nas antigas).
 export function textoAlvo(ind, alvoTipo, meta, unidade = "") {
   if (ind.tipo === "preco_medio") return "no preço-alvo de cada produto";
   if (meta == null || meta === "" || isNaN(meta)) return "";
@@ -151,7 +217,7 @@ export function periodoTexto(inicio, fim) {
   return inicio === fim ? fmt.data(inicio) : `${fmt.data(inicio)} a ${fmt.data(fim)}`;
 }
 
-// "3 semanas" ou "10 dias": o tamanho de um período (a ação e a janela da base têm o mesmo).
+// "3 semanas" ou "10 dias": o tamanho de um período (nas campanhas de antes, a janela da base tem o da campanha).
 export function duracaoTexto(inicio, fim) {
   const dias = Math.round((Date.parse(fim) - Date.parse(inicio)) / 864e5) + 1;
   if (dias % 7 === 0) return dias === 7 ? "1 semana" : `${dias / 7} semanas`;

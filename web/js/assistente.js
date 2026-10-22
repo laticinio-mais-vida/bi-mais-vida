@@ -3,11 +3,11 @@
 // resposta com as consultas feitas. As conversas ficam no servidor, como nos chats de IA: a lista ao lado mostra as
 // da pessoa, cada uma tem o seu link (#/assistente?c=id) e abre em qualquer computador.
 // A resposta da IA vira HTML só depois de escapada (nada do texto vira tag por conta própria).
-// Ações: quando a IA monta um rascunho (propor_acao, só para o administrador), a resposta traz um card com "Lançar
-// ação" (grava pela página Gestão) e "Revisar no painel"; nada é lançado sem o clique. #/assistente?q=… abre uma
+// Campanhas: quando a IA monta um rascunho (propor_acao, só para o administrador), a resposta traz um card com
+// "Lançar campanha" (grava pela página Gestão) e "Revisar no painel"; nada é lançado sem o clique. #/assistente?q=… abre uma
 // conversa nova com a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
 import { MESES, api, esc, fmt, icone, toast } from "./util.js";
-import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, visual } from "./indicadores.js";
+import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase, visual } from "./indicadores.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
@@ -25,9 +25,9 @@ const FERRAMENTA = {
   resumo_vendas: { nome: "Resumo de vendas", icone: "moeda" },
   metas_e_realizado: { nome: "Metas e realizado", icone: "alvo" },
   consultar_sql: { nome: "Consulta aos dados", icone: "banco" },
-  listar_acoes: { nome: "Ações da Gestão", icone: "bandeira" },
-  andamento_acao: { nome: "Andamento da ação", icone: "bandeira" },
-  propor_acao: { nome: "Rascunho de ação", icone: "bandeira" },
+  listar_acoes: { nome: "Campanhas da Gestão", icone: "bandeira" },
+  andamento_acao: { nome: "Andamento da campanha", icone: "bandeira" },
+  propor_acao: { nome: "Rascunho de campanha", icone: "bandeira" },
   // nomes de antes (conversas gravadas)
   listar_campanhas: { nome: "Campanhas", icone: "quadro" },
   andamento_campanha: { nome: "Andamento da campanha", icone: "quadro" },
@@ -558,7 +558,7 @@ function balaoIA(m, i) {
     </div></div>`;
 }
 
-// ---------- rascunho de ação ----------
+// ---------- rascunho de campanha ----------
 function cartaoRascunho(r, i, j) {
   const ind = r.indicador || descritorLegado(r); // rascunho de antes dos tipos novos
   const m = visual(ind);
@@ -569,13 +569,14 @@ function cartaoRascunho(r, i, j) {
   const alvo = ind.tipo === "preco_medio"
     ? `preço-alvo de ${precos.length} produto${precos.length === 1 ? "" : "s"}: ${precos.slice(0, 3).map((p) => `${r.nomes?.produtos?.[p.id] || p.id} a R$ ${fmt.num(p.meta, 2)}`).join(", ")}${precos.length > 3 ? "…" : ""}`
     : r.alvo_tipo ? textoAlvo(ind, r.alvo_tipo, r.meta_padrao, r.unidade)
-    : r.meta_padrao ? `${metaDigitada(ind, r.meta_padrao, r.unidade)} por vendedor` : "sem alvo";
+    : r.meta_padrao ? `${metaDigitada(ind, r.meta_padrao, r.unidade)} por vendedor` : "sem meta";
   const filtros = [...textoFiltros(r.filtros || {}, r.nomes?.produtos), ...textoBase(ind)];
   const linhas = [
     ...(r.regiao ? [["mapa", "Região", r.regiao]] : []),
     ["calendario", "Período", periodoTexto(r.inicio, r.fim)],
+    ...(r.base_periodo ? [["grafico", "Base", textoPeriodoBase(r.base_periodo, r.base_inicio, r.base_fim)]] : []),
     [m.icone, "Mede", ind.nome + (r.unidade && ind.medida === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
-    ["alvo", "Alvo", alvo + (ajustes ? ` · ${ajustes} ajustado${ajustes === 1 ? "" : "s"}` : "")],
+    ["alvo", "Meta", alvo + (ajustes ? ` · ${ajustes} ajustada${ajustes === 1 ? "" : "s"}` : "")],
     ["pessoas", `${vend.length} vendedor${vend.length === 1 ? "" : "es"}`, vend.length <= 6 ? vend.join(", ") : `${vend.slice(0, 5).join(", ")} e mais ${vend.length - 5}`],
     ["funil", "Conta", filtros.length ? filtros.join(" · ") : "todos os produtos e clientes"],
   ];
@@ -585,13 +586,13 @@ function cartaoRascunho(r, i, j) {
     acoes = `<span class="chip camp-criada">${icone("certo")}Lançada</span>
       <a class="btn" href="#/gestao?${lancada.regiao ? `r=${lancada.regiao}&` : ""}a=${lancada.id}">${icone("bandeira")}Abrir no painel</a>`;
   } else if (info?.gestao && ctx.admin) {
-    acoes = `<button class="btn primario" type="button" data-criar="${i}:${j}">${icone("bandeira")}Lançar ação</button>
+    acoes = `<button class="btn primario" type="button" data-criar="${i}:${j}">${icone("bandeira")}Lançar campanha</button>
       <a class="btn" href="#/gestao?rascunho=${encodeURIComponent(r.id)}">${icone("lapis")}Revisar no painel</a>`;
   } else {
-    acoes = `<span class="fraco">${info?.gestao ? "Só o administrador lança ações." : "Para acompanhar as ações, peça ao administrador acesso à página Gestão."}</span>`;
+    acoes = `<span class="fraco">${info?.gestao ? "Só o administrador lança campanhas." : "Para acompanhar as campanhas, peça ao administrador acesso à página Gestão."}</span>`;
   }
   return `<div class="camp-rascunho" style="--c:${m.cor}">
-    <div class="camp-rascunho-cab">${icone("bandeira")}<span>${lancada ? "Ação lançada" : "Rascunho de ação · ainda não lançada"}</span></div>
+    <div class="camp-rascunho-cab">${icone("bandeira")}<span>${lancada ? "Campanha lançada" : "Rascunho de campanha · ainda não lançada"}</span></div>
     <h4>${esc(r.nome)}</h4>
     <dl>${linhas.map(([ic, rot, val]) => `<div>${icone(ic)}<dt>${esc(rot)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>
     ${r.descricao ? `<p class="fraco">${esc(r.descricao)}</p>` : ""}
@@ -609,11 +610,11 @@ async function aoClicarRascunho(e) {
   b.disabled = true;
   try {
     const acao = { nome: r.nome, rotulo: r.rotulo || "", descricao: r.descricao || "", regiao: r.regiao, inicio: r.inicio,
-      fim: r.fim, metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros, alvo_tipo: r.alvo_tipo || "fixo",
-      meta_padrao: r.meta_padrao, vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
+      fim: r.fim, base_periodo: r.base_periodo || "mes", metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros,
+      alvo_tipo: r.alvo_tipo || "fixo", meta_padrao: r.meta_padrao, vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
     const res = await api("/api/gestao/acoes", { json: { acao, rascunho: r.id } });
     r.acao = { id: res.id, nome: r.nome, regiao: res.regiao };
-    toast(res.ja_existia ? "Este rascunho já tinha virado ação" : `Ação “${r.nome}” lançada`);
+    toast(res.ja_existia ? "Este rascunho já tinha virado campanha" : `Campanha “${r.nome}” lançada`);
     if (conversa === atual) desenharMensagens();
   } catch (err) {
     b.disabled = false;
@@ -646,7 +647,7 @@ function descricao(p) {
   }
   if (p.ferramenta === "metas_e_realizado") return `${a.visao || ""} · ${(a.meses || []).join(", ")}`;
   if (p.ferramenta === "listar_acoes" || p.ferramenta === "listar_campanhas") return a.texto ? `“${a.texto}”` : "todas";
-  if (p.ferramenta === "andamento_acao") return p.resumo || `ação ${a.acao}`;
+  if (p.ferramenta === "andamento_acao") return p.resumo || `campanha ${a.acao}`;
   if (p.ferramenta === "andamento_campanha") return p.resumo || `campanha ${a.campanha}`;
   if (p.ferramenta === "propor_acao" || p.ferramenta === "propor_campanha") return a.nome || "";
   return p.objetivo || a.objetivo || "";

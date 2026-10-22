@@ -1,8 +1,8 @@
 // Configuração da página Gestão (só administradores):
-// - Acesso por usuário: quem usa a página e quais vendedores cada visualizador acompanha (as ações, os objetivos e o
-//   histórico deles). Só o administrador lança ações e objetivos e escreve observações. Vendedor aqui é o vendedor da
+// - Acesso por usuário: quem usa a página e quais vendedores cada visualizador acompanha (as campanhas, os objetivos e o
+//   histórico deles). Só o administrador lança campanhas e objetivos e escreve observações. Vendedor aqui é o vendedor da
 //   venda, como na página Metas.
-// - Dias de atendimento: em que dias da semana cada área comercial é visitada. A efetividade das ações conta as
+// - Dias de atendimento: em que dias da semana cada área comercial é visitada. A efetividade das campanhas conta as
 //   visitas esperadas por eles (começou com a planilha do Power BI). Área pendente ou não atendida fica fora da conta.
 // Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
@@ -102,7 +102,7 @@ function render() {
     <aside class="cartao config-menu entra" style="--i:0">
       ${[["usuarios", "escudo", "Acesso por usuário", nVe], ["areas", "calendario", "Dias de atendimento", pendentes()]]
         .map(([id, ic, nome, n]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}<span class="cont">${n}</span></button>`).join("")}
-      <div class="dica">${icone("info")} Cada pessoa vê as ações, os objetivos e o histórico dos vendedores do acesso dela.
+      <div class="dica">${icone("info")} Cada pessoa vê as campanhas, os objetivos e o histórico dos vendedores do acesso dela.
         Só os administradores lançam e mudam. Os dias de atendimento das áreas valem para a efetividade.</div>
     </aside>
     <div id="cg-secao"></div>
@@ -146,7 +146,7 @@ function secaoAreas(alvo) {
   alvo.innerHTML = `
   <section class="cartao secao entra" style="--i:1">
     <div class="cartao-cab"><div><h2>${icone("calendario")}Dias de atendimento das áreas</h2>
-      <p class="sub">A efetividade das ações conta uma visita esperada por cliente ativo da área em cada dia marcado.
+      <p class="sub">A efetividade das campanhas conta uma visita esperada por cliente ativo da área em cada dia marcado.
         Área pendente ou não atendida fica fora da conta (pedidos e visitas).</p></div></div>
     ${dados.aviso_areas ? `<div class="aviso">${icone("alerta")}<span>${esc(dados.aviso_areas)}</span></div>` : ""}
     ${n ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>${n} área${n === 1 ? "" : "s"} com clientes ativos ainda sem dia: os clientes delas ficam fora da efetividade.</span></p>` : ""}
@@ -293,7 +293,7 @@ function desenharEditor() {
     </div></div>
     <div class="opcao-linha">
       <button class="chave ${r.ve ? "ligada" : ""}" id="cg-ve" type="button" role="switch" aria-checked="${r.ve}" aria-label="Usa a Gestão"></button>
-      <div><b>Usa a Gestão</b><p>${r.ve ? "A página aparece na barra lateral desta pessoa, que acompanha as ações, os objetivos e o histórico dos vendedores do acesso (também pelo Assistente)." : "Desligado, a página some da barra lateral e o servidor recusa os pedidos."}
+      <div><b>Usa a Gestão</b><p>${r.ve ? "A página aparece na barra lateral desta pessoa, que acompanha as campanhas, os objetivos e o histórico dos vendedores do acesso (também pelo Assistente)." : "Desligado, a página some da barra lateral e o servidor recusa os pedidos."}
         ${!outras.length && r.ve ? " É a única página dela: para tirar, libere outra antes em Usuários." : ""}</p></div>
     </div>
     <div ${r.ve ? "" : "hidden"}>
@@ -406,7 +406,7 @@ function atualizarResumoU(u) {
   else if (r.modo === "todos") txt = `${quem} acompanha <b>qualquer vendedor</b>.`;
   else {
     const vendo = vendedoresDoUsuario(u, r);
-    if (!vendo.length) txt = `${quem} vê a página, mas <b>nenhum vendedor</b>: não veria nenhuma ação.`;
+    if (!vendo.length) txt = `${quem} vê a página, mas <b>nenhum vendedor</b>: não veria nenhuma campanha.`;
     else if (vendo.length <= 4) txt = `${quem} acompanha só ${emLista(vendo.map((v) => `<b>${esc(v.nome)}</b>`))}.`;
     else txt = `${quem} acompanha <b>${vendo.length} vendedores</b>; os demais não aparecem para ela.`;
   }
