@@ -264,14 +264,14 @@ class TestIndicadores(ComCache, unittest.TestCase):
         # ES (quartas): 2/9 os dois; 9/9 só o 3 (o 1 comprou em 2/9); 16, 23 e 30/9 só o 1 (o 3 comprou em 15/9)
         self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (1, 6, 5))
         self.assertFalse(any("frequência" in x for x in a["avisos"]))
-        # o pedido de cliente fora da previsão conta, mas ele não entra nas visitas: o 2 (quinzenal, comprou em 3/9)
-        # compra também em 10/9. 10/9: só o 12 previsto, 2 pedidos (200%); 17/9 ninguém previsto (os dois compraram
-        # em 10/9): fica fora; 24/9 só o 2, com o pedido do bloqueado: (0,5 + 2 + 1) ÷ 3 dias
+        # o cliente fora da previsão que compra no dia entra nas visitas desse dia: o 2 (quinzenal, comprou em 3/9)
+        # compra também em 10/9. 10/9: o 12 previsto e o 2, 2 pedidos (100%, e não 200% só com o 12); 17/9 ninguém
+        # previsto (os dois compraram em 10/9): fica fora; 24/9 só o 2, com o pedido do bloqueado: (0,5 + 1 + 1) ÷ 3
         self.cur.execute("INSERT INTO _pedidos_venda (data, id_vendedor, id_cliente, tipo_cliente, tipopedido, "
                          "cancelada, pedidos) VALUES ('2026-09-10', ?, 2, 'CLIENTE', 'PEDIDOVENDA', 0, 1)", [BA])
         por, _ = self.medir("efetividade", meta=30)
-        self.assertEqual((por[BA]["numerador"], por[BA]["denominador"], por[BA]["dias"]), (4, 4, 3))
-        self.assertAlmostEqual(por[BA]["realizado"], 3.5 / 3, places=4)
+        self.assertEqual((por[BA]["numerador"], por[BA]["denominador"], por[BA]["dias"]), (4, 5, 3))
+        self.assertAlmostEqual(por[BA]["realizado"], 2.5 / 3, places=4)
         # cache sem as redes (pacote do PC com o código anterior): todos contam como semanais, com aviso
         self.desmontar_cache()
         self.montar_cache(extras=True, rede=False)
@@ -1244,7 +1244,7 @@ class TestMigracao008(BaseBanco):
                             "(%s, '2026-09-01', '2026-09-30', %s, %s, 'Ana')", [nome, metrica, dono])
         self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
-                                               "013_preco_medio_aumento"])
+                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1282,7 +1282,7 @@ class TestMigracao013(BaseBanco):
             con.execute("INSERT INTO gestao_eventos (id_vendedor, campanha, tipo, dados, criada_por_nome) VALUES "
                         "(115, %s, 'lancada', '{\"base\": 0.9813, \"alvo\": 1.0}', 'Ana'), "
                         "(115, %s, 'editada', '{\"base\": 0.95, \"alvo\": 1.0}', 'Ana')", [um, um])
-        self.assertEqual(self.banco.migrar(), ["013_preco_medio_aumento"])
+        self.assertEqual(self.banco.migrar(), ["013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1307,7 +1307,7 @@ class TestMigracao009(BaseBanco):
             con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor) VALUES (%s, 124)", [id_])
         self.assertEqual(self.banco.migrar(), ["009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
-                                               "013_preco_medio_aumento"])
+                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

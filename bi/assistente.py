@@ -1135,8 +1135,8 @@ clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com 
 de atendimento das áreas), pela carteira do vendedor. Só contam os pedidos de clientes das áreas atendidas naquele \
 dia: pedido de cliente de área de outro dia fica fora. As visitas esperadas seguem a frequência de compra (a rede \
 SEMANAL, QUINZENAL ou MENSAL do cliente): o semanal sempre, o quinzenal sem compra nos 7 dias antes, o mensal sem \
-compra nos 21 dias antes; o pedido de quem não estava previsto conta, mas ele não entra nas visitas (o dia pode \
-passar de 100%); sem frequência conta como semanal. \
+compra nos 21 dias antes; quem não estava previsto e compra no dia entra nas visitas desse dia; sem frequência \
+conta como semanal. \
 Dias sem visita esperada (fim de semana) ficam fora da média. \
 O numerador e o denominador que vêm junto (pedidos na rota e visitas desses dias) não dão a média se divididos: use \
 o valor que vem pronto. A meta \
