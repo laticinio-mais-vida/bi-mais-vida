@@ -294,8 +294,10 @@ A **Gestão da equipe**, separada por região (**ES** e **BA**; o Edir é da BA,
 As cores do andamento seguem o % da meta, sem olhar o prazo, num degradê contínuo: vermelho até 50%, passando pelo
 laranja até o amarelo em 80% e pelo verde-amarelado até o verde em 100%; acima disso, o verde fica cada vez mais
 forte até 150%. Na barra da campanha, o % é a soma dos resultados ÷ a soma das metas
-nos indicadores que somam (positivação, faturamento, volume) e a média do % de cada vendedor nos que são médias (mix,
-efetividade, frequência, preço médio); quem ainda não tem meta (base aguardando os dados) fica de fora.
+nos indicadores que somam (positivação, faturamento, volume), a média do % de cada vendedor nos que são médias (mix,
+efetividade, frequência) e, no preço médio, os aumentos feitos ÷ os pedidos, somando os vendedores em R$ (na média, quem
+estava a centavos do alvo e subiu poucos centavos ficaria com centenas de % e puxaria a campanha); quem ainda não tem
+meta (base aguardando os dados) fica de fora.
 
 A equipe é quem tem meta no mês na planilha METAS, como na página Metas: contas da casa (venda interna, funcionário,
 produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
@@ -316,7 +318,8 @@ produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
     Ao fechar o formulário, isso some.
   - Campanhas de antes (migração 012) continuam com a base do mesmo tamanho, logo antes do início.
 - **Meta:** **Número** (o valor que cada um precisa atingir, igual para todos) ou **Percentual** (a base de cada um +
-  X%). No preço médio, é o preço-alvo de cada produto (100%). Campanhas de antes podem ter a meta "base + N", que só
+  X%). No preço médio, é o preço-alvo de cada produto, e o % da meta é o aumento (veja abaixo). Campanhas de antes
+  podem ter a meta "base + N", que só
   aparece na edição delas.
 - **Enquanto corre:** o histórico mostra a parcial de cada semana completa; o detalhe da campanha (clicar no cartão
   dela) mostra base, meta, resultado até agora, o % da meta e a situação pelo ritmo dos dias úteis, por vendedor.
@@ -359,8 +362,13 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
     as visitas.
 - **Frequência:** semanas com compra, somadas cliente a cliente, ÷ clientes positivados. A semana vai de domingo a
   sábado e é cortada na virada do mês, como no Power BI.
-- **Preço médio por produto:** cada produto tem um preço-alvo (R$ por unidade). O índice do vendedor é o que ele
-  vendeu ÷ o que teria vendido as mesmas quantidades nos preços-alvo (100% = no alvo).
+- **Preço médio por produto:** cada produto tem um preço-alvo (R$ por unidade), e a base de cada vendedor é o preço
+  dele em cada produto. A meta é o aumento, não o preço cheio: com base R$ 10, alvo R$ 20 e preço de agora R$ 15, o
+  vendedor está em 50%. Com vários produtos, soma em R$ nas quantidades vendidas agora: (preço de agora − o da base) ×
+  quantidade ÷ (preço-alvo − o da base) × quantidade. Produto que já estava no alvo na base não pede aumento e só
+  desconta se cair abaixo dele; produto sem preço na base fica fora. Os cards mostram o preço da base de cada um, e o
+  detalhe, o preço de agora e o da base por produto. Nos objetivos (que não têm base), continua o índice: o que a
+  equipe vendeu ÷ o que teria vendido as mesmas quantidades nos preços-alvo (100% = no alvo).
 - **Personalizada:** faturamento, venda média por cliente, volume (produtos de uma unidade só), volume por cliente,
   % da carteira que comprou ou produtos distintos. Nos objetivos há também o crescimento sobre o período anterior
   ou o mesmo período do ano anterior (numa campanha, "crescer X%" é a meta Percentual: X% sobre a base).
@@ -482,7 +490,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `regras` | as regras de Metas e os vendedores de Projeções; cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
-| `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado |
+| `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado (no preço médio, também o preço de cada produto: `base_precos` e `resultado_precos`, migração 013) |
 | `gestao_eventos` | o histórico interno de cada vendedor: observações e o que aconteceu nas ações dele (lançada, editada, prorrogada, encerrada, resultado) |
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |

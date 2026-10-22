@@ -89,6 +89,40 @@ function rotuloClasse(classe, caminho) {
 }
 const acaoDoQuadro = (id) => (estado.quadro?.acoes || []).find((a) => a.id === id);
 
+// Preço médio: a meta é o preço-alvo de cada produto, e o % da meta é o aumento de preço feito ÷ o pedido, desde o
+// preço de cada um na base (bi/indicadores.py progresso_preco). Os preços vêm por produto: {"<id>": {preco, quantidade}}.
+const ePreco = (ind) => ind?.tipo === "preco_medio";
+const precoDe = (precos, id) => precos?.[String(id)]?.preco ?? null;
+const reaisSinal = (v) => (v < 0 ? `−${fmt.moeda2(-v)}` : fmt.moeda2(v));
+// O preço médio de vários vendedores juntos num produto (pela quantidade de cada um).
+function precoJunto(listas, id) {
+  let valor = 0, qtd = 0;
+  for (const precos of listas) {
+    const x = precos?.[String(id)];
+    if (x?.preco != null && x.quantidade > 0) { valor += x.preco * x.quantidade; qtd += x.quantidade; }
+  }
+  return qtd ? valor / qtd : null;
+}
+// Um preço por produto: com um produto só, "R$ 19,14"; com vários, uma linha por produto (até 3).
+function precosHtml(produtos, valorDe, vazio = "—") {
+  const lista = produtos || [];
+  const v = (p) => { const x = valorDe(p); return x == null ? `<span class="fraco">${vazio}</span>` : `<b>${fmt.moeda2(x)}</b>`; };
+  if (lista.length === 1) return v(lista[0]);
+  return `<span class="ge-vend-precos">${lista.slice(0, 3).map((p) => `<span><i title="${esc(p.nome)}">${esc(p.nome)}</i>${v(p)}</span>`).join("")}
+    ${lista.length > 3 ? `<small>e mais ${lista.length - 3}</small>` : ""}</span>`;
+}
+// O mesmo em texto corrido: "R$ 19,14" ou "MANTEIGA 200G R$ 10,00 · QUEIJO MUSSARELA 4KG R$ 31,50".
+function precosTexto(produtos, valorDe, vazio = "sem venda") {
+  const lista = produtos || [];
+  const v = (p) => { const x = valorDe(p); return x == null ? vazio : fmt.moeda2(x); };
+  return lista.length === 1 ? v(lista[0]) : lista.map((p) => `${p.nome} ${v(p)}`).join(" · ");
+}
+// "R$ 30,00 (base R$ 10,00, alvo R$ 40,00)", produto a produto.
+function precosDica(produtos, base, agora) {
+  const um = (p) => `${fmt.moeda2(precoDe(agora, p.id))} (base ${fmt.moeda2(precoDe(base, p.id))}, alvo ${fmt.moeda2(p.meta)})`;
+  return (produtos || []).length === 1 ? um(produtos[0]) : (produtos || []).map((p) => `${p.nome}: ${um(p)}`).join(" · ");
+}
+
 // ---------- montagem ----------
 export function gestaoTemAlteracoes() {
   return !!((estado.form && formMudou()) || (dlg?.open && objetivoMudou()) || raiz?.querySelector("#g-nota")?.value.trim());
@@ -326,12 +360,14 @@ function cartaoAcao(a, i) {
 }
 
 // A segunda barra do cartão: o andamento da campanha contra a meta (a largura para em 100%; acima disso, o verde fica
-// mais forte). Soma: a soma dos resultados ÷ a soma das metas; médias: a média do % de cada vendedor.
+// mais forte). Soma: a soma dos resultados ÷ a soma das metas; médias: a média do % de cada vendedor; preço médio: os
+// aumentos feitos ÷ os pedidos, em R$.
 function barraMeta(a) {
   if (a.situacao === "planejada") return `<span class="ge-meta"><i></i></span><span class="ge-meta-texto fraco">Meta: ainda não começou</span>`;
   const pct = a.meta_pct;
   if (pct == null) return `<span class="ge-meta"><i></i></span><span class="ge-meta-texto fraco">Meta: ${a.base_pendente ? "aguardando a base" : "sem números ainda"}</span>`;
-  const conta = a.indicador?.comportamento === "soma" ? "soma dos resultados ÷ soma das metas" : "média do % da meta de cada vendedor";
+  const conta = ePreco(a.indicador) ? "aumento de preço feito ÷ aumento pedido, somando os vendedores em R$"
+    : a.indicador?.comportamento === "soma" ? "soma dos resultados ÷ soma das metas" : "média do % da meta de cada vendedor";
   const quem = a.com_meta < a.vendedores ? ` · ${a.com_meta} de ${a.vendedores} com meta` : "";
   return `<span class="ge-meta" style="--m:${corMeta(pct)};--i:${intensidadeMeta(pct)}" title="${esc(conta)}"><i data-largura="${Math.max(0, Math.min(1, pct)) * 100}%"></i></span>
     <span class="ge-meta-texto" style="--m:${corMeta(pct)}">${a.situacao === "encerrada" ? "Resultado: " : ""}${fmt.pct(pct, 0)} da meta<small>${esc(quem)}</small></span>`;
@@ -378,25 +414,41 @@ function redesenharQuadrado(id) {
   if (foco) raiz.querySelector(`.ge-vend[data-vendedor="${id}"] .ge-vend-cab`)?.focus();
 }
 
-// A base do vendedor no período escolhido (da prévia do servidor) e, nos marcados, a meta dele.
+// A base de um vendedor na prévia: o valor do indicador ou, no preço médio, o preço de cada produto.
+function baseDaPrevia(p, id) {
+  if (!p || p.pendente) return null;
+  return (ePreco(p.indicador) ? p.precos?.[String(id)] : p.vendedores[String(id)]) ?? null;
+}
+
+// A base do vendedor no período escolhido (da prévia do servidor) e, nos marcados, a meta dele. No preço médio, o
+// preço de cada produto na base.
 function baseDoQuadrado(v, marcado) {
   const f = estado.form, p = f.previa, ind = p?.indicador;
-  let base = null, linha;
+  const base = baseDaPrevia(p, v.id);
+  let linha;
   if (f.erroPrevia) linha = `<span class="fraco">Base: —</span>`;
   else if (!p) linha = `<span class="fraco">Base: calculando…</span>`;
   else if (p.pendente) linha = `<span class="fraco">Base: aguardando os dados</span>`;
-  else {
-    base = p.vendedores[String(v.id)] ?? null;
-    linha = `Base: <b>${base == null ? "sem dados" : esc(valorIndicador(ind, base, p.unidade, true))}</b>`;
-  }
+  else if (ePreco(ind) && p.produtos) linha = `Base: ${precosHtml(p.produtos, (x) => precoDe(base, x.id), "sem venda")}`;
+  else linha = `Base: <b>${base == null ? "sem dados" : esc(valorIndicador(ind, base, p.unidade, true))}</b>`;
   return `<span class="ge-vend-base">${linha}</span>${marcado ? `<span class="ge-vend-meta" data-meta-de="${v.id}">${metaDoQuadrado(v, base)}</span>` : ""}`;
+}
+
+// Preço médio no quadrado marcado: a meta é o preço-alvo; com um produto só, quanto o preço precisa subir desde a base.
+function metaPreco(base) {
+  const alvos = estado.form.construtor?.valor().metas_produto || [];
+  if (alvos.length !== 1) return `<span class="ge-vend-alvo">Meta: <b>o preço-alvo de cada produto</b></span>`;
+  const { id, meta } = alvos[0], b = precoDe(base, id);
+  if (!(meta > 0)) return `<span class="ge-vend-alvo">Meta: —</span>`;
+  const sobe = b == null ? "" : b < meta ? ` <small>(+${fmt.moeda2(meta - b)})</small>` : " <small>(já no alvo)</small>";
+  return `<span class="ge-vend-alvo">Meta: <b>${fmt.moeda2(meta)}</b>${sobe}</span>`;
 }
 
 function metaDoQuadrado(v, base) {
   const f = estado.form, p = f.previa, form = raiz.querySelector("#g-form");
   const ind = p?.indicador || f.construtor?.descritor();
   if (!ind) return "";
-  if (ind.tipo === "preco_medio") return `Meta: <b>no preço-alvo</b>`;
+  if (ePreco(ind)) return metaPreco(base);
   const tipo = form?.querySelector('[name="alvo_tipo"]')?.value || f.dados.alvo_tipo;
   const padrao = form?.querySelector('[name="meta"]')?.value ?? "";
   const propria = f.metas.get(v.id);
@@ -423,9 +475,8 @@ function atualizarMetasQuadrados() {
     const id = Number(el.dataset.metaDe), v = (estado.quadro?.vendedores || []).find((x) => x.id === id);
     const alvo = el.querySelector(".ge-vend-alvo");
     if (!v || !alvo) return;
-    const p = f.previa, base = p && !p.pendente ? (p.vendedores[String(id)] ?? null) : null;
     const tmp = document.createElement("span");
-    tmp.innerHTML = metaDoQuadrado(v, base);
+    tmp.innerHTML = metaDoQuadrado(v, baseDaPrevia(f.previa, id));
     alvo.replaceWith(tmp.querySelector(".ge-vend-alvo"));
   });
 }
@@ -438,7 +489,9 @@ function etiqueta(e) {
     const porque = e.base_pendente ? "aguardando a base" : "sem meta ou sem números ainda";
     return `<span class="ge-pill${pop}" title="${esc(`${porque} · até ${fmt.dataCurta(e.fim)}`)}">${icone("bandeira")}${esc(e.rotulo)}</span>`;
   }
-  const titulo = `${fmt.pct(e.pct, 0)} da meta (${valorIndicador(a.indicador, e.resultado, a.unidade, true)} de ${valorIndicador(a.indicador, e.alvo, a.unidade, true)}) · até ${fmt.dataCurta(e.fim)}`;
+  const conta = ePreco(a.indicador) && a.produtos ? precosDica(a.produtos, e.base_precos, e.precos)
+    : `${valorIndicador(a.indicador, e.resultado, a.unidade, true)} de ${valorIndicador(a.indicador, e.alvo, a.unidade, true)}`;
+  const titulo = `${fmt.pct(e.pct, 0)} da meta (${conta}) · até ${fmt.dataCurta(e.fim)}`;
   return `<span class="ge-pill meta${pop}" style="--c:${corMeta(e.pct)};--i:${intensidadeMeta(e.pct)}" title="${esc(titulo)}">${esc(e.rotulo)} · ${fmt.pct(e.pct, 0)}</span>`;
 }
 
@@ -622,7 +675,8 @@ function atualizarAlvo() {
   const campo = form.querySelector('[name="meta"]');
   campo.step = tipo === "fixo" && ["clientes", "produtos"].includes(pr.formato) ? "1" : "any";
   const meta = campo.value;
-  form.querySelector("#gf-previa").textContent = preco ? "No preço-alvo de cada produto (100%)."
+  form.querySelector("#gf-previa").textContent = preco
+    ? "O % da meta de cada um é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%)."
     : meta !== "" ? `${capitalizar(textoAlvo(desc, tipo, Number(meta), desc.unidade))}.` : "";
   form.querySelector('[name="rotulo"]').placeholder = pr.rotulo;
   atualizarMetasQuadrados();
@@ -689,6 +743,15 @@ function desenharMedia() {
     return;
   }
   if (p.aviso) { el.innerHTML = `${icone("alerta")}<span>${esc(capitalizar(p.aviso))}</span>`; return; }
+  if (ePreco(p.indicador) && p.produtos) { // o preço de cada produto, pela quantidade de cada vendedor
+    const todos = Object.values(p.precos || {});
+    const marcados = [...(estado.selecao || [])].map((id) => p.precos?.[String(id)]).filter(Boolean);
+    const juntos = (listas) => esc(precosTexto(p.produtos, (x) => precoJunto(listas, x.id)));
+    const dos = marcados.length && marcados.length < todos.length
+      ? ` · dos ${plural(marcados.length, "marcado", "marcados")}: <b>${juntos(marcados)}</b>` : "";
+    el.innerHTML = `${icone("grafico")}<span>Preço médio da equipe na base (${esc(periodo)}): <b>${juntos(todos)}</b>${dos}</span>`;
+    return;
+  }
   const valor = (x) => esc(valorIndicador(p.indicador, x, p.unidade));
   const marcados = [...(estado.selecao || [])].map((id) => p.vendedores[String(id)]).filter((x) => x != null);
   const media = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
@@ -810,8 +873,12 @@ function evento(e, h) {
   const a = h.acoes[String(e.acao)] || null;
   const ind = a?.indicador || { formato: "razao", casas: 2 };
   const u = a?.unidade || "";
-  const val = (x) => esc(valorIndicador(ind, x, u));
   const d = e.dados || {};
+  // no preço médio (eventos depois da 013, com os preços), a base e a meta em R$ por produto; o resto, como sempre
+  const preco = ePreco(ind) && a?.produtos && d.base_precos !== undefined;
+  const val = (x) => esc(valorIndicador(ind, x, u));
+  const valBase = (x) => (preco ? esc(precosTexto(a.produtos, (p) => precoDe(d.base_precos, p.id))) : val(x));
+  const valAlvo = (x) => (preco ? esc(precosTexto(a.produtos, (p) => d.alvos?.[String(p.id)] ?? p.meta)) : val(x));
   const nome = esc(d.nome || a?.nome || "");
   switch (e.tipo) {
     case "nota":
@@ -820,28 +887,28 @@ function evento(e, h) {
     case "lancada": {
       const janela = janelaTexto(d.base_periodo, d.base_inicio, d.base_fim);
       const base = d.base_pendente ? `Base: aguardando os dados de ${fmt.dataCurta(d.base_inicio)} a ${fmt.dataCurta(d.base_fim)}`
-        : d.base == null ? `Base: sem dados ${janela}` : `Base: ${val(d.base)} ${janela}`;
+        : d.base == null ? `Base: sem dados ${janela}` : `Base: ${valBase(d.base)} ${janela}`;
       const alvo = d.alvo == null ? (d.base_pendente ? "Meta: sai da base, quando ela chegar" : "Meta: sem base para calcular")
-        : `Meta: ${val(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
+        : `Meta: ${valAlvo(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
       return `<div class="ge-bolha esq"><b>${icone("bandeira")}Campanha lançada: ${nome}</b>
         <p>${base}<br>${alvo}${d.vendedores > 1 ? `<br>Mesma campanha para ${d.vendedores} vendedores` : ""}</p>
         <small>${esc(e.autor)}${a ? ` · <button type="button" class="ge-link" data-acao="${e.acao}">ver a campanha</button>` : ""}</small></div>`;
     }
     case "parcial":
-      return `<p class="ge-linha">${icone("grafico")}Parcial da semana ${d.semana}${a ? ` de ${esc(a.rotulo)}` : ""}: <b>${val(d.valor)}</b></p>`;
+      return `<p class="ge-linha">${icone("grafico")}Parcial da semana ${d.semana}${a ? ` de ${esc(a.rotulo)}` : ""}: <b>${val(d.valor)}${ePreco(ind) ? " da meta" : ""}</b></p>`;
     case "resultado":
       return cartaoResultado(e, a, ind, u, h);
     case "prorrogada": {
       const resto = d.base_pendente ? "; a base aguarda os dados"
-        : d.base_periodo ? `; a base continua a mesma, meta ${val(d.alvo)}`
-        : `; base refeita ${janelaTexto(null, d.base_inicio, d.base_fim)}: ${val(d.base)}, meta ${val(d.alvo)}`;
+        : d.base_periodo ? `; a base continua a mesma, meta ${valAlvo(d.alvo)}`
+        : `; base refeita ${janelaTexto(null, d.base_inicio, d.base_fim)}: ${valBase(d.base)}, meta ${valAlvo(d.alvo)}`;
       return `<p class="ge-linha sistema">${icone("calendario")}${nome} prorrogada até ${fmt.dataCurta(d.fim)}${resto} · ${esc(e.autor)}</p>`;
     }
     case "encerrada":
       return `<p class="ge-linha sistema">${icone("certo")}${nome} encerrada em ${fmt.dataCurta(d.fim)}${d.fim_antes && d.fim_antes !== d.fim ? ` (ia até ${fmt.dataCurta(d.fim_antes)})` : ""} · ${esc(e.autor)}</p>`;
     case "editada": {
       const mudou = (d.mudou || []).map((x) => (x === "alvo" ? "meta" : x)).join(", ");
-      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc(mudou)})${d.alvo != null ? `: meta ${val(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
+      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc(mudou)})${d.alvo != null ? `: meta ${valAlvo(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
     }
     case "removido":
       return `<p class="ge-linha sistema">${icone("x")}Saiu da campanha ${nome} · ${esc(e.autor)}</p>`;
@@ -861,15 +928,33 @@ function cartaoResultado(e, a, ind, u, h) {
   const delta = d.delta != null
     ? `${esc(deltaTexto(ind, d.delta, u))} sobre a base${d.delta_pct != null
       ? ` (${d.delta_pct >= 0 ? "+" : "−"}${fmt.num(Math.abs(d.delta_pct) * 100, Math.abs(d.delta_pct) < 0.1 ? 1 : 0)}%)` : ""}` : "";
+  const corpo = ePreco(ind) && a?.produtos && d.precos !== undefined ? resultadoPreco(d, a)
+    : `${barra("Base", d.base, "var(--s-ritmo)")}${barra("Meta", d.alvo, "var(--linha-forte)")}${barra("Resultado", d.resultado, cor)}
+    ${delta ? `<p class="ge-delta">${delta}</p>` : ""}`;
   const botoes = e.atual && h.pode_editar && a ? `<div class="ge-resultado-acoes">
       ${e.provisorio ? `<button class="btn" type="button" data-encerrar="${a.id}">${icone("certo")}Encerrar campanha</button>` : ""}
       <button class="btn" type="button" data-prorrogar="${a.id}">${icone("calendario")}Prorrogar 2 semanas</button></div>` : "";
   return `<div class="ge-resultado ${cls}">
     <div class="ge-resultado-cab"><b>${icone("ranking")}Resultado: ${esc(d.nome || a?.nome || "")}</b><span class="ge-pill ${cls}">${esc(rotuloClasse(cls, d.caminho))}</span></div>
-    ${barra("Base", d.base, "var(--s-ritmo)")}${barra("Meta", d.alvo, "var(--linha-forte)")}${barra("Resultado", d.resultado, cor)}
-    ${delta ? `<p class="ge-delta">${delta}</p>` : ""}
+    ${corpo}
     ${e.provisorio ? `<p class="ge-delta fraco">Provisório: os dados vão até ${fmt.dataCurta(h.data_ref)}; o resultado fecha quando passarem do fim.</p>` : ""}
     ${botoes}</div>`;
+}
+
+// Preço médio: o preço de cada produto da base ao fim, contra o alvo, e o % da meta (o aumento feito ÷ o pedido).
+function resultadoPreco(d, a) {
+  const pct = d.resultado;
+  const linhas = a.produtos.map((p) => {
+    const id = String(p.id), alvo = d.alvos?.[id] ?? p.meta;
+    return `<div class="ge-barra ge-preco"><span title="${esc(p.nome)}">${esc(p.nome)}</span>
+      <span>${fmt.moeda2(precoDe(d.base_precos, id))} → <b>${fmt.moeda2(precoDe(d.precos, id))}</b></span><small>alvo ${fmt.moeda2(alvo)}</small></div>`;
+  }).join("");
+  const barra = `<div class="ge-barra"><span>% da meta</span><span class="ge-barra-trilho"><i style="--c:${corMeta(pct)}" data-largura="${Math.max(0, Math.min(1, pct || 0)) * 100}%"></i></span>
+    <b>${pct == null ? "—" : fmt.pct(pct, 0)}</b></div>`;
+  const aumento = d.delta == null ? "" : d.aumento_pedido
+    ? `Aumento de preço: ${reaisSinal(d.delta)} de ${fmt.moeda2(d.aumento_pedido)} pedidos, nas quantidades vendidas`
+    : "Já estava no preço-alvo na base: a meta era manter";
+  return `${linhas}${barra}${aumento ? `<p class="ge-delta">${aumento}</p>` : ""}`;
 }
 
 async function enviarNota() {
@@ -1022,28 +1107,39 @@ function aberturaAcao(d) {
   </section>`;
 }
 
-// Preço médio: o preço de cada vendedor em cada produto, contra o preço-alvo (enquanto a campanha corre).
+// Preço médio: o preço de cada vendedor em cada produto, com o da base embaixo e a cor do caminho até o preço-alvo, e o
+// % da meta de cada um (o aumento feito ÷ o pedido, em R$ nas quantidades vendidas).
 function gradePrecos(d) {
-  const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const prods = d.produtos, ind = d.indicador;
-  const cor = (pct) => (pct == null ? "" : pct >= 1 ? "var(--ok)" : pct >= 0.9 ? "var(--atencao)" : "var(--ruim)");
-  const cel = (p) => (p?.preco == null ? '<td class="fraco">—</td>'
-    : `<td><b style="color:${cor(p.pct)}">${reais2(p.preco)}</b><small>${fmt.pct(p.pct)} · ${fmt.num(p.quantidade, 1)} ${esc((p.unidade || "").toLowerCase())}</small></td>`);
+  const prods = d.produtos, ind = d.indicador, it = d.item;
+  const enc = it.situacao === "encerrada";
+  const un = (p) => esc((p.unidade || "").toLowerCase());
+  const cel = (p, u) => {
+    if (!p || (p.preco == null && p.base == null)) return '<td class="fraco">—</td>';
+    const base = p.base == null ? "sem base" : `base ${fmt.moeda2(p.base)}`;
+    const agora = p.preco == null ? '<span class="fraco">sem venda</span>'
+      : `<b${p.pct != null ? ` style="color:color-mix(in srgb, ${corMeta(p.pct)} 70%, var(--tinta))"` : ""}>${fmt.moeda2(p.preco)}</b>`;
+    return `<td title="${p.pct != null ? `${fmt.pct(p.pct, 0)} do caminho até o alvo` : ""}">${agora}<small>${base}${p.quantidade ? ` · ${fmt.num(p.quantidade, 1)} ${u}` : ""}</small></td>`;
+  };
+  const aumento = (x) => (x.delta == null ? "—" : x.aumento_pedido
+    ? `${reaisSinal(x.delta)}<small>de ${fmt.moeda2(x.aumento_pedido)}</small>` : `${reaisSinal(x.delta)}<small>já estava no alvo</small>`);
   const linhas = d.linhas.map((x) => {
     const por = Object.fromEntries((x.produtos || []).map((p) => [p.id, p]));
     return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
-      ${prods.map((p) => cel(por[p.id])).join("")}
-      <td>${x.resultado != null ? `<b>${fmt.pct(x.resultado)}</b>` : "—"}</td>
-      <td>${x.base != null ? fmt.pct(x.base) : '<span class="fraco">sem base</span>'}</td>
-      <td>${x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`;
+      <td>${x.pct == null ? (x.base_pendente ? '<span class="fraco">aguardando a base</span>' : "—")
+        : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
+      <td>${aumento(x)}</td>
+      <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
+        : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td>
+      ${prods.map((p) => cel(por[p.id], un(p))).join("")}</tr>`;
   }).join("");
+  const equipe = (p) => (p.preco == null ? '<td class="fraco">—</td>' : `<td><b>${fmt.moeda2(p.preco)}</b><small>${fmt.num(p.quantidade, 1)} ${un(p)}</small></td>`);
   return `<section class="cartao secao entra" style="--i:2">
     <div class="cartao-cab"><div><h3>${icone("moeda")}Preço médio por produto</h3>
-      <p class="sub">venda líquida ÷ quantidade de cada vendedor, contra o preço-alvo; o índice compara o que vendeu com o que seria nos preços-alvo (100% = no alvo)</p></div></div>
+      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim") : "preço até agora"} (venda líquida ÷ quantidade) e o da base embaixo · o % da meta é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo, somados em R$ nas quantidades vendidas (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%) · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados camp-grade">
-      <thead><tr><th>Vendedor</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${reais2(p.meta)}${p.unidade ? `/${esc(p.unidade.toLowerCase())}` : ""}</small></th>`).join("")}<th>Índice</th><th>Base</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Vendedor</th><th>% da meta</th><th title="Aumento de preço feito, em R$ nas quantidades vendidas, e o que a meta pede">Aumento</th><th>Situação</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${fmt.moeda2(p.meta)}${p.unidade ? `/${un(p)}` : ""}</small></th>`).join("")}</tr></thead>
       <tbody>${linhas}</tbody>
-      <tfoot><tr><td class="nome-v">Total</td>${prods.map(cel).join("")}<td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado) : "—"}</b></td><td></td><td></td></tr></tfoot>
+      <tfoot><tr><td class="nome-v">Equipe<small>aumento de todos ÷ o pedido</small></td><td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado, 0) : "—"}</b></td><td></td><td></td>${prods.map(equipe).join("")}</tr></tfoot>
     </table></div></section>`;
 }
 

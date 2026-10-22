@@ -1142,7 +1142,9 @@ O numerador e o denominador que vêm junto (pedidos na rota e visitas desses dia
 o valor que vem pronto. A meta \
 é em % (80 = 80%); só aceita filtros de cliente (UF, segmento, área).
   - frequencia: semanas com compra por cliente positivado (média).
-  - preco_medio: preço-alvo de cada produto em metas_produto (R$ por unidade); a meta é estar no preço-alvo.
+  - preco_medio: preço-alvo de cada produto em metas_produto (R$ por unidade). O % da meta de cada vendedor é o \
+aumento de preço que ele fez sobre o preço dele na base ÷ o aumento até o preço-alvo (base R$ 10, alvo R$ 20, agora \
+R$ 15 = 50%), somados em R$ nas quantidades vendidas.
   - personalizada: para o resto, monte com medida (faturamento, volume, clientes ou produtos) e forma: total; \
 por_cliente (faturamento ou volume ÷ clientes positivados); pct_carteira (clientes da carteira que compraram; meta \
 em %). Numa campanha não existe a forma crescimento: "crescer X%" é alvo_tipo pct. Volume exige produtos de uma \

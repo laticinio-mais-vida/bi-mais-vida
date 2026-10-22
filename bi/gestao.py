@@ -11,14 +11,16 @@ vendedor.
   a base + X%); "base + N" (mais) só nas campanhas de antes. Enquanto a campanha corre, o resultado e as parciais de
   cada semana são calculados na hora; quando os dados passam do fim (ou o administrador encerra), o resultado de cada
   vendedor fica congelado. O quadro mostra o % da meta de cada vendedor nas campanhas em vigor e o da campanha
-  (pct_da_campanha); a prévia da base (previa_base) mede a base dos vendedores para o formulário, sem gravar.
+  (pct_da_campanha); a prévia da base (previa_base) mede a base dos vendedores para o formulário, sem gravar. No preço
+  médio, a meta é o preço-alvo de cada produto e o % da meta é o aumento de preço feito ÷ o pedido, desde o preço de
+  cada produto na base (base_precos, migração 013; indicadores.progresso_preco).
 - Objetivo: um indicador da equipe da região num período, contra uma meta da equipe (o total, sem repetir clientes
   entre os vendedores).
 - Histórico (tabela gestao_eventos): as observações do administrador e o que aconteceu em cada campanha do vendedor
   (lançada, editada, prorrogada, encerrada, resultado). As parciais e o resultado de uma campanha em vigor entram na hora.
 - Quem mexe: só o administrador. Quem tem a página vê as campanhas, os objetivos e as observações dos vendedores do
   acesso dela (Gestão › Configurar, como em Projeções e no Assistente).
-- Tudo fica no PostgreSQL (migrações 007, 008, 009 e 012). As contas usam o recorte com todos os vendedores do
+- Tudo fica no PostgreSQL (migrações 007, 008, 009, 012 e 013). As contas usam o recorte com todos os vendedores do
   Assistente, filtrando os vendedores no SQL, e ficam guardadas no próprio recorte (refeito quando os dados, as regras
   ou as metas mudam). Base pendente e resultado vencido são gravados na leitura seguinte (cálculo preguiçoso), com a
   coluna versao evitando gravar por cima de uma mudança feita no meio.
@@ -43,12 +45,14 @@ from .conversas import NaoEncontrada, id_valido, novo_id
 from .indicadores import (ABERTURAS, BASES, BASES_COM_PRODUTO, COMBINACOES, COMPARAR, FILTROS, FILTROS_PRODUTO,
                           FORMAS, MAX_PRODUTOS_PRECO, MEDIDAS, PERIODOS_BASE, TIPOS, _marcas, _redondo, calcular,
                           calendario_periodo, descritor, filtros_aceitos, janela_base, janela_fechada, medir, normalizar,
-                          periodo_base, total_equipe, unidades, valor_de)
+                          periodo_base, precos_de, progresso_preco, progresso_preco_juntos, total_equipe, unidades,
+                          valor_de)
 from .metas import MESES
 from .projecoes import NOME_EQUIPE
 
 __all__ = ["Gestao", "ContextoGestao", "SemDados", "andamento", "calendario_periodo", "unidades", "validar",
-           "situacao", "prazo", "alvo_de", "classe_resultado", "comparar", "rotulo_padrao", "texto_alvo", "publica"]
+           "situacao", "prazo", "alvo_de", "classe_resultado", "comparar", "comparar_preco", "andamento_preco",
+           "produtos_preco", "valor_vendedor", "rotulo_padrao", "texto_alvo", "publica"]
 
 TIPOS_ITEM = {"acao": "campanha", "objetivo": "objetivo"}
 REGIOES = ("ES", "BA")
@@ -87,7 +91,7 @@ _COLUNAS = ("id", "tipo", "nome", "rotulo", "descricao", "regiao", "status", "in
             "atualizada_em", "atualizada_por_nome")
 _CAMPOS = ", ".join(f"c.{x}" for x in _COLUNAS)
 _COLUNAS_V = ("id_vendedor", "meta", "base", "base_num", "base_den", "base_em", "resultado", "resultado_num",
-              "resultado_den", "parciais", "entrou_em")
+              "resultado_den", "parciais", "entrou_em", "base_precos", "resultado_precos")
 
 
 class SemDados(RuntimeError):
@@ -475,12 +479,15 @@ def _pct(res, alvo):
     return res / alvo if res is not None and alvo else None
 
 
-def pct_da_campanha(desc: dict, pares) -> dict:
+def pct_da_campanha(desc: dict, pares, precos=()) -> dict:
     """O andamento da campanha contra a meta, com os pares (resultado, meta) dos vendedores que têm os dois: nos
-    indicadores de soma, a soma dos resultados ÷ a soma das metas; nas médias, a média do % de cada vendedor."""
+    indicadores de soma, a soma dos resultados ÷ a soma das metas; nas médias, a média do % de cada vendedor. No
+    preço médio, os aumentos feitos ÷ os pedidos, somados em R$ (precos: (pct, aumento, pedido) de cada um)."""
     pares = [(r, a) for r, a in pares if r is not None and a]
     if not pares:
         return {"meta_pct": None, "com_meta": 0}
+    if desc["tipo"] == "preco_medio":
+        return {"meta_pct": _redondo(progresso_preco_juntos(precos)), "com_meta": len(pares)}
     if desc["comportamento"] == "soma":
         pct = sum(r for r, _ in pares) / sum(a for _, a in pares)
     else:
@@ -495,6 +502,54 @@ def comparar(res, base, alvo) -> dict:
     return {"classe": classe_resultado(res, base, alvo), "delta": _redondo(delta),
             "delta_pct": _redondo(delta / base) if delta is not None and base else None,
             "caminho": _redondo(caminho)}
+
+
+# --- preço médio: o % da meta sai dos preços de cada produto na base e agora ----------------------
+def alvos_preco(c: dict) -> dict[int, float]:
+    return {p["id"]: p["meta"] for p in c.get("metas_produto") or []}
+
+
+def comparar_preco(prog: dict | None, com_base: bool) -> dict:
+    """comparar() no preço médio, pelo % da meta (progresso_preco): ok = chegou ao alvo; mid = subiu sem chegar; bad =
+    não subiu (ou caiu). delta: o aumento feito, em R$."""
+    if prog is None:
+        return {"classe": "sem_dados" if com_base else "sem_alvo", "delta": None, "delta_pct": None, "caminho": None}
+    pct = prog["pct"]
+    return {"classe": "ok" if round(pct, 3) >= 1 else "mid" if pct > 0 else "bad", "delta": _redondo(prog["aumento"]),
+            "delta_pct": None, "caminho": _redondo(pct)}
+
+
+def andamento_preco(c: dict, base_precos, precos) -> dict:
+    """O preço médio de um vendedor: o % da meta (resultado), a classe, o aumento feito (delta) e o pedido, em R$, e os
+    preços de agora (precos_de)."""
+    prog = progresso_preco(base_precos, precos, alvos_preco(c))
+    return {"resultado": _redondo(prog and prog["pct"]), "precos": precos,
+            "aumento_pedido": _redondo((prog or {}).get("aumento_pedido")), **comparar_preco(prog, bool(base_precos))}
+
+
+def produtos_preco(c: dict, base_precos, precos) -> list[dict]:
+    """O preço médio de um vendedor produto a produto (a grade da página): o preço da base, o de agora, a quantidade e
+    o % até o alvo."""
+    pcts = (progresso_preco(base_precos, precos, alvos_preco(c)) or {}).get("produtos", {})
+    saida = []
+    for p in c["metas_produto"]:
+        chave, agora = str(p["id"]), (precos or {}).get(str(p["id"])) or {}
+        saida.append({"id": p["id"], "meta": p["meta"], "base": ((base_precos or {}).get(chave) or {}).get("preco"),
+                      "preco": agora.get("preco"), "quantidade": agora.get("quantidade"), "pct": _redondo(pcts.get(chave))})
+    return saida
+
+
+def valor_vendedor(c: dict, medida: tuple | None, base_precos) -> float | None:
+    """O valor de um vendedor que a página mostra (as parciais, a etiqueta): o do indicador ou, no preço médio, o % da
+    meta, com os preços da base dele. medida: (valor, numerador, denominador, preços), de Gestao._valores."""
+    if c["metrica"] == "preco_medio":
+        prog = progresso_preco(base_precos, medida[3] if medida else None, alvos_preco(c))
+        return prog and prog["pct"]
+    return medida[0] if medida else None
+
+
+def _json(x) -> str | None:
+    return None if x is None else json.dumps(x, ensure_ascii=False)
 
 
 def _em_ordem(itens: list[dict]) -> list[dict]:
@@ -516,7 +571,8 @@ def _num(v: float, desc: dict) -> str:
 def texto_alvo(alvo_tipo: str, meta: float, desc: dict) -> str:
     """Como a meta aparece para a IA e no rascunho ("+10% sobre a base de cada um")."""
     if desc["tipo"] == "preco_medio":
-        return "no preço-alvo de cada produto (100%)"
+        return ("o preço-alvo de cada produto; o % da meta é o aumento de preço feito sobre a base de cada um ÷ o "
+                "aumento até o alvo")
     if alvo_tipo == "pct":
         return f"+{_num(meta, {'formato': 'pct'})}% sobre a base de cada um"
     if alvo_tipo == "mais":
@@ -544,7 +600,8 @@ def _vendedor(linha) -> dict:
     return {"id": v["id_vendedor"], "meta": _float(v["meta"]), "base": _float(v["base"]),
             "base_num": _float(v["base_num"]), "base_den": _float(v["base_den"]), "base_em": hora(v["base_em"]),
             "resultado": _float(v["resultado"]), "resultado_num": _float(v["resultado_num"]),
-            "resultado_den": _float(v["resultado_den"]), "parciais": v["parciais"], "entrou_em": hora(v["entrou_em"])}
+            "resultado_den": _float(v["resultado_den"]), "parciais": v["parciais"], "entrou_em": hora(v["entrou_em"]),
+            "base_precos": v["base_precos"], "resultado_precos": v["resultado_precos"]}
 
 
 def _campanha(linha, vendedores: list[dict], produtos: list[dict]) -> dict:
@@ -625,6 +682,16 @@ class _Contas:
 
     def descritor(self, c: dict) -> dict:
         return descritor(c["metrica"], c["parametros"], self.unidade(c))
+
+    def produtos(self, c: dict) -> list[dict] | None:
+        """Preço médio: os produtos da campanha com o nome, a unidade e o preço-alvo (para a página)."""
+        if c["metrica"] != "preco_medio" or not c["metas_produto"]:
+            return None
+        ids = [p["id"] for p in c["metas_produto"]]
+        info = {p: (n, (u or "").strip().upper()) for p, n, u in self.cur.execute(
+            f"SELECT id_produto, produto, unidade FROM produtos WHERE id_produto IN ({_marcas(ids)})", ids).fetchall()}
+        return [{"id": p["id"], "nome": info.get(p["id"], (f"Produto {p['id']}", ""))[0],
+                 "unidade": info.get(p["id"], ("", ""))[1], "meta": p["meta"]} for p in c["metas_produto"]]
 
     def nomes(self, ids) -> dict[int, tuple[str, str]]:
         ids = sorted(set(ids))
@@ -731,8 +798,9 @@ class Gestao:
 
     # --- contas ------------------------------------------------------------------------------
     def _valores(self, k: _Contas, c: dict, ids, inicio: dt.date, ate: dt.date) -> dict[int, tuple]:
-        """{vendedor: (valor, numerador, denominador)} do indicador entre inicio e ate (guardado no recorte quando a
-        campanha já está gravada: c["id"])."""
+        """{vendedor: (valor, numerador, denominador, preços)} do indicador entre inicio e ate (guardado no recorte
+        quando a campanha já está gravada: c["id"]). preços: no preço médio, o de cada produto (precos_de); nos outros
+        tipos, None."""
         ids = sorted(ids)
         if not ids or ate < inicio:
             return {}
@@ -741,10 +809,12 @@ class Gestao:
         def fazer():
             m = medir(k.cur, c, ids, inicio, ate, areas)
             comportamento = descritor(c["metrica"], c["parametros"])["comportamento"]
+            preco = c["metrica"] == "preco_medio"
             saida = {}
             for v in ids:
                 x = m["vend"].get(v)
-                saida[v] = (valor_de(comportamento, x), (x or {}).get("num", 0.0), (x or {}).get("den"))
+                saida[v] = (valor_de(comportamento, x), (x or {}).get("num", 0.0), (x or {}).get("den"),
+                            precos_de((x or {}).get("produtos")) if preco else None)
             return saida
         if c.get("id") is None:
             return fazer()
@@ -769,26 +839,37 @@ class Gestao:
             saida.append({"semana": i, "ate": ate, "valores": self._valores(k, c, ids, c["inicio"], ate)})
             i += 1
 
-    def _resultado(self, k: _Contas, c: dict) -> dict:
+    def _resultado(self, k: _Contas, c: dict, base_precos: dict) -> dict:
+        """O resultado de cada vendedor e as parciais (o valor que a página mostra: no preço médio, o % da meta, com os
+        preços da base de cada um, base_precos: {vendedor: preços})."""
         ids = [v["id"] for v in c["vendedores"]]
         parciais = self._parciais(k, c, ids)
         return {"valores": self._valores(k, c, ids, c["inicio"], c["fim"]),
                 "parciais": {vid: [{"semana": p["semana"], "ate": p["ate"].isoformat(),
-                                    "valor": _redondo(p["valores"].get(vid, (None,))[0])} for p in parciais]
-                             for vid in ids}}
+                                    "valor": _redondo(valor_vendedor(c, p["valores"].get(vid), base_precos.get(vid)))}
+                                   for p in parciais] for vid in ids}}
+
+    @staticmethod
+    def _precos_base(c: dict, bases: dict) -> dict:
+        """{vendedor: preços da base} (preço médio), com as bases que acabaram de ser medidas."""
+        return {v["id"]: bases[v["id"]][3] if v["id"] in bases else v.get("base_precos") for v in c["vendedores"]}
 
     @staticmethod
     def _meta_v(c: dict, v: dict) -> float:
         return c["meta_padrao"] if v.get("meta") is None else v["meta"]
 
     @staticmethod
-    def _retrato(c: dict, base, alvo) -> dict:
-        """O que o histórico guarda de uma campanha no momento do evento."""
-        return {"nome": c["nome"], "rotulo": c["rotulo"], "inicio": c["inicio"].isoformat(), "fim": c["fim"].isoformat(),
-                "base_periodo": c.get("base_periodo"), "base_inicio": c["base_inicio"].isoformat(),
-                "base_fim": c["base_fim"].isoformat(), "alvo_tipo": c["alvo_tipo"], "base": _redondo(base),
-                "alvo": _redondo(alvo),
-                "vendedores": len(c["vendedores"])}
+    def _retrato(c: dict, base, alvo, base_precos=None) -> dict:
+        """O que o histórico guarda de uma campanha no momento do evento (no preço médio, também os preços da base e os
+        preços-alvo)."""
+        r = {"nome": c["nome"], "rotulo": c["rotulo"], "inicio": c["inicio"].isoformat(), "fim": c["fim"].isoformat(),
+             "base_periodo": c.get("base_periodo"), "base_inicio": c["base_inicio"].isoformat(),
+             "base_fim": c["base_fim"].isoformat(), "alvo_tipo": c["alvo_tipo"], "base": _redondo(base),
+             "alvo": _redondo(alvo),
+             "vendedores": len(c["vendedores"])}
+        if c["metrica"] == "preco_medio":
+            r.update(base_precos=base_precos, alvos={str(p): m for p, m in alvos_preco(c).items()})
+        return r
 
     @staticmethod
     def _evento(con, vid: int, campanha, tipo: str, dados: dict, usuario: dict | None, texto: str = "") -> None:
@@ -800,26 +881,30 @@ class Gestao:
     def _gravar_bases(self, con, c: dict, desc: dict, bases: dict) -> None:
         """Grava as bases medidas e completa o retrato dos eventos que estavam com a base pendente."""
         por_id = {v["id"]: v for v in c["vendedores"]}
-        for vid, (valor, num, den) in bases.items():
-            con.execute("UPDATE campanha_vendedores SET base = %s, base_num = %s, base_den = %s, base_em = now() "
-                        "WHERE campanha = %s AND id_vendedor = %s", [valor, num, den, c["id"], vid])
+        for vid, (valor, num, den, precos) in bases.items():
+            con.execute("UPDATE campanha_vendedores SET base = %s, base_num = %s, base_den = %s, base_precos = %s::jsonb, "
+                        "base_em = now() WHERE campanha = %s AND id_vendedor = %s",
+                        [valor, num, den, _json(precos), c["id"], vid])
             alvo = alvo_de(c["alvo_tipo"], desc, valor, self._meta_v(c, por_id.get(vid, {})))
             con.execute("UPDATE gestao_eventos SET dados = dados || %s::jsonb WHERE campanha = %s AND id_vendedor = %s "
                         "AND dados->>'base_pendente' = 'true'",
-                        [json.dumps({"base": _redondo(valor), "alvo": _redondo(alvo), "base_pendente": False}), c["id"], vid])
+                        [json.dumps({"base": _redondo(valor), "alvo": _redondo(alvo), "base_pendente": False,
+                                     **({"base_precos": precos} if precos is not None else {})}), c["id"], vid])
 
     def _congelar(self, con, c: dict, desc: dict, bases: dict, resultado: dict) -> None:
         """Congela o resultado de cada vendedor (com as parciais) e põe o evento no histórico de cada um."""
+        precos_base = self._precos_base(c, bases)
         for v in c["vendedores"]:
             vid = v["id"]
             base = bases[vid][0] if vid in bases else v["base"]
-            res, num, den = resultado["valores"].get(vid, (None, None, None))
+            res, num, den, precos = resultado["valores"].get(vid, (None, None, None, None))
             alvo = alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v))
             con.execute("UPDATE campanha_vendedores SET resultado = %s, resultado_num = %s, resultado_den = %s, "
-                        "parciais = %s::jsonb WHERE campanha = %s AND id_vendedor = %s",
-                        [res, num, den, json.dumps(resultado["parciais"].get(vid, [])), c["id"], vid])
-            self._evento(con, vid, c["id"], "resultado",
-                         {**self._retrato(c, base, alvo), "resultado": _redondo(res), **comparar(res, base, alvo)}, None)
+                        "resultado_precos = %s::jsonb, parciais = %s::jsonb WHERE campanha = %s AND id_vendedor = %s",
+                        [res, num, den, _json(precos), json.dumps(resultado["parciais"].get(vid, [])), c["id"], vid])
+            fim = (andamento_preco(c, precos_base[vid], precos) if c["metrica"] == "preco_medio"
+                   else {"resultado": _redondo(res), **comparar(res, base, alvo)})
+            self._evento(con, vid, c["id"], "resultado", {**self._retrato(c, base, alvo, precos_base[vid]), **fim}, None)
         con.execute("UPDATE campanhas SET resultado_em = now(), status = 'concluida' WHERE id = %s", [c["id"]])
 
     @staticmethod
@@ -834,7 +919,8 @@ class Gestao:
         for c in acoes:
             if c["tipo"] != "acao" or c["arquivada"]:
                 continue
-            pendentes = [v["id"] for v in c["vendedores"] if v["base_em"] is None]
+            preco = c["metrica"] == "preco_medio"  # base de antes da 013, de vários produtos: sem os preços, mede de novo
+            pendentes = [v["id"] for v in c["vendedores"] if v["base_em"] is None or (preco and v["base_precos"] is None)]
             medir_base = bool(pendentes) and k.data_ref >= c["base_fim"]
             vence = c["resultado_em"] is None and c["inicio"] <= k.data_ref and (
                 c["encerrada_em"] is not None or k.data_ref >= c["fim"] + dt.timedelta(days=FOLGA_CONGELAR))
@@ -842,7 +928,7 @@ class Gestao:
                 continue
             try:
                 bases = self._bases(k, c, pendentes) if medir_base else {}
-                resultado = self._resultado(k, c) if vence else None
+                resultado = self._resultado(k, c, self._precos_base(c, bases)) if vence else None
             except SemDados:
                 continue
             desc = descritor(c["metrica"], c["parametros"])
@@ -858,9 +944,11 @@ class Gestao:
 
     def _estado(self, k: _Contas, c: dict, hoje: dt.date, desc: dict) -> dict:
         """Base, alvo e (na campanha encerrada) o resultado de cada vendedor: o congelado, ou o provisório enquanto os
-        dados não passam do fim."""
+        dados não passam do fim. No preço médio, também os preços da base (base_precos) e os do resultado (precos); o
+        resultado é o % da meta."""
         sit = situacao(c, hoje)
         congelado = c["resultado_em"] is not None
+        preco = c["metrica"] == "preco_medio"
         vivo, aviso = {}, None
         if sit == "encerrada" and not congelado and c["inicio"] <= k.data_ref:
             try:
@@ -873,7 +961,12 @@ class Gestao:
             alvo = alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v))
             item = {"base": _redondo(base), "base_pendente": v["base_em"] is None, "alvo": _redondo(alvo),
                     "meta": self._meta_v(c, v), "resultado": None}
-            if congelado or vivo:
+            if preco:
+                item["base_precos"] = v["base_precos"] if v["base_em"] else None
+            if (congelado or vivo) and preco:
+                precos = v["resultado_precos"] if congelado else (vivo.get(v["id"]) or (None,) * 4)[3]
+                item.update(andamento_preco(c, item["base_precos"], precos))
+            elif congelado or vivo:
                 res = v["resultado"] if congelado else vivo.get(v["id"], (None,))[0]
                 item.update(resultado=_redondo(res), **comparar(res, base, alvo))
             vendedores[v["id"]] = item
@@ -1012,11 +1105,18 @@ class Gestao:
                         vivo = self._valores(k, c, visiveis, c["inicio"], min(c["fim"], k.data_ref))
                     except SemDados as e:
                         aviso = str(e)
-                pares = {}  # vendedor -> (resultado até agora ou final, meta)
+                pares = {}  # vendedor -> (resultado até agora ou final, meta); no preço médio, (% da meta, 1)
+                precos = []  # preço médio: (% da meta, aumento feito, aumento pedido) de cada um
                 for vid in visiveis:
                     e = estado["vendedores"][vid]
-                    res = vivo.get(vid, (None,))[0] if em_vigor else e["resultado"]
+                    if c["metrica"] == "preco_medio":
+                        x = andamento_preco(c, e["base_precos"], (vivo.get(vid) or (None,) * 4)[3]) if em_vigor else e
+                        res = x["resultado"]
+                        precos.append((res, x.get("delta"), x.get("aumento_pedido")))
+                    else:
+                        res = vivo.get(vid, (None,))[0] if em_vigor else e["resultado"]
                     pares[vid] = (res, e["alvo"])
+                produtos = k.produtos(c)
                 classes = [estado["vendedores"][vid].get("classe") for vid in visiveis]
                 cartoes.append({
                     "id": c["id"], "nome": c["nome"], "rotulo": c["rotulo"], "descricao": c["descricao"],
@@ -1029,17 +1129,21 @@ class Gestao:
                     "encerrada_em": c["encerrada_em"], "aviso": aviso,
                     "base_pendente": any(estado["vendedores"][vid]["base_pendente"] for vid in visiveis),
                     "criada_por_nome": c["criada_por_nome"],
-                    **(pct_da_campanha(desc, pares.values()) if estado["situacao"] != "planejada"
+                    **(pct_da_campanha(desc, pares.values(), precos) if estado["situacao"] != "planejada"
                        else {"meta_pct": None, "com_meta": 0}),
+                    **({"produtos": produtos} if produtos else {}),
                 })
                 if not em_vigor:
                     continue
                 for vid in visiveis:  # os cards dos vendedores mostram só as campanhas em vigor
                     res, alvo = pares[vid]
+                    e = estado["vendedores"][vid]
                     etiquetas[vid].append({"id": c["id"], "rotulo": c["rotulo"], "situacao": "em_vigor",
                                            "fim": c["fim"].isoformat(), "resultado": _redondo(res),
                                            "alvo": _redondo(alvo), "pct": _redondo(_pct(res, alvo)),
-                                           "base_pendente": estado["vendedores"][vid]["base_pendente"]})
+                                           "base_pendente": e["base_pendente"],
+                                           **({"base_precos": e["base_precos"], "precos": (vivo.get(vid) or (None,) * 4)[3]}
+                                              if produtos else {})})
             saida["acoes"] = _em_ordem(cartoes)
 
             # os quadrados: a equipe do acesso e quem está numa campanha que ainda corre
@@ -1126,15 +1230,17 @@ class Gestao:
                     "vendedores": len(c["vendedores"]), "arquivada": c["arquivada"], "congelado": estado["congelado"],
                     "provisorio": estado["provisorio"], "alvo_tipo": c["alvo_tipo"], "meta_padrao": c["meta_padrao"],
                     "participa": participa is not None, "aviso": estado["aviso"],
+                    **({"produtos": produtos} if (produtos := k.produtos(c)) else {}),
                 }
                 if participa is None:
                     continue
                 if estado["congelado"]:
                     semanas = [{"semana": p["semana"], "ate": p["ate"], "valor": p["valor"]} for p in participa["parciais"] or []]
                 elif c["inicio"] <= k.data_ref and not c["arquivada"]:
+                    base_precos = estado["vendedores"][vid].get("base_precos")
                     try:
                         semanas = [{"semana": p["semana"], "ate": p["ate"].isoformat(),
-                                    "valor": _redondo(p["valores"].get(vid, (None,))[0])}
+                                    "valor": _redondo(valor_vendedor(c, p["valores"].get(vid), base_precos))}
                                    for p in self._parciais(k, c, [v["id"] for v in c["vendedores"]])]
                     except SemDados:
                         semanas = []
@@ -1149,8 +1255,9 @@ class Gestao:
                     dia = min(hoje, c["fim"] + dt.timedelta(days=1))
                     item = {"id": None, "tipo": "resultado", "acao": c["id"], "data": dia.isoformat(), "texto": "",
                             "autor": None, "criada_em": None, "provisorio": True,
-                            "dados": {**self._retrato(c, e["base"], e["alvo"]),
-                                      **{x: e.get(x) for x in ("resultado", "classe", "delta", "delta_pct", "caminho")}}}
+                            "dados": {**self._retrato(c, e["base"], e["alvo"], e.get("base_precos")),
+                                      **{x: e[x] for x in ("resultado", "classe", "delta", "delta_pct", "caminho", "precos",
+                                                           "aumento_pedido") if x in e}}}
                     eventos.append(item)
                     ultimo_resultado[c["id"]] = item
             for camp, e in ultimo_resultado.items():
@@ -1197,11 +1304,13 @@ class Gestao:
                     c = self._uma(con, c["id"])
             desc = k.descritor(c)
             estado = self._estado(k, c, hoje, desc)
+            preco = c["metrica"] == "preco_medio"
             a, aviso = None, estado["aviso"]
             if not estado["congelado"] and c["inicio"] <= k.data_ref:
                 escala = 100 if desc["meta_em_pct"] else 1
                 camp = {**c, "meta_padrao": 0, "vendedores": [
-                    {"id": vid, "meta": (e["alvo"] or 0) * escala} for vid, e in estado["vendedores"].items()]}
+                    {"id": vid, "meta": (e["alvo"] or 0) * escala, "base_precos": e.get("base_precos")}
+                    for vid, e in estado["vendedores"].items()]}
                 try:
                     areas, _ = k.areas(c)
                     a = calcular(k.cur, camp, k.regras, k.cal, k.data_ref, ids, areas, abrir)
@@ -1214,14 +1323,21 @@ class Gestao:
             for vid in visiveis:
                 e, r = estado["vendedores"][vid], vivo.get(vid, {})
                 nome_v, equipe = nomes.get(vid, (f"Vendedor {vid}", ""))
-                res = e["resultado"] if e["resultado"] is not None or estado["congelado"] else r.get("realizado")
+                if preco:  # o % da meta e a grade de preços: do resultado (congelado ou provisório) ou de agora
+                    precos = e["precos"] if "precos" in e else precos_de(r.get("produtos"))
+                    p = andamento_preco(c, e.get("base_precos"), precos)
+                    res, cmp = p["resultado"], {x: p[x] for x in ("classe", "delta", "delta_pct", "caminho")}
+                    extra = {"base_precos": e.get("base_precos"), "aumento_pedido": p["aumento_pedido"],
+                             "produtos": produtos_preco(c, e.get("base_precos"), precos)}
+                else:
+                    res = e["resultado"] if e["resultado"] is not None or estado["congelado"] else r.get("realizado")
+                    cmp, extra = comparar(res, e["base"], e["alvo"]), {"produtos": r["produtos"]} if r.get("produtos") else {}
                 linha = {"id": vid, "nome": nome_v, "equipe": NOME_EQUIPE.get(equipe, equipe), "base": e["base"],
                          "base_pendente": e["base_pendente"], "alvo": e["alvo"], "resultado": res,
                          "pct": _redondo(res / e["alvo"]) if res is not None and e["alvo"] else None,
                          "status": r.get("status"), "projecao": r.get("projecao"),
                          "numerador": r.get("numerador"), "denominador": r.get("denominador"), "dias": r.get("dias"),
-                         **({"produtos": r["produtos"]} if r.get("produtos") else {}),
-                         **comparar(res, e["base"], e["alvo"])}
+                         **extra, **cmp}
                 linhas.append(linha)
             linhas.sort(key=lambda x: (x["pct"] is None, -(x["pct"] or 0), _chave(x["nome"])))
             encerrada = estado["situacao"] == "encerrada"
@@ -1229,12 +1345,15 @@ class Gestao:
                      "acima_da_base": sum(1 for x in linhas if x["classe"] in ("ok", "mid")),
                      **({k_: a["total"][k_] for k_ in ("realizado", "numerador", "denominador", "dias", "distintos")
                          if a and k_ in a["total"]})}
+            if preco:  # os aumentos feitos ÷ os pedidos, somados, como a barra da campanha (também no congelado)
+                total["realizado"] = _redondo(progresso_preco_juntos(
+                    (x["resultado"], x["delta"], x["aumento_pedido"]) for x in linhas))
             item = {**publica(c), "situacao": estado["situacao"], "prazo": prazo(c, hoje),
                     "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada,
                     "vendedores": [{"id": v["id"], "meta": v["meta"]} for v in c["vendedores"]
                                    if ids is None or v["id"] in ids]}
             return {"item": item, "indicador": desc, "unidade": desc["unidade"], "linhas": linhas, "total": total,
-                    "abertura": (a or {}).get("abertura"), "produtos": (a or {}).get("produtos"),
+                    "abertura": (a or {}).get("abertura"), "produtos": (a or {}).get("produtos") or k.produtos(c),
                     "calendarios": (a or {}).get("calendarios"), "avisos": (a or {}).get("avisos", []),
                     "aviso": aviso, "ocultos": len(estado["vendedores"]) - len(visiveis),
                     "pode_editar": usuario["papel"] == "admin", "data_ref": k.data_ref.isoformat()}
@@ -1303,13 +1422,16 @@ class Gestao:
                 except SemDados as e:
                     aviso = str(e)
             data_ref = k.data_ref
+            produtos = k.produtos(m)
         com_valor = [b[0] for b in bases.values() if b[0] is not None]
         return {"base_periodo": m["base_periodo"], "base_inicio": m["base_inicio"].isoformat(),
                 "base_fim": m["base_fim"].isoformat(), "texto": texto_janela(m["base_periodo"], m["base_inicio"],
                                                                              m["base_fim"]),
                 "pendente": pendente, "data_ref": data_ref.isoformat(), "aviso": aviso, "indicador": desc,
                 "unidade": desc["unidade"], "vendedores": {str(v): _redondo(b[0]) for v, b in bases.items()},
-                "media": _redondo(sum(com_valor) / len(com_valor)) if com_valor else None}
+                "media": _redondo(sum(com_valor) / len(com_valor)) if com_valor else None,
+                # preço médio: o preço de cada produto na base de cada vendedor (a página mostra no lugar do índice)
+                **({"produtos": produtos, "precos": {str(v): b[3] for v, b in bases.items()}} if produtos else {})}
 
     def criar(self, usuario: dict, dados: dict, tipo: str = "acao", rascunho=None) -> dict:
         """Lança a campanha (com a base de cada vendedor, se os dados já cobrem a janela) ou cria o objetivo. rascunho: o
@@ -1349,14 +1471,14 @@ class Gestao:
 
     def _entrar(self, con, c: dict, desc: dict, v: dict, base: tuple | None, usuario: dict) -> None:
         """Põe o vendedor na campanha (com a base, se já medida) e o evento "campanha lançada" no histórico dele."""
-        valor, num, den = base or (None, None, None)
-        con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor, meta, base, base_num, base_den, base_em) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END)",
-                    [c["id"], v["id"], v["meta"], valor, num, den, base is not None])
+        valor, num, den, precos = base or (None, None, None, None)
+        con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor, meta, base, base_num, base_den, base_precos, "
+                    "base_em) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, CASE WHEN %s THEN now() END)",
+                    [c["id"], v["id"], v["meta"], valor, num, den, _json(precos), base is not None])
         meta = self._meta_v(c, v)
         alvo = alvo_de(c["alvo_tipo"], desc, valor if base else None, meta)
         self._evento(con, v["id"], c["id"], "lancada",
-                     {**self._retrato(c, valor if base else None, alvo), "meta": meta, "base_pendente": base is None},
+                     {**self._retrato(c, valor if base else None, alvo, precos), "meta": meta, "base_pendente": base is None},
                      usuario)
 
     @staticmethod
@@ -1423,14 +1545,15 @@ class Gestao:
             con.execute(sql, [*valores, self.hoje(), usuario["nome"], c["id"]])
             self._gravar_produtos(con, c["id"], d["metas_produto"])
             if mudou_medida:
-                con.execute("UPDATE campanha_vendedores SET base = NULL, base_num = NULL, base_den = NULL, base_em = NULL "
-                            "WHERE campanha = %s", [c["id"]])
+                con.execute("UPDATE campanha_vendedores SET base = NULL, base_num = NULL, base_den = NULL, "
+                            "base_precos = NULL, base_em = NULL WHERE campanha = %s", [c["id"]])
             for vid in saem:
                 v = antes[vid]
                 con.execute("DELETE FROM campanha_vendedores WHERE campanha = %s AND id_vendedor = %s", [c["id"], vid])
                 base = v["base"] if v["base_em"] else None
                 self._evento(con, vid, c["id"], "removido",
-                             self._retrato(c, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v))), usuario)
+                             self._retrato(c, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v)),
+                                           v["base_precos"] if v["base_em"] else None), usuario)
             for v in nova["vendedores"]:
                 vid = v["id"]
                 if vid in novos:
@@ -1442,9 +1565,11 @@ class Gestao:
                     continue
                 base_antes = antes[vid]["base"] if antes[vid]["base_em"] else None
                 base = bases[vid][0] if vid in bases else (None if mudou_medida else base_antes)
+                precos = bases[vid][3] if vid in bases else (
+                    None if mudou_medida or not antes[vid]["base_em"] else antes[vid]["base_precos"])
                 pendente = mudou_medida and vid not in bases
                 self._evento(con, vid, c["id"], "editada", {
-                    **self._retrato(nova, base, alvo_de(d["alvo_tipo"], desc, base, self._meta_v(nova, v))),
+                    **self._retrato(nova, base, alvo_de(d["alvo_tipo"], desc, base, self._meta_v(nova, v)), precos),
                     "mudou": mudou, "base_pendente": pendente, "fim_antes": c["fim"].isoformat(),
                     "base_antes": _redondo(base_antes),
                     "alvo_antes": _redondo(alvo_de(c["alvo_tipo"], descritor(c["metrica"], c["parametros"]), base_antes,
@@ -1473,10 +1598,10 @@ class Gestao:
                 bases = self._bases(k, nova, ids)
             else:
                 bases = self._bases(k, nova, [v["id"] for v in c["vendedores"] if v["base_em"] is None])
-            resultado = self._resultado(k, nova)
+            resultado = self._resultado(k, nova, self._precos_base(nova, bases))
         nova["id"] = c["id"]
         if refaz:
-            nova["vendedores"] = [{**v, "base": None, "base_em": None} for v in c["vendedores"]]
+            nova["vendedores"] = [{**v, "base": None, "base_precos": None, "base_em": None} for v in c["vendedores"]]
         desc = descritor(c["metrica"], c["parametros"])
         with self.banco.conexao() as con:
             if not self._travar_versao(con, c):
@@ -1488,8 +1613,9 @@ class Gestao:
             for v in c["vendedores"]:
                 base_antes = v["base"] if v["base_em"] else None
                 base = bases[v["id"]][0] if v["id"] in bases else base_antes
+                precos = bases[v["id"]][3] if v["id"] in bases else (v["base_precos"] if v["base_em"] else None)
                 self._evento(con, v["id"], c["id"], "encerrada", {
-                    **self._retrato(nova, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v))),
+                    **self._retrato(nova, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v)), precos),
                     "fim_antes": c["fim"].isoformat(), "base_antes": _redondo(base_antes)}, usuario)
             self._gravar_bases(con, nova, desc, bases)
             self._congelar(con, nova, desc, bases, resultado)
@@ -1517,7 +1643,8 @@ class Gestao:
             _conferir_historico(c["parametros"], bi, self._inicio_dados(),
                                 f"a base da campanha prorrogada ({bi:%d/%m/%Y} a {bf:%d/%m/%Y})")
         nova = {**c, "fim": fim, "base_inicio": bi, "base_fim": bf, "resultado_em": None, "encerrada_em": None,
-                "vendedores": [{**v, "base": None, "base_em": None} if refaz else v for v in c["vendedores"]]}
+                "vendedores": [{**v, "base": None, "base_precos": None, "base_em": None} if refaz else v
+                               for v in c["vendedores"]]}
         bases = self._medir_novas(nova, [v["id"] for v in nova["vendedores"] if v["base_em"] is None])
         desc = descritor(c["metrica"], c["parametros"])
         with self.banco.conexao() as con:
@@ -1528,13 +1655,16 @@ class Gestao:
                         "ELSE 'andamento' END, versao = versao + 1, atualizada_em = now(), atualizada_por_nome = %s "
                         "WHERE id = %s", [fim, bi, bf, self.hoje(), usuario["nome"], c["id"]])
             con.execute("UPDATE campanha_vendedores SET resultado = NULL, resultado_num = NULL, resultado_den = NULL, "
-                        "parciais = NULL" + (", base = NULL, base_num = NULL, base_den = NULL, base_em = NULL"
-                                             if refaz else "") + " WHERE campanha = %s", [c["id"]])
+                        "resultado_precos = NULL, parciais = NULL"
+                        + (", base = NULL, base_num = NULL, base_den = NULL, base_precos = NULL, base_em = NULL"
+                           if refaz else "") + " WHERE campanha = %s", [c["id"]])
             for v in c["vendedores"]:
                 base_antes = v["base"] if v["base_em"] else None
                 base = bases[v["id"]][0] if v["id"] in bases else (None if refaz else base_antes)
+                precos = bases[v["id"]][3] if v["id"] in bases else (
+                    None if refaz or not v["base_em"] else v["base_precos"])
                 self._evento(con, v["id"], c["id"], "prorrogada", {
-                    **self._retrato(nova, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v))),
+                    **self._retrato(nova, base, alvo_de(c["alvo_tipo"], desc, base, self._meta_v(c, v)), precos),
                     "dias": dias, "fim_antes": c["fim"].isoformat(), "base_antes": _redondo(base_antes),
                     "alvo_antes": _redondo(alvo_de(c["alvo_tipo"], desc, base_antes, self._meta_v(c, v))),
                     "base_pendente": v["id"] not in bases and (refaz or v["base_em"] is None)}, usuario)
@@ -1753,6 +1883,19 @@ class ContextoGestao:
         base["vendedores"] = [{("meta" if k == "alvo" else k): x[k] for k in campos if x.get(k) is not None}
                               for x in r["linhas"]]
         base["leitura_classe"] = "ok = meta batida; mid = melhorou sobre a base sem chegar à meta; bad = não passou da base"
+        if item["metrica"] == "preco_medio":  # sem o índice (base e meta): o % da meta e os preços de cada produto
+            nomes = {p["id"]: p["nome"] for p in r.get("produtos") or []}
+            base["leitura"] = ("resultado e pct = o % da meta (fração): o aumento de preço feito sobre o preço da base ÷ "
+                               "o aumento até o preço-alvo, somados em R$ nas quantidades vendidas agora (produto que "
+                               "já estava no alvo só conta se cair abaixo dele); aumento_feito e aumento_pedido em R$; "
+                               "em produtos, o preço da base, o de agora e o preço-alvo de cada um, em R$ por unidade")
+            base["vendedores"] = [{
+                **{k: x[k] for k in ("id", "nome", "equipe", "resultado", "pct", "classe", "status") if x.get(k) is not None},
+                "aumento_feito": x.get("delta"), "aumento_pedido": x.get("aumento_pedido"),
+                "produtos": [{"produto": nomes.get(p["id"], p["id"]), "base": p["base"], "preco": p["preco"],
+                              "preco_alvo": p["meta"], "quantidade": p["quantidade"]} for p in x.get("produtos") or []],
+            } for x in r["linhas"]]
+            base["leitura_classe"] = "ok = chegou ao preço-alvo; mid = subiu sem chegar; bad = não subiu (ou caiu)"
         base["total"] = r["total"]
         if item.get("provisorio"):
             base["resultado_provisorio"] = "a campanha acabou, mas os dados ainda não passaram do fim: o resultado pode mudar"
@@ -1761,7 +1904,8 @@ class ContextoGestao:
         if r.get("avisos"):
             base["avisos"] = r["avisos"]
         if r.get("produtos"):
-            base["produtos"] = [{k: p[k] for k in ("id", "nome", "unidade", "meta", "preco", "pct", "quantidade")}
+            base["produtos"] = [{("preco_alvo" if k == "meta" else "preco_da_equipe" if k == "preco" else k): p[k]
+                                 for k in ("id", "nome", "unidade", "meta", "preco", "quantidade") if k in p}
                                 for p in r["produtos"]]
         if r.get("abertura"):
             ab = r["abertura"]
@@ -1807,7 +1951,10 @@ class ContextoGestao:
             "id": novo_id(), **publica(d), "indicador": ind, "unidade": unidade, "nome_metrica": ind["nome"],
             "texto_alvo": texto_alvo(d["alvo_tipo"], d["meta_padrao"], ind),
             "texto_base": texto_janela(d["base_periodo"], d["base_inicio"], d["base_fim"]),
-            "bases": {str(v): {"base": _redondo(b[0]), "alvo": _redondo(alvo_de(d["alvo_tipo"], ind, b[0], metas[v]))}
+            "bases": {str(v): ({"precos_na_base": {nomes_p.get(int(p), p): x["preco"] for p, x in b[3].items()} or
+                                                  "sem venda dos produtos no período da base"}
+                               if d["metrica"] == "preco_medio" else
+                               {"base": _redondo(b[0]), "alvo": _redondo(alvo_de(d["alvo_tipo"], ind, b[0], metas[v]))})
                       for v, b in bases.items()},
             "nomes": {"vendedores": {str(k): v for k, v in nomes_v.items()}, "produtos": {str(k): v for k, v in nomes_p.items()}},
         }

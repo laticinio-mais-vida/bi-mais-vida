@@ -84,7 +84,9 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
     const alvo = achar("[data-ci-precos-lista]");
     const porId = new Map(cat.produtos.map((x) => [x.id, x]));
     if (!metasProduto.size) {
-      alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Escolha os produtos e dê o preço-alvo de cada um. O índice do vendedor compara o que ele vendeu com o que seria nos preços-alvo (100% = no alvo).</span></p>`;
+      alvo.innerHTML = `<p class="usu-nota">${icone("info")}<span>Escolha os produtos e dê o preço-alvo de cada um. ${objetivo
+        ? "O índice da equipe compara o que ela vendeu com o que seria nos preços-alvo (100% = no alvo)."
+        : "O % da meta de cada vendedor é o aumento de preço feito sobre a base dele ÷ o aumento até o preço-alvo."}</span></p>`;
       return;
     }
     alvo.innerHTML = [...metasProduto].map(([id, meta]) => {
