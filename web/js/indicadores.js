@@ -113,15 +113,19 @@ export function alvoDe(ind, tipo, base, meta) {
   return ["clientes", "produtos"].includes(ind.formato) ? Math.ceil(alvo - 1e-9) : alvo;
 }
 
-// A cor do andamento contra a meta, pelo % que aparece: vermelho abaixo de 90%, amarelo de 90% a 99% e verde a partir
-// de 100%, cada vez mais intenso até 150%.
+// A cor do andamento contra a meta, num degradê sem degraus: vermelho até 50%, passando pelo laranja até o amarelo em
+// 80% e pelo verde-amarelado até o verde em 100%; acima disso, um verde cada vez mais intenso até 150%. A mistura é em
+// oklch (vermelho → amarelo passa pelo laranja, sem ficar barrento) e usa as cores do tema (claro ou escuro).
+const DEGRADE_META = [[50, "var(--ruim-forte)"], [80, "var(--atencao-forte)"], [100, "var(--ok-forte)"], [150, "var(--ok-intenso)"]];
 export function corMeta(pct) {
   if (pct == null || isNaN(pct)) return "var(--linha-forte)";
-  const p = Math.round(pct * 100);
-  if (p < 90) return "var(--ruim-forte)";
-  if (p < 100) return "var(--atencao-forte)";
-  const t = intensidadeMeta(pct);
-  return t ? `color-mix(in srgb, var(--ok-intenso) ${Math.round(t * 100)}%, var(--ok-forte))` : "var(--ok-forte)";
+  const p = pct * 100;
+  if (p <= DEGRADE_META[0][0]) return DEGRADE_META[0][1];
+  for (let i = 1; i < DEGRADE_META.length; i++) {
+    const [ate, cor] = DEGRADE_META[i], [de, antes] = DEGRADE_META[i - 1];
+    if (p < ate) return `color-mix(in oklch, ${cor} ${Math.round(((p - de) / (ate - de)) * 100)}%, ${antes})`;
+  }
+  return DEGRADE_META[DEGRADE_META.length - 1][1];
 }
 
 // De 0 (até 100%) a 1 (150% ou mais): o quanto a meta foi passada (o CSS usa em --i para reforçar o fundo e o brilho).

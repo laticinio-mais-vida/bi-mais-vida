@@ -273,8 +273,9 @@ A **Gestão da equipe**, separada por região (**ES** e **BA**; o Edir é da BA,
   contra a meta (nas encerradas, o resultado final e quantos vendedores ficaram na meta);
 - e um **quadrado por vendedor** da equipe, com uma etiqueta por campanha em vigor e o % da meta dele até agora.
 
-As cores do andamento seguem o % da meta, sem olhar o prazo: vermelho abaixo de 90%, amarelo de 90% a 99% e verde a
-partir de 100%, cada vez mais forte até 150%. Na barra da campanha, o % é a soma dos resultados ÷ a soma das metas
+As cores do andamento seguem o % da meta, sem olhar o prazo, num degradê contínuo: vermelho até 50%, passando pelo
+laranja até o amarelo em 80% e pelo verde-amarelado até o verde em 100%; acima disso, o verde fica cada vez mais
+forte até 150%. Na barra da campanha, o % é a soma dos resultados ÷ a soma das metas
 nos indicadores que somam (positivação, faturamento, volume) e a média do % de cada vendedor nos que são médias (mix,
 efetividade, frequência, preço médio); quem ainda não tem meta (base aguardando os dados) fica de fora.
 
