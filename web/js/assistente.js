@@ -6,7 +6,9 @@
 // Campanhas: quando a IA monta um rascunho (propor_acao, só para o administrador), a resposta traz um card com
 // "Lançar campanha" (grava pela página Gestão) e "Revisar no painel"; nada é lançado sem o clique. #/assistente?q=… abre uma
 // conversa nova com a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
-import { MESES, api, esc, fmt, icone, toast } from "./util.js";
+// Arquivos: quando a IA prepara um Excel ou PDF (gerar_arquivo), a resposta traz um card com "Baixar"; o servidor monta
+// o arquivo no clique, com todas as linhas e o acesso de agora.
+import { MESES, api, esc, fmt, icone, irParaLogin, toast } from "./util.js";
 import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase, visual } from "./indicadores.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
@@ -28,6 +30,7 @@ const FERRAMENTA = {
   listar_acoes: { nome: "Campanhas da Gestão", icone: "bandeira" },
   andamento_acao: { nome: "Andamento da campanha", icone: "bandeira" },
   propor_acao: { nome: "Rascunho de campanha", icone: "bandeira" },
+  gerar_arquivo: { nome: "Arquivo para baixar", icone: "abaixo" },
   // nomes de antes (conversas gravadas)
   listar_campanhas: { nome: "Campanhas", icone: "quadro" },
   andamento_campanha: { nome: "Andamento da campanha", icone: "quadro" },
@@ -42,7 +45,7 @@ let pendente = null;    // {conversa, nova, pergunta, inicio}: pergunta que o se
                         // aba ou antes de recarregar a página
 let busca = "", pedidoLista = 0, abrindo = 0, acompanhando = false;
 
-// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?, rascunhos?}]
+// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?, rascunhos?, arquivos?}]
 function nova() { return { id: null, titulo: "", mensagens: [] }; }
 const linkDe = (id) => `#/assistente?c=${encodeURIComponent(id)}`;
 const idDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("c");
@@ -88,6 +91,7 @@ export async function montarAssistente(container, contexto) {
   container.querySelector("#a-form").addEventListener("submit", (e) => { e.preventDefault(); enviar(); });
   container.querySelector("#a-nova").addEventListener("click", () => novaConversa());
   container.querySelector("#a-msgs").addEventListener("click", aoClicarRascunho);
+  container.querySelector("#a-msgs").addEventListener("click", baixarArquivo);
   ligarLista();
   window.addEventListener("hashchange", aoMudarHash);
   setInterval(atualizarPensando, 1000);
@@ -451,7 +455,7 @@ async function enviar(textoPronto) {
     // O servidor lê a conversa do banco: vai só a pergunta.
     const r = await api("/api/assistente", { json: { conversa: conversa.id, pergunta: texto }, signal: controle.signal });
     conversa.mensagens.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
-      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso, rascunhos: r.rascunhos });
+      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso, rascunhos: r.rascunhos, arquivos: r.arquivos });
     if (r.conversa) gravada(conversa, r.conversa);
     if (r.restantes !== undefined) mostrarRestantes(r.restantes);
     pararEspera(limite);
@@ -551,11 +555,61 @@ function balaoIA(m, i) {
   return `<div class="chat-msg ia"><span class="chat-avatar">${icone("conversa")}</span>
     <div class="chat-corpo">
       <div class="chat-balao chat-texto">${markdown(m.texto)}</div>
+      ${(m.arquivos || []).map(cartaoArquivo).join("")}
       ${(m.rascunhos || []).map((r, j) => cartaoRascunho(r, i, j)).join("")}
       ${m.aviso ? `<p class="chat-aviso">${icone("alerta")}${esc(m.aviso)}</p>` : ""}
       <div class="chat-meta">${meta}<button type="button" class="chat-acao" data-copiar="${i}">${icone("copiar")}Copiar</button></div>
       ${passos.length ? desenharPassos(passos) : ""}
     </div></div>`;
+}
+
+// ---------- arquivo para baixar ----------
+function cartaoArquivo(a) {
+  const pdf = a.formato === "pdf";
+  const linhas = `${fmt.num(a.linhas)} linha${a.linhas === 1 ? "" : "s"}${a.cortado ? " (o limite do arquivo)" : ""}`;
+  return `<div class="chat-arquivo${pdf ? " pdf" : ""}">
+    <span class="chat-arquivo-tipo" aria-hidden="true">${pdf ? "PDF" : "XLSX"}</span>
+    <div class="chat-arquivo-t"><b>${esc(a.titulo)}</b>
+      <small>${pdf ? "PDF" : "Excel"} · ${linhas}${a.descricao ? ` · ${esc(a.descricao)}` : ""}</small></div>
+    <button class="btn" type="button" data-baixar="${esc(a.id)}" title="Montar o arquivo com os dados de agora e baixar">${icone("abaixo")}<span>Baixar</span></button>
+  </div>`;
+}
+
+async function baixarArquivo(e) {
+  const b = e.target.closest("[data-baixar]");
+  if (!b || b.disabled) return;
+  const rotulo = b.querySelector("span");
+  b.disabled = true;
+  rotulo.textContent = "Montando…";
+  try {
+    const r = await fetch(`/api/assistente/arquivo?id=${encodeURIComponent(b.dataset.baixar)}`);
+    if (r.status === 401) return irParaLogin();
+    if (!r.ok) {
+      let msg = `erro ${r.status}`;
+      try { msg = (await r.json()).erro || msg; } catch { /* sem corpo */ }
+      throw new Error(msg);
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await r.blob());
+    link.download = nomeDoArquivo(r.headers.get("Content-Disposition")) || "arquivo";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    toast("Arquivo salvo em Downloads.");
+  } catch (err) {
+    toast(err.message, "erro");
+  } finally {
+    b.disabled = false;
+    rotulo.textContent = "Baixar";
+  }
+}
+
+// O nome com acentos vem em filename*=UTF-8''…; sem ele, em filename="…".
+function nomeDoArquivo(cabecalho) {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cabecalho || "");
+  if (utf8) { try { return decodeURIComponent(utf8[1]); } catch { /* usa o outro */ } }
+  return /filename="([^"]+)"/i.exec(cabecalho || "")?.[1];
 }
 
 // ---------- rascunho de campanha ----------
@@ -650,6 +704,7 @@ function descricao(p) {
   if (p.ferramenta === "andamento_acao") return p.resumo || `campanha ${a.acao}`;
   if (p.ferramenta === "andamento_campanha") return p.resumo || `campanha ${a.campanha}`;
   if (p.ferramenta === "propor_acao" || p.ferramenta === "propor_campanha") return a.nome || "";
+  if (p.ferramenta === "gerar_arquivo") return `${a.titulo || ""} (${a.formato === "pdf" ? "PDF" : "Excel"})`;
   return p.objetivo || a.objetivo || "";
 }
 

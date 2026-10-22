@@ -29,12 +29,13 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import webbrowser
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
@@ -219,6 +220,17 @@ class Manipulador(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", tipo)
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+
+    def _baixavel(self, corpo: bytes, tipo: str, nome: str):
+        """Arquivo para baixar. O nome com acentos vai em filename* (RFC 6266); filename leva a versão sem acento."""
+        simples = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode().replace('"', "")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Disposition", f"attachment; filename=\"{simples}\"; filename*=UTF-8''{quote(nome)}")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
         self.wfile.write(corpo)
@@ -446,6 +458,25 @@ class Manipulador(BaseHTTPRequestHandler):
                 r["acao"] = lancadas.get(r["id"])
         return self._json({"conversa": conversa, "pendente": pendente})
 
+    def _baixar_arquivo(self, usuario: dict, q: dict):
+        """Um arquivo (Excel ou PDF) que o Assistente preparou numa conversa da pessoa, montado agora com o acesso de
+        agora (só o dono da conversa encontra o arquivo)."""
+        if not self._pode_assistente(usuario):
+            return
+        achado = self.app.conversas.arquivo(usuario["id"], q.get("id"))
+        if achado is None:
+            raise NaoEncontrada("arquivo não encontrado; a conversa pode ter sido excluída")
+        arquivo, texto = achado
+        vendedores, equipes = escopo_assistente(usuario)
+        try:
+            conteudo, nome, tipo = self.app.assistente.arquivo(usuario, arquivo, texto, vendedores, equipes,
+                                                               "credito" in paginas_permitidas(usuario))
+        except ErroAssistente as e:
+            log.warning("arquivo do Assistente (%s): %s", usuario["login"], e)
+            return self._erro(str(e), e.status)
+        log.info("%s baixou %s (%s KB)", usuario["login"], nome, len(conteudo) // 1024)
+        return self._baixavel(conteudo, tipo, nome)
+
     def _mudar_historico(self, usuario: dict, caminho: str, corpo: dict):
         if not self._pode_assistente(usuario):
             return
@@ -572,6 +603,8 @@ class Manipulador(BaseHTTPRequestHandler):
                                    "gestao": "gestao" in paginas_permitidas(usuario)})
             if url.path in ("/api/assistente/conversas", "/api/assistente/conversa"):
                 return self._ler_historico(usuario, url.path, q)
+            if url.path == "/api/assistente/arquivo":  # id=…: o Excel ou o PDF que o Assistente preparou
+                return self._baixar_arquivo(usuario, q)
             if url.path == "/api/assistente/config":
                 return self._json(self._config_assistente())
             if url.path in ROTAS_GESTAO_LER:

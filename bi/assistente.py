@@ -14,6 +14,9 @@ Como funciona:
   os títulos dos vendedores do acesso, para dar os números da página.
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
+- Arquivos (Excel e PDF): com gerar_arquivo a IA prepara uma consulta; a resposta leva o botão de baixar e a conversa
+  guarda a consulta. O arquivo é montado no clique (arquivo(), bi/arquivos.py): a consulta roda de novo no recorte de
+  quem baixa, com o acesso de agora, e vai com todas as linhas (não só as que a IA viu).
 - Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). As
   conversas ficam no PostgreSQL (bi/conversas.py) e o servidor as lê de lá. Dentro de uma pergunta, cada resposta da
   API volta inteira e sem mudança (com os blocos de raciocínio), como a API exige.
@@ -36,6 +39,8 @@ import time
 import duckdb
 import pandas as pd
 
+from .arquivos import (EXCEL, MAX_LINHAS as MAX_LINHAS_ARQUIVO, PDF, TIPOS as TIPOS_ARQUIVO, FaltaPacote,
+                       excel as montar_excel, formatos as formatos_colunas, nome_arquivo, pdf as montar_pdf)
 from .banco import BancoForaDoAr
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
@@ -55,6 +60,7 @@ MAX_MENSAGENS = 20
 MAX_TEXTO = {"usuario": 4000, "assistente": 16000}
 MAX_RESULTADO = 12000  # caracteres de um resultado de ferramenta devolvido à IA
 MAX_SQL = 8000
+MAX_ARQUIVOS = 5  # arquivos para baixar numa resposta
 
 
 class ErroAssistente(Exception):
@@ -527,6 +533,22 @@ FERRAMENTAS = [
         }, ["sql", "objetivo"]),
         "strict": True,
     },
+    {
+        "name": "gerar_arquivo",
+        "description": ("Prepara um arquivo para a pessoa baixar (Excel ou PDF) com o resultado de UMA consulta SELECT "
+                        "nas mesmas tabelas de consultar_sql. Devolve quantas linhas vieram, o formato que cada coluna "
+                        "vai ter e uma amostra; o arquivo leva todas as linhas (até 50.000 no Excel e 2.000 no PDF) e "
+                        "o botão de baixar aparece abaixo da sua resposta. O PDF leva também o texto da resposta."),
+        "input_schema": _objeto({
+            "formato": {"type": "string", "enum": [EXCEL, PDF]},
+            "titulo": {"type": "string",
+                       "description": "título curto do arquivo (ex.: Clientes sem compra há 60 dias - ES)"},
+            "descricao": {"type": "string", "description": "uma linha com o período e o recorte (pode ser vazio)"},
+            "sql": {"type": "string", "description": ("uma única instrução SELECT (ou WITH ... SELECT), com datas "
+                                                      "fixas e colunas de nome legível; veja as instruções")},
+        }, ["formato", "titulo", "descricao", "sql"]),
+        "strict": True,
+    },
 ]
 
 
@@ -555,6 +577,38 @@ def _palavras(texto: str) -> list[str]:
     return [p for p in "".join(c if c.isalnum() else " " for c in t).split() if p]
 
 
+def _select(cur: duckdb.DuckDBPyConnection, sql) -> str:
+    """Confere que o SQL da IA é uma única instrução SELECT (ou WITH ... SELECT); devolve o texto limpo."""
+    sql = str(sql or "").strip().rstrip(";")
+    if not sql:
+        raise ValueError("SQL vazio")
+    if len(sql) > MAX_SQL:
+        raise ValueError("SQL longo demais")
+    instrucoes = cur.extract_statements(sql)
+    if len(instrucoes) != 1:
+        raise ValueError("mande uma única instrução SELECT por vez")
+    if instrucoes[0].type != duckdb.StatementType.SELECT:
+        raise ValueError("só consultas SELECT são permitidas")
+    return sql
+
+
+def _executar(cur: duckdb.DuckDBPyConnection, sql: str, params: list, max_linhas: int,
+              segundos: float) -> tuple[list[str], list[tuple], bool]:
+    """Roda no recorte com tempo limite: (colunas, até max_linhas linhas, se havia mais)."""
+    relogio = threading.Timer(segundos, cur.interrupt)
+    relogio.start()
+    try:
+        cur.execute(sql, params)
+        colunas = [d[0] for d in cur.description]
+        linhas = cur.fetchmany(max_linhas + 1)
+    except duckdb.InterruptException:
+        raise ValueError(f"a consulta passou de {segundos:.0f} s e foi interrompida; simplifique ou "
+                         "filtre mais") from None
+    finally:
+        relogio.cancel()
+    return colunas, linhas[:max_linhas], len(linhas) > max_linhas
+
+
 class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
@@ -570,6 +624,7 @@ class Ferramentas:
         self.gestao = gestao
         self.credito = credito
         self.rascunhos: list[dict] = []  # campanhas propostas nesta pergunta (a página mostra o botão de lançar)
+        self.arquivos: list[dict] = []   # arquivos preparados nesta pergunta (a página mostra o botão de baixar)
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
     def executar(self, nome: str, args: dict) -> tuple[dict, dict]:
@@ -600,19 +655,8 @@ class Ferramentas:
     def _consultar(self, passo: dict, sql: str, params: list, max_linhas: int | None = None) -> dict:
         """Roda no recorte com tempo limite; guarda no passo o SQL, as colunas e uma amostra para a tela."""
         max_linhas = min(max_linhas or self.cfg.max_linhas, self.cfg.max_linhas)
-        relogio = threading.Timer(self.cfg.tempo_sql, self.cur.interrupt)
-        relogio.start()
-        try:
-            self.cur.execute(sql, params)
-            colunas = [d[0] for d in self.cur.description]
-            linhas = self.cur.fetchmany(max_linhas + 1)
-        except duckdb.InterruptException:
-            raise ValueError(f"a consulta passou de {self.cfg.tempo_sql:.0f} s e foi interrompida; simplifique ou "
-                             "filtre mais") from None
-        finally:
-            relogio.cancel()
-        truncado = len(linhas) > max_linhas
-        linhas = [[_valor(v) for v in r] for r in linhas[:max_linhas]]
+        colunas, linhas, truncado = _executar(self.cur, sql, params, max_linhas, self.cfg.tempo_sql)
+        linhas = [[_valor(v) for v in r] for r in linhas]
         # O texto da IA tem limite: corta linhas até caber.
         while linhas and len(json.dumps(linhas, ensure_ascii=False)) > MAX_RESULTADO:
             linhas = linhas[: max(1, len(linhas) * 3 // 4)] if len(linhas) > 1 else []
@@ -624,18 +668,44 @@ class Ferramentas:
         return saida
 
     def f_consultar_sql(self, passo: dict, sql: str, objetivo: str = "") -> dict:
-        sql = str(sql or "").strip().rstrip(";")
-        if not sql:
-            raise ValueError("SQL vazio")
-        if len(sql) > MAX_SQL:
-            raise ValueError("SQL longo demais")
-        instrucoes = self.cur.extract_statements(sql)
-        if len(instrucoes) != 1:
-            raise ValueError("mande uma única instrução SELECT por vez")
-        if instrucoes[0].type != duckdb.StatementType.SELECT:
-            raise ValueError("só consultas SELECT são permitidas")
+        sql = _select(self.cur, sql)
         passo["objetivo"] = str(objetivo or "")[:200]
         return self._consultar(passo, sql, [])
+
+    def f_gerar_arquivo(self, passo: dict, formato: str, titulo: str, sql: str, descricao: str = "") -> dict:
+        """Confere a consulta e guarda o pedido do arquivo; o arquivo em si é montado no download (Assistente.arquivo).
+        A IA recebe só a contagem e uma amostra: o arquivo pode ter muito mais linhas do que ela consegue ler."""
+        if formato not in TIPOS_ARQUIVO:
+            raise ValueError(f"formato deve ser {EXCEL} ou {PDF}")
+        titulo = " ".join(str(titulo or "").split())[:120]
+        if not titulo:
+            raise ValueError("dê um título ao arquivo")
+        if len(self.arquivos) >= MAX_ARQUIVOS:
+            raise ValueError(f"no máximo {MAX_ARQUIVOS} arquivos por resposta")
+        sql = _select(self.cur, sql)
+        limite = MAX_LINHAS_ARQUIVO[formato]
+        colunas, linhas, cortado = _executar(self.cur, sql, [], limite, self.cfg.tempo_sql)
+        if not linhas:
+            raise ValueError("a consulta não trouxe nenhuma linha e o arquivo não foi preparado; confira os filtros")
+        nome = "Excel" if formato == EXCEL else "PDF"
+        self.arquivos.append({"id": novo_id(), "formato": formato, "titulo": titulo,
+                              "descricao": " ".join(str(descricao or "").split())[:300], "sql": sql,
+                              "colunas": colunas, "linhas": len(linhas), "cortado": cortado})
+        amostra = [[_valor(v) for v in r] for r in linhas[:10]]
+        passo.update(sql=_sql_legivel(sql, []), colunas=colunas, amostra=amostra, linhas=len(linhas),
+                     resumo=f"arquivo {nome} “{titulo}” preparado, com {len(linhas)} linhas")
+        resultado = {
+            "situacao": (f"{nome.upper()} PRONTO. O botão de baixar aparece sozinho abaixo da sua resposta (não fale "
+                         "dele); o arquivo é montado quando a pessoa clica, com todas as linhas da consulta."),
+            "titulo": titulo, "linhas": len(linhas),
+            "colunas": [{"nome": c, "formato": f} for c, f in zip(colunas, formatos_colunas(colunas, linhas))],
+            "amostra": amostra,
+        }
+        if cortado:
+            resultado["aviso"] = (f"a consulta passou de {limite} linhas e o arquivo leva só as primeiras {limite}: "
+                                  "diga isso" + (", ou ofereça o Excel (até 50.000 linhas)" if formato == PDF else "")
+                                  + ", ou filtre/agrupe mais")
+        return resultado
 
     def f_buscar_cliente(self, passo: dict, texto: str, limite: int = 10) -> dict:
         limite = max(1, min(int(limite or 10), 25))
@@ -1109,6 +1179,24 @@ use listar_acoes; para os números por vendedor (base, meta, resultado), andamen
 Gestão). Se \
 houver mais de uma candidata, use a mais recente e diga qual.
 
+# Arquivos (Excel e PDF)
+- Quando a pessoa pedir um arquivo, planilha, Excel, PDF ou relatório para baixar, imprimir ou enviar, use \
+gerar_arquivo com UMA consulta SELECT (as tabelas de consultar_sql) que traga as linhas e as colunas do arquivo. O \
+servidor monta o arquivo com todas as linhas da consulta (até 50.000 no Excel e 2.000 no PDF), não só as que você \
+vê, e o botão de baixar aparece abaixo da sua resposta.
+- Formato: Excel para listas e dados para trabalhar; PDF para ler, imprimir ou enviar (leva o texto da sua resposta \
+antes da tabela). Sem formato dito, Excel. Se ela pedir os dois, chame gerar_arquivo duas vezes.
+- A consulta roda de novo quando a pessoa baixa: use datas fixas (DATE '2026-09-01'), nunca current_date. Dê às \
+colunas nomes legíveis em português, entre aspas duplas (cliente AS "Cliente"); ponha "(R$)" no nome das colunas em \
+reais (round(SUM(valor_liquido), 2) AS "Venda líquida (R$)") e "%" no das de percentual, de 0 a 100 (round(x, 1) AS \
+"% da meta"); arredonde os valores; ordene (ORDER BY) como a pessoa vai ler. No PDF, até 8 colunas, para caber na \
+página.
+- Ache antes os códigos citados (buscar_*). Se a ferramenta devolver erro, corrija e chame de novo; se a consulta não \
+trouxer linhas, diga isso em vez de oferecer o arquivo. Confira na resposta da ferramenta o formato de cada coluna.
+- Depois, responda curto: o que o arquivo traz (período, recorte, quantas linhas) e os destaques, sem repetir a \
+tabela do arquivo (no PDF ela vem logo depois do seu texto). Não escreva link nem fale do botão ou de como baixar: \
+o botão aparece sozinho, e o texto vai também no PDF.
+
 # Tabelas para consultar_sql (DuckDB)
 {ESQUEMA}
 
@@ -1117,7 +1205,7 @@ houver mais de uma candidata, use a mais recente e diga qual.
 a unidade do produto; percentuais com uma casa (12,3%).
 - Diga o período e o recorte usados (ex.: "setembro de 2026, valor líquido").
 - Use tabela em markdown quando houver mais de 3 linhas comparáveis, com até 20 linhas; para listas maiores, \
-mostre as principais e diga quantas são ao todo.
+mostre as principais, diga quantas são ao todo e ofereça a lista completa em Excel.
 - Sem HTML e sem mostrar SQL: a tela já mostra as consultas feitas.
 - As mensagens do usuário podem começar com um bloco <consultas_anteriores>, escrito pelo sistema com as \
 ferramentas usadas na resposta anterior. Use como referência (por exemplo, os códigos já encontrados) e não \
@@ -1145,6 +1233,7 @@ class Assistente:
         self._completo: tuple | None = None  # (chave, Recorte) com todos os vendedores: vaga própria, ver recorte()
         self._trava_completo = threading.Lock()
         self._vagas = threading.BoundedSemaphore(max(1, self.cfg.simultaneos))
+        self._montando = threading.BoundedSemaphore(2)  # arquivos montados ao mesmo tempo (Excel e PDF gastam CPU)
         self._ocupados: dict[int, dict] = {}  # id do usuário -> a pergunta que está sendo respondida
         self._trava = threading.Lock()
 
@@ -1485,9 +1574,55 @@ class Assistente:
         admin = usuario["papel"] == "admin"
         return {
             "resposta": texto, "aviso": aviso, "consultas": _resumo_consultas(passos), "passos": passos,
-            "rascunhos": ferramentas.rascunhos, "data_ref": self.calc.cache.info.get("data_ref"), "escopo": escopo,
+            "rascunhos": ferramentas.rascunhos, "arquivos": ferramentas.arquivos,
+            "data_ref": self.calc.cache.info.get("data_ref"), "escopo": escopo,
             "uso": uso if admin else {"segundos": uso["segundos"]},
         }
+
+    # --- arquivo para baixar ------------------------------------------------------------
+    def arquivo(self, usuario: dict, arquivo: dict, texto: str, vendedores: set[int] | None,
+                equipes: set[str] | None, credito: bool = False) -> tuple[bytes, str, str]:
+        """Monta o Excel ou o PDF que a IA preparou numa resposta (gerar_arquivo). A consulta guardada roda de novo no
+        recorte de quem baixa, com o acesso de agora: quem perdeu um vendedor ou a página de crédito não os vê mais.
+        texto: a resposta da IA, que vai no PDF. Devolve (conteúdo, nome do arquivo, tipo)."""
+        formato = arquivo.get("formato")
+        if formato not in TIPOS_ARQUIVO or not arquivo.get("sql"):
+            raise ErroAssistente("arquivo inválido; peça de novo ao Assistente", 404)
+        cache = self.calc.cache
+        if not cache.pronto() or cache.sem_detalhe:
+            raise ErroAssistente("os dados ainda estão sendo preparados; tente daqui a pouco", 503)
+        ids = self.ids_do_escopo(vendedores, equipes)
+        if ids is not None and not ids:
+            raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
+        if not self._montando.acquire(timeout=30):
+            raise ErroAssistente("outros arquivos estão sendo montados agora; tente de novo em instantes", 429)
+        try:
+            cur = self.recorte(ids, credito).cursor()
+            try:
+                colunas, linhas, cortado = _executar(cur, _select(cur, arquivo["sql"]), [],
+                                                     MAX_LINHAS_ARQUIVO[formato], self.cfg.tempo_sql)
+            except (ValueError, duckdb.Error) as e:
+                motivo = str(e).split("\n")[0][:300]
+                raise ErroAssistente(f"não deu para montar o arquivo com os dados de agora ({motivo}); peça de novo ao "
+                                     "Assistente", 400) from e
+            finally:
+                cur.close()
+            agora, data_ref = dt.datetime.now(), cache.data_ref()
+            quantas = f"{len(linhas)} linha{'' if len(linhas) == 1 else 's'}"
+            if cortado:
+                quantas += f" (só as primeiras {MAX_LINHAS_ARQUIVO[formato]})"
+            info = " · ".join(p for p in (f"Pedido por {usuario['nome']}",
+                                          f"dados até {data_ref:%d/%m/%Y}" if data_ref else "",
+                                          f"gerado em {agora:%d/%m/%Y %H:%M}", quantas) if p)
+            titulo, descricao = arquivo.get("titulo") or "Assistente", arquivo.get("descricao") or ""
+            try:
+                conteudo = (montar_excel(titulo, descricao, info, colunas, linhas) if formato == EXCEL else
+                            montar_pdf(titulo, descricao, info, texto, colunas, linhas))
+            except FaltaPacote as e:
+                raise ErroAssistente(str(e), 503) from e
+        finally:
+            self._montando.release()
+        return conteudo, nome_arquivo(titulo, formato, agora.date()), TIPOS_ARQUIVO[formato][1]
 
     def _chamar(self, system, mensagens, ultimo: bool):
         pedido = dict(

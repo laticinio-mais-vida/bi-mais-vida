@@ -5,3 +5,5 @@ numpy==2.4.4
 anthropic==1.15.0
 psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
+XlsxWriter==3.3.0
+fpdf2==2.8.9

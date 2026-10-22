@@ -111,6 +111,21 @@ class TestConversas(BaseBanco):
             self.c.acrescentar(self.bia, id_, "e agora?", resposta("ok"))
         self.assertEqual(len(self.c.obter(self.ana, id_)["mensagens"]), 2)
 
+    def test_arquivo_e_rascunho_so_do_dono(self):
+        id_ = str(uuid.uuid4())
+        arquivo = {"id": str(uuid.uuid4()), "formato": "excel", "titulo": "Clientes", "sql": "SELECT 1", "linhas": 1}
+        rascunho = {"id": str(uuid.uuid4()), "nome": "Mix"}
+        self.c.acrescentar(self.ana, id_, "manda em excel", {**resposta("O arquivo traz 1 linha."),
+                                                             "arquivos": [arquivo], "rascunhos": [rascunho]})
+        self.assertEqual(self.c.arquivo(self.ana, arquivo["id"]), (arquivo, "O arquivo traz 1 linha."))
+        self.assertEqual(self.c.rascunho(self.ana, rascunho["id"]), rascunho)
+        self.assertEqual(self.c.obter(self.ana, id_)["mensagens"][1]["arquivos"], [arquivo])
+        for usuario, procurado in ((self.bia, arquivo["id"]), (self.ana, rascunho["id"]), (self.ana, "abc"),
+                                   (self.ana, str(uuid.uuid4()))):
+            self.assertIsNone(self.c.arquivo(usuario, procurado))
+        self.assertIsNone(self.c.rascunho(self.bia, rascunho["id"]))
+        self.assertIsNone(self.c.rascunho(self.ana, arquivo["id"]))
+
     def test_ids_invalidos(self):
         for id_ in ("", None, "abc", "1; DROP TABLE conversas"):
             self.assertIsNone(self.c.obter(self.ana, id_))

@@ -17,7 +17,8 @@ from .banco import Banco
 MAX_MENSAGENS_CONVERSA = 200  # 100 perguntas; a IA vê só as últimas (MAX_MENSAGENS em bi/assistente.py)
 TAM_TITULO = 60
 MAX_TITULO = 80
-DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso", "rascunhos")  # o que a página mostra junto da resposta
+# O que a página mostra junto da resposta.
+DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso", "rascunhos", "arquivos")
 _META = "id, titulo, criada_em, atualizada_em"
 
 
@@ -105,16 +106,29 @@ class Conversas:
 
     def rascunho(self, usuario: int, id_) -> dict | None:
         """Um rascunho de campanha que o Assistente montou numa conversa da pessoa (para abrir na página Gestão)."""
+        achado = self._da_resposta(usuario, "rascunhos", id_)
+        return achado[0] if achado else None
+
+    def arquivo(self, usuario: int, id_) -> tuple[dict, str] | None:
+        """Um arquivo (Excel ou PDF) que o Assistente preparou numa conversa da pessoa, com o texto da resposta em que
+        ele veio (o PDF leva esse texto)."""
+        return self._da_resposta(usuario, "arquivos", id_)
+
+    def _da_resposta(self, usuario: int, lista: str, id_) -> tuple[dict, str] | None:
+        """O item de id_ numa lista dos detalhes das respostas (rascunhos ou arquivos), só nas conversas da pessoa:
+        (item, texto da resposta)."""
         id_ = id_valido(id_)
         if not id_:
             return None
         with self.banco.conexao() as con:
             linha = con.execute(
-                "SELECT r FROM mensagens m JOIN conversas c ON c.id = m.conversa, jsonb_array_elements(CASE WHEN "
-                "jsonb_typeof(m.detalhes->'rascunhos') = 'array' THEN m.detalhes->'rascunhos' ELSE '[]' END) r "
-                "WHERE c.usuario = %s AND m.detalhes->'rascunhos' @> %s::jsonb AND r->>'id' = %s LIMIT 1",
-                [usuario, json.dumps([{"id": id_}]), id_]).fetchone()
-        return linha[0] if linha else None
+                "SELECT r, m.texto FROM mensagens m JOIN conversas c ON c.id = m.conversa, jsonb_array_elements(CASE "
+                "WHEN jsonb_typeof(m.detalhes->%(lista)s::text) = 'array' THEN m.detalhes->%(lista)s::text "
+                "ELSE '[]' END) r "
+                "WHERE c.usuario = %(usuario)s AND m.detalhes->%(lista)s::text @> %(filtro)s::jsonb "
+                "AND r->>'id' = %(id)s LIMIT 1",
+                {"lista": lista, "usuario": usuario, "filtro": json.dumps([{"id": id_}]), "id": id_}).fetchone()
+        return (linha[0], linha[1]) if linha else None
 
     def acrescentar(self, usuario: int, id_, pergunta: str, resposta: dict) -> dict:
         """Grava uma pergunta e a resposta ({"texto", e os DETALHES}); cria a conversa se ela ainda não existe.

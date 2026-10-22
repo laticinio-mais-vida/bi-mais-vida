@@ -1888,6 +1888,26 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .camp-criada { background: var(--ok-bg); color: var(--ok); }
 .camp-criada .ic { width: 14px; height: 14px; }
 
+/* arquivo (Excel ou PDF) para baixar na resposta do Assistente */
+.chat-arquivo {
+  --c: var(--ok-forte);
+  display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 10px 12px 10px 10px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--linha); box-shadow: var(--sombra-1);
+}
+.chat-arquivo.pdf { --c: var(--ruim-forte); }
+.chat-arquivo-tipo {
+  flex: none; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 11px;
+  background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); font: 800 11px var(--f-texto); letter-spacing: .05em;
+}
+.chat-arquivo-t { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.chat-arquivo-t b { font-size: 14px; overflow-wrap: anywhere; }
+.chat-arquivo-t small { color: var(--tinta-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.chat-arquivo .btn { flex: none; height: 38px; color: var(--tinta); }
+@media (max-width: 520px) {
+  .chat-arquivo { flex-wrap: wrap; }
+  .chat-arquivo .btn { width: 100%; justify-content: center; }
+}
+
 @media (max-width: 1180px) {
   .cf-filtros { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

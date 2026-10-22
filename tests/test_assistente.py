@@ -9,11 +9,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from bi.assistente import ErroAssistente, Ferramentas
 from bi.banco import BancoForaDoAr
 from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, ClienteFalso, ConversasFalsas, RegistroFalso,
                          bloco_ferramenta, bloco_pensamento, bloco_texto, criar_assistente, criar_calc, resposta)
+from tests.test_arquivos import TEM_PDF, TEM_XLSX, ler_excel
 
 
 class Base(unittest.TestCase):
@@ -142,6 +144,34 @@ class TestFerramentas(Base):
         self.assertEqual(r["linhas"][0][0], 32)
         r, _ = f.executar("buscar_vendedor", {"texto": ""})
         self.assertEqual({x[0] for x in r["linhas"]}, {ES, BA, EDIR})
+
+    def test_gerar_arquivo(self):
+        f, _ = self.ferramentas(max_linhas=5)
+        sql = 'SELECT range AS "Código", range * 1.5 AS "Valor (R$)" FROM range(300)'
+        r, p = f.executar("gerar_arquivo",
+                          {"formato": "excel", "titulo": " Lista  grande ", "descricao": "", "sql": sql})
+        self.assertIsNone(p["erro"])
+        self.assertEqual(r["linhas"], 300)  # o arquivo leva tudo, mesmo com max_linhas = 5 para a IA
+        self.assertEqual(len(r["amostra"]), 10)
+        self.assertEqual([c["formato"] for c in r["colunas"]], ["codigo", "reais"])
+        arquivo, = f.arquivos
+        self.assertEqual((arquivo["titulo"], arquivo["formato"], arquivo["linhas"], arquivo["cortado"], arquivo["sql"]),
+                         ("Lista grande", "excel", 300, False, sql))
+        self.assertIn("preparado, com 300 linhas", p["resumo"])
+        # o PDF vai até 2.000 linhas, e a IA fica sabendo que cortou
+        r, p = f.executar("gerar_arquivo",
+                          {"formato": "pdf", "titulo": "x", "descricao": "", "sql": "SELECT * FROM range(2500)"})
+        self.assertEqual(r["linhas"], 2000)
+        self.assertIn("Excel", r["aviso"])
+        self.assertTrue(f.arquivos[-1]["cortado"])
+        # com erro, nada fica guardado
+        for args in ({"formato": "csv", "titulo": "x", "descricao": "", "sql": "SELECT 1"},
+                     {"formato": "excel", "titulo": " ", "descricao": "", "sql": "SELECT 1"},
+                     {"formato": "excel", "titulo": "x", "descricao": "", "sql": "DROP TABLE clientes"},
+                     {"formato": "excel", "titulo": "x", "descricao": "", "sql": "SELECT * FROM clientes WHERE false"}):
+            _, p = f.executar("gerar_arquivo", args)
+            self.assertTrue(p["erro"], args)
+        self.assertEqual(len(f.arquivos), 2)
 
 
 class TestLaco(Base):
@@ -376,6 +406,72 @@ class TestHistorico(Base):
             with self.assertRaises(ErroAssistente):
                 a.perguntar(USUARIO_VIS, None, pergunta, None, None)
         self.assertEqual(self.api.pedidos, [])
+
+
+class TestArquivo(Base):
+    """O arquivo preparado numa resposta e montado no download: a consulta guardada roda de novo, no acesso de quem
+    baixa."""
+
+    POR_VENDEDOR = ('SELECT vendedor AS "Vendedor", round(SUM(valor_liquido), 2) AS "Venda líquida (R$)" '
+                    "FROM faturamento WHERE ano = 2026 AND mes = 9 GROUP BY ALL ORDER BY 2 DESC")
+
+    def preparar(self, sql, formato="excel", credito=False):
+        conversas = ConversasFalsas()
+        api = ClienteFalso([
+            resposta(bloco_ferramenta("t1", "gerar_arquivo", {"formato": formato, "titulo": "Vendas por vendedor",
+                                                              "descricao": "setembro de 2026", "sql": sql}),
+                     parada="tool_use"),
+            resposta(bloco_texto("O arquivo traz **3 vendedores**, de setembro de 2026.")),
+        ])
+        a = criar_assistente(self.pasta, self.calc, cliente=api, conversas=conversas)
+        r = a.perguntar(USUARIO_ADMIN, None, "manda as vendas por vendedor", None, None, credito=credito)
+        guardada = conversas.dados[r["conversa"]["id"]]["mensagens"][1]
+        self.assertEqual(guardada["arquivos"], r["arquivos"])  # a conversa guarda a consulta, para o download
+        return a, r
+
+    @unittest.skipUnless(TEM_XLSX, "sem o pacote XlsxWriter")
+    def test_excel_com_o_acesso_de_quem_baixa(self):
+        a, r = self.preparar(self.POR_VENDEDOR)
+        arquivo, = r["arquivos"]
+        self.assertEqual(arquivo["linhas"], 3)
+        conteudo, nome, tipo = a.arquivo(USUARIO_ADMIN, arquivo, r["resposta"], None, None)
+        self.assertRegex(nome, r"^Vendas por vendedor - \d{4}-\d{2}-\d{2}\.xlsx$")
+        self.assertIn("spreadsheetml", tipo)
+        linhas = ler_excel(conteudo, {"v": "Vendedor", "r": "Venda líquida (R$)"})
+        self.assertEqual([(ln["v"], float(ln["r"])) for ln in linhas],
+                         [("Thais", 4750.0), ("Rubens", 1480.0), ("Edir", 700.0)])
+        # quem só vê o ES baixa só o ES: vale o acesso de quem baixa, agora
+        conteudo, _, _ = a.arquivo(USUARIO_VIS, arquivo, r["resposta"], None, {"ES"})
+        self.assertEqual([ln["v"] for ln in ler_excel(conteudo, {"v": "Vendedor"})], ["Rubens"])
+        with self.assertRaises(ErroAssistente) as e:
+            a.arquivo(USUARIO_VIS, arquivo, r["resposta"], set(), None)
+        self.assertEqual(e.exception.status, 403)
+
+    @unittest.skipUnless(TEM_PDF, "sem o pacote fpdf2")
+    def test_pdf(self):
+        a, r = self.preparar(self.POR_VENDEDOR, formato="pdf")
+        conteudo, nome, tipo = a.arquivo(USUARIO_ADMIN, r["arquivos"][0], r["resposta"], None, None)
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+        self.assertTrue(nome.endswith(".pdf"))
+        self.assertEqual(tipo, "application/pdf")
+
+    def test_credito_so_para_quem_tem_a_pagina(self):
+        a, r = self.preparar('SELECT cliente AS "Cliente", saldo AS "Saldo (R$)" FROM titulos_receber', credito=True)
+        with self.assertRaises(ErroAssistente) as e:
+            a.arquivo(USUARIO_VIS, r["arquivos"][0], r["resposta"], None, None, credito=False)
+        self.assertEqual(e.exception.status, 400)
+        self.assertIn("titulos_receber", str(e.exception))
+
+    def test_arquivo_invalido_ou_sem_o_pacote(self):
+        a, r = self.preparar(self.POR_VENDEDOR)
+        with self.assertRaises(ErroAssistente) as e:
+            a.arquivo(USUARIO_ADMIN, {**r["arquivos"][0], "formato": "csv"}, "", None, None)
+        self.assertEqual(e.exception.status, 404)
+        with mock.patch("bi.arquivos.importlib.import_module", side_effect=ImportError):
+            with self.assertRaises(ErroAssistente) as e:
+                a.arquivo(USUARIO_ADMIN, r["arquivos"][0], "", None, None)
+        self.assertEqual(e.exception.status, 503)
+        self.assertIn("pip install XlsxWriter", str(e.exception))
 
 if __name__ == "__main__":
     unittest.main()

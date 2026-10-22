@@ -37,7 +37,8 @@ no computador onde o painel está instalado. Depois, o administrador cadastra os
 O projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird), `duckdb`, `pandas` e `numpy` (que vem
 com o pandas), que já estão instalados. Usuários, regras e o histórico do Assistente ficam num PostgreSQL instalado
 no próprio PC (veja [Banco de dados](#banco-de-dados)), que precisa de `pip install "psycopg[binary]" psycopg-pool`.
-O Assistente precisa também de `pip install anthropic`, só onde for usado. No VPS, tudo já vem na imagem.
+O Assistente precisa também de `pip install anthropic`, só onde for usado, e de `pip install XlsxWriter fpdf2` para os
+arquivos Excel e PDF que ele prepara. No VPS, tudo já vem na imagem.
 
 ## De onde vêm os dados
 
@@ -196,7 +197,8 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - resumo de vendas por período, com filtros e agrupamentos;
   - metas e realizado (os mesmos números da página Metas);
   - crédito de um cliente (os mesmos números da Reavaliação de Crédito; só para quem tem essa página);
-  - para o resto, uma consulta SQL que só lê os dados.
+  - para o resto, uma consulta SQL que só lê os dados;
+  - um arquivo Excel ou PDF para baixar (veja [Arquivos](#arquivos-excel-e-pdf)).
 - **As regras são as das metas.**
   - Faturamento líquido = vendas não canceladas − devoluções dos motivos marcados, pela data de entrada.
   - Valem as equivalências de produto, e os produtos que "não contam" ficam de fora.
@@ -215,6 +217,22 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - No celular, a lista abre pelo botão **Conversas**.
   - O histórico fica no banco PostgreSQL do painel (veja [Banco de dados](#banco-de-dados)).
 - Cada pergunta leva de alguns segundos a um minuto, conforme o número de consultas.
+
+### Arquivos (Excel e PDF)
+
+Pedindo "me manda em Excel os clientes do Rubens sem compra há 60 dias" ou "faz um PDF com as metas do BA", a IA
+prepara o arquivo e a resposta traz um card com o botão **Baixar**.
+
+- **O que vai no arquivo:** todas as linhas da consulta que a IA montou, não só as que ela leu. São até 50.000 linhas
+  no Excel e 2.000 no PDF. Quando a lista passa disso, o arquivo e a resposta avisam.
+- **Excel:** título, período e "pedido por… · dados até…" em cima. Depois vem a tabela, com o cabeçalho congelado e
+  com filtro. Valores em R$, percentuais e datas já chegam formatados, e os números continuam números.
+- **PDF:** o mesmo cabeçalho, o texto da resposta e a tabela, com número de página. Ele deita quando as colunas não
+  cabem em pé.
+- **Montado no clique:** a conversa guarda a consulta, não o arquivo. Cada clique em Baixar roda a consulta de novo,
+  com os dados do momento e o acesso atual de quem baixa. Só o dono da conversa baixa, e quem perdeu um vendedor ou a
+  página de crédito não os vê no arquivo. As datas da consulta são fixas, então o período não muda.
+- Precisa dos pacotes `XlsxWriter` e `fpdf2`. Sem eles o painel funciona e só o botão Baixar avisa o que falta.
 
 ### O que cada pessoa consulta
 
@@ -608,6 +626,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, e a busca de cliente |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
+| `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/indicadores.py` | os indicadores das ações (positivação, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
