@@ -1,15 +1,41 @@
 // O "Indicador medido" das campanhas e dos objetivos da página Gestão: a predefinição (um tipo pronto ou uma
-// combinação da Personalizada), quem conta (base de clientes), a comparação do crescimento (só nos objetivos), os
-// produtos com o preço-alvo (preço médio) e os filtros de produto e de cliente. Monta em qualquer contêiner; quem
-// usa lê valor() na hora de gravar. A conferência de verdade é do servidor (bi/gestao.py validar).
+// combinação da Personalizada), como ela é calculada (com a janela de todos os indicadores), quem conta (base de
+// clientes), a comparação do crescimento (só nos objetivos), os produtos com o preço-alvo (preço médio) e os filtros
+// de produto e de cliente. Monta em qualquer contêiner; quem usa lê valor() na hora de gravar. A conferência de
+// verdade é do servidor (bi/gestao.py validar).
 import { esc, fmt, icone } from "./util.js";
 import { multiSelecao } from "./multiselecao.js";
-import { BASES, COMPARAR, FILTROS, FILTROS_PRODUTO, NOME_GRUPO, PRESETS, presetDe } from "./indicadores.js";
+import { BASES, COMO_META, COMPARAR, FILTROS, FILTROS_PRODUTO, NOME_GRUPO, PRESETS, comoCalcula, presetDe } from "./indicadores.js";
 
 const aceitaBase = (pr) => ["positivacao", "mix_medio", "frequencia"].includes(pr.metrica)
   || (pr.metrica === "personalizada" && ["total", "por_cliente"].includes(pr.forma));
 const semFiltroProduto = (pr) => pr.metrica === "efetividade" || pr.metrica === "preco_medio";
 const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let janelaComo = null;
+
+// A janela "Como cada indicador é calculado": todos os indicadores (o atual em destaque) e, nas campanhas, a base, a
+// meta e o % da meta. Abre por cima de outra janela (a do objetivo).
+export function abrirComoCalcula(atual, objetivo = false) {
+  if (!janelaComo) {
+    janelaComo = document.createElement("dialog");
+    janelaComo.className = "dialogo ci-como-janela";
+    janelaComo.setAttribute("aria-labelledby", "ci-como-titulo");
+    document.body.appendChild(janelaComo);
+    janelaComo.addEventListener("click", (e) => { if (e.target.closest("[data-fechar]")) janelaComo.close(); });
+  }
+  const item = ([nome, conta, detalhe], destaque) => `<div class="${destaque ? "atual" : ""}"><dt>${esc(nome)}</dt>
+    <dd>${conta ? `<b>${esc(conta)}</b>` : ""}${detalhe ? ` ${esc(detalhe)}` : ""}</dd></div>`;
+  const lista = PRESETS.filter((x) => objetivo || !x.objetivo)
+    .map((x) => { const c = comoCalcula(x, objetivo); return item([x.nome, c.conta, c.detalhe], x.id === atual); }).join("");
+  janelaComo.innerHTML = `<h2 id="ci-como-titulo">${icone("info")}Como cada indicador é calculado</h2>
+    <p class="sub">${objetivo ? "No objetivo, a conta é da equipe toda, sem repetir clientes entre os vendedores."
+      : "Na campanha, a conta é de cada vendedor (a efetividade e a carteira, pelos clientes da carteira dele)."} As vendas seguem as regras das metas.</p>
+    <dl class="ci-como-lista">${lista}</dl>
+    ${objetivo ? "" : `<h3>Base, meta e % da meta</h3><dl class="ci-como-lista">${COMO_META.map(([n, d]) => item([n, "", d])).join("")}</dl>`}
+    <div class="dialogo-acoes"><button class="btn primario" type="button" data-fechar>Entendi</button></div>`;
+  janelaComo.showModal();
+  janelaComo.querySelector(".atual")?.scrollIntoView({ block: "center" });
+}
 
 // Valores de texto (linhas, UFs…) vão para a lista de seleção por posição: ela trabalha com números.
 function opcoesFiltro(id, cat) {
@@ -38,6 +64,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
     <label class="campo-form ci-preset"><span>Indicador medido</span>
       <span class="campo"><select data-ci-preset aria-label="Indicador medido" style="padding-left:14px">${PRESETS.filter((x) => objetivo || !x.objetivo)
         .map((x) => `<option value="${x.id}" ${x.id === preset.id ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select></span></label>
+    <p class="ci-como" data-ci-como aria-live="polite"></p>
     <div class="ci-sub" data-ci-sub></div>`;
   (precosEm || el).insertAdjacentHTML("beforeend", `<div class="ci-precos" data-ci-precos hidden>
       <span class="cf-rotulo">Produtos e preços-alvo <small>(R$ por unidade do produto)</small></span>
@@ -122,6 +149,8 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
     const sub = el.querySelector("[data-ci-sub]");
     sub.innerHTML = html;
     sub.hidden = !html;
+    el.querySelector("[data-ci-como]").innerHTML = `${icone("info")}<span><b>Como é calculado:</b> ${esc(comoCalcula(preset, objetivo).conta)}
+      <button type="button" class="ge-link" data-ci-todos>Ver detalhes</button></span>`;
     for (const id of FILTROS_PRODUTO) achar(`[data-ci-f="${id}"]`).hidden = semFiltroProduto(preset);
     achar("[data-ci-rotulo-filtros]").textContent = semFiltroProduto(preset) ? "Clientes que contam" : "Produtos e clientes que contam";
     achar("[data-ci-precos]").hidden = preset.metrica !== "preco_medio";
@@ -144,10 +173,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
         : "Em volume, escolha produtos, linha, categoria ou grupo com uma unidade só (a quantidade não soma kg com unidade).");
     }
     if (preset.forma === "crescimento") textos.push("A meta é o crescimento sobre o período de comparação, para a equipe toda.");
-    if (preset.forma === "pct_carteira") textos.push("Conta os clientes ativos da carteira de cada vendedor que compraram no período, de qualquer vendedor.");
-    if (preset.metrica === "efetividade") textos.push("A média da efetividade de cada dia: pedidos na rota do dia ÷ visitas esperadas no dia, pelos dias de atendimento das áreas (Gestão › Configurar), pela carteira de cada vendedor. Só contam os pedidos de clientes das áreas atendidas naquele dia. As visitas seguem a frequência de compra (rede do cadastro): semanais sempre, quinzenais sem compra nos 7 dias antes, mensais sem compra nos 21 dias antes; o pedido de quem não estava previsto conta, sem ele entrar nas visitas. Dias sem visita esperada (fim de semana) e clientes em áreas sem dia ficam fora.");
-    if (preset.metrica === "frequencia") textos.push("Semanas de domingo a sábado, cortadas na virada do mês, como no Power BI.");
-    if (preset.metrica === "mix_medio") textos.push("Os produtos escolhidos são o mix medido; nada escolhido = todos os produtos. Divide por todos os clientes que compraram.");
+    if (preset.metrica === "mix_medio") textos.push("Os produtos escolhidos são o mix medido; nada escolhido = todos os produtos.");
     if (["nunca_compraram", "ja_compraram"].includes(p.clientes) && aceitaBase(preset) && !comProduto) {
       textos.push("Para contar quem nunca ou já comprou, escolha os produtos.");
     }
@@ -159,6 +185,9 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
     preset = PRESETS.find((x) => x.id === e.target.value);
     desenharSub();
     aoMudar({ preset: true });
+  });
+  el.querySelector("[data-ci-como]").addEventListener("click", (e) => {
+    if (e.target.closest("[data-ci-todos]")) abrirComoCalcula(preset.id, objetivo);
   });
   el.querySelector("[data-ci-sub]").addEventListener("change", (e) => {
     const k = e.target.dataset.p;

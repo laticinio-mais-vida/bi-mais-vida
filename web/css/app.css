@@ -1711,11 +1711,20 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-vend-precos small { color: var(--tinta-3); }
 .ge-vend-meta .ge-link { font-size: 12px; }
 .ge-meta-propria { display: inline-flex; align-items: center; gap: 4px; cursor: default; }
-.ge-meta-propria input {
+.ge-meta-propria input, .ge-meta-precos input {
   width: 78px; height: 30px; padding: 0 8px; border-radius: 9px; border: 1px solid var(--linha-forte); background: var(--surface);
   font: 600 13px var(--f-texto); color: var(--tinta); font-variant-numeric: tabular-nums;
 }
-.ge-meta-propria input:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+.ge-meta-propria input:focus, .ge-meta-precos input:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+/* "padrão" (a meta da campanha) ou "própria", ao lado da meta do marcado */
+.ge-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; vertical-align: 1px; background: var(--neutro-bg); color: var(--tinta-3); }
+.ge-tag.propria { background: var(--acento-suave); color: var(--acento-tinta); }
+/* preço médio com vários produtos: um preço-alvo próprio por produto */
+.ge-meta-precos { display: grid; gap: 4px; width: 100%; cursor: default; }
+.ge-meta-precos label { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.ge-meta-precos i { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; color: var(--tinta-3); }
+.ge-meta-precos input { flex: none; }
+.ge-meta-precos-rodape { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 
 /* campanha em lote: o formulário em linha, acima dos quadrados */
 .ge-form { margin-bottom: 14px; border-color: color-mix(in srgb, var(--acento) 45%, var(--linha)); scroll-margin-top: 90px; }
@@ -1729,6 +1738,20 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-form .campo select, .ge-indicador .campo select { height: 42px; border-radius: 12px; font-weight: 500; }
 .ci-sub { display: grid; gap: 10px; }
 .ci-sub[hidden], .ci-precos[hidden] { display: none; }
+/* como o indicador é calculado (abaixo do "Indicador medido" e no detalhe da campanha) e a janela com todos */
+.ci-como { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--tinta-3); }
+.ci-como .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--acento); }
+.ci-como b { color: var(--tinta-2); }
+.ci-como .ge-link { font-size: inherit; }
+.camp-como { margin-top: 12px; font-size: 13px; }
+.ci-como-janela { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.ci-como-janela h3 { margin: 18px 0 8px; font-size: 14px; color: var(--tinta-2); }
+.ci-como-lista { display: grid; gap: 6px; margin: 0; }
+.ci-como-lista > div { padding: 9px 12px; border-radius: 12px; border: 1px solid var(--linha); background: var(--surface-2); }
+.ci-como-lista > div.atual { border-color: color-mix(in srgb, var(--acento) 55%, var(--linha)); background: var(--acento-suave); }
+.ci-como-lista dt { font-size: 13px; font-weight: 700; color: var(--tinta); }
+.ci-como-lista dd { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--tinta-2); }
+.ci-como-lista dd b { font-weight: 600; color: var(--tinta); }
 .ci-precos, .ci-filtros { margin-top: 12px; }
 .ge-alvo-linha { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 6px; }
 .ge-alvo-linha[hidden] { display: none; }

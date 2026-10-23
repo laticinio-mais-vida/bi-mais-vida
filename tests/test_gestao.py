@@ -454,7 +454,8 @@ class TestValidar(ComCache, unittest.TestCase):
         self.assertEqual(d["nome"], "Mussarela de setembro")
         self.assertEqual(d["filtros"], {"produtos": [11469, 32], "grupos": ["outras"], "linhas": ["MUSSARELA"],
                                         "ufs": ["ES"]})
-        self.assertEqual(d["vendedores"], [{"id": EDIR, "meta": None}, {"id": BA, "meta": 500.0}])  # o Edir é da BA
+        self.assertEqual(d["vendedores"], [{"id": EDIR, "meta": None, "alvos_precos": None},
+                                           {"id": BA, "meta": 500.0, "alvos_precos": None}])  # o Edir é da BA
         self.assertEqual((d["inicio"], d["fim"]), (D(2026, 9, 1), D(2026, 9, 30)))
         self.assertEqual((d["base_periodo"], d["base_inicio"], d["base_fim"]),
                          ("mes", D(2026, 8, 1), D(2026, 8, 31)))  # sem período da base: o mês fechado antes
@@ -538,6 +539,16 @@ class TestValidar(ComCache, unittest.TestCase):
                          metas_produto=[{"id": 3643, "meta": 9.5}, {"id": 32, "meta": 30}])
         self.assertEqual(d["metas_produto"], [{"id": 11469, "meta": 9.5}, {"id": 32, "meta": 30.0}])
         self.assertEqual((d["meta_padrao"], d["alvo_tipo"], d["vendedores"][1]["meta"]), (100.0, "fixo", None))
+        # a meta própria do preço médio: o preço-alvo do vendedor, só nos produtos em que muda o da campanha
+        d = self.validar(metrica="preco_medio", metas_produto=[{"id": 3643, "meta": 9.5}, {"id": 32, "meta": 30}],
+                         vendedores=[{"id": EDIR, "alvos_precos": {"3643": 10, 32: 30}}, {"id": BA, "alvos_precos": {}}])
+        self.assertEqual(d["vendedores"], [{"id": EDIR, "meta": None, "alvos_precos": {"11469": 10.0}},
+                                           {"id": BA, "meta": None, "alvos_precos": None}])
+        self.erro("não está na campanha", metrica="preco_medio", metas_produto=[{"id": 32, "meta": 30}],
+                  vendedores=[{"id": BA, "alvos_precos": {"27": 12}}])
+        self.erro("maior que zero", metrica="preco_medio", metas_produto=[{"id": 32, "meta": 30}],
+                  vendedores=[{"id": BA, "alvos_precos": {"32": 0}}])
+        self.assertIsNone(self.validar(vendedores=[{"id": BA, "alvos_precos": {"32": 20}}])["vendedores"][0]["alvos_precos"])
         d = self.validar(metrica="positivacao", filtros={"areas": ["rota 1"], "segmentos": ["padaria"]})
         self.assertEqual(d["filtros"], {"segmentos": ["PADARIA"], "areas": ["ROTA 1"]})
         self.erro("área comercial não encontrada", metrica="positivacao", filtros={"areas": ["ROTA 9"]})
@@ -1171,6 +1182,43 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
                                                            "preco_alvo": 40.0, "quantidade": 10.0}])
         self.assertEqual((a["vendedores"][0]["resultado"], a["vendedores"][0]["aumento_feito"]), (0.6667, 200.0))
 
+    def test_preco_medio_meta_propria(self):
+        # a manteiga (27) do ES: R$ 10 na base (julho) e R$ 30 em setembro (10 un). O alvo da campanha é R$ 40, mas o
+        # do Rubens é R$ 20: fez R$ 20 dos R$ 10 de aumento pedidos por unidade (200%)
+        precos = [{"id": 27, "meta": 40}]
+        id_ = self.criar("preco_medio", regiao="ES", vendedores=[{"id": ES, "alvos_precos": {"27": 20}}],
+                         metas_produto=precos, inicio="2026-08-01", fim="2026-10-15", base_periodo="mes")
+        with self.banco.conexao() as con:
+            gravado, = con.execute("SELECT alvos_precos FROM campanha_vendedores WHERE campanha = %s", [id_]).fetchone()
+            dados, = con.execute("SELECT dados FROM gestao_eventos WHERE campanha = %s AND tipo = 'lancada'",
+                                 [id_]).fetchone()
+        self.assertEqual((gravado, dados["alvos"]), ({"27": 20.0}, {"27": 20.0}))
+        d = self.detalhe(id_)
+        rubens, = d["linhas"]
+        self.assertEqual((rubens["resultado"], rubens["classe"], rubens["delta"], rubens["aumento_pedido"],
+                          rubens["meta_propria"], rubens["produtos"][0]["meta"]), (2.0, "ok", 200.0, 100.0, True, 20.0))
+        self.assertEqual(d["item"]["vendedores"], [{"id": ES, "meta": None, "alvos_precos": {"27": 20.0}}])
+        q = self.gestao.quadro(self.chefe, (None, None), "ES")
+        etiqueta = next(e for v in q["vendedores"] if v["id"] == ES for e in v["acoes"] if e["id"] == id_)
+        self.assertEqual((etiqueta["pct"], etiqueta["alvos"]), (2.0, {"27": 20.0}))
+        # de volta à meta da campanha (R$ 40): o % volta a 66,67%, e o histórico registra a mudança de meta
+        self.gestao.atualizar(self.chefe, id_, {"nome": "Ação", "inicio": "2026-08-01", "fim": "2026-10-15",
+                                                "base_periodo": "mes", "metrica": "preco_medio", "metas_produto": precos,
+                                                "vendedores": [ES]})
+        rubens, = self.detalhe(id_)["linhas"]
+        self.assertEqual((rubens["resultado"], rubens["meta_propria"]), (0.6667, False))
+        with self.banco.conexao() as con:
+            gravado, = con.execute("SELECT alvos_precos FROM campanha_vendedores WHERE campanha = %s", [id_]).fetchone()
+            mudou, = con.execute("SELECT dados->'mudou' FROM gestao_eventos WHERE campanha = %s AND tipo = 'editada'",
+                                 [id_]).fetchone()
+        self.assertEqual((gravado, mudou), (None, ["meta"]))
+        # a prévia da base mede o preço de cada produto antes de o preço-alvo ser digitado
+        previa = self.gestao.previa_base(self.chefe, {"regiao": "ES", "inicio": "2026-08-01", "fim": "2026-10-15",
+                                                      "base_periodo": "mes", "metrica": "preco_medio",
+                                                      "metas_produto": [{"id": 27}]}, [ES])
+        self.assertEqual((previa["precos"], previa["produtos"][0]["meta"]),
+                         ({str(ES): {"27": {"preco": 10.0, "quantidade": 5.0}}}, None))
+
     def test_dias_de_atendimento(self):
         cfg = {a["id"]: a for a in self.gestao.config_areas()["areas"]}
         self.assertEqual(cfg[209]["dias"], [1])  # da planilha (migração 008), mesmo sem clientes no cache
@@ -1244,7 +1292,8 @@ class TestMigracao008(BaseBanco):
                             "(%s, '2026-09-01', '2026-09-30', %s, %s, 'Ana')", [nome, metrica, dono])
         self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
-                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
+                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
+                                               "015_meta_propria_preco"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1282,7 +1331,8 @@ class TestMigracao013(BaseBanco):
             con.execute("INSERT INTO gestao_eventos (id_vendedor, campanha, tipo, dados, criada_por_nome) VALUES "
                         "(115, %s, 'lancada', '{\"base\": 0.9813, \"alvo\": 1.0}', 'Ana'), "
                         "(115, %s, 'editada', '{\"base\": 0.95, \"alvo\": 1.0}', 'Ana')", [um, um])
-        self.assertEqual(self.banco.migrar(), ["013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
+        self.assertEqual(self.banco.migrar(), ["013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
+                                               "015_meta_propria_preco"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1307,7 +1357,8 @@ class TestMigracao009(BaseBanco):
             con.execute("INSERT INTO campanha_vendedores (campanha, id_vendedor) VALUES (%s, 124)", [id_])
         self.assertEqual(self.banco.migrar(), ["009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
-                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra"])
+                                               "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
+                                               "015_meta_propria_preco"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

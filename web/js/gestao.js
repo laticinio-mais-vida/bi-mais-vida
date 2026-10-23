@@ -4,16 +4,17 @@
 // histórico interno dele (as campanhas com a base e a meta dele, as observações, a parcial de cada semana e o
 // resultado); clicar numa campanha abre o andamento dela por vendedor.
 // Só o administrador lança campanhas (marcando vendedores no quadro: a mesma campanha para todos), cria objetivos,
-// escreve observações, encerra e prorroga; quem tem a página acompanha os vendedores do acesso. Enquanto o
-// formulário da campanha está aberto, os quadrados mostram a base de cada um (no período da base escolhido) e, nos
-// marcados, a meta, com a opção de uma meta própria. A conta é toda no servidor (bi/gestao.py), que manda o descritor
-// do indicador: a página só formata. O rascunho que o Assistente monta chega por #/gestao?rascunho=<id> e abre o
-// formulário já preenchido.
+// escreve observações, encerra e prorroga; quem tem a página acompanha os vendedores do acesso. A campanha nova já
+// vem com todos os vendedores ativos marcados, na meta padrão. Enquanto o formulário está aberto, os quadrados
+// mostram a base de cada um (no período da base escolhido) e, nos marcados, a meta ("padrão" ou "própria"), com a
+// opção de uma meta própria (no preço médio, o preço-alvo do vendedor em cada produto). A conta é toda no servidor
+// (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
+// por #/gestao?rascunho=<id> e abre o formulário já preenchido.
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
-import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, corMeta, definirCatalogo, deltaTexto, duracaoTexto,
-         iniciais, intensidadeMeta, janelaFechada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase,
-         textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
-import { construtorIndicador } from "./construtorindicador.js";
+import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, definirCatalogo, deltaTexto,
+         duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
+         textoPeriodoBase, textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
+import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
 const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
@@ -93,6 +94,8 @@ const acaoDoQuadro = (id) => (estado.quadro?.acoes || []).find((a) => a.id === i
 // preço de cada um na base (bi/indicadores.py progresso_preco). Os preços vêm por produto: {"<id>": {preco, quantidade}}.
 const ePreco = (ind) => ind?.tipo === "preco_medio";
 const precoDe = (precos, id) => precos?.[String(id)]?.preco ?? null;
+// O preço-alvo de um vendedor num produto: o da meta própria dele ({"<id>": R$}) ou o da campanha.
+const alvoDoVendedor = (alvos, p) => alvos?.[String(p.id)] ?? p.meta;
 const reaisSinal = (v) => (v < 0 ? `−${fmt.moeda2(-v)}` : fmt.moeda2(v));
 // O preço médio de vários vendedores juntos num produto (pela quantidade de cada um).
 function precoJunto(listas, id) {
@@ -117,9 +120,9 @@ function precosTexto(produtos, valorDe, vazio = "sem venda") {
   const v = (p) => { const x = valorDe(p); return x == null ? vazio : fmt.moeda2(x); };
   return lista.length === 1 ? v(lista[0]) : lista.map((p) => `${p.nome} ${v(p)}`).join(" · ");
 }
-// "R$ 30,00 (base R$ 10,00, alvo R$ 40,00)", produto a produto.
-function precosDica(produtos, base, agora) {
-  const um = (p) => `${fmt.moeda2(precoDe(agora, p.id))} (base ${fmt.moeda2(precoDe(base, p.id))}, alvo ${fmt.moeda2(p.meta)})`;
+// "R$ 30,00 (base R$ 10,00, alvo R$ 40,00)", produto a produto (alvos: a meta própria do vendedor).
+function precosDica(produtos, base, agora, alvos) {
+  const um = (p) => `${fmt.moeda2(precoDe(agora, p.id))} (base ${fmt.moeda2(precoDe(base, p.id))}, alvo ${fmt.moeda2(alvoDoVendedor(alvos, p))})`;
   return (produtos || []).length === 1 ? um(produtos[0]) : (produtos || []).map((p) => `${p.nome}: ${um(p)}`).join(" · ");
 }
 
@@ -386,7 +389,8 @@ function desenharGrade() {
   const el = raiz.querySelector("#g-grade");
   if (!el) return;
   const d = estado.quadro, vend = d.vendedores || [];
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${estado.form ? " · a base de cada um no período escolhido" : ""}</span></div>
+  const todos = estado.selecao && vend.length ? ` · <button type="button" class="ge-link" data-marcar-todos>${textoMarcarTodos()}</button>` : "";
+  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${estado.form ? " · a base de cada um no período escolhido" : ""}${todos}</span></div>
     ${vend.length ? `<div class="ge-grade ${estado.selecao ? "selecionando" : ""}">${vend.map(quadrado).join("")}</div>`
       : `<p class="ge-vazio">${icone("info")}<span>Nenhum vendedor da região no seu acesso.</span></p>`}`;
 }
@@ -434,21 +438,50 @@ function baseDoQuadrado(v, marcado) {
   return `<span class="ge-vend-base">${linha}</span>${marcado ? `<span class="ge-vend-meta" data-meta-de="${v.id}">${metaDoQuadrado(v, base)}</span>` : ""}`;
 }
 
-// Preço médio no quadrado marcado: a meta é o preço-alvo; com um produto só, quanto o preço precisa subir desde a base.
-function metaPreco(base) {
-  const alvos = estado.form.construtor?.valor().metas_produto || [];
-  if (alvos.length !== 1) return `<span class="ge-vend-alvo">Meta: <b>o preço-alvo de cada produto</b></span>`;
-  const { id, meta } = alvos[0], b = precoDe(base, id);
-  if (!(meta > 0)) return `<span class="ge-vend-alvo">Meta: —</span>`;
-  const sobe = b == null ? "" : b < meta ? ` <small>(+${fmt.moeda2(meta - b)})</small>` : " <small>(já no alvo)</small>";
-  return `<span class="ge-vend-alvo">Meta: <b>${fmt.moeda2(meta)}</b>${sobe}</span>`;
+// Ao lado da meta do marcado: "padrão" (a da campanha) ou "própria".
+const marcaMeta = (propria) => `<span class="ge-tag${propria ? " propria" : ""}">${propria ? "própria" : "padrão"}</span>`;
+
+function nomeProduto(id) {
+  return estado.catalogo?.produtos.find((x) => x.id === id)?.nome || estado.form?.nomes?.produtos?.[id] || `produto ${id}`;
+}
+
+// A meta própria de um vendedor no preço médio, só nos produtos da campanha: {"<id>": R$} ou null.
+function alvosProprios(vid, produtos) {
+  const p = estado.form?.alvos.get(vid) || {}, saida = {};
+  for (const { id } of produtos) if (p[id] > 0) saida[id] = p[id];
+  return Object.keys(saida).length ? saida : null;
+}
+
+// Preço médio no quadrado marcado: a meta é o preço-alvo de cada produto (o da campanha ou, na meta própria, o do
+// vendedor); com um produto só, quanto o preço precisa subir desde a base. A meta própria abre um campo por produto.
+function metaPreco(v, base) {
+  const f = estado.form, alvos = f.construtor?.valor().metas_produto || [];
+  const proprios = alvosProprios(v.id, alvos);
+  let valor = "<b>o preço-alvo de cada produto</b>";
+  if (alvos.length === 1) {
+    const alvo = alvoDoVendedor(proprios, alvos[0]), b = precoDe(base, alvos[0].id);
+    valor = !(alvo > 0) ? "<b>—</b>" : `<b>${fmt.moeda2(alvo)}</b>${b == null ? "" : b < alvo ? ` <small>(+${fmt.moeda2(alvo - b)})</small>` : " <small>(já no alvo)</small>"}`;
+  }
+  const linha = `<span class="ge-vend-alvo">Meta: ${valor}${alvos.length ? marcaMeta(!!proprios) : ""}</span>`;
+  if (!alvos.length) return linha;
+  if (!proprios && !f.abertas.has(v.id)) return `${linha}<button type="button" class="ge-link" data-meta-propria="${v.id}">Meta própria</button>`;
+  const digitado = f.alvos.get(v.id) || {};
+  const campo = (p) => `<input type="number" min="0" step="0.01" inputmode="decimal" data-preco-v="${v.id}" data-preco-p="${p.id}"
+    value="${digitado[p.id] ?? ""}" placeholder="${p.meta > 0 ? esc(fmt.num(p.meta, 2)) : "R$"}"
+    aria-label="Preço-alvo próprio de ${esc(v.nome)}${alvos.length > 1 ? ` em ${esc(nomeProduto(p.id))}` : ""}">`;
+  const tirar = `<button type="button" class="ge-x" data-tirar-meta="${v.id}" title="Voltar à meta padrão" aria-label="Voltar à meta padrão">${icone("x")}</button>`;
+  if (alvos.length === 1) return `${linha}<span class="ge-meta-propria" data-parar><small>R$</small>${campo(alvos[0])}${tirar}</span>`;
+  return `${linha}<span class="ge-meta-precos" data-parar>${alvos.map((p) => `<label><i title="${esc(nomeProduto(p.id))}">${esc(nomeProduto(p.id))}</i>${campo(p)}</label>`).join("")}
+    <span class="ge-meta-precos-rodape"><small>em branco = o da campanha</small>${tirar}</span></span>`;
 }
 
 function metaDoQuadrado(v, base) {
   const f = estado.form, p = f.previa, form = raiz.querySelector("#g-form");
-  const ind = p?.indicador || f.construtor?.descritor();
+  // o descritor do servidor (da prévia) enquanto ele for do indicador escolhido; trocado o tipo, o do construtor
+  const d = f.construtor?.descritor(), q = p?.indicador;
+  const ind = q && (!d || ["tipo", "medida", "forma"].every((k) => (q[k] ?? null) === (d[k] ?? null))) ? q : d;
   if (!ind) return "";
-  if (ePreco(ind)) return metaPreco(base);
+  if (ePreco(ind)) return metaPreco(v, base);
   const tipo = form?.querySelector('[name="alvo_tipo"]')?.value || f.dados.alvo_tipo;
   const padrao = form?.querySelector('[name="meta"]')?.value ?? "";
   const propria = f.metas.get(v.id);
@@ -464,7 +497,7 @@ function metaDoQuadrado(v, base) {
         placeholder="${esc(padrao || "meta")}" aria-label="Meta própria de ${esc(v.nome)}">${unidade ? `<small>${unidade}</small>` : ""}
         <button type="button" class="ge-x" data-tirar-meta="${v.id}" title="Voltar à meta padrão" aria-label="Voltar à meta padrão">${icone("x")}</button></span>`
     : `<button type="button" class="ge-link" data-meta-propria="${v.id}">Meta própria</button>`;
-  return `<span class="ge-vend-alvo">Meta${propria != null ? " própria" : ""}: <b>${texto}</b>${sufixo}</span>${controle}`;
+  return `<span class="ge-vend-alvo">Meta: <b>${texto}</b>${sufixo}${marcaMeta(propria != null)}</span>${controle}`;
 }
 
 // Só o texto da meta dos marcados (a meta padrão ou o tipo mudou): os campos abertos ficam como estão.
@@ -489,7 +522,7 @@ function etiqueta(e) {
     const porque = e.base_pendente ? "aguardando a base" : "sem meta ou sem números ainda";
     return `<span class="ge-pill${pop}" title="${esc(`${porque} · até ${fmt.dataCurta(e.fim)}`)}">${icone("bandeira")}${esc(e.rotulo)}</span>`;
   }
-  const conta = ePreco(a.indicador) && a.produtos ? precosDica(a.produtos, e.base_precos, e.precos)
+  const conta = ePreco(a.indicador) && a.produtos ? precosDica(a.produtos, e.base_precos, e.precos, e.alvos)
     : `${valorIndicador(a.indicador, e.resultado, a.unidade, true)} de ${valorIndicador(a.indicador, e.alvo, a.unidade, true)}`;
   const titulo = `${fmt.pct(e.pct, 0)} da meta (${conta}) · até ${fmt.dataCurta(e.fim)}`;
   return `<span class="ge-pill meta${pop}" style="--c:${corMeta(e.pct)};--i:${intensidadeMeta(e.pct)}" title="${esc(titulo)}">${esc(e.rotulo)} · ${fmt.pct(e.pct, 0)}</span>`;
@@ -523,9 +556,12 @@ async function entrarSelecao(ids = [], dados = null, extra = {}) {
   const antiga = !!extra.id && d.base_periodo == null; // campanha de antes da 012: pode manter a base "logo antes"
   if (d.base_periodo == null) d.base_periodo = antiga ? BASE_ANTIGA : "mes";
   estado.form = { id: extra.id || null, rascunho: extra.rascunho || null, nomes: extra.nomes || {}, construtor: null, orig: null,
+                  todos: !!extra.todos, // a campanha nova, com todos os vendedores ativos já marcados
                   dados: d, antiga, metas: new Map((dados?.vendedores || []).map((v) => [v.id, v.meta ?? null])),
+                  // preço médio: a meta própria é o preço-alvo do vendedor em cada produto ({"<id>": R$})
+                  alvos: new Map((dados?.vendedores || []).filter((v) => v.alvos_precos).map((v) => [v.id, { ...v.alvos_precos }])),
                   abertas: new Set(), previa: null, erroPrevia: null, carregandoPrevia: false, pedidoPrevia: 0,
-                  chavePrevia: null, timerPrevia: null };
+                  chavePrevia: null, timerPrevia: null, chaveQuadros: null };
   if (estado.vista !== "grade") {
     estado.vista = "grade";
     estado.historico = estado.detalhe = null;
@@ -560,7 +596,26 @@ function contarSelecao() {
   const t = raiz.querySelector("#gf-titulo"), b = raiz.querySelector("[data-lancar] span");
   if (t) t.textContent = f?.id ? `Editar campanha · ${plural(n, "vendedor", "vendedores")}` : `Nova campanha para ${plural(n, "vendedor", "vendedores")}`;
   if (b) b.textContent = f?.id ? "Salvar alterações" : `Lançar para ${n}`;
+  const todos = raiz.querySelector("[data-marcar-todos]");
+  if (todos) todos.textContent = textoMarcarTodos();
   if (n) erroForm("");
+}
+
+// Os vendedores que a campanha nova já traz marcados (e o "Marcar todos"): os do quadro, menos os inativos no ERP.
+const ativosDoQuadro = () => (estado.quadro?.vendedores || []).filter((v) => !v.inativo).map((v) => v.id);
+function textoMarcarTodos() {
+  const s = estado.selecao, ativos = ativosDoQuadro();
+  return s?.size && ativos.every((id) => s.has(id)) ? "Desmarcar todos" : "Marcar todos";
+}
+
+function marcarTodos() {
+  const s = estado.selecao;
+  if (!s) return;
+  if (textoMarcarTodos() === "Desmarcar todos") s.clear();
+  else ativosDoQuadro().forEach((id) => s.add(id));
+  desenharGrade();
+  contarSelecao();
+  desenharMedia();
 }
 
 async function montarForm() {
@@ -570,7 +625,8 @@ async function montarForm() {
   f.semanas = d.fim ? semanasDe(d.inicio, d.fim) : d.semanas;
   alvo.innerHTML = `<section class="cartao ge-form entra" style="--i:0">
     <div class="ge-form-cab"><div><b id="gf-titulo"></b>
-        <span class="fraco">${f.rascunho ? "Rascunho do Assistente: confira e lance. " : ""}Marque os vendedores no quadro abaixo.</span></div>
+        <span class="fraco">${f.rascunho ? "Rascunho do Assistente: confira e lance. " : ""}${f.todos ? "Todos os vendedores ativos já vêm marcados, na meta padrão: desmarque no quadro abaixo quem fica de fora ou dê uma meta própria."
+          : "Marque os vendedores no quadro abaixo."}</span></div>
       <span class="ge-pill">região ${esc(estado.quadro.regiao)}</span></div>
     <div class="ge-campos">
       <label class="campo-form"><span>Campanha</span><input name="nome" maxlength="120" value="${esc(d.nome)}" placeholder="Ex.: Aumentar mix médio" autocomplete="off"></label>
@@ -679,19 +735,30 @@ function atualizarAlvo() {
     ? "O % da meta de cada um é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%)."
     : meta !== "" ? `${capitalizar(textoAlvo(desc, tipo, Number(meta), desc.unidade))}.` : "";
   form.querySelector('[name="rotulo"]').placeholder = pr.rotulo;
-  atualizarMetasQuadrados();
+  // outro tipo ou outros produtos no preço médio: a meta dos quadrados muda de forma (os campos da meta própria)
+  const chave = JSON.stringify([pr.id, preco ? f.construtor.valor().metas_produto.map((x) => x.id) : []]);
+  if (f.chaveQuadros != null && chave !== f.chaveQuadros) {
+    f.previa = f.erroPrevia = null; // a base de antes era de outro indicador: "calculando…" até a nova chegar
+    if (JSON.parse(f.chaveQuadros)[0] !== pr.id) f.abertas.clear(); // outro tipo: fecha os campos vazios da meta própria
+    desenharGrade();
+  } else {
+    atualizarMetasQuadrados();
+  }
+  f.chaveQuadros = chave;
   agendarPrevia();
 }
 
 // ---------- prévia da base (o servidor mede; nada é gravado) ----------
+// No preço médio vão só os produtos: a base é o preço de cada um, que não depende do preço-alvo.
 function corpoPrevia() {
   const f = estado.form, d = coletarForm();
   return { campanha: { id: f.id, regiao: d.regiao, inicio: d.inicio, semanas: d.semanas, fim: d.fim, base_periodo: d.base_periodo,
-                       metrica: d.metrica, parametros: d.parametros, filtros: d.filtros, metas_produto: d.metas_produto },
+                       metrica: d.metrica, parametros: d.parametros, filtros: d.filtros,
+                       metas_produto: d.metas_produto.map((p) => ({ id: p.id })) },
            ids: (estado.quadro?.vendedores || []).map((v) => v.id) };
 }
 
-// Pede a base de novo quando o que a muda mudou (o indicador, os filtros, os preços, a base, o início ou o prazo).
+// Pede a base de novo quando o que a muda mudou (o indicador, os filtros, os produtos, a base, o início ou o prazo).
 function agendarPrevia() {
   const f = estado.form;
   if (!f?.construtor) return;
@@ -700,9 +767,9 @@ function agendarPrevia() {
   f.chavePrevia = chave;
   clearTimeout(f.timerPrevia);
   const { metrica, metas_produto: precos } = corpo.campanha;
-  if (metrica === "preco_medio" && (!precos.length || precos.some((p) => !(p.meta > 0)))) {
+  if (metrica === "preco_medio" && !precos.length) {
     f.previa = null;
-    f.erroPrevia = "dê o preço-alvo de cada produto para ver a base";
+    f.erroPrevia = "escolha os produtos para ver o preço de cada vendedor na base";
     desenharMedia();
     desenharGrade();
     return;
@@ -772,7 +839,8 @@ function coletarForm() {
     inicio: val("inicio"), ...(prazo === "data" ? { fim: val("fim") } : { semanas: Number(prazo) }),
     base_periodo: val("base_periodo") || f.dados.base_periodo, ...ind,
     alvo_tipo: preco ? "fixo" : val("alvo_tipo"), meta_padrao: preco ? 100 : (val("meta") === "" ? null : Number(val("meta"))),
-    vendedores: [...(estado.selecao || [])].map((id) => ({ id, meta: f.metas.get(id) ?? null })),
+    vendedores: [...(estado.selecao || [])].map((id) => (preco ? { id, meta: null, alvos_precos: alvosProprios(id, ind.metas_produto) }
+      : { id, meta: f.metas.get(id) ?? null })),
   };
 }
 
@@ -1047,11 +1115,20 @@ function desenharDetalhe() {
         ${it.arquivada ? `<span class="chip">${icone("arquivo")}arquivada</span>` : ""}
       </div>
       ${it.descricao ? `<p class="camp-descricao">${esc(it.descricao)}</p>` : ""}
+      ${comoNoDetalhe(it)}
       <p class="ge-det-resumo">${esc(resumo)}${d.ocultos ? ` · ${plural(d.ocultos, "vendedor fora do seu acesso", "vendedores fora do seu acesso")}` : ""}</p>
     </section>
     ${avisos}${ind.tipo === "preco_medio" && d.produtos?.length ? gradePrecos(d) : tabelaAcao(d)}${aberturaAcao(d)}`;
   animarEntradas(el);
   ligarTooltips(el);
+}
+
+// "Como é calculado: …", com o botão que abre a janela de todos os indicadores.
+function comoNoDetalhe(it) {
+  const pr = presetDe(it.metrica, it.parametros), como = comoCalcula(pr);
+  if (!como.conta) return "";
+  return `<p class="ci-como camp-como">${icone("info")}<span><b>Como é calculado:</b> ${esc(como.conta)}
+    <button type="button" class="ge-link" data-como="${esc(pr.id)}">Ver detalhes</button></span></p>`;
 }
 
 function tabelaAcao(d) {
@@ -1113,9 +1190,11 @@ function gradePrecos(d) {
   const prods = d.produtos, ind = d.indicador, it = d.item;
   const enc = it.situacao === "encerrada";
   const un = (p) => esc((p.unidade || "").toLowerCase());
+  const alvoCampanha = Object.fromEntries(prods.map((p) => [p.id, p.meta]));
   const cel = (p, u) => {
     if (!p || (p.preco == null && p.base == null)) return '<td class="fraco">—</td>';
-    const base = p.base == null ? "sem base" : `base ${fmt.moeda2(p.base)}`;
+    const proprio = p.meta != null && p.meta !== alvoCampanha[p.id] ? ` · alvo próprio ${fmt.moeda2(p.meta)}` : "";
+    const base = (p.base == null ? "sem base" : `base ${fmt.moeda2(p.base)}`) + proprio;
     const agora = p.preco == null ? '<span class="fraco">sem venda</span>'
       : `<b${p.pct != null ? ` style="color:color-mix(in srgb, ${corMeta(p.pct)} 70%, var(--tinta))"` : ""}>${fmt.moeda2(p.preco)}</b>`;
     return `<td title="${p.pct != null ? `${fmt.pct(p.pct, 0)} do caminho até o alvo` : ""}">${agora}<small>${base}${p.quantidade ? ` · ${fmt.num(p.quantidade, 1)} ${u}` : ""}</small></td>`;
@@ -1124,7 +1203,7 @@ function gradePrecos(d) {
     ? `${reaisSinal(x.delta)}<small>de ${fmt.moeda2(x.aumento_pedido)}</small>` : `${reaisSinal(x.delta)}<small>já estava no alvo</small>`);
   const linhas = d.linhas.map((x) => {
     const por = Object.fromEntries((x.produtos || []).map((p) => [p.id, p]));
-    return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
+    return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}${x.meta_propria ? " · meta própria" : ""}</small></td>
       <td>${x.pct == null ? (x.base_pendente ? '<span class="fraco">aguardando a base</span>' : "—")
         : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
       <td>${aumento(x)}</td>
@@ -1381,16 +1460,20 @@ function trocarRegiao(r) {
 }
 
 function aoClicar(e) {
+  if (e.target.closest(".multi")) return; // as listas de produtos e clientes têm o próprio data-acao (Aplicar, Limpar)
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
-    "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]");
+    "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
+    "[data-marcar-todos],[data-como]");
   if (!t) return;
   const ds = t.dataset;
+  if ("marcarTodos" in ds) return marcarTodos();
+  if (ds.como) return abrirComoCalcula(ds.como);
   if (ds.metaPropria) return abrirMetaPropria(Number(ds.metaPropria));
   if (ds.tirarMeta) return tirarMetaPropria(Number(ds.tirarMeta));
   if ("parar" in ds) return; // o campo da meta própria: não marca nem desmarca o vendedor
   if (ds.regiao) return trocarRegiao(ds.regiao);
-  if ("nova" in ds) return entrarSelecao([]);
+  if ("nova" in ds) return entrarSelecao(ativosDoQuadro(), null, { todos: true });
   if (ds.objetivo) return abrirObjetivo(ds.objetivo);
   if (ds.acaoPara) return acaoPara(Number(ds.acaoPara));
   if (ds.acao) return abrirAcao(Number(ds.acao));
@@ -1435,19 +1518,28 @@ function aoDigitar(e) {
     estado.form.metas.set(Number(e.target.dataset.metaV), e.target.value === "" ? null : Number(e.target.value));
     atualizarMetasQuadrados();
   }
+  if (e.target.dataset.precoV && estado.form) { // preço médio: o preço-alvo próprio de um produto
+    const vid = Number(e.target.dataset.precoV), proprios = { ...(estado.form.alvos.get(vid) || {}) };
+    if (e.target.value === "") delete proprios[e.target.dataset.precoP];
+    else proprios[e.target.dataset.precoP] = Number(e.target.value);
+    estado.form.alvos.set(vid, proprios);
+    atualizarMetasQuadrados();
+  }
 }
 
-// A meta própria de um vendedor marcado: abre o campo no quadrado dele (o tipo é o da meta padrão).
+// A meta própria de um vendedor marcado: abre o campo no quadrado dele (o tipo é o da meta padrão; no preço médio,
+// um preço-alvo por produto).
 function abrirMetaPropria(id) {
   estado.form?.abertas.add(id);
   redesenharQuadrado(id);
-  raiz.querySelector(`[data-meta-v="${id}"]`)?.focus();
+  raiz.querySelector(`[data-meta-v="${id}"], [data-preco-v="${id}"]`)?.focus();
 }
 
 function tirarMetaPropria(id) {
   const f = estado.form;
   if (!f) return;
   f.metas.set(id, null);
+  f.alvos.delete(id);
   f.abertas.delete(id);
   redesenharQuadrado(id);
   raiz.querySelector(`.ge-vend[data-vendedor="${id}"] [data-meta-propria]`)?.focus();

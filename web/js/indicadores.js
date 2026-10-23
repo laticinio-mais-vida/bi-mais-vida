@@ -54,6 +54,60 @@ export const PRESETS = [
   { id: "clientes:crescimento", metrica: "personalizada", medida: "clientes", forma: "crescimento", nome: "Crescimento da positivação (%)", rotulo: "Crescimento", alvo: "% de crescimento", pct: true, formato: "clientes", objetivo: true },
 ];
 
+// Como cada indicador é calculado (o informativo do formulário e do detalhe da campanha), pelas contas de
+// bi/indicadores.py. conta: a fórmula numa linha; detalhe: o resto; objetivo: o texto do objetivo, quando muda.
+const MESMA_UNIDADE = "Escolha produtos da mesma unidade (a quantidade não soma kg com unidade).";
+const CRESCIMENTO = {
+  conta: "O indicador no período ÷ o mesmo indicador no período de comparação, menos 1.",
+  detalhe: "Compara com o período anterior (do mesmo tamanho, logo antes; em meses cheios, os mesmos meses logo antes) ou com o mesmo período do ano anterior. Só nos objetivos.",
+};
+export const COMO_CALCULA = {
+  positivacao: {
+    conta: "Clientes distintos que compraram no período.",
+    detalhe: "Cada cliente conta uma vez. Com produtos, linhas ou categorias escolhidos, só quem comprou esses produtos. Em “Quem conta” dá para contar só os clientes novos, os recuperados (sem compra há N dias antes do início) ou quem nunca ou já comprava os produtos escolhidos.",
+  },
+  mix_medio: {
+    conta: "Produtos da campanha levados, somados cliente a cliente, ÷ clientes positivados.",
+    detalhe: "Para cada cliente, conta quantos produtos diferentes da campanha ele levou e soma todos; divide pelos clientes que compraram qualquer produto, como no Power BI. Ex.: 4 clientes compraram, 2 levaram 3 produtos da campanha e 2 não levaram nenhum: 6 ÷ 4 = 1,5. Sem produto escolhido, contam todos os produtos.",
+  },
+  efetividade: {
+    conta: "A média dos dias: pedidos na rota do dia ÷ visitas esperadas no dia.",
+    detalhe: "Pela carteira do vendedor. As visitas esperadas de um dia são os clientes ativos das áreas atendidas nesse dia (Gestão › Configurar), pela frequência de compra do cadastro: os semanais sempre, os quinzenais sem compra nos 7 dias antes e os mensais sem compra nos 21 dias antes; quem não estava previsto e comprou no dia também entra nas visitas. Só contam os pedidos de clientes das áreas atendidas naquele dia (o pedido fora de rota fica de fora). A efetividade do período é a média dos dias com visita esperada: o fim de semana e os clientes em áreas sem dia ficam de fora.",
+  },
+  frequencia: {
+    conta: "Semanas com compra, somadas cliente a cliente, ÷ clientes positivados.",
+    detalhe: "Para cada cliente, conta em quantas semanas ele comprou (de domingo a sábado, cortadas na virada do mês, como no Power BI) e soma todos; divide pelos clientes que compraram. Ex.: um cliente comprou em 3 semanas e outro em 1: 4 ÷ 2 = 2,0.",
+  },
+  preco_medio: {
+    conta: "Aumento de preço feito ÷ aumento pedido, do preço de cada vendedor na base até o preço-alvo.",
+    detalhe: "O preço médio de um produto é a venda líquida ÷ a quantidade. O % da meta compara quanto o preço subiu desde a base do vendedor com quanto precisava subir até o preço-alvo: base R$ 10, alvo R$ 20 e agora R$ 15 = 50%. Com vários produtos, os aumentos são somados em R$, nas quantidades vendidas agora. Produto que já estava no alvo na base só desconta se cair abaixo dele. A meta própria troca o preço-alvo de um vendedor.",
+    objetivo: {
+      conta: "O que a equipe vendeu ÷ o que venderia, nas mesmas quantidades, nos preços-alvo.",
+      detalhe: "O preço médio de um produto é a venda líquida ÷ a quantidade. 100% = a equipe vendeu no preço-alvo; acima disso, vendeu mais caro.",
+    },
+  },
+  "faturamento:total": { conta: "Venda líquida em R$, descontando as devoluções, como nas metas." },
+  "faturamento:por_cliente": { conta: "Venda líquida em R$ ÷ clientes positivados." },
+  "volume:total": { conta: "Quantidade vendida, na unidade dos produtos, descontando as devoluções.", detalhe: MESMA_UNIDADE },
+  "volume:por_cliente": { conta: "Quantidade vendida ÷ clientes positivados.", detalhe: MESMA_UNIDADE },
+  "clientes:pct_carteira": {
+    conta: "Clientes da carteira que compraram ÷ clientes ativos da carteira.",
+    detalhe: "Pela carteira do vendedor: vale a compra feita com qualquer vendedor.",
+  },
+  "produtos:total": { conta: "Produtos diferentes vendidos no período." },
+  "faturamento:crescimento": CRESCIMENTO, "volume:crescimento": CRESCIMENTO, "clientes:crescimento": CRESCIMENTO,
+};
+// A base, a meta e o % da meta das campanhas (o fim do informativo).
+export const COMO_META = [
+  ["Base", "O mesmo indicador, medido no período fechado escolhido (semana, quinzena, mês…): o último antes do início da campanha."],
+  ["Meta", "Número: o valor que cada vendedor precisa atingir. Percentual: a base de cada um + X%. A meta própria troca a de um vendedor."],
+  ["% da meta", "O resultado de cada vendedor ÷ a meta dele. Na barra da campanha: a soma dos resultados ÷ a soma das metas nos indicadores de total (positivação, faturamento, volume, produtos) e a média do % de cada um nos de média (mix, efetividade, frequência, por cliente, carteira); no preço médio, os aumentos de todos somados em R$."],
+];
+export function comoCalcula(preset, objetivo = false) {
+  const c = COMO_CALCULA[preset?.id] || { conta: "" };
+  return objetivo && c.objetivo ? c.objetivo : c;
+}
+
 // A predefinição de uma ação gravada (ou rascunho): o tipo e, na Personalizada, a medida e a forma.
 export function presetDe(metrica, p = {}) {
   const legado = LEGADOS[metrica];

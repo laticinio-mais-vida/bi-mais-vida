@@ -18,7 +18,8 @@ Tipos prontos, com as contas do Power BI da empresa (MAIS VIDAS-PBIT.pbit):
 - preco_medio: preço médio (venda líquida ÷ quantidade líquida) de cada produto contra o preço-alvo dele. Na campanha,
   o % da meta de cada vendedor é o aumento de preço feito ÷ o aumento pedido (do preço dele na base até o preço-alvo),
   somados em R$ produto a produto nas quantidades vendidas agora (progresso_preco; decisão do usuário: a meta é o
-  aumento, não o preço cheio). No objetivo, que não tem base, um índice: o que vendeu ÷ o que teria vendido as mesmas
+  aumento, não o preço cheio). A meta própria de um vendedor troca o preço-alvo dele nos produtos que ela dá
+  (alvos_do_vendedor). No objetivo, que não tem base, um índice: o que vendeu ÷ o que teria vendido as mesmas
   quantidades nos preços-alvo (100% = no alvo).
 - personalizada: medida (faturamento, volume, clientes ou produtos) × forma (total, por cliente, % da carteira ou
   crescimento sobre um período de comparação). Faturamento, volume e mix de antes são Personalizada com forma total.
@@ -569,12 +570,12 @@ def _precos(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date) -> dict
     info = {p: (n, (u or "").strip().upper()) for p, n, u in cur.execute(
         f"SELECT id_produto, produto, unidade FROM produtos WHERE id_produto IN ({_marcas(prods)})", prods).fetchall()}
 
-    def item(pid, valor, qtd):
+    def item(pid, valor, qtd):  # sem o preço-alvo (a prévia da base, antes de digitar), só o preço
         preco = valor / qtd if qtd > 0 else None
         return {"id": pid, "nome": info.get(pid, (f"Produto {pid}", ""))[0], "unidade": info.get(pid, ("", ""))[1],
                 "meta": alvo[pid], "valor": _redondo(valor), "quantidade": _redondo(qtd),
                 "preco": _redondo(preco) if preco is not None else None,
-                "pct": preco / alvo[pid] if preco is not None else None}
+                "pct": preco / alvo[pid] if preco is not None and alvo[pid] else None}
 
     por_vend: dict = {}
     total: dict = {}
@@ -583,10 +584,17 @@ def _precos(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date) -> dict
 
     def indice(itens: dict) -> dict:
         com = [i for i in itens.values() if i["preco"] is not None]
-        return {"num": sum(i["valor"] for i in com), "den": sum(i["quantidade"] * i["meta"] for i in com),
+        return {"num": sum(i["valor"] for i in com), "den": sum(i["quantidade"] * i["meta"] for i in com if i["meta"]),
                 "produtos": [itens.get(p) or item(p, 0.0, 0.0) for p in prods]}
 
     return {"vend": {v: indice(por_vend.get(v, {})) for v in ids}, "total": indice(total)}
+
+
+def alvos_do_vendedor(alvos: dict, proprios: dict | None) -> dict:
+    """Os preços-alvo de um vendedor no preço médio: os da campanha ({produto: R$}) e, por cima, a meta própria dele
+    (proprios: {"<produto>": R$}, campanha_vendedores.alvos_precos; só valem os produtos da campanha)."""
+    proprios = proprios or {}
+    return {pid: float(proprios[str(pid)]) if proprios.get(str(pid)) is not None else alvo for pid, alvo in alvos.items()}
 
 
 def precos_de(produtos) -> dict:
@@ -679,7 +687,8 @@ def calcular(cur, campanha: dict, regras, cal, data_ref: dt.date, permitidos: fr
     """Realizado, meta, % e situação de cada vendedor da campanha (só os do acesso de quem vê) e o total. areas: os
     dias de atendimento ({id_area: [dias ISO]}), para a efetividade. abrir: area, segmento ou produto ("padrao" = a
     abertura que o tipo mostra de saída; None = nenhuma). No preço médio, o realizado é o % da meta
-    (progresso_preco), com os preços da base de cada vendedor em campanha["vendedores"][i]["base_precos"]."""
+    (progresso_preco), com os preços da base de cada vendedor em campanha["vendedores"][i]["base_precos"] e a meta
+    própria dele em ["alvos_precos"]."""
     metrica, p = normalizar(campanha["metrica"], campanha.get("parametros"))
     c = {**campanha, "metrica": metrica, "parametros": p, "metas_produto": campanha.get("metas_produto") or []}
     inicio, fim = c["inicio"], c["fim"]
@@ -721,10 +730,11 @@ def calcular(cur, campanha: dict, regras, cal, data_ref: dt.date, permitidos: fr
         realizado, extra = valor(medido), {}
         if metrica == "preco_medio":
             base = v.get("base_precos") or {}
-            prog = progresso_preco(base, precos_de((medido or {}).get("produtos")), alvos)
+            alvos_v = alvos_do_vendedor(alvos, v.get("alvos_precos"))
+            prog = progresso_preco(base, precos_de((medido or {}).get("produtos")), alvos_v)
             meta_conta, realizado = 1.0, prog and prog["pct"]
             extra = {"aumento": _redondo((prog or {}).get("aumento")), "aumento_pedido": _redondo((prog or {}).get("aumento_pedido")),
-                     "produtos": [{**x, "base": (base.get(str(x["id"])) or {}).get("preco"),
+                     "produtos": [{**x, "meta": alvos_v.get(x["id"], x["meta"]), "base": (base.get(str(x["id"])) or {}).get("preco"),
                                    "pct": _redondo((prog or {}).get("produtos", {}).get(str(x["id"])))}
                                   for x in (medido or {}).get("produtos") or []]}
         elif crescimento:
