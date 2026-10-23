@@ -78,11 +78,11 @@ MAX_DIAS_SEM_COMPRA = 730
 MAX_PRODUTOS_PRECO = 30
 # A meta da positivação: em clientes ou em % da base (a cobertura).
 META_EM = {"clientes": "clientes", "pct_base": "% da base"}
-# Cobertura (_cobertura). Os ativos de um mês vêm do histórico da carteira (bi/carteira.py) a partir do primeiro mês que
-# ele cobre inteiro (a semeadura começa em 15/09/2026, então outubro/2026); antes, da META CLIENTE da planilha de
-# metas. Sem o histórico no cache, os meses desde HISTORICO_DESDE esperam os dados (a base não é gravada com a planilha).
-HISTORICO_DESDE = dt.date(2026, 10, 1)
-MAX_DIAS_UM_MES = 31  # período de até 31 dias: uma cobertura só, com os ativos do mês em que ele termina
+# Cobertura (_cobertura). A lista de clientes ativos de um dia vem do histórico da carteira (bi/carteira.py) desde o
+# primeiro dia conferido (a semeadura de 15/09/2026); antes, da META CLIENTE da planilha de metas (os ativos do começo
+# do mês). Sem o histórico no cache, as listas desde HISTORICO_DESDE esperam os dados (a base não é gravada com a planilha).
+HISTORICO_DESDE = dt.date(2026, 9, 15)
+MAX_DIAS_UM_MES = 31  # período de até 31 dias: uma cobertura só, com a lista do primeiro dia
 FONTES = {"historico": "o histórico da carteira", "planilha": "a META CLIENTE da planilha de metas"}
 ABERTURAS = {"area": "Área comercial", "segmento": "Segmento", "produto": "Produto"}
 MAX_ABERTURA = 50
@@ -219,12 +219,11 @@ def descritor(metrica: str, p: dict, unidade: str | None = None) -> dict:
     if metrica == "positivacao":
         if p.get("meta_em") == "pct_base":
             d.update(formato="pct", casas=1, comportamento="acumula_taxa", meta_em_pct=True, media_mensal=True,
-                     descricao="clientes ativos da base atendidos pelo próprio vendedor ÷ clientes ativos da base dele, "
-                               "mês a mês (num período de mais de 31 dias, a média dos meses); antes do histórico da "
-                               "carteira (outubro/2026), todos os clientes que ele atendeu ÷ a META CLIENTE da planilha "
-                               "de metas",
-                     rotulo_meta="% da base", numerador="Clientes da base atendidos",
-                     denominador="Clientes ativos da base", aberturas=["area", "segmento"])
+                     descricao="clientes que o vendedor atendeu ÷ os clientes ativos da carteira dele no início da "
+                               "campanha (num período de mais de 31 dias, a média dos meses); antes do histórico da "
+                               "carteira (15/09/2026), ÷ a META CLIENTE da planilha de metas",
+                     rotulo_meta="% da base", numerador="Clientes atendidos",
+                     denominador="Clientes ativos no início", aberturas=["area", "segmento"])
         else:
             d.update(formato="clientes", descricao="clientes distintos com venda no período",
                      rotulo_meta="clientes por vendedor")
@@ -502,64 +501,82 @@ def _pct_carteira(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, a
     return r
 
 
-def meses_cobertura(inicio: dt.date, fim: dt.date, ate: dt.date) -> list[tuple[dt.date, dt.date, dt.date]]:
-    """As partes da cobertura: (o mês dos ativos, de, até). Período de até 31 dias (de inicio a fim): uma parte só, com
-    os ativos do mês em que ele termina; acima disso, uma por mês do calendário, com os dias do período que caem nele
-    (decisões do usuário: a média dos % de cada mês). ate: até onde os dados vão (o período em andamento)."""
+def meses_cobertura(inicio: dt.date, fim: dt.date, ate: dt.date,
+                    por_mes: bool = False) -> list[tuple[dt.date, dt.date, dt.date]]:
+    """As partes da cobertura: (o dia da lista de ativos, de, até). Período de até 31 dias (de inicio a fim): uma parte
+    só, com a lista do primeiro dia; acima disso, uma por mês do calendário, com os dias do período que caem nele, e a
+    média dos % dos meses. A lista é a do início do período em todas as partes (a campanha: decisão do usuário,
+    2026-10-23) ou, com por_mes (a base de trimestre, semestre ou ano), a do primeiro dia de cada parte. ate: até onde
+    os dados vão (o período em andamento)."""
     ate = min(ate, fim)
     if ate < inicio:
         return []
     if (fim - inicio).days + 1 <= MAX_DIAS_UM_MES:
-        return [(fim.replace(day=1), inicio, ate)]
+        return [(inicio, inicio, ate)]
     partes, d = [], inicio
     while d <= ate:
         proximo = (d.replace(day=1) + dt.timedelta(days=32)).replace(day=1)
-        partes.append((d.replace(day=1), d, min(proximo - dt.timedelta(days=1), ate)))
+        partes.append((d if por_mes else inicio, d, min(proximo - dt.timedelta(days=1), ate)))
         d = proximo
     return partes
 
 
-def _fonte(mes: dt.date, inicio_hist: dt.date | None) -> str:
-    """De onde vêm os ativos do mês: o histórico da carteira (que já existia no primeiro dia do mês), a planilha de
-    metas (antes dele) ou pendente (o cache ainda sem o histórico, num mês desde HISTORICO_DESDE)."""
-    if inicio_hist and inicio_hist <= mes:
+def _fonte(dia: dt.date, inicio_hist: dt.date | None) -> str:
+    """De onde vem a lista de ativos de um dia: o histórico da carteira (que já existia nesse dia), a planilha de metas
+    (antes dele) ou pendente (o cache ainda sem o histórico, num dia desde HISTORICO_DESDE)."""
+    if inicio_hist and inicio_hist <= dia:
         return "historico"
-    return "pendente" if inicio_hist is None and mes >= HISTORICO_DESDE else "planilha"
+    return "pendente" if inicio_hist is None and dia >= HISTORICO_DESDE else "planilha"
 
 
 def _cobertura(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, abrir: str | None = None) -> dict:
-    """A cobertura da positivação (decisões do usuário, 2026-10-23): em cada mês (meses_cobertura), os clientes da base
-    que o vendedor atendeu ÷ os clientes ativos da base dele; no período, a média dos meses. Os ativos de um mês vêm:
-    - do histórico da carteira (bi/carteira.py), nos meses que ele cobre inteiros: os clientes com um trecho no mês,
-      sem "PEDIDO BLOQUEADO", na carteira do vendedor (pelo último trecho do mês). O numerador são os que o próprio
-      vendedor atendeu, e os filtros de cliente (UF, segmento, área) valem pelo trecho;
-    - antes dele, da META CLIENTE do vendedor na planilha de metas, que acompanha os ativos da carteira no começo do
-      mês. Sem saber quais são os clientes, o numerador são todos os que ele atendeu (o "% Meta Clientes Realizada" do
-      Power BI), e o filtro de cliente deixa o mês sem número.
-    Os filtros de produto valem nos dois (só no numerador). Vendedor sem número num mês (fora da planilha, sem ativos)
-    fica sem cobertura no período; sem o histórico no cache, os meses desde HISTORICO_DESDE ficam pendentes.
+    """A cobertura da positivação (decisões do usuário, 2026-10-23): os clientes que o vendedor atendeu ÷ os clientes
+    ativos da carteira dele no início (a lista não muda: quem entra ou volta depois do início não conta nos ativos, e
+    quem sai continua). O numerador são todos os que ele atendeu, da lista ou não, e o % pode passar de 100%. Num
+    período de mais de 31 dias, a média dos meses (meses_cobertura; na base, c["lista_por_mes"], cada mês com a sua
+    lista). A lista vem:
+    - do histórico da carteira (bi/carteira.py), desde o primeiro dia conferido: os clientes com um trecho no dia, sem
+      "PEDIDO BLOQUEADO", na carteira do vendedor naquele dia. Os filtros de cliente (UF, segmento, área) valem pelo
+      trecho nos ativos e pelo cadastro nos atendidos;
+    - antes dele, da META CLIENTE do vendedor na planilha de metas no mês do dia, que acompanha os ativos da carteira
+      no começo do mês (o "% Meta Clientes Realizada" do Power BI). Sem saber quais são os clientes, o filtro de
+      cliente deixa a parte sem número.
+    Os filtros de produto valem nos dois (só no numerador). Vendedor sem número numa parte (fora da planilha, sem
+    ativos) fica sem cobertura no período; sem o histórico no cache, as listas desde HISTORICO_DESDE ficam pendentes.
     Devolve, por vendedor e no total, {atendidos, ativos, pct, meses: [{mes, fonte, atendidos, ativos, pct}], falta,
-    pendente}, os avisos e, com abrir (área ou segmento, só com todos os meses do histórico), a abertura."""
+    pendente, lista (o dia da lista, se é um só)}, os avisos e, com abrir (área ou segmento, só com todas as partes do
+    histórico), a abertura."""
     filtros = c["filtros"]
-    partes = meses_cobertura(inicio, max(c.get("fim") or ate, inicio), ate)
+    partes = meses_cobertura(inicio, max(c.get("fim") or ate, inicio), ate, bool(c.get("lista_por_mes")))
     inicio_hist = cur.execute("SELECT min(data) FROM carteira_retratos").fetchone()[0]
     onde_p, params_p = _onde(filtros, FILTROS_PRODUTO)
-    onde_c, params_c = _onde(filtros, FILTROS_CLIENTE, "t.")
-    atendidos = (f"SELECT DISTINCT id_vendedor, id_cliente FROM faturamento WHERE {_VENDA} AND {_CLIENTE} "
-                 f"AND data BETWEEN ? AND ? AND id_vendedor IN ({_marcas(ids)})" + "".join(f" AND {o}" for o in onde_p))
-    # os ativos do mês pelo histórico: o último trecho de cada cliente que toca o mês, e quem o vendedor atendeu
-    carteira = (f"WITH t AS (SELECT * FROM clientes_vigencias WHERE de <= ? AND (ate IS NULL OR ate >= ?) "
-                f"QUALIFY row_number() OVER (PARTITION BY id_cliente ORDER BY de DESC) = 1), feitos AS ({atendidos}) "
-                "SELECT {grupo}, COUNT(feitos.id_cliente), COUNT(*) FROM t "
-                "LEFT JOIN feitos ON feitos.id_cliente = t.id_cliente AND feitos.id_vendedor = t.id_vendedor "
-                f"WHERE NOT t.bloqueado AND t.id_vendedor IN ({_marcas(ids)})" + "".join(f" AND {o}" for o in onde_c)
-                + " GROUP BY 1")
+    onde_c, params_c = _onde(filtros, FILTROS_CLIENTE)
+    onde_t, _ = _onde(filtros, FILTROS_CLIENTE, "t.")
+    sem = f"'(sem {'área' if abrir == 'area' else 'segmento'})'"
+
+    def atendidos(de, a, vendedores, grupo, cliente):
+        """{grupo: clientes distintos que cada vendedor atendeu entre de e a}, somados entre os vendedores."""
+        onde = onde_p + (onde_c if cliente else [])
+        sql = (f"SELECT g, COUNT(*) FROM (SELECT DISTINCT id_vendedor, id_cliente, {grupo} AS g FROM faturamento "
+               f"WHERE {_VENDA} AND {_CLIENTE} AND data BETWEEN ? AND ? AND id_vendedor IN ({_marcas(vendedores)})"
+               + "".join(f" AND {o}" for o in onde) + ") GROUP BY 1")
+        params = [de, a, *vendedores, *params_p, *(params_c if cliente else [])]
+        return {k: _numero(n) for k, n in cur.execute(sql, params).fetchall()}
+
+    def lista(dia, grupo):
+        """{grupo: clientes ativos da carteira no dia}, pelo trecho de cada cliente que cobre o dia."""
+        sql = ("WITH t AS (SELECT * FROM clientes_vigencias WHERE de <= ? AND (ate IS NULL OR ate >= ?) "
+               "QUALIFY row_number() OVER (PARTITION BY id_cliente ORDER BY de DESC) = 1) "
+               f"SELECT {grupo}, COUNT(*) FROM t WHERE NOT t.bloqueado AND t.id_vendedor IN ({_marcas(ids)})"
+               + "".join(f" AND {o}" for o in onde_t) + " GROUP BY 1")
+        return {k: _numero(n) for k, n in cur.execute(sql, [dia, dia, *ids, *params_c]).fetchall()}
+
     vend = {v: {"meses": [], "falta": [], "pendente": False} for v in ids}
     total = {"meses": [], "falta": [], "pendente": False}
     avisos, abertura, sem_planilha, com_filtro = [], {}, set(), []
-    for mes, de, a in partes:
-        fonte = _fonte(mes, inicio_hist)
-        chave = mes.isoformat()[:7]
+    for dia, de, a in partes:
+        fonte = _fonte(dia, inicio_hist)
+        chave = de.isoformat()[:7]
         if fonte == "pendente":
             for x in (*vend.values(), total):
                 x["pendente"] = True
@@ -567,23 +584,23 @@ def _cobertura(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, abri
         por_v: dict[int, tuple[float, float]] = {}
         if fonte == "planilha":
             if onde_c:
-                com_filtro.append(f"{mes:%m/%Y}")
+                com_filtro.append(f"{dia:%m/%Y}")
             else:
                 metas = dict(cur.execute(f"SELECT id_vendedor, meta_clientes FROM metas_vendedor WHERE ano = ? AND mes = ? "
-                                         f"AND id_vendedor IN ({_marcas(ids)})", [mes.year, mes.month, *ids]).fetchall())
-                feitos = dict(cur.execute(f"SELECT id_vendedor, COUNT(*) FROM ({atendidos}) GROUP BY 1",
-                                          [de, a, *ids, *params_p]).fetchall())
-                por_v = {v: (_numero(feitos.get(v)), _numero(metas[v])) for v in ids if metas.get(v)}
+                                         f"AND id_vendedor IN ({_marcas(ids)})", [dia.year, dia.month, *ids]).fetchall())
+                feitos = atendidos(de, a, ids, "id_vendedor", False)
+                por_v = {v: (feitos.get(v, 0.0), _numero(metas[v])) for v in ids if metas.get(v)}
                 sem_planilha |= {v for v in ids if not metas.get(v)}
         else:
-            fim_mes = (mes + dt.timedelta(days=32)).replace(day=1) - dt.timedelta(days=1)
-            params = [fim_mes, mes, de, a, *ids, *params_p, *ids, *params_c]
-            por_v = {v: (_numero(n), _numero(d)) for v, n, d in
-                     cur.execute(carteira.format(grupo="t.id_vendedor"), params).fetchall()}
-            if abrir in ("area", "segmento"):
-                col = f"COALESCE(t.{abrir}, '(sem {'área' if abrir == 'area' else 'segmento'})')"
-                for k, n, d in cur.execute(carteira.format(grupo=col), params).fetchall():
-                    abertura.setdefault(k, []).append((_numero(n), _numero(d)))
+            ativos = lista(dia, "t.id_vendedor")
+            feitos = atendidos(de, a, ids, "id_vendedor", True)
+            por_v = {v: (feitos.get(v, 0.0), d) for v, d in ativos.items()}
+            com_lista = [v for v in ids if ativos.get(v)]  # como no total: só os vendedores com o número
+            if abrir in ("area", "segmento") and com_lista:
+                ds = lista(dia, f"COALESCE(t.{abrir}, {sem})")
+                ns = atendidos(de, a, com_lista, f"COALESCE({abrir}, {sem})", True)
+                for k in ds.keys() | ns.keys():
+                    abertura.setdefault(k, []).append((ns.get(k, 0.0), ds.get(k, 0.0)))
         soma_n = soma_d = 0.0
         for v in ids:
             n, d = por_v.get(v, (0.0, 0.0))
@@ -597,28 +614,32 @@ def _cobertura(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, abri
                                    "pct": soma_n / soma_d})
         else:
             total["falta"].append(chave)
+    dias = {dia for dia, _, _ in partes}
+    um_dia = next(iter(dias)).isoformat() if len(dias) == 1 else None
 
     def fechar(x: dict) -> dict:
         meses = x["meses"]
         completo = bool(meses) and not x["pendente"] and not x["falta"]
         return {"atendidos": sum(m["atendidos"] for m in meses), "ativos": sum(m["ativos"] for m in meses),
                 "pct": sum(m["pct"] for m in meses) / len(meses) if completo else None, "meses": meses,
-                "falta": x["falta"], "pendente": x["pendente"]}
+                "falta": x["falta"], "pendente": x["pendente"], "lista": um_dia}
 
     if total["pendente"]:
         avisos.append("o histórico da carteira ainda não chegou do computador da empresa; a cobertura (% da base) "
                       "aparece depois da próxima atualização")
     if com_filtro:
-        avisos.append("com filtro de cliente (UF, segmento ou área), a cobertura só sai nos meses do histórico da "
-                      f"carteira: {', '.join(com_filtro)} fica{'m' if len(com_filtro) > 1 else ''} sem o % da base")
+        avisos.append("com filtro de cliente (UF, segmento ou área), a cobertura só sai com o histórico da carteira "
+                      f"(desde 15/09/2026): {', '.join(com_filtro)} fica{'m' if len(com_filtro) > 1 else ''} sem o % "
+                      "da base")
     if sem_planilha:
         n = len(sem_planilha)
         avisos.append(f"{n} vendedor{'es' if n != 1 else ''} sem a META CLIENTE na planilha de metas em algum mês "
                       f"fica{'m' if n != 1 else ''} sem a cobertura (% da base)")
     r = {"vend": {v: fechar(x) for v, x in vend.items()}, "total": fechar(total), "avisos": avisos}
-    if abrir in ("area", "segmento") and partes and all(_fonte(mes, inicio_hist) == "historico" for mes, _, _ in partes):
+    if abrir in ("area", "segmento") and partes and all(_fonte(dia, inicio_hist) == "historico" for dia, _, _ in partes):
         r["abertura"] = [{"chave": k, "nome": k, "num": sum(n for n, _ in xs), "den": sum(d for _, d in xs),
-                          "valor": sum(n / d for n, d in xs) / len(xs) if len(xs) == len(partes) else None}
+                          "valor": (sum(n / d for n, d in xs) / len(xs)
+                                    if len(xs) == len(partes) and all(d for _, d in xs) else None)}
                          for k, xs in abertura.items()]
     return r
 
@@ -630,13 +651,13 @@ def _como_valor(x: dict) -> dict:
 
 
 def da_base(x: dict | None) -> dict | None:
-    """A cobertura de um vendedor (ou do total) como a página e a IA recebem: os meses em número, as fontes e os meses
-    sem número (MM/AAAA)."""
+    """A cobertura de um vendedor (ou do total) como a página e a IA recebem: os meses em número, as fontes, os meses
+    sem número (MM/AAAA) e o dia da lista de ativos (None: na base longa, o primeiro dia de cada mês)."""
     if not x:
         return None
     return {"atendidos": _redondo(x["atendidos"]), "ativos": _redondo(x["ativos"]), "pct": _redondo(x["pct"]),
             "meses": len(x["meses"]), "fontes": sorted({m["fonte"] for m in x["meses"]}),
-            "falta": [f"{m[5:]}/{m[:4]}" for m in x["falta"]], "pendente": x["pendente"]}
+            "falta": [f"{m[5:]}/{m[:4]}" for m in x["falta"]], "pendente": x["pendente"], "lista": x.get("lista")}
 
 
 def _media_dos_dias(pedidos: Counter, visitas: Counter) -> dict:

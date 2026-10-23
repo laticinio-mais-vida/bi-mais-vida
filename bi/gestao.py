@@ -875,10 +875,11 @@ class Gestao:
 
     def _bases(self, k: _Contas, c: dict, ids) -> dict[int, tuple]:
         """A base dos vendedores: o indicador na janela da base ({} se os dados ainda não cobrem a janela). A cópia com
-        as datas da janela faz a base de clientes (novos, recuperados...) contar a partir do começo da janela."""
+        as datas da janela faz a base de clientes (novos, recuperados...) contar a partir do começo da janela; na
+        cobertura de uma base de mais de 31 dias, cada mês usa os ativos do seu primeiro dia (lista_por_mes)."""
         if not ids or k.data_ref < c["base_fim"]:
             return {}
-        janela = {**c, "inicio": c["base_inicio"], "fim": c["base_fim"]}
+        janela = {**c, "inicio": c["base_inicio"], "fim": c["base_fim"], "lista_por_mes": True}
         return self._valores(k, janela, ids, c["base_inicio"], c["base_fim"])
 
     def _parciais(self, k: _Contas, c: dict, ids) -> list[dict]:
@@ -1966,11 +1967,12 @@ class ContextoGestao:
         base["leitura_classe"] = "ok = meta batida; mid = melhorou sobre a base sem chegar à meta; bad = não passou da base"
         if ind.get("cobertura"):
             base["leitura_da_base"] = (
-                "da_base (agora) e base_da_base (na base) = a cobertura, que % da base de clientes ativos o vendedor "
-                "atendeu: atendidos ÷ ativos, mês a mês, e a média dos meses num período de mais de 31 dias (pct em "
-                "fração). fontes: historico = os clientes da carteira que o próprio vendedor atendeu ÷ os ativos da "
-                "carteira (histórico desde out/2026); planilha = todos os clientes que ele atendeu ÷ a META CLIENTE da "
-                "planilha de metas (antes). falta = meses sem número (o % fica vazio)")
+                "da_base (agora) e base_da_base (na base) = a cobertura: todos os clientes que o vendedor atendeu ÷ os "
+                "clientes ativos da carteira dele no início (lista = o dia; quem entra depois não conta nos ativos, "
+                "quem sai continua; pode passar de 100%). Num período de mais de 31 dias, a média dos meses (na base "
+                "longa, cada mês com os ativos do seu 1º dia). pct em fração. fontes: historico = a lista pelo histórico "
+                "da carteira (desde 15/09/2026); planilha = a META CLIENTE da planilha de metas (antes). falta = meses "
+                "sem número (o % fica vazio)")
         if item["metrica"] == "preco_medio":  # sem o índice (base e meta): o % da meta e os preços de cada produto
             nomes = {p["id"]: p["nome"] for p in r.get("produtos") or []}
             base["leitura"] = ("resultado e pct = o % da meta (fração): o aumento de preço feito sobre o preço da base ÷ "

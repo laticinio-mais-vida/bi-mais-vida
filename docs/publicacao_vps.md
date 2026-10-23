@@ -433,6 +433,18 @@ tabelas `clientes_vigencias` e `carteira_retratos` dentro do cache.
   % da base como positivação em clientes (com a base em % gravada): arquive ou exclua essas antes de voltar.
 - **Assistente:** `propor_acao` ganhou `meta_em` (clientes ou pct_base) e não oferece mais a forma `pct_carteira`.
 
+#### A % da base com a lista do início (migração 017)
+
+A cobertura passa a dividir pelos clientes ativos da carteira **no início** da campanha. É uma lista que não muda:
+quem entra ou volta depois não conta nos ativos, e quem sai continua. O numerador são todos os clientes que o vendedor
+atendeu. Na base de trimestre, semestre ou ano, cada mês usa os ativos do seu 1º dia.
+
+- **A migração 017** não cria nada. Nas positivações ainda sem resultado congelado, ela apaga a cobertura gravada com a
+  regra da 016, que volta medida na leitura seguinte. Na meta em % da base, a base inteira volta a "aguardando", com o
+  retrato dos eventos, como na 014. As campanhas congeladas ficam como estão. Ensaie antes de publicar.
+- **Voltar atrás:** o código da 016 mede a cobertura de novo só onde ela estiver vazia. Para recalcular com a regra
+  antiga, rode a 017 de novo no banco antes de voltar.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a

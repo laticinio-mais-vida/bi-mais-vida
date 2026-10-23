@@ -63,15 +63,15 @@ const CRESCIMENTO = {
   conta: "O indicador no período ÷ o mesmo indicador no período de comparação, menos 1.",
   detalhe: "Compara com o período anterior (do mesmo tamanho, logo antes; em meses cheios, os mesmos meses logo antes) ou com o mesmo período do ano anterior. Só nos objetivos.",
 };
-const DA_BASE = "A % da base de cada mês: os clientes ativos da carteira do vendedor que ele mesmo atendeu ÷ os clientes ativos da carteira dele, pelo histórico da carteira que o painel registra a cada atualização (desde out/2026; sem os “PEDIDO BLOQUEADO”). Antes disso, todos os clientes que ele atendeu ÷ a META CLIENTE da planilha de metas, como no Power BI. Até 31 dias, um % só (com os ativos do mês em que o período termina); num período maior, a média dos % de cada mês. Mês sem número (vendedor fora da planilha) deixa o % vazio.";
+const DA_BASE = "A % da base: todos os clientes que o vendedor atendeu ÷ os clientes ativos da carteira dele no início da campanha. A lista do início não muda: quem é cadastrado ou reativado depois não entra nos ativos, e quem é inativado continua (o % pode passar de 100%). A lista vem do histórico da carteira que o painel registra a cada atualização (desde 15/09/2026; sem os “PEDIDO BLOQUEADO”); antes disso, da META CLIENTE da planilha de metas, como no Power BI. Até 31 dias, um % só; num período maior, a média dos % de cada mês (na base de trimestre, semestre ou ano, cada mês com os ativos do seu 1º dia). Mês sem número (vendedor fora da planilha) deixa o % vazio.";
 export const COMO_CALCULA = {
   positivacao: {
     conta: "Clientes distintos que compraram no período (e, ao lado, que % da base de clientes ativos isso é).",
     detalhe: `Cada cliente conta uma vez. Com produtos, linhas ou categorias escolhidos, só quem comprou esses produtos. Em “Quem conta” dá para contar só os clientes novos, os recuperados (sem compra há N dias antes do início) ou quem nunca ou já comprava os produtos escolhidos. Com todos os clientes, vem junto a % da base. ${DA_BASE}`,
   },
   "positivacao:pct_base": {
-    conta: "Clientes da base atendidos ÷ clientes ativos da base, mês a mês: a meta é em % da base.",
-    detalhe: `${DA_BASE} Os filtros de produto contam no numerador; os de cliente (UF, segmento, área), só nos meses do histórico da carteira.`,
+    conta: "Clientes atendidos ÷ clientes ativos da carteira no início da campanha: a meta é em % da base.",
+    detalhe: `${DA_BASE} Os filtros de produto contam no numerador; os de cliente (UF, segmento, área), só com o histórico da carteira.`,
   },
   mix_medio: {
     conta: "Produtos da campanha levados, somados cliente a cliente, ÷ clientes positivados.",
@@ -282,7 +282,8 @@ export function daBase(da) {
   const falta = da.falta?.length ? `sem o número de ativos de ${da.falta.join(", ")}` : "";
   if (da.pct == null) return { texto: "—", partes: "", dica: falta || "sem clientes ativos na base" };
   const partes = `${fmt.num(da.atendidos)} de ${fmt.num(da.ativos)}${da.meses > 1 ? ` · média de ${da.meses} meses` : ""}`;
-  return { texto: fmt.pct(da.pct), partes, dica: `ativos pelo ${(da.fontes || []).map((f) => FONTES_BASE[f] || f).join(" e ")}` };
+  const quando = da.lista ? `em ${fmt.data(da.lista)}` : "no 1º dia de cada mês";
+  return { texto: fmt.pct(da.pct), partes, dica: `ativos ${quando}, pelo ${(da.fontes || []).map((f) => FONTES_BASE[f] || f).join(" e ")}` };
 }
 
 // Contagens (pedidos, visitas, clientes) e, na venda por cliente e no preço médio, valores em R$.

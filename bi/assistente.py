@@ -1078,7 +1078,8 @@ metas_produto — metas de volume (planilha METAS PRODUTOS.xlsx): ano, mes, id_v
 clientes_vigencias — o histórico da carteira, registrado pelo painel a cada atualização desde 15/09/2026 (o ERP não
   guarda): um trecho por cliente ativo e vendedor, de quando (de) até quando (ate; vazio = ainda vale) valeu:
   id_cliente, de, ate, id_vendedor (o da carteira), bloqueado ("PEDIDO BLOQUEADO" no nome), uf, id_area, area,
-  segmento. Inativação ou troca de vendedor fecha o trecho; reativação abre outro
+  segmento. Inativação ou troca de vendedor fecha o trecho; reativação abre outro. Os ativos de um dia D: de <= D
+  AND (ate IS NULL OR ate >= D) AND NOT bloqueado
 carteira_retratos — os dias conferidos: data, ativos, entradas, saidas, trocas (de vendedor)
 titulos_receber — só para quem tem a página Reavaliação de Crédito: os títulos a receber de venda a cliente, não
   cancelados, de todo o histórico, pelo vendedor do título: id_titulo, id_cliente, cliente, id_vendedor, vendedor,
@@ -1158,13 +1159,14 @@ parciais de cada semana; no fim, o resultado de cada um contra a base e a meta. 
 "o mesmo tamanho, logo antes" e a meta "base + N": leia como vierem. Um objetivo é o indicador da equipe da região \
 num período, contra uma meta da equipe. Tipos (metrica):
   - positivacao: clientes distintos com venda. Recuperação de clientes = clientes_base recuperados, com \
-dias_sem_compra (padrão 90). Com todos os clientes, vem junto a cobertura (da_base): que % da base de clientes \
-ativos cada vendedor atendeu. Cada período tem a sua conta: até 31 dias (uma campanha de 4 semanas, a base de um \
-mês), um % só; acima disso (a base de trimestre, semestre ou ano), a média dos % de cada mês (meses diz quantos). \
-Desde out/2026 pelo \
-histórico da carteira (os clientes da carteira que o próprio vendedor atendeu ÷ os ativos da carteira); antes, todos \
-os clientes que ele atendeu ÷ a META CLIENTE da planilha de metas. A meta é em clientes (meta_em clientes, o padrão) \
-ou em % da base (meta_em pct_base, a cobertura; a meta é em %: 80 = 80%).
+dias_sem_compra (padrão 90). Com todos os clientes, vem junto a cobertura (da_base): todos os clientes que cada \
+vendedor atendeu ÷ os clientes ativos da carteira dele no início do período (a lista do dia, em lista; quem entra \
+ou volta depois não conta nos ativos, quem sai continua; pode passar de 100%). Até 31 dias (uma campanha de 4 \
+semanas, a base de um mês), um % só; acima disso, a média dos % de cada mês (meses diz quantos): na campanha, \
+sempre com a lista do início; na base de trimestre, semestre ou ano, cada mês com os ativos do seu 1º dia. A lista \
+vem do histórico da carteira desde 15/09/2026; antes, da META CLIENTE da planilha de metas (os ativos do começo do \
+mês). A meta é em clientes (meta_em clientes, o padrão) ou em % da base (meta_em pct_base, a cobertura; a meta é \
+em %: 80 = 80%).
   - mix_medio: produtos da campanha levados por cliente positivado (média). "Clientes que nunca compraram X" = \
 clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com os produtos.
   - efetividade: a média da efetividade de cada dia (pedidos na rota do dia ÷ visitas esperadas no dia, pelos dias \

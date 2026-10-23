@@ -340,17 +340,20 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
 `bi/indicadores.py`):
 
 - **Positivação:** clientes distintos com venda no período. Com todos os clientes ("Quem conta"), vem junto a **% da
-  base** (a cobertura): que % dos clientes ativos da base o vendedor atendeu. A meta é em clientes ou, na opção
-  **Positivação (meta em % da base)**, na % da base. A "Cobertura da carteira" de antes ficou só nas campanhas antigas.
-  - Nos meses do **histórico da carteira** (desde outubro/2026): os clientes ativos da carteira que o próprio vendedor
-    atendeu ÷ os clientes ativos da carteira dele naquele mês (quem esteve ativo em algum dia do mês, sem os "PEDIDO
-    BLOQUEADO"; quem trocou de vendedor no mês conta na carteira nova). Os filtros de cliente valem pelo cadastro do
-    cliente naquele mês.
-  - Antes disso (11/2024 a 09/2026): todos os clientes que o vendedor atendeu ÷ a **META CLIENTE** da planilha METAS,
-    que acompanha os ativos da carteira no começo do mês (como o "% Meta Clientes" do Power BI). Vendedor fora da
-    planilha fica sem %; com filtro de cliente, esses meses ficam sem %.
-  - Período de até 31 dias: um % só, com os ativos do mês em que ele termina. Mais que isso (a base de trimestre,
-    semestre ou ano): a média dos % de cada mês. Mês sem número deixa o período sem %.
+  base** (a cobertura): todos os clientes que o vendedor atendeu ÷ os clientes ativos da carteira dele **no início**.
+  A meta é em clientes ou, na opção **Positivação (meta em % da base)**, na % da base. A "Cobertura da carteira" de
+  antes ficou só nas campanhas antigas.
+  - **A lista do início não muda.** Com 100 ativos no início, 5 inativados, 15 cadastrados e 3 reativados durante a
+    campanha, o denominador continua 100. O numerador conta todo cliente atendido, da lista ou não, e o % pode passar
+    de 100%. O cliente que troca de vendedor fica na lista de quem o tinha no início.
+  - Desde o início do **histórico da carteira** (15/09/2026), a lista vem dos trechos que cobrem o dia, sem os "PEDIDO
+    BLOQUEADO". Os filtros de cliente valem pelo trecho na lista e pelo cadastro nos atendidos.
+  - Antes disso (11/2024 a 09/2026), a lista é a **META CLIENTE** da planilha METAS do mês, que acompanha os ativos da
+    carteira no começo do mês (como o "% Meta Clientes" do Power BI). Vendedor fora da planilha fica sem %; com filtro
+    de cliente, esses meses ficam sem %.
+  - Período de até 31 dias: um % só. Mais que isso, a média dos % de cada mês: na campanha, sempre com a lista do
+    início; na base de trimestre, semestre ou ano, cada mês com os ativos do seu 1º dia. Mês sem número deixa o
+    período sem %.
   - O **histórico da carteira** não vem do ERP, que não guarda quando um cliente foi inativado ou trocou de vendedor.
     O painel do PC compara os ativos a cada atualização dos dados e grava só o que mudou (`bi/carteira.py`), em
     trechos: de quando até quando o cliente esteve ativo, com que vendedor, área e segmento. Reativação abre um
