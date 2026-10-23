@@ -1293,7 +1293,7 @@ class TestMigracao008(BaseBanco):
         self.assertEqual(self.banco.migrar(), ["008_indicadores", "009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
                                                "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
-                                               "015_meta_propria_preco"])
+                                               "015_meta_propria_preco", "016_carteira_vigencias"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1332,7 +1332,7 @@ class TestMigracao013(BaseBanco):
                         "(115, %s, 'lancada', '{\"base\": 0.9813, \"alvo\": 1.0}', 'Ana'), "
                         "(115, %s, 'editada', '{\"base\": 0.95, \"alvo\": 1.0}', 'Ana')", [um, um])
         self.assertEqual(self.banco.migrar(), ["013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
-                                               "015_meta_propria_preco"])
+                                               "015_meta_propria_preco", "016_carteira_vigencias"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1358,7 +1358,7 @@ class TestMigracao009(BaseBanco):
         self.assertEqual(self.banco.migrar(), ["009_gestao_equipe", "010_efetividade_media_diaria",
                                                "011_efetividade_pedido_fora_da_previsao", "012_base_periodo",
                                                "013_preco_medio_aumento", "014_efetividade_visita_de_quem_compra",
-                                               "015_meta_propria_preco"])
+                                               "015_meta_propria_preco", "016_carteira_vigencias"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

@@ -1834,7 +1834,7 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-det-tit { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .ge-det-resumo { margin: 12px 0 0; font-size: 13.5px; font-weight: 600; color: var(--tinta-2); }
 tr.ge-clicavel { cursor: pointer; }
-tr.ge-clicavel td small { display: block; font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
+tr.ge-clicavel td small, tr.ge-total td small { display: block; font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
 tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--surface-2); }
 .ge-pct { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 700; font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--c) calc(15% + var(--i, 0) * 22%), var(--surface)); color: color-mix(in srgb, var(--c) 60%, var(--tinta)); }

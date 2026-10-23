@@ -78,6 +78,14 @@ TABELAS_CREDITO = {
 TABELAS_PARCELAS = {
     "titulos_parcelas": "id INTEGER, parcelas INTEGER, pagas INTEGER, pago DOUBLE",
 }
+# O histórico da carteira (bi/carteira.py): os trechos de cada cliente ativo e os dias conferidos. Não vem do ERP: o PC
+# registra no PostgreSQL a cada extração e copia para o cache, que leva ao VPS. Opcional como os pedidos: sem ela, a
+# cobertura da positivação dos meses do histórico espera os dados.
+TABELAS_CARTEIRA = {
+    "clientes_vigencias": ("id_cliente INTEGER, de DATE, ate DATE, id_vendedor INTEGER, bloqueado BOOLEAN, uf VARCHAR, "
+                           "id_area INTEGER, area VARCHAR, segmento VARCHAR"),
+    "carteira_retratos": "data DATE, ativos INTEGER, entradas INTEGER, saidas INTEGER, trocas INTEGER",
+}
 
 
 def _data(v):
@@ -124,6 +132,11 @@ class Cache:
         self.sem_rede = False  # falta a rede (frequência) dos clientes: a efetividade conta todos como semanais
         self.sem_credito = False  # faltam os títulos a receber e os limites (só a Reavaliação de Crédito precisa)
         self.sem_parcelas = False  # faltam as parcelas dos títulos: o crédito conta tudo como não pago
+        self.sem_carteira = False  # falta o histórico da carteira (só a cobertura da positivação precisa)
+        # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
+        # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
+        # cache anterior.
+        self.carteira = None
         if self.arquivo.exists():
             try:
                 self._abrir()
@@ -157,6 +170,7 @@ class Cache:
         sem_rede = _tabela_diferente(con, TABELAS_REDE) is not None
         sem_credito = _tabela_diferente(con, TABELAS_CREDITO) is not None
         sem_parcelas = _tabela_diferente(con, TABELAS_PARCELAS) is not None
+        sem_carteira = _tabela_diferente(con, TABELAS_CARTEIRA) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -168,6 +182,7 @@ class Cache:
             self.sem_rede = sem_rede
             self.sem_credito = sem_credito
             self.sem_parcelas = sem_parcelas
+            self.sem_carteira = sem_carteira
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -181,15 +196,16 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos, a rede e o crédito podem faltar (pacote do PC com o código anterior), mas, se vierem,
-        têm de estar no formato atual."""
+        cliente, os pedidos, a rede, o crédito e a carteira podem faltar (pacote do PC com o código anterior), mas, se
+        vierem, têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -210,8 +226,9 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito ou parcelas que não deu para ler (pedidos_erro, rede_erro, credito_erro, parcelas_erro) esperam
-        a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
+        redes, crédito, parcelas ou a carteira que não deu para ler ou registrar (pedidos_erro, rede_erro,
+        credito_erro, parcelas_erro, carteira_erro) esperam a próxima cópia, em vez de extrair tudo de novo a cada
+        minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -221,6 +238,7 @@ class Cache:
                 or (self.sem_rede and not self.info.get("rede_erro"))
                 or (self.sem_credito and not self.info.get("credito_erro"))
                 or (self.sem_parcelas and not self.info.get("parcelas_erro"))
+                or (self.sem_carteira and not self.info.get("carteira_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -238,13 +256,15 @@ class Cache:
         novo = self.arquivo.with_name(self.arquivo.stem + ".novo.duckdb")
         try:
             dados = self._extrair()
+            self.estado["etapa"] = "Registrando a carteira"
+            self._carteira(dados)
             self.estado["etapa"] = "Gravando cache local"
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito e parcelas: a leitura pode ter falhado
+            # pedidos, rede, crédito, parcelas e carteira: a leitura (ou o registro) pode ter falhado
             opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO,
-                                           **TABELAS_PARCELAS}.items() if k in dados}
+                                           **TABELAS_PARCELAS, **TABELAS_CARTEIRA}.items() if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
@@ -286,6 +306,36 @@ class Cache:
         finally:
             self.estado.update(atualizando=False, etapa=None)
             self._trava_extracao.release()
+
+    def _carteira_anterior(self) -> dict[str, list] | None:
+        """As tabelas da carteira do cache em uso (None se ele não tem)."""
+        if self._con is None or self.sem_carteira:
+            return None
+        try:
+            return {nome: self.consulta(f"SELECT {', '.join(_colunas(colunas))} FROM {nome}")
+                    for nome, colunas in TABELAS_CARTEIRA.items()}
+        except Exception as e:  # o cache mudou no meio: a carteira fica para a próxima
+            log.warning("não deu para ler a carteira do cache em uso: %s", e)
+            return None
+
+    def _carteira(self, dados: dict[str, list]) -> None:
+        """Registra a carteira do dia da cópia (bi/carteira.py) e põe as tabelas dela nos dados do cache novo. Sem o
+        banco (fora do ar ou sem o registro), leva as do cache em uso e marca carteira_erro: a extração e o envio ao
+        VPS não dependem do banco."""
+        from .carteira import estado
+
+        anterior = self._carteira_anterior()
+        try:
+            if self.carteira is None:
+                raise RuntimeError("o registro da carteira não foi ligado ao banco de dados")
+            ativos, cadastro = estado(dados["clientes"], dados["clientes_detalhes"])
+            data = dt.date.fromisoformat(dict(dados["info"])["banco_copia"][:10])
+            dados.update(self.carteira(ativos, cadastro, data, anterior))
+        except Exception as e:
+            log.warning("não deu para registrar a carteira (o cache leva a do anterior): %s", e)
+            dados["info"].append(("carteira_erro", str(e)[:300]))
+            if anterior:
+                dados.update(anterior)
 
     @staticmethod
     def _conferir_detalhe(con: duckdb.DuckDBPyConnection) -> None:

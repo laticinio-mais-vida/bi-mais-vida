@@ -45,6 +45,7 @@ from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, es
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
+from bi.carteira import Carteira  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
@@ -104,6 +105,8 @@ class Aplicacao:
         # Banco PostgreSQL ([postgres] no config.ini): usuários, regras, conversas e uso do Assistente. Nada aqui
         # conecta: a extração e o envio ao VPS (vigiar_em_segundo_plano) seguem mesmo com o banco fora do ar.
         self.banco = Banco(ini, raiz=RAIZ)
+        if not self.vps:  # o PC registra a carteira a cada extração; o VPS recebe o histórico pronto no cache
+            self.cache.carteira = Carteira(self.banco)
         self.usuarios = Usuarios(self.banco)
         self.configuracao = Configuracao(self.banco)
         self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)

@@ -7,8 +7,10 @@ import { esc, fmt, icone } from "./util.js";
 import { multiSelecao } from "./multiselecao.js";
 import { BASES, COMO_META, COMPARAR, FILTROS, FILTROS_PRODUTO, NOME_GRUPO, PRESETS, comoCalcula, presetDe } from "./indicadores.js";
 
-const aceitaBase = (pr) => ["positivacao", "mix_medio", "frequencia"].includes(pr.metrica)
+const aceitaBase = (pr) => (["positivacao", "mix_medio", "frequencia"].includes(pr.metrica) && !pr.meta_em)
   || (pr.metrica === "personalizada" && ["total", "por_cliente"].includes(pr.forma));
+// As opções do "Indicador medido": sem as só de objetivo (numa campanha) e sem as antigas (a não ser a atual).
+const oferecidos = (objetivo, atual) => PRESETS.filter((x) => (objetivo || !x.objetivo) && (!x.antigo || x.id === atual));
 const semFiltroProduto = (pr) => pr.metrica === "efetividade" || pr.metrica === "preco_medio";
 const reais2 = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let janelaComo = null;
@@ -25,11 +27,11 @@ export function abrirComoCalcula(atual, objetivo = false) {
   }
   const item = ([nome, conta, detalhe], destaque) => `<div class="${destaque ? "atual" : ""}"><dt>${esc(nome)}</dt>
     <dd>${conta ? `<b>${esc(conta)}</b>` : ""}${detalhe ? ` ${esc(detalhe)}` : ""}</dd></div>`;
-  const lista = PRESETS.filter((x) => objetivo || !x.objetivo)
+  const lista = oferecidos(objetivo, atual)
     .map((x) => { const c = comoCalcula(x, objetivo); return item([x.nome, c.conta, c.detalhe], x.id === atual); }).join("");
   janelaComo.innerHTML = `<h2 id="ci-como-titulo">${icone("info")}Como cada indicador é calculado</h2>
     <p class="sub">${objetivo ? "No objetivo, a conta é da equipe toda, sem repetir clientes entre os vendedores."
-      : "Na campanha, a conta é de cada vendedor (a efetividade e a carteira, pelos clientes da carteira dele)."} As vendas seguem as regras das metas.</p>
+      : "Na campanha, a conta é de cada vendedor (a efetividade e a % da base, pelos clientes da carteira dele)."} As vendas seguem as regras das metas.</p>
     <dl class="ci-como-lista">${lista}</dl>
     ${objetivo ? "" : `<h3>Base, meta e % da meta</h3><dl class="ci-como-lista">${COMO_META.map(([n, d]) => item([n, "", d])).join("")}</dl>`}
     <div class="dialogo-acoes"><button class="btn primario" type="button" data-fechar>Entendi</button></div>`;
@@ -62,7 +64,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
 
   el.innerHTML = `
     <label class="campo-form ci-preset"><span>Indicador medido</span>
-      <span class="campo"><select data-ci-preset aria-label="Indicador medido" style="padding-left:14px">${PRESETS.filter((x) => objetivo || !x.objetivo)
+      <span class="campo"><select data-ci-preset aria-label="Indicador medido" style="padding-left:14px">${oferecidos(objetivo, preset.id)
         .map((x) => `<option value="${x.id}" ${x.id === preset.id ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select></span></label>
     <p class="ci-como" data-ci-como aria-live="polite"></p>
     <div class="ci-sub" data-ci-sub></div>`;
@@ -209,6 +211,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
       s.clientes = p.clientes || "todos";
       if (s.clientes === "recuperados") s.dias_sem_compra = p.dias_sem_compra || 90;
     }
+    if (preset.meta_em) s.meta_em = preset.meta_em; // a positivação em % da base (conta todos os clientes)
     return s;
   }
 
@@ -226,7 +229,7 @@ export function construtorIndicador(el, { catalogo: cat, inicial = {}, nomes = {
   return {
     preset: () => preset,
     // o descritor que a página usa para os textos do alvo (o servidor manda o completo depois de gravar)
-    descritor: () => ({ tipo: preset.metrica, medida: preset.medida, forma: preset.forma, formato: preset.formato,
+    descritor: () => ({ tipo: preset.metrica, medida: preset.medida, forma: preset.forma, meta_em: preset.metrica === "positivacao" ? preset.meta_em || "clientes" : null, formato: preset.formato,
                         meta_em_pct: !!preset.pct, unidade: preset.medida === "volume" ? (unidadeVolume()[0] || "") : "", sufixo: "" }),
     unidadeAlvo: () => (preset.medida === "volume" && preset.forma !== "crescimento"
       ? `${(unidadeVolume()[0] || "quantidade").toLowerCase()}${preset.forma === "por_cliente" ? " por cliente" : ""}` : preset.alvo),

@@ -11,7 +11,7 @@
 // (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
 // por #/gestao?rascunho=<id> e abre o formulário já preenchido.
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
-import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, definirCatalogo, deltaTexto,
+import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
          duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
          textoPeriodoBase, textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
@@ -434,7 +434,12 @@ function baseDoQuadrado(v, marcado) {
   else if (!p) linha = `<span class="fraco">Base: calculando…</span>`;
   else if (p.pendente) linha = `<span class="fraco">Base: aguardando os dados</span>`;
   else if (ePreco(ind) && p.produtos) linha = `Base: ${precosHtml(p.produtos, (x) => precoDe(base, x.id), "sem venda")}`;
-  else linha = `Base: <b>${base == null ? "sem dados" : esc(valorIndicador(ind, base, p.unidade, true))}</b>`;
+  else {
+    linha = `Base: <b>${base == null ? "sem dados" : esc(valorIndicador(ind, base, p.unidade, true))}</b>`;
+    // positivação em clientes: a % da base ao lado do número
+    const da = ind?.cobertura && ind.meta_em !== "pct_base" ? daBase(p.coberturas?.[String(v.id)]) : null;
+    if (da) linha += ` <small title="${esc(da.dica)}">(${esc(da.texto === "—" ? "sem a % da base" : `${da.texto} da base`)})</small>`;
+  }
   return `<span class="ge-vend-base">${linha}</span>${marcado ? `<span class="ge-vend-meta" data-meta-de="${v.id}">${metaDoQuadrado(v, base)}</span>` : ""}`;
 }
 
@@ -479,7 +484,7 @@ function metaDoQuadrado(v, base) {
   const f = estado.form, p = f.previa, form = raiz.querySelector("#g-form");
   // o descritor do servidor (da prévia) enquanto ele for do indicador escolhido; trocado o tipo, o do construtor
   const d = f.construtor?.descritor(), q = p?.indicador;
-  const ind = q && (!d || ["tipo", "medida", "forma"].every((k) => (q[k] ?? null) === (d[k] ?? null))) ? q : d;
+  const ind = q && (!d || ["tipo", "medida", "forma", "meta_em"].every((k) => (q[k] ?? null) === (d[k] ?? null))) ? q : d;
   if (!ind) return "";
   if (ePreco(ind)) return metaPreco(v, base);
   const tipo = form?.querySelector('[name="alvo_tipo"]')?.value || f.dados.alvo_tipo;
@@ -1137,12 +1142,19 @@ function tabelaAcao(d) {
   const v = (x) => esc(valorIndicador(ind, x, u));
   const enc = it.situacao === "encerrada";
   const partes = !!ind.numerador && !it.congelado;
+  const comDaBase = ind.cobertura && ind.meta_em !== "pct_base"; // positivação em clientes: a % da base ao lado
+  const pctDaBase = (da) => {
+    const t = daBase(da);
+    return t ? `<span title="${esc(t.dica)}">${esc(t.texto)}${t.partes ? `<small>${esc(t.partes)}</small>` : ""}</span>` : "—";
+  };
   const linhas = d.linhas.map((x) => `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0" title="Abrir o histórico de ${esc(x.nome)}">
     <td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
-    <td>${x.base_pendente ? '<span class="fraco">aguardando os dados</span>' : x.base == null ? '<span class="fraco">sem dados</span>' : v(x.base)}</td>
+    <td>${x.base_pendente ? '<span class="fraco">aguardando os dados</span>' : x.base == null ? '<span class="fraco">sem dados</span>' : v(x.base)}${comDaBase && !x.base_pendente && x.base_da_base
+      ? `<small title="${esc(daBase(x.base_da_base).dica)}">${esc(daBase(x.base_da_base).texto)} da base</small>` : ""}</td>
     <td>${x.alvo == null ? "—" : v(x.alvo)}</td>
     <td>${x.resultado == null ? "—" : `<b>${v(x.resultado)}</b>`}${partes && x.numerador != null
       ? `<small>${textoPartes(ind, x)}</small>` : ""}</td>
+    ${comDaBase ? `<td>${pctDaBase(x.da_base)}</td>` : ""}
     <td>${x.pct == null ? "—" : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
     <td>${x.delta == null ? "—" : esc(deltaTexto(ind, x.delta, u))}</td>
     <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
@@ -1152,12 +1164,17 @@ function tabelaAcao(d) {
       <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim")
         : "resultado até agora; a situação considera o ritmo dos dias úteis"} · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados">
-      <thead><tr><th>Vendedor</th><th>Base</th><th>Meta</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th><th>% da meta</th><th>Sobre a base</th><th>Situação</th></tr></thead>
-      <tbody>${linhas}</tbody></table></div></section>`;
+      <thead><tr><th>Vendedor</th><th>Base</th><th>Meta</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th>${comDaBase
+        ? `<th title="${esc(comoCalcula({ id: "positivacao:pct_base" }).conta)}">% da base</th>` : ""}<th>% da meta</th><th>Sobre a base</th><th>Situação</th></tr></thead>
+      <tbody>${linhas}</tbody>${comDaBase && d.total.da_base ? `<tfoot><tr class="ge-total"><td class="nome-v">Equipe<small>os vendedores do seu acesso juntos</small></td><td></td><td></td>
+        <td>${d.total.realizado == null ? "—" : `<b>${v(d.total.realizado)}</b>`}</td><td>${pctDaBase(d.total.da_base)}</td><td></td><td></td><td></td></tr></tfoot>` : ""}</table></div></section>`;
 }
 
 // "3 ÷ 8" embaixo do resultado; na efetividade (média dos dias), os pedidos, as visitas e os dias, que não se dividem.
 function textoPartes(ind, x) {
+  if (ind.media_mensal) { // a % da base: os atendidos e os ativos (somados nos meses, que não se dividem)
+    return `${fmt.num(x.numerador)} de ${fmt.num(x.denominador)} da base${x.meses > 1 ? ` · média de ${x.meses} meses` : ""}`;
+  }
   if (!ind.media_diaria) return `${valorParte(ind, x.numerador)} ÷ ${valorParte(ind, x.denominador)}`;
   return `${plural(x.numerador, "pedido na rota", "pedidos na rota")} · ${plural(x.denominador, "visita", "visitas")} · média de ${plural(x.dias || 0, "dia", "dias")}`;
 }

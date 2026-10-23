@@ -36,9 +36,11 @@ export const FILTROS = [
 export const NOME_GRUPO = { mussarela: "Mussarela", outras: "Outras linhas" };
 
 // O "Indicador medido": cada opção é um tipo pronto ou uma combinação da Personalizada. alvo: a unidade da meta;
-// pct: a meta é em % (80 = 80%); objetivo: só nos objetivos (numa campanha a meta já sai da base).
+// pct: a meta é em % (80 = 80%); objetivo: só nos objetivos (numa campanha a meta já sai da base); antigo: só aparece
+// na campanha que já é dele (a cobertura da carteira virou a positivação com a meta em % da base).
 export const PRESETS = [
-  { id: "positivacao", metrica: "positivacao", nome: "Positivação (clientes com compra)", rotulo: "Positivação", alvo: "clientes", formato: "clientes" },
+  { id: "positivacao", metrica: "positivacao", nome: "Positivação (meta em clientes)", rotulo: "Positivação", alvo: "clientes", formato: "clientes" },
+  { id: "positivacao:pct_base", metrica: "positivacao", meta_em: "pct_base", nome: "Positivação (meta em % da base)", rotulo: "Cobertura", alvo: "% da base", pct: true, formato: "pct" },
   { id: "mix_medio", metrica: "mix_medio", nome: "Mix médio (produtos por cliente)", rotulo: "Mix", alvo: "produtos por cliente", formato: "razao" },
   { id: "efetividade", metrica: "efetividade", nome: "Efetividade (pedidos ÷ visitas)", rotulo: "Efetividade", alvo: "%", pct: true, formato: "pct" },
   { id: "frequencia", metrica: "frequencia", nome: "Frequência (semanas com compra)", rotulo: "Frequência", alvo: "semanas por cliente", formato: "razao" },
@@ -47,7 +49,7 @@ export const PRESETS = [
   { id: "faturamento:por_cliente", metrica: "personalizada", medida: "faturamento", forma: "por_cliente", nome: "Venda média por cliente (R$)", rotulo: "Venda média", alvo: "R$ por cliente", formato: "moeda" },
   { id: "volume:total", metrica: "personalizada", medida: "volume", forma: "total", nome: "Volume (quantidade)", rotulo: "Volume", alvo: "", formato: "quantidade" },
   { id: "volume:por_cliente", metrica: "personalizada", medida: "volume", forma: "por_cliente", nome: "Volume por cliente", rotulo: "Volume/cliente", alvo: "por cliente", formato: "quantidade" },
-  { id: "clientes:pct_carteira", metrica: "personalizada", medida: "clientes", forma: "pct_carteira", nome: "Cobertura da carteira (%)", rotulo: "Carteira", alvo: "% da carteira", pct: true, formato: "pct" },
+  { id: "clientes:pct_carteira", metrica: "personalizada", medida: "clientes", forma: "pct_carteira", nome: "Cobertura da carteira (%, antiga)", rotulo: "Carteira", alvo: "% da carteira", pct: true, formato: "pct", antigo: true },
   { id: "produtos:total", metrica: "personalizada", medida: "produtos", forma: "total", nome: "Produtos distintos vendidos", rotulo: "Produtos", alvo: "produtos", formato: "produtos" },
   { id: "faturamento:crescimento", metrica: "personalizada", medida: "faturamento", forma: "crescimento", nome: "Crescimento do faturamento (%)", rotulo: "Crescimento", alvo: "% de crescimento", pct: true, formato: "moeda", objetivo: true },
   { id: "volume:crescimento", metrica: "personalizada", medida: "volume", forma: "crescimento", nome: "Crescimento do volume (%)", rotulo: "Crescimento", alvo: "% de crescimento", pct: true, formato: "quantidade", objetivo: true },
@@ -61,10 +63,15 @@ const CRESCIMENTO = {
   conta: "O indicador no período ÷ o mesmo indicador no período de comparação, menos 1.",
   detalhe: "Compara com o período anterior (do mesmo tamanho, logo antes; em meses cheios, os mesmos meses logo antes) ou com o mesmo período do ano anterior. Só nos objetivos.",
 };
+const DA_BASE = "A % da base de cada mês: os clientes ativos da carteira do vendedor que ele mesmo atendeu ÷ os clientes ativos da carteira dele, pelo histórico da carteira que o painel registra a cada atualização (desde out/2026; sem os “PEDIDO BLOQUEADO”). Antes disso, todos os clientes que ele atendeu ÷ a META CLIENTE da planilha de metas, como no Power BI. Até 31 dias, um % só (com os ativos do mês em que o período termina); num período maior, a média dos % de cada mês. Mês sem número (vendedor fora da planilha) deixa o % vazio.";
 export const COMO_CALCULA = {
   positivacao: {
-    conta: "Clientes distintos que compraram no período.",
-    detalhe: "Cada cliente conta uma vez. Com produtos, linhas ou categorias escolhidos, só quem comprou esses produtos. Em “Quem conta” dá para contar só os clientes novos, os recuperados (sem compra há N dias antes do início) ou quem nunca ou já comprava os produtos escolhidos.",
+    conta: "Clientes distintos que compraram no período (e, ao lado, que % da base de clientes ativos isso é).",
+    detalhe: `Cada cliente conta uma vez. Com produtos, linhas ou categorias escolhidos, só quem comprou esses produtos. Em “Quem conta” dá para contar só os clientes novos, os recuperados (sem compra há N dias antes do início) ou quem nunca ou já comprava os produtos escolhidos. Com todos os clientes, vem junto a % da base. ${DA_BASE}`,
+  },
+  "positivacao:pct_base": {
+    conta: "Clientes da base atendidos ÷ clientes ativos da base, mês a mês: a meta é em % da base.",
+    detalhe: `${DA_BASE} Os filtros de produto contam no numerador; os de cliente (UF, segmento, área), só nos meses do histórico da carteira.`,
   },
   mix_medio: {
     conta: "Produtos da campanha levados, somados cliente a cliente, ÷ clientes positivados.",
@@ -91,8 +98,8 @@ export const COMO_CALCULA = {
   "volume:total": { conta: "Quantidade vendida, na unidade dos produtos, descontando as devoluções.", detalhe: MESMA_UNIDADE },
   "volume:por_cliente": { conta: "Quantidade vendida ÷ clientes positivados.", detalhe: MESMA_UNIDADE },
   "clientes:pct_carteira": {
-    conta: "Clientes da carteira que compraram ÷ clientes ativos da carteira.",
-    detalhe: "Pela carteira do vendedor: vale a compra feita com qualquer vendedor.",
+    conta: "Clientes da carteira que compraram ÷ clientes ativos da carteira hoje.",
+    detalhe: "A regra das campanhas antigas, pela carteira de hoje do vendedor: vale a compra feita com qualquer vendedor. As campanhas novas usam a Positivação com a meta em % da base.",
   },
   "produtos:total": { conta: "Produtos diferentes vendidos no período." },
   "faturamento:crescimento": CRESCIMENTO, "volume:crescimento": CRESCIMENTO, "clientes:crescimento": CRESCIMENTO,
@@ -101,7 +108,7 @@ export const COMO_CALCULA = {
 export const COMO_META = [
   ["Base", "O mesmo indicador, medido no período fechado escolhido (semana, quinzena, mês…): o último antes do início da campanha."],
   ["Meta", "Número: o valor que cada vendedor precisa atingir. Percentual: a base de cada um + X%. A meta própria troca a de um vendedor."],
-  ["% da meta", "O resultado de cada vendedor ÷ a meta dele. Na barra da campanha: a soma dos resultados ÷ a soma das metas nos indicadores de total (positivação, faturamento, volume, produtos) e a média do % de cada um nos de média (mix, efetividade, frequência, por cliente, carteira); no preço médio, os aumentos de todos somados em R$."],
+  ["% da meta", "O resultado de cada vendedor ÷ a meta dele. Na barra da campanha: a soma dos resultados ÷ a soma das metas nos indicadores de total (positivação, faturamento, volume, produtos) e a média do % de cada um nos de média (mix, efetividade, frequência, por cliente, % da base); no preço médio, os aumentos de todos somados em R$."],
 ];
 export function comoCalcula(preset, objetivo = false) {
   const c = COMO_CALCULA[preset?.id] || { conta: "" };
@@ -112,6 +119,7 @@ export function comoCalcula(preset, objetivo = false) {
 export function presetDe(metrica, p = {}) {
   const legado = LEGADOS[metrica];
   if (legado) return PRESETS.find((x) => x.id === legado.join(":"));
+  if (metrica === "positivacao" && p.meta_em === "pct_base") return PRESETS.find((x) => x.id === "positivacao:pct_base");
   if (metrica !== "personalizada") return PRESETS.find((x) => x.id === metrica) || PRESETS[0];
   return PRESETS.find((x) => x.id === `${p.medida}:${p.forma || "total"}`) || PRESETS.find((x) => x.id === "faturamento:total");
 }
@@ -263,6 +271,18 @@ export function textoProgresso(ind, real, alvo, unidade = "") {
   if (ind.formato === "pct") return `${fmt.pct(real)} de ${fmt.pct(alvo)}`;
   if (ind.formato === "razao") return `${fmt.num(real, 1)} de ${fmt.num(alvo, 1)}${ind.sufixo ? " " + ind.sufixo : ""}`;
   return `${valorIndicador(ind, real, unidade, true)} de ${valorIndicador(ind, alvo, unidade, true)}`;
+}
+
+// A % da base (a cobertura) da positivação de um vendedor ou da equipe (bi/indicadores.py da_base): o %, "98 de 136"
+// (e, num período maior que um mês, "média de 3 meses") e a dica de onde vieram os ativos e de que meses faltam.
+const FONTES_BASE = { historico: "histórico da carteira", planilha: "META CLIENTE da planilha de metas" };
+export function daBase(da) {
+  if (!da) return null;
+  if (da.pendente) return { texto: "aguardando", partes: "", dica: "o histórico da carteira ainda não chegou do computador da empresa" };
+  const falta = da.falta?.length ? `sem o número de ativos de ${da.falta.join(", ")}` : "";
+  if (da.pct == null) return { texto: "—", partes: "", dica: falta || "sem clientes ativos na base" };
+  const partes = `${fmt.num(da.atendidos)} de ${fmt.num(da.ativos)}${da.meses > 1 ? ` · média de ${da.meses} meses` : ""}`;
+  return { texto: fmt.pct(da.pct), partes, dica: `ativos pelo ${(da.fontes || []).map((f) => FONTES_BASE[f] || f).join(" e ")}` };
 }
 
 // Contagens (pedidos, visitas, clientes) e, na venda por cliente e no preço médio, valores em R$.

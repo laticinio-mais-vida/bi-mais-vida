@@ -42,6 +42,7 @@ import pandas as pd
 from .arquivos import (EXCEL, MAX_LINHAS as MAX_LINHAS_ARQUIVO, PDF, TIPOS as TIPOS_ARQUIVO, FaltaPacote,
                        excel as montar_excel, formatos as formatos_colunas, nome_arquivo, pdf as montar_pdf)
 from .banco import BancoForaDoAr
+from .cache import TABELAS_CARTEIRA
 from .configuracao import VISOES
 from .conversas import MAX_MENSAGENS_CONVERSA, NaoEncontrada, id_valido, novo_id
 from .credito import TOLERANCIA, Credito
@@ -266,12 +267,32 @@ class Recorte:
                    m.id_cliente, {nome_cliente} AS cliente, m.tipo_cliente, m.pedidos
             FROM _pedidos m LEFT JOIN vendedores v ON v.id_vendedor = m.id_vendedor
             LEFT JOIN clientes c ON c.id_cliente = m.id_cadastro""")
+        Recorte._carteira(con, cache, ids)
         if credito:
             Recorte._titulos(con, cache, filtro, params)
         # Daqui em diante: nada de arquivo, extensão nova ou mudança de configuração.
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
         return con
+
+    @staticmethod
+    def _carteira(con: duckdb.DuckDBPyConnection, cache, ids: frozenset[int] | None) -> None:
+        """O histórico da carteira (bi/carteira.py), para a cobertura da positivação: os trechos dos clientes da carteira
+        dos vendedores do acesso e os dias conferidos. Vazio se o cache ainda não tem."""
+        for nome, colunas in TABELAS_CARTEIRA.items():
+            con.execute(f"CREATE TABLE {nome} ({colunas})")
+        if cache.sem_carteira:
+            return
+        filtro, params = ("", []) if ids is None else (f" WHERE id_vendedor IN ({_marcas(ids)})", sorted(ids))
+        for nome, sql, p in (("clientes_vigencias", "SELECT * FROM clientes_vigencias" + filtro, params),
+                             ("carteira_retratos", "SELECT * FROM carteira_retratos", [])):
+            df = cache.df(sql, p)
+            colunas = [c.split()[0] for c in TABELAS_CARTEIRA[nome].split(", ")]
+            datas = {"de", "ate", "data"}
+            con.register("df_tmp", df)
+            con.execute(f"INSERT INTO {nome} SELECT "
+                        + ", ".join(f"CAST({c} AS DATE)" if c in datas else c for c in colunas) + " FROM df_tmp")
+            con.unregister("df_tmp")
 
     @staticmethod
     def _titulos(con: duckdb.DuckDBPyConnection, cache, filtro: str, params: list) -> None:
@@ -472,8 +493,11 @@ FERRAMENTAS = [
             "metrica": {"type": "string", "enum": list(TIPOS_CAMPANHA),
                         "description": "o indicador (veja as instruções); personalizada usa medida e forma"},
             "medida": {"type": "string", "enum": list(MEDIDAS_CAMPANHA), "description": "só na personalizada"},
-            "forma": {"type": "string", "enum": [f for f in FORMAS_CAMPANHA if f != "crescimento"],
+            "forma": {"type": "string", "enum": [f for f in FORMAS_CAMPANHA if f not in ("crescimento", "pct_carteira")],
                       "description": "só na personalizada (padrão total)"},
+            "meta_em": {"type": "string", "enum": ["clientes", "pct_base"],
+                        "description": ("só na positivação: clientes (padrão; a meta em número de clientes) ou "
+                                        "pct_base (a meta em % da base de clientes ativos, a cobertura)")},
             "clientes_base": {"type": "string", "enum": list(BASES_CAMPANHA),
                               "description": "quem conta (padrão todos); nunca_compraram e ja_compraram exigem produtos"},
             "dias_sem_compra": {"type": "integer", "description": "com clientes_base recuperados (padrão 90)"},
@@ -949,7 +973,8 @@ class Ferramentas:
 
     def f_propor_acao(self, passo: dict, nome: str, regiao: str, metrica: str, alvo_tipo: str = "fixo",
                       meta: float = 0, rotulo: str = "", descricao: str = "", inicio=None, semanas=None, fim=None,
-                      base=None, medida=None, forma=None, clientes_base=None, dias_sem_compra=None, metas=None,
+                      base=None, medida=None, forma=None, meta_em=None, clientes_base=None, dias_sem_compra=None,
+                      metas=None,
                       metas_produto=None, vendedores=None, equipes=None, produtos=None, linhas=None, categorias=None,
                       grupos=None, ufs=None, segmentos=None, areas=None) -> dict:
         individuais = {}
@@ -965,7 +990,7 @@ class Ferramentas:
             precos = [{"id": int(m["id_produto"]), "meta": m["meta"]} for m in metas_produto or []]
         except (KeyError, TypeError, ValueError):
             raise ValueError("metas_produto: use uma lista de {id_produto, meta}") from None
-        parametros = {k: v for k, v in {"medida": medida, "forma": forma, "clientes": clientes_base,
+        parametros = {k: v for k, v in {"medida": medida, "forma": forma, "meta_em": meta_em, "clientes": clientes_base,
                                         "dias_sem_compra": dias_sem_compra}.items() if v not in (None, "")}
         dados = {"nome": nome, "rotulo": rotulo, "descricao": descricao, "regiao": regiao, "inicio": inicio,
                  "semanas": semanas, "fim": fim, "base_periodo": base, "metrica": metrica, "parametros": parametros,
@@ -1050,6 +1075,11 @@ metas_vendedor — metas mensais (planilha METAS.xlsx): ano, mes, id_vendedor, v
   meta_mussarela, meta_outras, meta_clientes
 metas_produto — metas de volume (planilha METAS PRODUTOS.xlsx): ano, mes, id_vendedor, vendedor, id_produto,
   produto, meta_volume
+clientes_vigencias — o histórico da carteira, registrado pelo painel a cada atualização desde 15/09/2026 (o ERP não
+  guarda): um trecho por cliente ativo e vendedor, de quando (de) até quando (ate; vazio = ainda vale) valeu:
+  id_cliente, de, ate, id_vendedor (o da carteira), bloqueado ("PEDIDO BLOQUEADO" no nome), uf, id_area, area,
+  segmento. Inativação ou troca de vendedor fecha o trecho; reativação abre outro
+carteira_retratos — os dias conferidos: data, ativos, entradas, saidas, trocas (de vendedor)
 titulos_receber — só para quem tem a página Reavaliação de Crédito: os títulos a receber de venda a cliente, não
   cancelados, de todo o histórico, pelo vendedor do título: id_titulo, id_cliente, cliente, id_vendedor, vendedor,
   emissao, ano, mes (da emissão), vencimento (o da última parcela), quitacao (vazia = em aberto), quitado, valor,
@@ -1128,7 +1158,13 @@ parciais de cada semana; no fim, o resultado de cada um contra a base e a meta. 
 "o mesmo tamanho, logo antes" e a meta "base + N": leia como vierem. Um objetivo é o indicador da equipe da região \
 num período, contra uma meta da equipe. Tipos (metrica):
   - positivacao: clientes distintos com venda. Recuperação de clientes = clientes_base recuperados, com \
-dias_sem_compra (padrão 90).
+dias_sem_compra (padrão 90). Com todos os clientes, vem junto a cobertura (da_base): que % da base de clientes \
+ativos cada vendedor atendeu. Cada período tem a sua conta: até 31 dias (uma campanha de 4 semanas, a base de um \
+mês), um % só; acima disso (a base de trimestre, semestre ou ano), a média dos % de cada mês (meses diz quantos). \
+Desde out/2026 pelo \
+histórico da carteira (os clientes da carteira que o próprio vendedor atendeu ÷ os ativos da carteira); antes, todos \
+os clientes que ele atendeu ÷ a META CLIENTE da planilha de metas. A meta é em clientes (meta_em clientes, o padrão) \
+ou em % da base (meta_em pct_base, a cobertura; a meta é em %: 80 = 80%).
   - mix_medio: produtos da campanha levados por cliente positivado (média). "Clientes que nunca compraram X" = \
 clientes_base nunca_compraram, e "que já compram X" = ja_compraram, sempre com os produtos.
   - efetividade: a média da efetividade de cada dia (pedidos na rota do dia ÷ visitas esperadas no dia, pelos dias \
@@ -1146,9 +1182,9 @@ o valor que vem pronto. A meta \
 aumento de preço que ele fez sobre o preço dele na base ÷ o aumento até o preço-alvo (base R$ 10, alvo R$ 20, agora \
 R$ 15 = 50%), somados em R$ nas quantidades vendidas.
   - personalizada: para o resto, monte com medida (faturamento, volume, clientes ou produtos) e forma: total; \
-por_cliente (faturamento ou volume ÷ clientes positivados); pct_carteira (clientes da carteira que compraram; meta \
-em %). Numa campanha não existe a forma crescimento: "crescer X%" é alvo_tipo pct. Volume exige produtos de uma \
-unidade só.
+por_cliente (faturamento ou volume ÷ clientes positivados). A cobertura da carteira de antes (pct_carteira) agora é \
+a positivacao com meta_em pct_base: ela só aparece nas campanhas antigas. Numa campanha não existe a forma \
+crescimento: "crescer X%" é alvo_tipo pct. Volume exige produtos de uma unidade só.
 - Filtros de produto: produtos, linhas, categorias, grupos. Filtros de cliente: ufs, segmentos, areas (rotas). \
 Segmentos e áreas vão como estão nos dados: confira com consultar_sql (SELECT DISTINCT segmento FROM clientes) \
 se não tiver certeza.
@@ -1166,7 +1202,7 @@ nunca_compraram;
   - "efetividade de 80%" = efetividade, alvo_tipo fixo, meta 80;
   - "mussarela a R$ 32/kg e manteiga a R$ 9,50" = preco_medio, metas_produto;
   - "vender 10% a mais" = personalizada, faturamento, total, alvo_tipo pct, meta 10;
-  - "atender 60% da carteira" = personalizada, clientes, pct_carteira, alvo_tipo fixo, meta 60;
+  - "atender 60% da carteira" ou "cobertura de 60%" = positivacao, meta_em pct_base, alvo_tipo fixo, meta 60;
   - "300 kg de mussarela" = personalizada, volume, total, alvo_tipo fixo, meta 300, com os produtos.
 - Só o administrador lança campanhas e objetivos. Para ele, use propor_acao: ela confere e monta um RASCUNHO, sem \
 gravar, e ele lança no botão "Lançar campanha" que aparece abaixo da sua resposta. Nunca diga que a campanha foi \

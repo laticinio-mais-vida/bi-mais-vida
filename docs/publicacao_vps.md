@@ -411,6 +411,28 @@ coloridas pelo % da meta, e o card da campanha ganha a barra da meta.
 - **Assistente:** a ferramenta `propor_acao` ganhou o parâmetro `base` e o `alvo_tipo` só aceita `fixo` e `pct`.
   Depois de publicar, confira com uma pergunta curta de dentro do container (o modelo do VPS pode ser outro).
 
+#### Versão da cobertura com o histórico da carteira (migração 016)
+
+A positivação ganha a **% da base** (a cobertura, mês a mês) e a opção de meta em % da base; a "Cobertura da carteira"
+sai da Personalizada. O PC passa a registrar o **histórico da carteira** a cada extração (`bi/carteira.py`) e manda as
+tabelas `clientes_vigencias` e `carteira_retratos` dentro do cache.
+
+- **Ordem:** pode publicar o site antes. Sem as tabelas no cache, a cobertura dos meses desde outubro/2026 fica
+  "aguardando" (a base não é gravada com a planilha no lugar do histórico); os meses de antes saem da planilha METAS.
+- **No PC, antes de reabrir o painel com a versão nova:** a semeadura (os retratos de 15/09 e 19/10/2026) tem de entrar
+  antes da primeira extração, porque o registro recusa um dia anterior ao último. Ela aplica a 016 no banco do PC e
+  lê o dump e a cópia de 19/10 só para leitura. Depois, o painel extrai de novo uma vez sozinho (cache sem a carteira)
+  e manda ao site.
+- **A migração 016** cria as duas tabelas e as colunas `base_cobertura` e `resultado_cobertura` em
+  `campanha_vendedores`. As bases já gravadas de positivação ganham só a cobertura na leitura seguinte, sem mudar a
+  base nem a meta. Ensaie antes de publicar, como nas outras.
+- **Sem o banco do PC:** a extração segue e leva o histórico do cache anterior (o log diz "não deu para registrar a
+  carteira"). Se o banco do PC se perder, o histórico volta do cache na extração seguinte. Mesmo assim, agende a
+  cópia de segurança do PC (abaixo): o histórico nasce lá.
+- **Voltar atrás:** o código anterior ignora as tabelas e as colunas novas, mas lê uma campanha lançada com a meta em
+  % da base como positivação em clientes (com a base em % gravada): arquive ou exclua essas antes de voltar.
+- **Assistente:** `propor_acao` ganhou `meta_em` (clientes ou pct_base) e não oferece mais a forma `pct_carteira`.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a

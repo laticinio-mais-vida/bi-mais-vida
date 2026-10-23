@@ -295,7 +295,7 @@ As cores do andamento seguem o % da meta, sem olhar o prazo, num degradê contí
 laranja até o amarelo em 80% e pelo verde-amarelado até o verde em 100%; acima disso, o verde fica cada vez mais
 forte até 150%. Na barra da campanha, o % é a soma dos resultados ÷ a soma das metas
 nos indicadores que somam (positivação, faturamento, volume), a média do % de cada vendedor nos que são médias (mix,
-efetividade, frequência) e, no preço médio, os aumentos feitos ÷ os pedidos, somando os vendedores em R$ (na média, quem
+efetividade, frequência, % da base) e, no preço médio, os aumentos feitos ÷ os pedidos, somando os vendedores em R$ (na média, quem
 estava a centavos do alvo e subiu poucos centavos ficaria com centenas de % e puxaria a campanha); quem ainda não tem
 meta (base aguardando os dados) fica de fora.
 
@@ -339,7 +339,22 @@ produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
 Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Personalizada (a conta fica em
 `bi/indicadores.py`):
 
-- **Positivação:** clientes distintos com venda no período.
+- **Positivação:** clientes distintos com venda no período. Com todos os clientes ("Quem conta"), vem junto a **% da
+  base** (a cobertura): que % dos clientes ativos da base o vendedor atendeu. A meta é em clientes ou, na opção
+  **Positivação (meta em % da base)**, na % da base. A "Cobertura da carteira" de antes ficou só nas campanhas antigas.
+  - Nos meses do **histórico da carteira** (desde outubro/2026): os clientes ativos da carteira que o próprio vendedor
+    atendeu ÷ os clientes ativos da carteira dele naquele mês (quem esteve ativo em algum dia do mês, sem os "PEDIDO
+    BLOQUEADO"; quem trocou de vendedor no mês conta na carteira nova). Os filtros de cliente valem pelo cadastro do
+    cliente naquele mês.
+  - Antes disso (11/2024 a 09/2026): todos os clientes que o vendedor atendeu ÷ a **META CLIENTE** da planilha METAS,
+    que acompanha os ativos da carteira no começo do mês (como o "% Meta Clientes" do Power BI). Vendedor fora da
+    planilha fica sem %; com filtro de cliente, esses meses ficam sem %.
+  - Período de até 31 dias: um % só, com os ativos do mês em que ele termina. Mais que isso (a base de trimestre,
+    semestre ou ano): a média dos % de cada mês. Mês sem número deixa o período sem %.
+  - O **histórico da carteira** não vem do ERP, que não guarda quando um cliente foi inativado ou trocou de vendedor.
+    O painel do PC compara os ativos a cada atualização dos dados e grava só o que mudou (`bi/carteira.py`), em
+    trechos: de quando até quando o cliente esteve ativo, com que vendedor, área e segmento. Reativação abre um
+    trecho novo. O começo veio dos retratos de 15/09/2026 e 19/10/2026; o histórico vai no cache para o site.
 - **Mix médio:** produtos escolhidos levados, somados cliente a cliente, ÷ todos os clientes positivados.
 - **Efetividade:** a média da efetividade de cada dia, pela carteira do vendedor. A de um dia é pedidos na rota do
   dia ÷ visitas esperadas no dia.
@@ -370,8 +385,8 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
   desconta se cair abaixo dele; produto sem preço na base fica fora. Os cards mostram o preço da base de cada um, e o
   detalhe, o preço de agora e o da base por produto. Nos objetivos (que não têm base), continua o índice: o que a
   equipe vendeu ÷ o que teria vendido as mesmas quantidades nos preços-alvo (100% = no alvo).
-- **Personalizada:** faturamento, venda média por cliente, volume (produtos de uma unidade só), volume por cliente,
-  % da carteira que comprou ou produtos distintos. Nos objetivos há também o crescimento sobre o período anterior
+- **Personalizada:** faturamento, venda média por cliente, volume (produtos de uma unidade só), volume por cliente
+  ou produtos distintos. Nos objetivos há também o crescimento sobre o período anterior
   ou o mesmo período do ano anterior (numa campanha, "crescer X%" é a meta Percentual: X% sobre a base).
 
 - **Quem conta:** todos os clientes, ou só os novos (sem compra antes do início), os recuperados (sem compra há N dias
@@ -638,7 +653,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
-| `bi/indicadores.py` | os indicadores das ações (positivação, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
+| `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
+| `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
 | `bi/banco.py` | conexão com o PostgreSQL e as migrações |
 | `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |
