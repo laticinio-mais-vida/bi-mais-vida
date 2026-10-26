@@ -70,7 +70,8 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
                       "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
                       "/api/gestao/notas", "/api/gestao/nota/excluir", "/api/gestao/base"}
-# Página Agenda: cada pessoa lê e muda só a própria agenda (bi/agenda.py filtra pelo usuário).
+# Agenda, no topo da página Gestão: quem tem a Gestão lê e muda só a própria agenda (bi/agenda.py filtra pelo
+# usuário). Por isso não entra em ROTAS_ADMIN, como as rotas que mudam a Gestão.
 ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
                       "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer"}
@@ -551,21 +552,15 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._redireciona("/") if usuario else self._arquivo(WEB / "login.html")
         return self._arquivo(WEB / "index.html") if usuario else self._redireciona("/login")
 
-    def _pode_agenda(self, usuario: dict) -> bool:
-        if "agenda" in paginas_permitidas(usuario):
-            return True
-        self._erro("seu acesso não inclui a página Agenda", HTTPStatus.FORBIDDEN)
-        return False
-
     def _ler_agenda(self, usuario: dict, caminho: str, q: dict):
-        if not self._pode_agenda(usuario):
+        if not self._pode_gestao(usuario):
             return
         if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje)
             return self._json(self.app.agenda.mes(usuario["id"], q.get("mes")))
         return self._json(self.app.agenda.historico(usuario["id"], q.get("id")))
 
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
-        if not self._pode_agenda(usuario):
+        if not self._pode_gestao(usuario):
             return
         agenda, eu, id_ = self.app.agenda, usuario["id"], corpo.get("id")
         if caminho == "/api/agenda/atividades":

@@ -9,7 +9,9 @@
 // mostram a base de cada um (no período da base escolhido) e, nos marcados, a meta ("padrão" ou "própria"), com a
 // opção de uma meta própria (no preço médio, o preço-alvo do vendedor em cada produto). A conta é toda no servidor
 // (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
-// por #/gestao?rascunho=<id> e abre o formulário já preenchido.
+// por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js),
+// só dela, com os próprios eventos: os daqui ignoram o que acontece dentro dela (#g-agenda).
+import { agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
 import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
          duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
@@ -128,7 +130,8 @@ function precosDica(produtos, base, agora, alvos) {
 
 // ---------- montagem ----------
 export function gestaoTemAlteracoes() {
-  return !!((estado.form && formMudou()) || (dlg?.open && objetivoMudou()) || raiz?.querySelector("#g-nota")?.value.trim());
+  return !!((estado.form && formMudou()) || (dlg?.open && objetivoMudou()) || raiz?.querySelector("#g-nota")?.value.trim()
+    || agendaTemAlteracoes());
 }
 
 export function recarregarGestao() {
@@ -153,6 +156,7 @@ export function montarGestao(container, contexto) {
       </div>
     </div>
     <div id="g-avisos"></div>
+    <section class="ge-secao" id="g-agenda" aria-label="Minha agenda"></section>
     <section class="ge-secao" id="g-objetivos"><div class="esqueleto" style="height:96px"></div></section>
     <section class="ge-secao" id="g-acoes"><div class="esqueleto" style="height:118px"></div></section>
     <section class="ge-secao" id="g-corpo"><div class="esqueleto" style="height:320px"></div></section>
@@ -163,6 +167,7 @@ export function montarGestao(container, contexto) {
   raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
   criarJanela();
+  montarAgenda(raiz.querySelector("#g-agenda"));
   if (!ligado) {
     ligado = true;
     window.addEventListener("hashchange", aoMudarHash);
@@ -202,7 +207,7 @@ function aoMudarHash() {
     return;
   }
   const q = parametros();
-  if (!estado.naPagina) { estado.naPagina = true; carregar(true); }
+  if (!estado.naPagina) { estado.naPagina = true; carregar(true); recarregarAgenda(); }
   if (q.get("rascunho")) return abrirRascunho(q.get("rascunho"));
   const antes = [estado.regiao, estado.vista, estado.vendedor, estado.acao].join();
   lerUrl();
@@ -1476,7 +1481,10 @@ function trocarRegiao(r) {
   carregar();
 }
 
+const daAgenda = (e) => !!e.target.closest("#g-agenda");
+
 function aoClicar(e) {
+  if (daAgenda(e)) return;
   if (e.target.closest(".multi")) return; // as listas de produtos e clientes têm o próprio data-acao (Aplicar, Limpar)
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
@@ -1508,6 +1516,7 @@ function aoClicar(e) {
 }
 
 function aoMudarCampo(e) {
+  if (daAgenda(e)) return;
   const t = e.target;
   if (t.matches("select[data-abrir]")) {
     estado.abrir = t.value; // "" = não abrir
@@ -1530,6 +1539,7 @@ function aoMudarCampo(e) {
 }
 
 function aoDigitar(e) {
+  if (daAgenda(e)) return;
   if (e.target.name === "meta" && e.target.closest("#g-form")) atualizarAlvo();
   if (e.target.dataset.metaV && estado.form) {
     estado.form.metas.set(Number(e.target.dataset.metaV), e.target.value === "" ? null : Number(e.target.value));
@@ -1563,6 +1573,7 @@ function tirarMetaPropria(id) {
 }
 
 function aoTeclar(e) {
+  if (daAgenda(e)) return;
   if (e.target.id === "g-nota" && e.key === "Enter" && !e.shiftKey) { // Enter grava; Shift+Enter pula linha
     e.preventDefault();
     enviarNota();

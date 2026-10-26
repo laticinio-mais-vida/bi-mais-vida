@@ -11,7 +11,6 @@ import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
 import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js";
-import { montarAgenda, agendaTemAlteracoes } from "./agenda.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
@@ -94,14 +93,6 @@ const PAGINAS = {
     montar: (el) => montarCredito(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("credito", d) }),
     recarregar: recarregarCredito,
   },
-  agenda: {
-    nome: "Agenda",
-    titulo: "Minha agenda",
-    fixo: "Suas atividades do mês: só você vê esta agenda",
-    sempreMonta: true, // ao voltar à página, o dia de hoje e as atividades vêm de novo do servidor
-    pendente: agendaTemAlteracoes,
-    montar: (el) => montarAgenda(el),
-  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel e quais páginas cada pessoa vê",
@@ -119,7 +110,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
-  gestao: () => "Objetivos, campanhas e o histórico de cada vendedor, por região",
+  gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,
 };
 

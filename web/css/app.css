@@ -1963,11 +1963,17 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 }
 
 /* ==========================================================================
-   Agenda: a faixa de dias do Ritmo do mês (.faixa-dias e .dia), com o dia aberto e o formulário ao lado
+   Minha agenda (topo da Gestão): a faixa de dias do Ritmo do mês (.faixa-dias e .dia), com o dia aberto e o
+   formulário ao lado; recolhida, só a faixa
    ========================================================================== */
 .ag-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 18px; align-items: start; }
 .ag-layout > * { min-width: 0; }
+.ag-layout.recolhida { grid-template-columns: minmax(0, 1fr); }
+.ag-layout.recolhida #ag-dia, .ag-layout.recolhida .ag-nova, .ag-layout.recolhida .ag-legenda { display: none; }
 .ag-cal .cartao-cab { align-items: center; }
+.ag-cal .cartao-cab h2 { flex-wrap: wrap; row-gap: 0; }
+.ag-mes { font-weight: 600; color: var(--tinta-3); white-space: nowrap; }
+.ag-mes:not(:empty)::before { content: "· "; }
 .ag-nav { display: flex; gap: 6px; flex: none; }
 .ag-nav .btn { height: 38px; }
 .ag-faixa { padding-top: 14px; }
@@ -2059,7 +2065,6 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-vazio { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--tinta-3); font-size: 13.5px; }
 
 /* atividade nova (e edição) */
-.ag-nova { position: sticky; top: 14px; }
 .ag-form { display: grid; gap: 14px; }
 .ag-rep { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ag-rep button:last-child { grid-column: span 2; }
@@ -2087,7 +2092,6 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 
 @media (max-width: 1180px) {
   .ag-layout { grid-template-columns: 1fr; }
-  .ag-nova { position: static; }
 }
 @media (max-width: 860px) {
   .ag-faixa .dia { height: 50px; }

@@ -1,15 +1,17 @@
-// Página Agenda: as atividades de cada pessoa (só ela vê), na faixa de dias do mês (a mesma do "Ritmo do mês" da
-// página Metas), com o dia de hoje num quadrado maior. Clicar num dia amplia o painel com as atividades dele:
-// concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback, desfazer e, nas que se repetem,
-// o histórico de tudo o que foi feito. À direita, o formulário da atividade nova (única, diária, semanal, mensal ou a
-// cada N dias), que também edita uma atividade. Em que dias cada atividade acontece é conta do servidor (bi/agenda.py).
-import { MESES, api, esc, fmt, icone, ligarTooltips, linhaTT, toast } from "./util.js";
+// Minha agenda, no topo da página Gestão (gestao.js monta): as atividades de cada pessoa (só ela vê), na faixa de dias
+// do mês (a mesma do "Ritmo do mês" da página Metas), com o dia de hoje num quadrado maior. Clicar num dia amplia o
+// painel com as atividades dele: concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback,
+// desfazer e, nas que se repetem, o histórico de tudo o que foi feito. À direita, o formulário da atividade nova (única,
+// diária, semanal, mensal ou a cada N dias), que também edita uma atividade. Recolhida, fica só a faixa de dias (a
+// escolha fica guardada neste navegador). Em que dias cada atividade acontece é conta do servidor (bi/agenda.py).
+import { MESES, api, esc, fmt, guardar, icone, ler, ligarTooltips, linhaTT, toast } from "./util.js";
 
 const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
 const DIAS = [[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [7, "Dom"]]; // date.isoweekday()
 const NOME_DIA = ["", "segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"];
 const REPETICOES = [["nenhuma", "Única"], ["diaria", "Diária"], ["semanal", "Semanal"], ["mensal", "Mensal"], ["intervalo", "A cada N dias"]];
 const DESCARTAR_FB = "Descartar o feedback que você estava escrevendo?";
+const CHAVE_RECOLHIDA = "mv-agenda-recolhida";
 
 let raiz = null, dlg = null;
 const estado = { mes: null, dados: null, aberto: null, editando: null, concluindo: null, form: null, formInicial: null, pedido: 0 };
@@ -67,11 +69,13 @@ export function montarAgenda(el) {
   el.innerHTML = `<div class="ag-layout" id="ag-raiz">
     <section class="cartao ag-cal entra" style="--i:0">
       <div class="cartao-cab">
-        <div><h2>${icone("calendario")}<span id="ag-titulo">Agenda</span></h2><p class="sub" id="ag-resumo">&nbsp;</p></div>
+        <div><h2>${icone("calendario")}Minha agenda<span class="ag-mes" id="ag-titulo"></span></h2>
+          <p class="sub" id="ag-resumo">&nbsp;</p></div>
         <div class="ag-nav">
           <button class="btn icone" type="button" data-mes="-1" title="Mês anterior" aria-label="Mês anterior">${icone("voltar")}</button>
           <button class="btn" type="button" data-hoje>Hoje</button>
           <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
+          <button class="btn icone" type="button" data-recolher aria-controls="ag-dia ag-nova"></button>
         </div>
       </div>
       <div id="ag-faixa"><div class="esqueleto" style="height:80px"></div></div>
@@ -84,8 +88,26 @@ export function montarAgenda(el) {
   raiz.addEventListener("change", aoMudar);
   raiz.addEventListener("keydown", aoTeclar);
   Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null });
+  recolher(ler(CHAVE_RECOLHIDA, false));
   desenharForm();
   carregar();
+}
+
+// A Gestão chama ao voltar para a página: o dia de hoje (e o que foi feito em outro aparelho) pode ter mudado.
+export function recarregarAgenda() {
+  if (raiz?.isConnected && estado.dados) carregar();
+}
+
+// Recolhida: só a faixa de dias; o dia aberto e o formulário somem até abrir de novo (ou clicar num dia).
+function recolher(sim) {
+  raiz.classList.toggle("recolhida", sim);
+  const b = raiz.querySelector("[data-recolher]");
+  const dica = sim ? "Mostrar o dia e o formulário" : "Recolher a agenda";
+  b.innerHTML = icone(sim ? "expandir" : "recolher");
+  b.title = dica;
+  b.setAttribute("aria-label", dica);
+  b.setAttribute("aria-expanded", String(!sim));
+  guardar(CHAVE_RECOLHIDA, sim);
 }
 
 async function carregar(mes = estado.mes, { aberto } = {}) {
@@ -152,6 +174,7 @@ function desenharFaixa(quieta) {
 }
 
 function abrirDia(dia) {
+  if (raiz.classList.contains("recolhida")) recolher(false);
   if (dia === estado.aberto) return;
   if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
   estado.aberto = dia;
@@ -236,6 +259,7 @@ async function aoClicar(e) {
   const b = e.target.closest("button");
   if (!b || b.disabled) return;
   if (b.dataset.dia && b.closest(".ag-faixa")) return abrirDia(b.dataset.dia);
+  if ("recolher" in b.dataset) return recolher(!raiz.classList.contains("recolhida"));
   if (b.dataset.mes || "hoje" in b.dataset) {
     if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
     estado.concluindo = null;

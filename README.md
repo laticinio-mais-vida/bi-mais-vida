@@ -6,7 +6,8 @@ Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtro
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
-histórico interno de cada vendedor.
+histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
+que foi feito.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
@@ -284,9 +285,10 @@ Crédito; para os outros, esses dados nem existem na cópia que a IA consulta.
 
 ## Página Gestão
 
-A **Gestão da equipe**, separada por região (**ES** e **BA**; o Edir é da BA, com o calendário dela):
+No topo fica a agenda de quem está vendo (veja [Minha agenda](#minha-agenda)). Abaixo, a **Gestão da equipe**,
+separada por região (**ES** e **BA**; o Edir é da BA, com o calendário dela):
 
-- no topo, os **objetivos do período** da região;
+- primeiro, os **objetivos do período** da região;
 - abaixo, as **campanhas**, com duas barras: o tempo que falta (aviso quando faltam 5 dias ou menos) e o andamento
   contra a meta (nas encerradas, o resultado final e quantos vendedores ficaram na meta);
 - e um **quadrado por vendedor** da equipe, com uma etiqueta por campanha em vigor e o % da meta dele até agora.
@@ -417,6 +419,7 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 ### Quem vê o quê
 
 - **Só o administrador** lança, edita, encerra, prorroga e exclui campanhas, cria objetivos e escreve observações.
+- A **agenda** do topo é de cada um: quem tem a página cria, conclui e dá feedback nas próprias atividades.
 - Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
 - O acesso de cada pessoa se escolhe no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou
@@ -428,6 +431,36 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
   - Cada área pode ficar com dias, como **não atendida** (fora da conta, sem aviso) ou **pendente** (fora da conta,
     com aviso).
   - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)".
+
+### Minha agenda
+
+No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
+administrador vê as dos outros). Quem tem a página Gestão tem a agenda, inclusive o visualizador, que na equipe só
+acompanha. O botão de recolher deixa só a faixa de dias (a escolha fica guardada no navegador); clicar num dia abre
+de novo.
+
+- **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, com hoje num quadrado maior. A cor diz
+  como está o dia: com atividade, tudo concluído ou com alguma atividade que ficou sem concluir. O número em cima é
+  quantas faltam. As setas trocam de mês, e **Hoje** volta para o dia de hoje.
+- **Clicar num dia** abre as atividades dele embaixo da faixa. O círculo marca a atividade como concluída. Se ela
+  exige feedback, abre o campo para contar como foi, e só conclui com o texto escrito; se não exige, conclui na hora e
+  o feedback pode ser acrescentado depois. Dá para editar o feedback e desfazer a conclusão. Dias que ainda não
+  chegaram não podem ser concluídos.
+- **Atividade nova** (à direita): título, descrição, o dia (ou o primeiro dia, se repete), a repetição, um último dia
+  opcional e se exige feedback ao concluir. As repetições:
+
+  | Repetição | Acontece |
+  |---|---|
+  | Única | só no dia escolhido |
+  | Diária | todo dia; com "Só dias úteis", pula domingos, feriados e sábados sem expediente do calendário ES ou BA (o mesmo das metas, com os feriados extras de Configurações) |
+  | Semanal | nos dias da semana marcados |
+  | Mensal | num dia fixo do mês; o mês que não tem esse dia usa o último |
+  | A cada N dias | contando do primeiro dia (quinzenal: 15) |
+
+- **Histórico** (nas atividades que se repetem): cada dia concluído com o feedback, quantas vezes ela aconteceu até
+  hoje, quantas foram concluídas e os dias que ficaram sem concluir.
+- **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
+  de hoje e mantém o histórico. **Excluir** apaga a atividade e todo o histórico dela.
 
 ### Pelo Assistente
 
@@ -494,34 +527,6 @@ Diferenças em relação ao Power BI, combinadas com o usuário:
    por data que somava os dias de atraso dos títulos do mesmo dia.
 5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que
    não existe mais no modelo.
-
-## Página Agenda
-
-A agenda de cada pessoa: ninguém mais vê as atividades dela, nem o administrador. A página precisa ser marcada em
-Usuários para cada visualizador; o administrador já a tem.
-
-- **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, com hoje num quadrado maior. A cor diz
-  como está o dia: com atividade, tudo concluído ou com alguma atividade que ficou sem concluir. O número em cima é
-  quantas faltam. As setas trocam de mês, e **Hoje** volta para o dia de hoje.
-- **Clicar num dia** abre as atividades dele embaixo da faixa. O círculo marca a atividade como concluída. Se ela
-  exige feedback, abre o campo para contar como foi, e só conclui com o texto escrito; se não exige, conclui na hora e
-  o feedback pode ser acrescentado depois. Dá para editar o feedback e desfazer a conclusão. Dias que ainda não
-  chegaram não podem ser concluídos.
-- **Atividade nova** (à direita): título, descrição, o dia (ou o primeiro dia, se repete), a repetição, um último dia
-  opcional e se exige feedback ao concluir. As repetições:
-
-  | Repetição | Acontece |
-  |---|---|
-  | Única | só no dia escolhido |
-  | Diária | todo dia; com "Só dias úteis", pula domingos, feriados e sábados sem expediente do calendário ES ou BA (o mesmo das metas, com os feriados extras de Configurações) |
-  | Semanal | nos dias da semana marcados |
-  | Mensal | num dia fixo do mês; o mês que não tem esse dia usa o último |
-  | A cada N dias | contando do primeiro dia (quinzenal: 15) |
-
-- **Histórico** (nas atividades que se repetem): cada dia concluído com o feedback, quantas vezes ela aconteceu até
-  hoje, quantas foram concluídas e os dias que ficaram sem concluir.
-- **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
-  de hoje e mantém o histórico. **Excluir** apaga a atividade e todo o histórico dela.
 
 ## Banco de dados
 
@@ -593,7 +598,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito, Agenda). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -685,7 +690,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
-| `bi/agenda.py` | página Agenda: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
+| `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
