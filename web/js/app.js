@@ -11,6 +11,7 @@ import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
 import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js";
+import { montarAgenda, agendaTemAlteracoes } from "./agenda.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
@@ -92,6 +93,14 @@ const PAGINAS = {
     titulo: "Reavaliação de Crédito",
     montar: (el) => montarCredito(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("credito", d) }),
     recarregar: recarregarCredito,
+  },
+  agenda: {
+    nome: "Agenda",
+    titulo: "Minha agenda",
+    fixo: "Suas atividades do mês: só você vê esta agenda",
+    sempreMonta: true, // ao voltar à página, o dia de hoje e as atividades vêm de novo do servidor
+    pendente: agendaTemAlteracoes,
+    montar: (el) => montarAgenda(el),
   },
   usuarios: {
     titulo: "Usuários e acessos",

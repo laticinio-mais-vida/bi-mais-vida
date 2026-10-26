@@ -495,6 +495,34 @@ Diferenças em relação ao Power BI, combinadas com o usuário:
 5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que
    não existe mais no modelo.
 
+## Página Agenda
+
+A agenda de cada pessoa: ninguém mais vê as atividades dela, nem o administrador. A página precisa ser marcada em
+Usuários para cada visualizador; o administrador já a tem.
+
+- **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, com hoje num quadrado maior. A cor diz
+  como está o dia: com atividade, tudo concluído ou com alguma atividade que ficou sem concluir. O número em cima é
+  quantas faltam. As setas trocam de mês, e **Hoje** volta para o dia de hoje.
+- **Clicar num dia** abre as atividades dele embaixo da faixa. O círculo marca a atividade como concluída. Se ela
+  exige feedback, abre o campo para contar como foi, e só conclui com o texto escrito; se não exige, conclui na hora e
+  o feedback pode ser acrescentado depois. Dá para editar o feedback e desfazer a conclusão. Dias que ainda não
+  chegaram não podem ser concluídos.
+- **Atividade nova** (à direita): título, descrição, o dia (ou o primeiro dia, se repete), a repetição, um último dia
+  opcional e se exige feedback ao concluir. As repetições:
+
+  | Repetição | Acontece |
+  |---|---|
+  | Única | só no dia escolhido |
+  | Diária | todo dia; com "Só dias úteis", pula domingos, feriados e sábados sem expediente do calendário ES ou BA (o mesmo das metas, com os feriados extras de Configurações) |
+  | Semanal | nos dias da semana marcados |
+  | Mensal | num dia fixo do mês; o mês que não tem esse dia usa o último |
+  | A cada N dias | contando do primeiro dia (quinzenal: 15) |
+
+- **Histórico** (nas atividades que se repetem): cada dia concluído com o feedback, quantas vezes ela aconteceu até
+  hoje, quantas foram concluídas e os dias que ficaram sem concluir.
+- **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
+  de hoje e mantém o histórico. **Excluir** apaga a atividade e todo o histórico dela.
+
 ## Banco de dados
 
 O painel usa dois bancos, cada um para uma coisa:
@@ -513,6 +541,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `gestao_eventos` | o histórico interno de cada vendedor: observações e o que aconteceu nas ações dele (lançada, editada, prorrogada, encerrada, resultado) |
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
+| `agenda_atividades` e `agenda_registros` | a Agenda de cada pessoa: as atividades com a repetição, e cada dia concluído com o feedback (migração 018) |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -564,7 +593,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito, Agenda). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -656,6 +685,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
+| `bi/agenda.py` | página Agenda: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

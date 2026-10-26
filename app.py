@@ -11,7 +11,7 @@ Uso:
 O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões desta máquina; com
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
-Usuários, regras, conversas, o uso do Assistente e as campanhas da Gestão ficam no PostgreSQL de [postgres]
+Usuários, regras, conversas, o uso do Assistente, as campanhas da Gestão e a Agenda ficam no PostgreSQL de [postgres]
 (bi/banco.py), no PC e no VPS.
 """
 from __future__ import annotations
@@ -42,6 +42,7 @@ WEB = RAIZ / "web"
 
 from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
                        escopo_gestao, escopo_projecoes, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+from bi.agenda import Agenda  # noqa: E402
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
@@ -69,6 +70,10 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
                       "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
                       "/api/gestao/notas", "/api/gestao/nota/excluir", "/api/gestao/base"}
+# Página Agenda: cada pessoa lê e muda só a própria agenda (bi/agenda.py filtra pelo usuário).
+ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico")
+ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
+                      "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
@@ -117,6 +122,7 @@ class Aplicacao:
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
+        self.agenda = Agenda(self.banco, self.configuracao)
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
@@ -545,6 +551,40 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._redireciona("/") if usuario else self._arquivo(WEB / "login.html")
         return self._arquivo(WEB / "index.html") if usuario else self._redireciona("/login")
 
+    def _pode_agenda(self, usuario: dict) -> bool:
+        if "agenda" in paginas_permitidas(usuario):
+            return True
+        self._erro("seu acesso não inclui a página Agenda", HTTPStatus.FORBIDDEN)
+        return False
+
+    def _ler_agenda(self, usuario: dict, caminho: str, q: dict):
+        if not self._pode_agenda(usuario):
+            return
+        if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje)
+            return self._json(self.app.agenda.mes(usuario["id"], q.get("mes")))
+        return self._json(self.app.agenda.historico(usuario["id"], q.get("id")))
+
+    def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
+        if not self._pode_agenda(usuario):
+            return
+        agenda, eu, id_ = self.app.agenda, usuario["id"], corpo.get("id")
+        if caminho == "/api/agenda/atividades":
+            a = agenda.criar(eu, corpo.get("atividade") or {})
+            log.info("%s criou a atividade %s na agenda", usuario["login"], a["id"])
+            return self._json({"ok": True, "atividade": a})
+        if caminho == "/api/agenda/atividade/editar":
+            return self._json({"ok": True, "atividade": agenda.editar(eu, id_, corpo.get("atividade") or {})})
+        if caminho == "/api/agenda/atividade/encerrar":
+            return self._json({"ok": True, **agenda.encerrar(eu, id_)})
+        if caminho == "/api/agenda/atividade/excluir":
+            agenda.excluir(eu, id_)
+            log.info("%s excluiu a atividade %s da agenda", usuario["login"], id_)
+            return self._json({"ok": True})
+        if caminho == "/api/agenda/concluir":
+            return self._json({"ok": True, "item": agenda.concluir(eu, id_, corpo.get("dia"), corpo.get("feedback"))})
+        agenda.desfazer(eu, id_, corpo.get("dia"))  # /api/agenda/desfazer
+        return self._json({"ok": True})
+
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
         url = urlparse(self.path)
@@ -614,6 +654,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._ler_gestao(usuario, url.path, q)
             if url.path == "/api/gestao/config":
                 return self._json(self._config_gestao())
+            if url.path in ROTAS_AGENDA_LER:
+                return self._ler_agenda(usuario, url.path, q)
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
                                    **self._visualizadores()})
@@ -687,6 +729,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":
                 return self._salvar_config_gestao(usuario, self._corpo_json())
+            if url.path in ROTAS_AGENDA_MUDAR:
+                return self._mudar_agenda(usuario, url.path, self._corpo_json())
             if url.path == "/api/config/padrao":
                 log.info("%s restaurou o padrão das regras de Metas", usuario["login"])
                 return self._json({"ok": True, "config": self.app.configuracao.restaurar_padrao(usuario)})

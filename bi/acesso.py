@@ -29,7 +29,8 @@ from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
 PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "assistente": "Assistente", "gestao": "Gestão",
-           "credito": "Reavaliação de Crédito"}  # Crédito: sem escolha de vendedores (quem tem a página vê todos)
+           "credito": "Reavaliação de Crédito",  # Crédito: sem escolha de vendedores (quem tem a página vê todos)
+           "agenda": "Agenda"}  # Agenda: cada pessoa vê só a própria
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
 PAGINAS_COM_ESCOPO = ("projecoes", "assistente", "gestao")  # páginas com essa escolha de vendedores na configuração
