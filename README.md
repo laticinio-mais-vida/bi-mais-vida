@@ -495,20 +495,23 @@ guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca
 
 No formulário, **Tarefa** (em vez de **Atividade**) cria uma tarefa: título, descrição e o **prazo** (dia e
 horário opcional) e, embaixo, um card por pessoa (você e os **participantes**) com as **subtarefas** dela, cada uma
-com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card e deixa
-só a pessoa; clicar de novo mostra as subtarefas.
+com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
 
+- **Os cards das pessoas** começam recolhidos, só com o nome e quantas subtarefas cada uma tem. Clicar no nome abre
+  o card (o que estava aberto se recolhe) com as subtarefas da pessoa e, embaixo, já uma subtarefa nova em branco,
+  com o cursor no título; clicar de novo recolhe. Quem entra na tarefa já tem o card aberto.
 - **As subtarefas no card** ficam recolhidas, só com o texto e o prazo (em vermelho, se passa do da tarefa). Uma de
-  cada vez fica aberta para editar o título, o prazo e o horário: **+ Subtarefa** abre uma nova no mesmo card e
-  recolhe as outras; clicar numa recolhida abre ela, e a seta à esquerda do título recolhe. Ao editar uma tarefa,
-  todas começam recolhidas. Salvar com uma subtarefa sem título abre ela com o cursor no título.
-- **Escolher o dia grava a subtarefa:** com o título escrito, clicar no dia (ou Enter nele) recolhe a subtarefa e,
-  se ela era nova, já abre outra em branco para a mesma pessoa, sem precisar do **+ Subtarefa** (o horário, se
-  tiver, vai antes do dia). As setas do teclado só andam pelos dias; Enter no título vai para eles, sem salvar a
-  tarefa. A subtarefa nova deixada em branco não conta ao salvar e some quando outra abre.
+  cada vez fica aberta para editar o título, o prazo e o horário: clicar numa recolhida abre ela, e a seta à esquerda
+  do título recolhe (e volta a subtarefa nova em branco). Salvar com uma subtarefa sem título abre ela com o cursor
+  no título.
+- **Escolher o dia grava a subtarefa:** com o título escrito, clicar no dia (ou Enter nele) recolhe a subtarefa e
+  abre outra em branco para a mesma pessoa (o horário, se tiver, vai antes do dia). As setas do teclado só andam
+  pelos dias; Enter no título vai para eles, sem salvar a tarefa. A subtarefa nova deixada em branco não conta ao
+  salvar.
 
-- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O
-  **+ Subtarefa** dentro do card de cada um cria uma subtarefa para a pessoa, no formulário e na janela da tarefa.
+- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. Na janela
+  da tarefa, o **+ Subtarefa** no card de cada um cria uma subtarefa para a pessoa (quem criou, para qualquer uma;
+  quem tem autonomia, para si).
 - **Quem pode o quê:**
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |

@@ -13,7 +13,8 @@
 //   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
 // ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
-// subtarefas dela; a seta recolhe o card), que também edita uma atividade ou uma tarefa. Os dias se escolhem numa faixa
+// subtarefas dela; clicar no nome abre o card já com uma subtarefa nova, e escolher o dia dela grava e abre a
+// próxima), que também edita uma atividade ou uma tarefa. Os dias se escolhem numa faixa
 // de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia já tem.
 // Recolhida, fica só a faixa de dias (a escolha, e a vista, ficam guardadas neste navegador). #/gestao?dia=AAAA-MM-DD
 // abre a agenda nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da
@@ -511,10 +512,10 @@ async function aoClicar(e) {
     return desenharPessoas();
   }
   if (b.dataset.tirarPessoa) return tirarPessoa(Number(b.dataset.tirarPessoa));
-  if (b.dataset.subPara) return maisSub(Number(b.dataset.subPara));
-  if (b.dataset.recolherPessoa) return alternarCard(b, estado.tf.recolhidos);
+  if (b.dataset.recolherPessoa) return expandirPessoa(Number(b.dataset.recolherPessoa));
   if (b.dataset.abrirSub) return focarSub(Number(b.dataset.abrirSub), "titulo");
-  if ("fecharSub" in b.dataset) return abrirSub(null);
+  // recolher a subtarefa aberta: no lugar dela, uma nova em branco no mesmo card
+  if ("fecharSub" in b.dataset) return maisSub(estado.tf.subtarefas[estado.tf.aberta].responsavel);
   if (b.dataset.tirarSub) {
     lerSubs();
     const n = Number(b.dataset.tirarSub), aberta = estado.tf.aberta;
@@ -1073,15 +1074,15 @@ function formAtividade(a, dia) {
 }
 
 // O formulário da tarefa: o que é e o prazo; embaixo, as pessoas e as subtarefas. Participantes e subtarefas ficam em
-// estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; recolhidos: os cards fechados; aberta: a
-// subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto); os campos da subtarefa
-// usam data-campo, não name: com nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
+// estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; expandida: a pessoa com o card aberto, uma
+// de cada vez; aberta: a subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto);
+// os campos da subtarefa usam data-campo, não name: com nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
 function formTarefa(t, dia) {
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
     subtarefas: t ? t.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
                                                prazo: s.prazo, hora: s.hora || "" })) : [],
-    recolhidos: new Set(),
+    expandida: null,
     aberta: null,
   };
   return `<div class="ag-tela-col">
@@ -1097,35 +1098,32 @@ function formTarefa(t, dia) {
       <div class="campo-form"><span>Pessoas e subtarefas <small>(opcional)</small></span>
         <div class="ag-pessoas" id="ag-pessoas"></div>
         <span class="campo"><select data-add-pessoa aria-label="Adicionar participante"></select></span>
-        <small>Com autonomia, a pessoa edita o texto das próprias subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
+        <small>Clique no nome de uma pessoa para ver as subtarefas dela e criar outra. Com autonomia, a pessoa edita o texto
+          das próprias subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
       </div>
     </div>`;
 }
 
-// Um card por pessoa (você primeiro, depois os participantes), com as subtarefas dela dentro. Recolhido, fica só a
-// pessoa; a linha aberta continua na página (escondida), para lerSubs ler o que foi digitado nela.
+// Um card por pessoa (você primeiro, depois os participantes), com as subtarefas dela dentro. Só o da pessoa
+// expandida fica aberto, com uma subtarefa nova em branco no fim (expandirPessoa); os outros mostram só a pessoa.
 function desenharPessoas() {
   const f = raiz.querySelector("#ag-form");
-  const { participantes, subtarefas, recolhidos } = estado.tf;
+  const { participantes, subtarefas, expandida } = estado.tf;
   const eu = estado.pessoas.eu, prazo = f.elements.prazo.value, hora = f.elements.hora.value || null;
   const lista = f.querySelector("#ag-pessoas");
   lista.innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
     const linhas = subtarefas.map((s, n) => [s, n]).filter(([s]) => s.responsavel === p.id);
-    const quem = p.voce ? "você" : esc(p.nome);
     const escritas = linhas.filter(([s]) => !emBranco(s)).length; // a nova em branco ainda não conta
     const resumo = escritas ? plural(escritas, "subtarefa", "subtarefas") : "sem subtarefas";
-    return `<div class="ag-pessoa-card ${recolhidos.has(p.id) ? "recolhido" : ""}">
+    const fechado = p.id !== expandida;
+    return `<div class="ag-pessoa-card ${fechado ? "recolhido" : ""}">
       <div class="ag-pessoa-cab">
-        ${nomeDoCard(p, resumo, recolhidos.has(p.id))}
+        ${nomeDoCard(p, resumo, fechado)}
         ${p.voce ? "" : `<button type="button" class="ag-pessoa-op ${p.autonomia ? "ativo" : ""}" data-autonomia="${p.id}" aria-pressed="${p.autonomia}"
           title="${p.autonomia ? "Com autonomia: edita o texto das próprias subtarefas e cria subtarefas para si. Clique para tirar." : "Sem autonomia: só conclui as próprias subtarefas. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
         <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>`}
       </div>
-      <div class="ag-pessoa-corpo">
-        ${linhas.map(([s, n]) => linhaSub(s, n, p, prazo, hora)).join("")}
-        <button type="button" class="ag-pessoa-op ag-pessoa-sub" data-sub-para="${p.id}" title="Criar uma subtarefa para ${quem}"
-          aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button>
-      </div>
+      <div class="ag-pessoa-corpo">${linhas.map(([s, n]) => linhaSub(s, n, p, prazo, hora)).join("")}</div>
     </div>`;
   }).join("");
   prepararDias(lista);
@@ -1144,7 +1142,8 @@ function nomeDoCard(p, resumo, recolhido, papel = "") {
     title="${recolhido ? "Mostrar" : "Esconder"} as subtarefas de ${nome}">${icone("setaBaixo", "ag-seta")}${icone("usuario")}<b>${nome}</b>${papel ? `<small>${papel}</small>` : ""}<small>· ${resumo}</small></button>`;
 }
 
-// Recolhe ou abre o card do botão (sem redesenhar: o que está sendo digitado continua); recolhidos guarda a escolha.
+// Na janela da tarefa: recolhe ou abre o card do botão (sem redesenhar: o que está sendo digitado continua);
+// recolhidos guarda a escolha.
 function alternarCard(b, recolhidos) {
   const card = b.closest(".ag-pessoa-card");
   const fechar = !card.classList.contains("recolhido");
@@ -1155,7 +1154,8 @@ function alternarCard(b, recolhidos) {
 }
 
 // Uma subtarefa no card da pessoa p. Recolhida: só o texto e o prazo (em vermelho se passa do da tarefa), e clicar
-// abre. Aberta (a de estado.tf.aberta): o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado.
+// abre. Aberta (a de estado.tf.aberta): o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado; a nova
+// em branco, sem a seta e o x (não há o que recolher nem tirar).
 function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
   const de = p.voce ? "você" : p.nome;
   const tirar = `<button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>`;
@@ -1169,12 +1169,14 @@ function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
     </div>`;
   }
   const hora = `<input type="time" data-campo="hora" value="${s.hora || ""}" title="Horário (opcional)" aria-label="Horário da subtarefa (opcional)">`;
+  const nova = emBranco(s);
   return `<div class="ag-sub-linha" data-n="${n}">
       <div class="ag-sub-topo">
-        <button type="button" class="ag-sub-recolher" data-fechar-sub title="Recolher a subtarefa" aria-expanded="true"
-          aria-label="Recolher a subtarefa">${icone("setaBaixo")}</button>
-        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa de ${esc(de)}">
-        ${tirar}
+        ${nova ? "" : `<button type="button" class="ag-sub-recolher" data-fechar-sub title="Recolher a subtarefa" aria-expanded="true"
+          aria-label="Recolher a subtarefa">${icone("setaBaixo")}</button>`}
+        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}"
+          placeholder="${nova ? "Nova subtarefa: o que fazer" : "O que fazer"}" aria-label="Subtarefa de ${esc(de)}">
+        ${nova ? "" : tirar}
       </div>
       ${campoDia({ campo: "prazo", valor: s.prazo, max: prazoTarefa, maxDica: "Depois do prazo da tarefa", rotulo: `Prazo da subtarefa de ${de}`,
                    contar: !!p.voce, extra: hora })}
@@ -1191,20 +1193,27 @@ function abrirSub(n) {
   const alvo = n == null ? null : estado.tf.subtarefas[n];
   estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s === alvo || !emBranco(s));
   estado.tf.aberta = alvo ? estado.tf.subtarefas.indexOf(alvo) : null;
-  if (alvo) estado.tf.recolhidos.delete(alvo.responsavel);
+  if (alvo) estado.tf.expandida = alvo.responsavel;
   desenharPessoas();
   return estado.tf.aberta;
 }
 
-// Escolher o dia da subtarefa aberta grava ela, sem precisar do + Subtarefa: recolhe e, se era nova, abre outra em
-// branco para a mesma pessoa. Sem título ainda, fica aberta e o cursor vai para ele.
+// Clicar no nome da pessoa abre o card dela (o que estava aberto se recolhe) já com uma subtarefa nova em branco,
+// pronta para escrever; clicar de novo recolhe.
+function expandirPessoa(id) {
+  if (estado.tf.expandida !== id) return maisSub(id);
+  estado.tf.expandida = null;
+  abrirSub(null);
+}
+
+// Escolher o dia da subtarefa aberta grava ela: recolhe e abre outra em branco para a mesma pessoa. Sem título ainda,
+// fica aberta e o cursor vai para ele.
 function aoEscolherDia(e) {
   const linha = e.target.closest("#ag-pessoas .ag-sub-linha");
   if (!linha) return;
   lerSubs();
   const s = estado.tf.subtarefas[Number(linha.dataset.n)];
   if (!s.titulo.trim()) return linha.querySelector('[data-campo="titulo"]').focus();
-  if (s.id) return abrirSub(null);
   maisSub(s.responsavel);
 }
 
@@ -1216,8 +1225,8 @@ function lerSubs() {
   });
 }
 
-// Uma subtarefa nova no card da pessoa (aberto, se estava recolhido), com o prazo da tarefa: ela abre para escrever e
-// as outras ficam recolhidas, só com o texto.
+// Uma subtarefa nova em branco no card da pessoa (que abre), com o prazo da tarefa: ela abre para escrever e as
+// outras ficam recolhidas, só com o texto.
 function maisSub(responsavel) {
   lerSubs();
   const f = raiz.querySelector("#ag-form");
@@ -1227,7 +1236,7 @@ function maisSub(responsavel) {
 
 // Põe o foco num campo da subtarefa n (no prazo, o dia escolhido), abrindo ela e o card dela.
 function focarSub(n, campo) {
-  if (estado.tf.aberta !== n || raiz.querySelector(`#ag-pessoas .recolhido .ag-sub-linha[data-n="${n}"]`)) n = abrirSub(n);
+  if (estado.tf.aberta !== n) n = abrirSub(n);
   const c = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"] [data-campo="${campo}"]`);
   if (c.type === "hidden") focarDia(c); else c.focus();
 }
@@ -1240,7 +1249,7 @@ function tirarPessoa(id) {
   if (n && !confirm(`Tirar ${p.nome} da tarefa? ${n === 1 ? "A subtarefa" : `As ${n} subtarefas`} de ${p.nome} ${n === 1 ? "sai" : "saem"} junto.`)) return;
   estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s.responsavel !== id);
   estado.tf.participantes = estado.tf.participantes.filter((x) => x.id !== id);
-  estado.tf.recolhidos.delete(id);
+  if (estado.tf.expandida === id) estado.tf.expandida = null;
   estado.tf.aberta = null; // as posições das subtarefas mudaram
   desenharPessoas();
 }
@@ -1294,7 +1303,7 @@ function aoMudar(e) {
     const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));
     estado.tf.participantes.push({ id: p.id, nome: p.nome, autonomia: false });
     estado.tf.participantes.sort((a, b) => a.nome.localeCompare(b.nome));
-    desenharPessoas();
+    maisSub(p.id); // o card de quem entrou já abre, pronto para a primeira subtarefa
   }
 }
 
