@@ -26,6 +26,7 @@ const ICONES = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   mais: '<path d="M12 5v14M5 12h14"/>',
   minimizar: '<path d="M5 12h14"/>',
+  setaBaixo: '<path d="m6 9 6 6 6-6"/>', // recolher e abrir (gira quando recolhido)
   relogio: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/>',
   // caderneta de anotações: capa, lombada com as argolas e as linhas
   caderneta: '<rect x="5.5" y="3" width="14" height="18" rx="2"/><path d="M9.5 3v18M3.5 7.5h4M3.5 12h4M3.5 16.5h4M12.5 8h4.5M12.5 11.5h4.5M12.5 15h3"/>',

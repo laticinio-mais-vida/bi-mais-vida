@@ -5,10 +5,12 @@
 // - Atividade: concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback, desfazer e, nas que
 //   se repetem, o histórico de tudo o que foi feito.
 // - Tarefa: aparece no dia do prazo; cada subtarefa, no dia do prazo dela (quem criou vê todas; o participante, as
-//   dele). A janela da tarefa mostra todas as subtarefas, de todos: cada um conclui as suas e, com autonomia, edita o
-//   texto delas e cria subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas.
+//   dele). A janela da tarefa mostra um card por pessoa com as subtarefas dela, de todos: cada um conclui as suas e,
+//   com autonomia, edita o texto delas e cria subtarefas para si. No dia de hoje, um bloco lista as tarefas e
+//   subtarefas atrasadas.
 // Ao lado, o formulário de atividade nova (única, diária, semanal, mensal ou a cada N dias, com horário opcional) ou de
-// tarefa nova (prazo, participantes com ou sem autonomia e subtarefas), que também edita uma atividade ou uma tarefa.
+// tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as subtarefas dela; a seta recolhe o card), que
+// também edita uma atividade ou uma tarefa.
 // Recolhida, fica só a faixa de dias (a escolha fica guardada neste navegador). #/gestao?dia=AAAA-MM-DD abre a agenda
 // nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da repetição ("Toda
 // segunda e quinta") e o que cada pessoa pode fazer numa tarefa vêm do servidor (bi/agenda.py e bi/tarefas.py).
@@ -30,9 +32,10 @@ let raiz = null, dlg = null;
 // pessoas: quem pode participar ({eu, pessoas}, carregado na primeira tarefa); editando: {tipo, ...o item}.
 const estado = { mes: null, dados: null, aberto: null, editando: null, concluindo: null, form: null, formInicial: null, pedido: 0,
                  tipo: "atividade", tf: null, pessoas: null };
-// A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), como o formulário dela começou e,
-// na nova, para quem (o botão ao lado do nome da pessoa; null = quem criou).
-const janela = { tarefa: null, editando: null, inicial: null, para: null };
+// A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), como o formulário dela começou, na
+// nova, para quem (o card em que ela foi aberta) e os cards de pessoa recolhidos.
+const janela = { tarefa: null, editando: null, inicial: null, para: null, recolhidos: new Set() };
+const JANELA_VAZIA = () => ({ tarefa: null, editando: null, inicial: null, para: null, recolhidos: new Set() });
 
 // ---------- apoio ----------
 const capitalizar = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
@@ -405,12 +408,12 @@ async function aoClicar(e) {
     return desenharPessoas();
   }
   if (b.dataset.tirarPessoa) return tirarPessoa(Number(b.dataset.tirarPessoa));
-  if ("maisSub" in b.dataset) return maisSub();
   if (b.dataset.subPara) return maisSub(Number(b.dataset.subPara));
+  if (b.dataset.recolherPessoa) return alternarCard(b, estado.tf.recolhidos);
   if (b.dataset.tirarSub) {
     lerSubs();
     estado.tf.subtarefas.splice(Number(b.dataset.tirarSub), 1);
-    return desenharSubs();
+    return desenharPessoas();
   }
   if ("cancelarEdicao" in b.dataset) return cancelarEdicao();
   const li = b.closest(".ag-item");
@@ -578,7 +581,7 @@ function criarJanela() {
     }
   });
   dlg.addEventListener("cancel", (e) => { if (janelaMudou() && !confirm(DESCARTAR_SUB)) e.preventDefault(); });
-  dlg.addEventListener("close", () => Object.assign(janela, { tarefa: null, editando: null, inicial: null, para: null }));
+  dlg.addEventListener("close", () => Object.assign(janela, JANELA_VAZIA()));
 }
 
 async function abrirHistorico(a) {
@@ -587,7 +590,7 @@ async function abrirHistorico(a) {
     h = await api(`/api/agenda/historico?id=${a.id}`);
   } catch (e) { return toast(e.message, "erro"); }
   criarJanela();
-  Object.assign(janela, { tarefa: null, editando: null, inicial: null, para: null });
+  Object.assign(janela, JANELA_VAZIA());
   dlg.className = "dialogo camp-dialogo ag-historico";
   dlg.setAttribute("aria-labelledby", "ag-hist-titulo");
   const at = h.atividade;
@@ -629,38 +632,38 @@ async function abrirTarefa(id) {
   criarJanela();
   dlg.className = "dialogo camp-dialogo ag-tarefa-dlg";
   dlg.setAttribute("aria-labelledby", "ag-tf-titulo");
+  if (janela.tarefa?.id !== t.id) janela.recolhidos = new Set();
   janela.editando = null;
   desenharTarefa(t);
   if (!dlg.open) dlg.showModal();
 }
 
-// As subtarefas por pessoa: as minhas primeiro, depois as de quem criou e as dos outros, pelo nome.
-function grupos(t) {
-  const por = new Map();
-  for (const s of t.subtarefas) {
-    if (!por.has(s.responsavel.id)) por.set(s.responsavel.id, { pessoa: s.responsavel, minha: s.minha, subs: [] });
-    por.get(s.responsavel.id).subs.push(s);
-  }
-  const ordem = (g) => [g.minha ? 0 : g.pessoa.id === t.criador.id ? 1 : 2, g.pessoa.nome.toLowerCase()];
-  return [...por.values()].sort((a, b) => {
-    const [x, y] = [ordem(a), ordem(b)];
-    return x[0] - y[0] || x[1].localeCompare(y[1]);
-  });
+// As pessoas da tarefa, cada uma num card com as subtarefas dela: você primeiro, depois quem criou e os outros, pelo nome.
+function pessoasDaTarefa(t) {
+  const ordem = (p) => (p.voce ? 0 : p.criador ? 1 : 2);
+  return [{ ...t.criador, criador: true }, ...t.participantes].map((p) => ({ ...p, voce: p.id === t.eu }))
+    .sort((a, b) => ordem(a) - ordem(b) || a.nome.localeCompare(b.nome));
+}
+
+function cartaoTarefa(t, p) {
+  const subs = t.subtarefas.filter((s) => s.responsavel.id === p.id);
+  const feitas = subs.filter((s) => s.feita).length;
+  const recolhido = janela.recolhidos.has(p.id);
+  const quem = p.voce ? "você" : esc(p.nome);
+  const resumo = subs.length ? `${feitas} de ${subs.length} ${subs.length === 1 ? "feita" : "feitas"}` : "sem subtarefas";
+  // quem criou acrescenta para qualquer pessoa; o participante com autonomia, só no próprio card
+  const criar = !t.pode.criar_subtarefa || !(t.eu_criador || p.voce) ? ""
+    : janela.editando === "nova" && janela.para === p.id ? formSubHtml(t, null)
+    : `<button type="button" class="ag-pessoa-op ag-pessoa-sub" data-sub-nova data-para="${p.id}" title="Criar uma subtarefa para ${quem}"
+        aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button>`;
+  return `<section class="ag-pessoa-card ${recolhido ? "recolhido" : ""}">
+    <div class="ag-pessoa-cab">${nomeDoCard(p, resumo, recolhido, p.criador ? "· criou" : p.autonomia ? "· autonomia" : "")}</div>
+    <div class="ag-pessoa-corpo">${subs.length ? `<ul class="ag-itens">${subs.map((s) => subHtml(t, s)).join("")}</ul>` : ""}${criar}</div>
+  </section>`;
 }
 
 function desenharTarefa(t) {
   janela.tarefa = t;
-  const pessoas = [{ ...t.criador, criador: true }, ...t.participantes];
-  const lista = grupos(t).map((g) => {
-    const feitas = g.subs.filter((s) => s.feita).length;
-    return `<section class="ag-grupo">
-      <h4>${icone("usuario")}${g.minha ? "As suas" : esc(g.pessoa.nome)} <small>${feitas} de ${g.subs.length}</small></h4>
-      <ul class="ag-itens">${g.subs.map((s) => subHtml(t, s)).join("")}</ul>
-    </section>`;
-  }).join("");
-  const nova = !t.pode.criar_subtarefa ? ""
-    : janela.editando === "nova" ? `<div class="ag-grupo">${formSubHtml(t, null)}</div>`
-    : `<button class="btn ag-mais-sub" type="button" data-sub-nova>${icone("mais")}${t.eu_criador ? "Subtarefa" : "Subtarefa para mim"}</button>`;
   dlg.innerHTML = `<div class="ag-tf">
     <div class="ag-hist-cab">
       <div><h2 id="ag-tf-titulo">${icone("tarefa")}${esc(t.titulo)}</h2>
@@ -669,7 +672,6 @@ function desenharTarefa(t) {
       <button class="btn icone" type="button" data-fechar title="Fechar" aria-label="Fechar">${icone("x")}</button>
     </div>
     ${t.descricao ? `<p class="ag-tf-desc">${esc(t.descricao)}</p>` : ""}
-    <div class="ag-tf-pessoas">${pessoas.map((p) => pessoaHtml(t, p)).join("")}</div>
     <div class="ag-tf-prog">
       ${t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Tarefa concluída ${quando(t.concluida_em, t.prazo)}</span>` : ""}
       <span>${t.total ? `${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}` : "Sem subtarefas"}</span>
@@ -680,21 +682,10 @@ function desenharTarefa(t) {
       <button class="btn" type="button" data-tf-editar>${icone("lapis")}Editar</button>
       <button class="btn perigo" type="button" data-tf-excluir>${icone("lixeira")}Excluir</button>
     </div>` : ""}
-    <span class="cf-rotulo ag-hist-rotulo">Subtarefas</span>
-    ${lista || `<p class="ag-vazio">${icone("info")}Nenhuma subtarefa.</p>`}
-    ${nova}
+    <span class="cf-rotulo ag-hist-rotulo">Pessoas e subtarefas</span>
+    <div class="ag-pessoas">${pessoasDaTarefa(t).map((p) => cartaoTarefa(t, p)).join("")}</div>
   </div>`;
   janela.inicial = janela.editando != null ? JSON.stringify(lerSubJanela()) : null;
-}
-
-// Uma pessoa da tarefa, no topo da janela; para quem criou, com o botão que cria uma subtarefa para ela.
-function pessoaHtml(t, p) {
-  const papel = p.criador ? " · criou" : p.autonomia ? " · autonomia" : "";
-  if (!(t.eu_criador && t.pode.criar_subtarefa)) return `<span class="chip">${icone("usuario")}${esc(p.nome)}${papel}</span>`;
-  const quem = p.criador ? "você" : esc(p.nome);
-  return `<span class="ag-pessoa">${icone("usuario")}<b>${esc(p.nome)}</b>${papel ? `<small>${papel}</small>` : ""}
-    <button type="button" class="ag-pessoa-sub" data-sub-nova data-para="${p.id}" title="Criar uma subtarefa para ${quem}"
-      aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button></span>`;
 }
 
 function subHtml(t, s) {
@@ -717,14 +708,17 @@ function subHtml(t, s) {
   </li>`;
 }
 
-// A subtarefa nova ou em edição, na janela: quem criou muda tudo; o participante com autonomia, só o texto.
+// A subtarefa nova (no card da pessoa) ou em edição, na janela: quem criou muda tudo (na edição, até passar para outra
+// pessoa); o participante com autonomia, só o texto.
 function formSubHtml(t, s) {
   const pessoas = [t.criador, ...t.participantes];
   const v = s || { titulo: "", descricao: "", responsavel: pessoas.find((p) => p.id === janela.para) || t.criador,
                    prazo: t.prazo, hora: t.hora };
-  const prazo = t.eu_criador ? `<div class="ag-sub-edit-campos">
-      <label class="campo-form"><span>Responsável</span><span class="campo"><select data-campo="responsavel">${pessoas.map((p) =>
-        `<option value="${p.id}" ${p.id === v.responsavel.id ? "selected" : ""}>${esc(p.nome)}${p.id === t.criador.id ? " (você)" : ""}</option>`).join("")}</select></span></label>
+  const responsavel = s ? `<label class="campo-form"><span>Responsável</span><span class="campo"><select data-campo="responsavel">${pessoas.map((p) =>
+      `<option value="${p.id}" ${p.id === v.responsavel.id ? "selected" : ""}>${esc(p.nome)}${p.id === t.criador.id ? " (você)" : ""}</option>`).join("")}</select></span></label>`
+    : `<input type="hidden" data-campo="responsavel" value="${v.responsavel.id}">`;
+  const prazo = t.eu_criador ? `<div class="ag-sub-edit-campos ${s ? "" : "sem-responsavel"}">
+      ${responsavel}
       <label class="campo-form"><span>Prazo</span><input type="date" data-campo="prazo" value="${v.prazo}" max="${t.prazo}"></label>
       <label class="campo-form"><span>Horário <small>(opcional)</small></span><input type="time" data-campo="hora" value="${v.hora || ""}"></label>
     </div>`
@@ -763,6 +757,7 @@ function aoClicarJanela(e) {
   }
   const t = janela.tarefa;
   if (!t) return;
+  if (b.dataset.recolherPessoa) return alternarCard(b, janela.recolhidos);
   const s = b.closest("[data-sub]") ? subDe(t, Number(b.closest("[data-sub]").dataset.sub)) : null;
   if ("subNova" in b.dataset || "subEditar" in b.dataset) {
     if (janelaMudou() && !confirm(DESCARTAR_SUB)) return;
@@ -826,7 +821,7 @@ function desenharForm(item = null, tipo = item ? item.tipo : estado.tipo) {
       `<button type="button" data-tipo="${k}" class="${k === tipo ? "ativo" : ""}" aria-pressed="${k === tipo}">${n}</button>`).join("")}</div>`}
     <form id="ag-form" class="ag-form" novalidate>${ehTarefa ? formTarefa(item) : formAtividade(item)}</form>`;
   el.querySelector("form").addEventListener("submit", aoEnviar);
-  if (ehTarefa) desenharSubs(); else mostrarCampos();
+  if (ehTarefa) desenharPessoas(); else mostrarCampos();
   estado.formInicial = JSON.stringify(coletar());
 }
 
@@ -874,14 +869,15 @@ function formAtividade(a) {
       </div>`;
 }
 
-// O formulário da tarefa. Participantes e subtarefas ficam em estado.tf (desenharPessoas e desenharSubs); os campos das
-// linhas de subtarefa usam data-campo, não name: com nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
+// O formulário da tarefa. Participantes e subtarefas ficam em estado.tf (desenharPessoas: um card por pessoa, com as
+// subtarefas dela; recolhidos: os cards fechados); os campos das linhas de subtarefa usam data-campo, não name: com
+// nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
 function formTarefa(t) {
-  const eu = estado.pessoas.eu;
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
     subtarefas: t ? t.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
-                                               nome: s.responsavel.nome, prazo: s.prazo, hora: s.hora || "" })) : [],
+                                               prazo: s.prazo, hora: s.hora || "" })) : [],
+    recolhidos: new Set(),
   };
   return `<label class="campo-form"><span>Título</span>
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(t?.titulo || "")}" placeholder="Ex.: Preparar a feira de novembro"></label>
@@ -893,14 +889,10 @@ function formTarefa(t) {
         <label class="campo-form"><span>Horário <small>(opcional)</small></span>
           <input type="time" name="hora" value="${t?.hora || ""}"></label>
       </div>
-      <div class="campo-form"><span>Participantes <small>(opcional)</small></span>
+      <div class="campo-form"><span>Pessoas e subtarefas <small>(opcional)</small></span>
         <div class="ag-pessoas" id="ag-pessoas"></div>
         <span class="campo"><select data-add-pessoa aria-label="Adicionar participante"></select></span>
-        <small>Com autonomia, a pessoa edita o texto das subtarefas dela e cria subtarefas para si. Prazos, só você muda.</small>
-      </div>
-      <div class="campo-form"><span>Subtarefas <small>(opcional; responsável ${esc(eu.nome)} ou um participante)</small></span>
-        <div class="ag-subs" id="ag-subs"></div>
-        <button class="btn ag-mais-sub" type="button" data-mais-sub>${icone("mais")}Subtarefa</button>
+        <small>Com autonomia, a pessoa edita o texto das próprias subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
       </div>
       <div class="ag-form-acoes">
         ${t ? `<button class="btn" type="button" data-cancelar-edicao>Cancelar</button>` : ""}
@@ -908,17 +900,30 @@ function formTarefa(t) {
       </div>`;
 }
 
+// Um card por pessoa (você primeiro, depois os participantes), com as subtarefas dela dentro. Recolhido, fica só a
+// pessoa; as linhas continuam na página (escondidas), para lerSubs ler tudo.
 function desenharPessoas() {
   const f = raiz.querySelector("#ag-form");
-  const { participantes } = estado.tf;
-  f.querySelector("#ag-pessoas").innerHTML = participantes.map((p) => `<span class="ag-pessoa">
-      ${icone("usuario")}<b>${esc(p.nome)}</b>
-      <button type="button" class="ag-pessoa-sub" data-sub-para="${p.id}" title="Criar uma subtarefa para ${esc(p.nome)}"
-        aria-label="Criar uma subtarefa para ${esc(p.nome)}">${icone("mais")}Subtarefa</button>
-      <button type="button" data-autonomia="${p.id}" aria-pressed="${p.autonomia}" class="${p.autonomia ? "ativo" : ""}"
-        title="${p.autonomia ? "Com autonomia: edita o texto das subtarefas dele e cria subtarefas para si. Clique para tirar." : "Sem autonomia: só conclui as subtarefas dele. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
-      <button type="button" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>
-    </span>`).join("") || `<span class="ag-sem-pessoas">Só você, por enquanto.</span>`;
+  const { participantes, subtarefas, recolhidos } = estado.tf;
+  const eu = estado.pessoas.eu;
+  f.querySelector("#ag-pessoas").innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
+    const linhas = subtarefas.map((s, n) => [s, n]).filter(([s]) => s.responsavel === p.id);
+    const quem = p.voce ? "você" : esc(p.nome);
+    const resumo = linhas.length ? plural(linhas.length, "subtarefa", "subtarefas") : "sem subtarefas";
+    return `<div class="ag-pessoa-card ${recolhidos.has(p.id) ? "recolhido" : ""}">
+      <div class="ag-pessoa-cab">
+        ${nomeDoCard(p, resumo, recolhidos.has(p.id))}
+        ${p.voce ? "" : `<button type="button" class="ag-pessoa-op ${p.autonomia ? "ativo" : ""}" data-autonomia="${p.id}" aria-pressed="${p.autonomia}"
+          title="${p.autonomia ? "Com autonomia: edita o texto das próprias subtarefas e cria subtarefas para si. Clique para tirar." : "Sem autonomia: só conclui as próprias subtarefas. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
+        <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>`}
+      </div>
+      <div class="ag-pessoa-corpo">
+        ${linhas.map(([s, n]) => linhaSub(s, n, quem)).join("")}
+        <button type="button" class="ag-pessoa-op ag-pessoa-sub" data-sub-para="${p.id}" title="Criar uma subtarefa para ${quem}"
+          aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button>
+      </div>
+    </div>`;
+  }).join("");
   const livres = estado.pessoas.pessoas.filter((p) => !participantes.some((q) => q.id === p.id));
   const sel = f.querySelector("[data-add-pessoa]");
   sel.innerHTML = `<option value="">${livres.length ? "Adicionar pessoa…" : "Ninguém mais com acesso à Gestão"}</option>` +
@@ -926,54 +931,73 @@ function desenharPessoas() {
   sel.disabled = !livres.length;
 }
 
-function desenharSubs() {
-  desenharPessoas();
-  const eu = estado.pessoas.eu;
-  const opcoes = [{ id: eu.id, nome: `${eu.nome} (você)` }, ...estado.tf.participantes];
-  raiz.querySelector("#ag-subs").innerHTML = estado.tf.subtarefas.map((s, n) => {
-    const resp = opcoes.some((o) => o.id === s.responsavel) ? opcoes : [...opcoes, { id: s.responsavel, nome: s.nome }];
-    return `<div class="ag-sub-linha" data-n="${n}">
+// O nome no topo do card (no formulário e na janela da tarefa): a seta e o nome recolhem o card (fica só a pessoa) e
+// abrem de novo (com as subtarefas).
+function nomeDoCard(p, resumo, recolhido, papel = "") {
+  const nome = `${esc(p.nome)}${p.voce ? " (você)" : ""}`;
+  return `<button type="button" class="ag-pessoa-nome" data-recolher-pessoa="${p.id}" aria-expanded="${!recolhido}"
+    title="${recolhido ? "Mostrar" : "Esconder"} as subtarefas de ${nome}">${icone("setaBaixo", "ag-seta")}${icone("usuario")}<b>${nome}</b>${papel ? `<small>${papel}</small>` : ""}<small>· ${resumo}</small></button>`;
+}
+
+// Recolhe ou abre o card do botão (sem redesenhar: o que está sendo digitado continua); recolhidos guarda a escolha.
+function alternarCard(b, recolhidos) {
+  const card = b.closest(".ag-pessoa-card");
+  const fechar = !card.classList.contains("recolhido");
+  card.classList.toggle("recolhido", fechar);
+  if (fechar) recolhidos.add(Number(b.dataset.recolherPessoa)); else recolhidos.delete(Number(b.dataset.recolherPessoa));
+  b.setAttribute("aria-expanded", String(!fechar));
+  b.title = b.title.replace(fechar ? "Esconder" : "Mostrar", fechar ? "Mostrar" : "Esconder");
+}
+
+function linhaSub(s, n, quem) {
+  return `<div class="ag-sub-linha" data-n="${n}">
       <div class="ag-sub-topo">
-        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa ${n + 1}">
-        <button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa ${n + 1}">${icone("x")}</button>
+        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa de ${quem}">
+        <button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>
       </div>
       <div class="ag-sub-campos">
-        <span class="campo"><select data-campo="responsavel" aria-label="Responsável pela subtarefa ${n + 1}">${resp.map((o) =>
-          `<option value="${o.id}" ${o.id === s.responsavel ? "selected" : ""}>${esc(o.nome)}</option>`).join("")}</select></span>
-        <input type="date" data-campo="prazo" value="${s.prazo}" aria-label="Prazo da subtarefa ${n + 1}">
-        <input type="time" data-campo="hora" value="${s.hora || ""}" aria-label="Horário da subtarefa ${n + 1} (opcional)">
+        <input type="date" data-campo="prazo" value="${s.prazo}" aria-label="Prazo da subtarefa">
+        <input type="time" data-campo="hora" value="${s.hora || ""}" aria-label="Horário da subtarefa (opcional)">
       </div>
     </div>`;
-  }).join("");
 }
 
 // Copia o que foi digitado nas linhas de subtarefa para estado.tf (antes de redesenhar ou de enviar).
 function lerSubs() {
-  raiz.querySelectorAll("#ag-subs .ag-sub-linha").forEach((linha) => {
+  raiz.querySelectorAll("#ag-pessoas .ag-sub-linha").forEach((linha) => {
     const s = estado.tf.subtarefas[Number(linha.dataset.n)];
-    linha.querySelectorAll("[data-campo]").forEach((c) => { s[c.dataset.campo] = c.dataset.campo === "responsavel" ? Number(c.value) : c.value; });
+    linha.querySelectorAll("[data-campo]").forEach((c) => { s[c.dataset.campo] = c.value; });
   });
 }
 
-// Uma linha de subtarefa nova, com o prazo da tarefa; responsavel: o participante do botão ao lado do nome (sem ele, eu).
-function maisSub(responsavel = estado.pessoas.eu.id) {
+// Uma linha de subtarefa nova no card da pessoa (aberto, se estava recolhido), com o prazo da tarefa.
+function maisSub(responsavel) {
   lerSubs();
   const f = raiz.querySelector("#ag-form");
-  const eu = estado.pessoas.eu;
-  const nome = responsavel === eu.id ? eu.nome : estado.tf.participantes.find((p) => p.id === responsavel).nome;
-  estado.tf.subtarefas.push({ id: null, titulo: "", descricao: "", responsavel, nome,
-                              prazo: f.elements.prazo.value || hojeLocal(), hora: "" });
-  desenharSubs();
-  raiz.querySelector('#ag-subs .ag-sub-linha:last-child [data-campo="titulo"]').focus();
+  estado.tf.recolhidos.delete(responsavel);
+  estado.tf.subtarefas.push({ id: null, titulo: "", descricao: "", responsavel, prazo: f.elements.prazo.value || hojeLocal(), hora: "" });
+  desenharPessoas();
+  focarSub(estado.tf.subtarefas.length - 1, "titulo");
 }
 
+// Põe o cursor num campo da linha n, abrindo o card dela se estava recolhido.
+function focarSub(n, campo) {
+  const linha = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"]`);
+  const nome = linha.closest(".ag-pessoa-card").querySelector("[data-recolher-pessoa]");
+  if (nome.closest(".recolhido")) alternarCard(nome, estado.tf.recolhidos);
+  linha.querySelector(`[data-campo="${campo}"]`).focus();
+}
+
+// Tira o participante da tarefa e, com ele, as subtarefas dele (perguntando antes, se houver).
 function tirarPessoa(id) {
   lerSubs();
   const p = estado.tf.participantes.find((x) => x.id === id);
   const n = estado.tf.subtarefas.filter((s) => s.responsavel === id).length;
-  if (n) return toast(`Passe ${n === 1 ? "a subtarefa" : `as ${n} subtarefas`} de ${p.nome} para outra pessoa ou tire ${n === 1 ? "a subtarefa" : "as subtarefas"} antes`, "erro");
+  if (n && !confirm(`Tirar ${p.nome} da tarefa? ${n === 1 ? "A subtarefa" : `As ${n} subtarefas`} de ${p.nome} ${n === 1 ? "sai" : "saem"} junto.`)) return;
+  estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s.responsavel !== id);
   estado.tf.participantes = estado.tf.participantes.filter((x) => x.id !== id);
-  desenharSubs();
+  estado.tf.recolhidos.delete(id);
+  desenharPessoas();
 }
 
 async function escolherTipo(tipo) {
@@ -1018,7 +1042,7 @@ function aoMudar(e) {
     const p = estado.pessoas.pessoas.find((x) => x.id === Number(e.target.value));
     estado.tf.participantes.push({ id: p.id, nome: p.nome, autonomia: false });
     estado.tf.participantes.sort((a, b) => a.nome.localeCompare(b.nome));
-    desenharSubs();
+    desenharPessoas();
   }
 }
 
@@ -1104,12 +1128,11 @@ async function enviarTarefa(f) {
   const dados = coletar();
   if (!dados.titulo) { toast("Escreva o título da tarefa", "erro"); return f.elements.titulo.focus(); }
   if (!dados.prazo) { toast("Escolha o prazo da tarefa", "erro"); return f.elements.prazo.focus(); }
-  const linhas = f.querySelectorAll(".ag-sub-linha");
   for (const [n, s] of dados.subtarefas.entries()) {
-    if (!s.titulo) { toast("Escreva o título da subtarefa", "erro"); return linhas[n].querySelector('[data-campo="titulo"]').focus(); }
+    if (!s.titulo) { toast("Escreva o título da subtarefa", "erro"); return focarSub(n, "titulo"); }
     if (depoisDoPrazo(s, dados)) {
       toast(`A subtarefa "${s.titulo}" vence depois da tarefa: o prazo dela vai até o da tarefa`, "erro");
-      return linhas[n].querySelector('[data-campo="prazo"]').focus();
+      return focarSub(n, "prazo");
     }
   }
   const botao = f.querySelector('[type="submit"]');

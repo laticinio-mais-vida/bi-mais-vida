@@ -110,8 +110,8 @@ class TestTarefasNoBanco(BaseBanco):
         self.assertEqual(self.mes(self.ana, "2026-11")["tarefas"], [])
         aberta = self.tarefas.obter(self.beto, t["id"])  # aberta, todas as subtarefas para todos
         self.assertEqual(len(aberta["subtarefas"]), 3)
-        self.assertEqual((aberta["eu_criador"], aberta["minha_autonomia"], aberta["pode"]),
-                         (False, True, {"editar": False, "concluir": False, "criar_subtarefa": True}))
+        self.assertEqual((aberta["eu"], aberta["eu_criador"], aberta["minha_autonomia"], aberta["pode"]),
+                         (self.beto, False, True, {"editar": False, "concluir": False, "criar_subtarefa": True}))
         self.assertEqual(self.sub(aberta, "Estande")["pode"], {"concluir": True, "editar_texto": True,
                                                                "editar_prazo": False})
         self.assertEqual(self.sub(aberta, "Material")["pode"], {"concluir": False, "editar_texto": False,

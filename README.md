@@ -483,12 +483,12 @@ guardada no navegador), e clicar num dia também abre.
 #### Tarefas
 
 No formulário ao lado do dia, **Tarefa** (em vez de **Atividade**) cria uma tarefa: título, descrição, o **prazo**
-(dia e horário opcional), os **participantes** e as **subtarefas**, cada uma com um responsável (quem criou ou um
-participante) e o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
+(dia e horário opcional) e um card por pessoa (você e os **participantes**) com as **subtarefas** dela, cada uma
+com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card e deixa
+só a pessoa; clicar de novo mostra as subtarefas.
 
-- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O botão
-  **+ Subtarefa** ao lado do nome de cada um cria uma subtarefa já com a pessoa como responsável, no formulário e na
-  janela da tarefa.
+- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O
+  **+ Subtarefa** dentro do card de cada um cria uma subtarefa para a pessoa, no formulário e na janela da tarefa.
 - **Quem pode o quê:**
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
@@ -500,15 +500,16 @@ participante) e o próprio prazo, que vai até o da tarefa (sem prazo, vence com
   | Concluir uma subtarefa | todas | as próprias | as próprias |
 
 - **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela: quem criou vê
-  todas, o participante vê as dele. O ícone de olho abre a tarefa com as subtarefas de todos, por pessoa, e ali cada
-  um conclui as suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
+  todas, o participante vê as dele. O ícone de olho abre a tarefa com um card por pessoa e as subtarefas de todos, e
+  ali cada um conclui as suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
 - **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo. Concluir a tarefa faz as
   subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
 - **Atrasadas:** o que passou do dia do prazo sem concluir fica vermelho no dia do prazo e aparece também no bloco
   **Atrasadas** do dia de hoje, até ser concluído.
-- **Editar** (só quem criou) muda tudo, até tirar participantes, mas quem ainda tem subtarefa só sai depois de as
-  subtarefas passarem para outra pessoa ou saírem. Se um participante mudou a tarefa enquanto o formulário estava
-  aberto, o Salvar avisa e pede para abrir de novo. **Excluir** apaga a tarefa e as subtarefas para todos.
+- **Editar** (só quem criou) muda tudo. Tirar um participante tira junto as subtarefas dele (a página pergunta
+  antes); para passar uma subtarefa a outra pessoa, use o lápis dela na janela da tarefa. Se um participante mudou a
+  tarefa enquanto o formulário estava aberto, o Salvar avisa e pede para abrir de novo. **Excluir** apaga a tarefa e
+  as subtarefas para todos.
 
 ### Pelo Assistente
 

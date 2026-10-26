@@ -179,7 +179,7 @@ class Tarefas:
                          "editar_texto": criador or (minha and autonomia), "editar_prazo": criador}})
         return {"id": t["id"], "titulo": t["titulo"], "descricao": t["descricao"], "prazo": t["prazo"].isoformat(),
                 "hora": _hhmm(t["hora"]), "versao": t["versao"],
-                "criador": {"id": t["criador"], "nome": t["criador_nome"]}, "eu_criador": criador,
+                "criador": {"id": t["criador"], "nome": t["criador_nome"]}, "eu": eu, "eu_criador": criador,
                 "minha_autonomia": autonomia,
                 "participantes": [p for p in t["pessoas"] if p["id"] != t["criador"]],
                 "feita": concluida, "concluida_em": hora(t["concluida_em"]),
