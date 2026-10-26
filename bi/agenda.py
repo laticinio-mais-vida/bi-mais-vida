@@ -1,4 +1,5 @@
 """Agenda de cada pessoa, no topo da página Gestão: atividades únicas ou repetidas e o que foi feito em cada dia.
+As tarefas com prazo, divididas com outras pessoas, ficam em bi/tarefas.py (a mesma agenda mostra as duas).
 
 - Cada pessoa vê só a própria agenda, como as conversas do Assistente (bi/conversas.py): todo método recebe o id do
   usuário e filtra por ele, e a atividade de outra pessoa é tratada como se não existisse.
@@ -78,13 +79,13 @@ def _inteiro(valor, campo: str, minimo: int, maximo: int) -> int:
     return n
 
 
-def _id(valor) -> int:
+def _id(valor, nao_achou: str = _NAO_ACHOU) -> int:
     try:
         n = int(valor)
     except (TypeError, ValueError):
-        raise NaoEncontrada(_NAO_ACHOU) from None
+        raise NaoEncontrada(nao_achou) from None
     if not 0 < n < 2 ** 63:
-        raise NaoEncontrada(_NAO_ACHOU)
+        raise NaoEncontrada(nao_achou)
     return n
 
 
@@ -106,13 +107,19 @@ def _chave(texto) -> str:
     return " ".join("".join(c if c.isalnum() else " " for c in t).split())
 
 
-def _valida(dados: dict) -> dict:
-    """A atividade como vai para o banco, com só os campos da repetição escolhida."""
-    titulo = " ".join(str(dados.get("titulo") or "").split())
+def _titulo(valor, de: str = "da atividade") -> str:
+    """O título sem espaços sobrando; obrigatório."""
+    titulo = " ".join(str(valor or "").split())
     if not titulo:
-        raise ValueError("escreva o título da atividade")
+        raise ValueError(f"escreva o título {de}")
     if len(titulo) > MAX_TITULO:
         raise ValueError(f"o título pode ter até {MAX_TITULO} caracteres")
+    return titulo
+
+
+def _valida(dados: dict) -> dict:
+    """A atividade como vai para o banco, com só os campos da repetição escolhida."""
+    titulo = _titulo(dados.get("titulo"))
     repeticao = dados.get("repeticao") or "nenhuma"
     if repeticao not in REPETICOES:
         raise ValueError(f"repetição desconhecida: {repeticao!r}")

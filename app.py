@@ -55,6 +55,7 @@ from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
+from bi.tarefas import Tarefas  # noqa: E402
 from bi.uso import RegistroUso  # noqa: E402
 
 log = logging.getLogger("bi")
@@ -71,11 +72,15 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
                       "/api/gestao/notas", "/api/gestao/nota/excluir", "/api/gestao/base"}
 # Agenda, no topo da página Gestão: quem tem a Gestão lê e muda só a própria agenda (bi/agenda.py filtra pelo
-# usuário). Por isso não entra em ROTAS_ADMIN, como as rotas que mudam a Gestão.
-ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico")
+# usuário) e as tarefas de que participa (bi/tarefas.py confere quem pode o quê). Por isso não entra em ROTAS_ADMIN,
+# como as rotas que mudam a Gestão.
+ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico", "/api/agenda/pessoas", "/api/agenda/tarefa")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
                       "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer",
-                      "/api/agenda/proposta"}
+                      "/api/agenda/proposta", "/api/agenda/tarefas", "/api/agenda/tarefa/editar",
+                      "/api/agenda/tarefa/excluir", "/api/agenda/tarefa/concluir", "/api/agenda/tarefa/desfazer",
+                      "/api/agenda/subtarefas", "/api/agenda/subtarefa/editar", "/api/agenda/subtarefa/concluir",
+                      "/api/agenda/subtarefa/desfazer"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
@@ -125,6 +130,7 @@ class Aplicacao:
                                      conversas=self.conversas)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
         self.agenda = Agenda(self.banco, self.configuracao)
+        self.tarefas = Tarefas(self.banco)
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
@@ -562,13 +568,20 @@ class Manipulador(BaseHTTPRequestHandler):
     def _ler_agenda(self, usuario: dict, caminho: str, q: dict):
         if not self._pode_gestao(usuario):
             return
-        if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje)
-            return self._json(self.app.agenda.mes(usuario["id"], q.get("mes")))
-        return self._json(self.app.agenda.historico(usuario["id"], q.get("id")))
+        eu = usuario["id"]
+        if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje): as atividades e as tarefas
+            return self._json(self.app.tarefas.no_mes(eu, self.app.agenda.mes(eu, q.get("mes"))))
+        if caminho == "/api/agenda/pessoas":  # quem pode participar de uma tarefa
+            return self._json(self.app.tarefas.pessoas(eu))
+        if caminho == "/api/agenda/tarefa":  # id=…: a tarefa aberta, com as subtarefas de todos
+            return self._json(self.app.tarefas.obter(eu, q.get("id")))
+        return self._json(self.app.agenda.historico(eu, q.get("id")))
 
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
         if not self._pode_gestao(usuario):
             return
+        if caminho.startswith(("/api/agenda/tarefa", "/api/agenda/subtarefa")):
+            return self._mudar_tarefa(usuario, caminho, corpo)
         agenda, eu, id_ = self.app.agenda, usuario["id"], corpo.get("id")
         if caminho == "/api/agenda/atividades":
             a = agenda.criar(eu, corpo.get("atividade") or {})
@@ -595,6 +608,32 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json({"ok": True, **r})
         agenda.desfazer(eu, id_, corpo.get("dia"))  # /api/agenda/desfazer
         return self._json({"ok": True})
+
+    def _mudar_tarefa(self, usuario: dict, caminho: str, corpo: dict):
+        """Tarefas e subtarefas da agenda; a resposta traz a tarefa como ficou (menos ao excluir)."""
+        tarefas, eu, id_ = self.app.tarefas, usuario["id"], corpo.get("id")
+        if caminho == "/api/agenda/tarefas":
+            t = tarefas.criar(eu, corpo.get("tarefa") or {})
+            log.info("%s criou a tarefa %s na agenda", usuario["login"], t["id"])
+        elif caminho == "/api/agenda/tarefa/editar":
+            t = tarefas.editar(eu, id_, corpo.get("tarefa") or {}, corpo.get("versao"))
+        elif caminho == "/api/agenda/tarefa/excluir":
+            tarefas.excluir(eu, id_)
+            log.info("%s excluiu a tarefa %s da agenda", usuario["login"], id_)
+            return self._json({"ok": True})
+        elif caminho == "/api/agenda/tarefa/concluir":
+            t = tarefas.concluir(eu, id_)
+        elif caminho == "/api/agenda/tarefa/desfazer":
+            t = tarefas.desfazer(eu, id_)
+        elif caminho == "/api/agenda/subtarefas":  # id: a tarefa
+            t = tarefas.nova_subtarefa(eu, id_, corpo.get("subtarefa") or {})
+        elif caminho == "/api/agenda/subtarefa/editar":
+            t = tarefas.editar_subtarefa(eu, id_, corpo.get("subtarefa") or {})
+        elif caminho == "/api/agenda/subtarefa/concluir":
+            t = tarefas.concluir_subtarefa(eu, id_)
+        else:  # /api/agenda/subtarefa/desfazer
+            t = tarefas.desfazer_subtarefa(eu, id_)
+        return self._json({"ok": True, "tarefa": t})
 
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):

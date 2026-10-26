@@ -9,9 +9,9 @@
 // mostram a base de cada um (no período da base escolhido) e, nos marcados, a meta ("padrão" ou "própria"), com a
 // opção de uma meta própria (no preço médio, o preço-alvo do vendedor em cada produto). A conta é toda no servidor
 // (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
-// por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js),
-// só dela, com os próprios eventos: os daqui ignoram o que acontece dentro dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD>
-// abre a agenda nesse dia.
+// por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js):
+// as atividades dela e as tarefas de que participa, com os próprios eventos: os daqui ignoram o que acontece dentro
+// dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD> abre a agenda nesse dia.
 import { abrirNaAgenda, agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
 import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,

@@ -445,6 +445,15 @@ atendeu. Na base de trimestre, semestre ou ano, cada mês usa os ativos do seu 1
 - **Voltar atrás:** o código da 016 mede a cobertura de novo só onde ela estiver vazia. Para recalcular com a regra
   antiga, rode a 017 de novo no banco antes de voltar.
 
+#### Tarefas na agenda (migração 020)
+
+A agenda do topo da Gestão ganha as **tarefas**: prazo, participantes (com ou sem autonomia) e subtarefas para cada um.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 020** só cria as tabelas `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas`; as
+  atividades ficam como estão.
+- **Voltar atrás:** o código anterior ignora as tabelas novas (as tarefas somem da agenda e voltam com a versão nova).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a

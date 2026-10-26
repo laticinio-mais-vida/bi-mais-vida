@@ -345,13 +345,14 @@ class BaseBanco(unittest.TestCase):
             con.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
         self.banco.fechar()
 
-    def criar_usuario(self, login: str, papel: str = "visualizador") -> int:
-        """Direto na tabela (sem a conta demorada da senha): para testes que só precisam de um dono."""
+    def criar_usuario(self, login: str, papel: str = "visualizador", paginas: list[str] | None = None) -> int:
+        """Direto na tabela (sem a conta demorada da senha): para testes que só precisam de um dono. paginas: as do
+        visualizador (padrão: Metas e Assistente)."""
         with self.banco.conexao() as con:
             return con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas) VALUES (%s, %s, %s, 'x', "
-                               "%s::text[]) RETURNING id", [login, login.title(), papel,
-                                                            None if papel == "admin" else ["metas", "assistente"]]
-                               ).fetchone()[0]
+                               "%s::text[]) RETURNING id",
+                               [login, login.title(), papel,
+                                None if papel == "admin" else paginas or ["metas", "assistente"]]).fetchone()[0]
 
     def contar(self, tabela: str, onde: str = "true") -> int:
         with self.banco.conexao() as con:

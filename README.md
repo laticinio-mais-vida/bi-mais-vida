@@ -7,7 +7,7 @@ fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
-que foi feito.
+que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
@@ -420,7 +420,8 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 ### Quem vê o quê
 
 - **Só o administrador** lança, edita, encerra, prorroga e exclui campanhas, cria objetivos e escreve observações.
-- A **agenda** do topo é de cada um: quem tem a página cria, conclui e dá feedback nas próprias atividades.
+- A **agenda** do topo é de cada um: quem tem a página cria, conclui e dá feedback nas próprias atividades. As
+  **tarefas** são vistas por quem criou e pelos participantes (o administrador só vê as de que participa).
 - Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
 - O acesso de cada pessoa se escolhe no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou
@@ -436,17 +437,17 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 ### Minha agenda
 
 No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
-administrador vê as dos outros). Quem tem a página Gestão tem a agenda, inclusive o visualizador, que na equipe só
-acompanha. O botão **−** recolhe a agenda e deixa só a faixa de dias; o **+** mostra de novo (a escolha fica
+administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)). Quem tem a
+página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** recolhe a agenda e deixa só a faixa de dias; o **+** mostra de novo (a escolha fica
 guardada no navegador), e clicar num dia também abre.
 
 - **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, na largura toda do cartão, com hoje num
   quadrado maior. Em cada quadrado:
-  - o número em cima é quantas atividades o dia tem;
+  - o número em cima é quantas atividades e tarefas o dia tem;
   - a barrinha embaixo do dia mostra as feitas (verde) e as que faltam (laranja; vermelho se o dia já passou), um
-    pedaço por atividade (com mais de 6, só as duas partes);
-  - a cor do quadrado diz como está o dia: com atividade, tudo feito ou com alguma que ficou sem concluir;
-  - passando o mouse, aparecem o total, as feitas, as que faltam e a lista das atividades com o horário.
+    pedaço por item (com mais de 6, só as duas partes);
+  - a cor do quadrado diz como está o dia: com algo marcado, tudo feito ou com algo que ficou sem concluir;
+  - passando o mouse, aparecem o total, as feitas, as que faltam e a lista do dia com o horário.
 
   As setas trocam de mês, e **Hoje** volta para o dia de hoje.
 - **Clicar num dia** abre as atividades dele embaixo da faixa, as com horário primeiro, em ordem. O círculo marca a
@@ -477,7 +478,35 @@ guardada no navegador), e clicar num dia também abre.
 
   O Assistente nunca grava sozinho: a resposta traz a proposta com um botão (**Adicionar à agenda**, **Salvar a
   mudança**, **Encerrar**, **Excluir** ou **Marcar como feita**), e só o clique aplica, uma vez só. Depois, o cartão
-  mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia.
+  mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia. O Assistente ainda não vê as tarefas.
+
+#### Tarefas
+
+No formulário ao lado do dia, **Tarefa** (em vez de **Atividade**) cria uma tarefa: título, descrição, o **prazo**
+(dia e horário opcional), os **participantes** e as **subtarefas**, cada uma com um responsável (quem criou ou um
+participante) e o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
+
+- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**.
+- **Quem pode o quê:**
+
+  | | Quem criou | Participante com autonomia | Participante sem autonomia |
+  |---|---|---|---|
+  | Editar, concluir, reabrir e excluir a tarefa | sim | não | não |
+  | Mudar prazos e responsáveis | sim | não | não |
+  | Editar título e descrição de uma subtarefa | todas | as próprias | não |
+  | Criar subtarefa | para qualquer participante | só para si, com o prazo da tarefa | não |
+  | Concluir uma subtarefa | todas | as próprias | as próprias |
+
+- **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela: quem criou vê
+  todas, o participante vê as dele. O ícone de olho abre a tarefa com as subtarefas de todos, por pessoa, e ali cada
+  um conclui as suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
+- **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo. Concluir a tarefa faz as
+  subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
+- **Atrasadas:** o que passou do dia do prazo sem concluir fica vermelho no dia do prazo e aparece também no bloco
+  **Atrasadas** do dia de hoje, até ser concluído.
+- **Editar** (só quem criou) muda tudo, até tirar participantes, mas quem ainda tem subtarefa só sai depois de as
+  subtarefas passarem para outra pessoa ou saírem. Se um participante mudou a tarefa enquanto o formulário estava
+  aberto, o Salvar avisa e pede para abrir de novo. **Excluir** apaga a tarefa e as subtarefas para todos.
 
 ### Pelo Assistente
 
@@ -565,6 +594,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -709,6 +739,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
+| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia e as atrasadas (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

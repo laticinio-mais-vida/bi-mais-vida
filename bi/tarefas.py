@@ -1,0 +1,445 @@
+"""Tarefas da agenda (topo da página Gestão): um prazo (dia e horário opcional), as pessoas que participam e as
+subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cada pessoa, ficam em bi/agenda.py.
+
+- Quem vê: quem criou e os participantes (agenda_tarefa_pessoas, migração 020; quem criou também está lá). Para quem
+  não participa, a tarefa não existe (NaoEncontrada); quem participa mas não pode fazer algo recebe PermissionError,
+  com o motivo.
+- Na agenda (no_mes): a tarefa no dia do prazo, para todos; cada subtarefa no dia do prazo dela, todas para quem
+  criou e só as próprias para o participante. Aberta (obter), a tarefa mostra todas as subtarefas a todos.
+- Só quem criou edita, exclui e conclui a tarefa e muda prazos. Com autonomia, o participante edita o título e a
+  descrição das próprias subtarefas e cria subtarefas para si, com o prazo da tarefa.
+- A subtarefa vence até o prazo da tarefa. Conclui o responsável (ou quem criou), em qualquer dia. Concluir a tarefa
+  faz as subtarefas abertas contarem como feitas (pela_tarefa) enquanto ela estiver concluída.
+- Atrasada: o dia do prazo passou sem concluir. Fica no dia do prazo e, no mês de hoje, também na lista atrasadas.
+- versao: sobe a cada mudança na tarefa, nas pessoas ou nas subtarefas (concluir não conta). Editar confere, para o
+  Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
+"""
+from __future__ import annotations
+
+import datetime as dt
+
+from .agenda import _data, _dm, _hora, _id, _texto, _titulo
+from .banco import Banco, hora
+from .conversas import NaoEncontrada
+
+MAX_PESSOAS = 30      # participantes de uma tarefa, sem quem criou
+MAX_SUBTAREFAS = 50
+_NAO_ACHOU = "tarefa não encontrada; ela pode ter sido excluída ou você não participa mais dela"
+_NAO_ACHOU_SUB = "subtarefa não encontrada; ela pode ter sido excluída"
+_MUDOU = "a tarefa acabou de mudar; abra de novo e repita"
+# Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
+_COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
+_T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "concluida_em", "versao")
+_S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "concluida_em", "concluida_por",
+      "concluida_por_nome")
+# As tarefas de quem vê com algo no mês: a tarefa ou uma subtarefa que ele vê vencendo nele ou, no mês de hoje,
+# atrasada (de qualquer mês).
+_DO_MES = """SELECT t.id FROM agenda_tarefas t
+JOIN agenda_tarefa_pessoas eu ON eu.tarefa = t.id AND eu.usuario = %(eu)s
+WHERE t.prazo BETWEEN %(de)s AND %(ate)s
+   OR (%(atrasadas)s AND t.concluida_em IS NULL AND t.prazo < %(hoje)s)
+   OR EXISTS (SELECT 1 FROM agenda_subtarefas s WHERE s.tarefa = t.id
+              AND (t.criador = %(eu)s OR s.responsavel = %(eu)s)
+              AND (s.prazo BETWEEN %(de)s AND %(ate)s
+                   OR (%(atrasadas)s AND t.concluida_em IS NULL AND s.concluida_em IS NULL AND s.prazo < %(hoje)s)))"""
+
+
+def _hhmm(h: dt.time | None) -> str | None:
+    return h.strftime("%H:%M") if h else None
+
+
+def _pessoa(valor) -> int:
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"pessoa inválida: {valor!r}") from None
+
+
+def _ate_o_prazo(prazo: dt.date, h: dt.time | None, prazo_tarefa: dt.date, h_tarefa: dt.time | None) -> bool:
+    """A subtarefa vence até o prazo da tarefa? No mesmo dia, o horário só conta quando os dois têm."""
+    if prazo != prazo_tarefa:
+        return prazo < prazo_tarefa
+    return h is None or h_tarefa is None or h <= h_tarefa
+
+
+def _texto_prazo(prazo: dt.date, h: dt.time | None, hoje: dt.date) -> str:
+    """'30/10' ou '30/10 às 14:00'."""
+    return f"{_dm(prazo, hoje)} às {_hhmm(h)}" if h else _dm(prazo, hoje)
+
+
+def _valida_sub(s: dict, t: dict, pessoas: set[int], responsavel: int) -> dict:
+    """Uma subtarefa da tarefa t (prazo e hora já conferidos). Sem prazo, vence com a tarefa (e no horário dela); sem
+    responsável, fica com `responsavel`. pessoas: quem participa da tarefa (com quem criou)."""
+    titulo = _titulo(s.get("titulo"), "da subtarefa")
+    resp = responsavel if s.get("responsavel") in (None, "") else _pessoa(s["responsavel"])
+    if resp not in pessoas:
+        raise ValueError(f"o responsável pela subtarefa “{titulo}” não participa da tarefa: escolha outra pessoa "
+                         "ou tire a subtarefa")
+    if s.get("prazo"):
+        prazo, h = _data(s["prazo"], f"da subtarefa “{titulo}”"), _hora(s.get("hora"))
+    else:
+        prazo, h = t["prazo"], _hora(s["hora"]) if s.get("hora") else t["hora"]
+    if not _ate_o_prazo(prazo, h, t["prazo"], t["hora"]):
+        limite = _texto_prazo(t["prazo"], t["hora"], t["prazo"])
+        raise ValueError(f"a subtarefa “{titulo}” vence depois da tarefa ({limite}): o prazo dela vai até o da tarefa")
+    return {"id": _id(s["id"], _NAO_ACHOU_SUB) if s.get("id") else None, "titulo": titulo,
+            "descricao": _texto(s.get("descricao"), "a descrição"), "responsavel": resp, "prazo": prazo, "hora": h}
+
+
+def _valida_tarefa(dados: dict, criador: int) -> dict:
+    """A tarefa como vai para o banco: participantes {id: autonomia}, sem quem criou, e as subtarefas (_valida_sub)."""
+    if not dados.get("prazo"):
+        raise ValueError("escolha o prazo da tarefa")
+    t = {"titulo": _titulo(dados.get("titulo"), "da tarefa"),
+         "descricao": _texto(dados.get("descricao"), "a descrição"), "prazo": _data(dados["prazo"], "do prazo"),
+         "hora": _hora(dados.get("hora")), "participantes": {}}
+    for p in dados.get("participantes") or []:
+        id_ = _pessoa(p.get("id") if isinstance(p, dict) else p)
+        if id_ != criador:
+            t["participantes"][id_] = isinstance(p, dict) and bool(p.get("autonomia"))
+    if len(t["participantes"]) > MAX_PESSOAS:
+        raise ValueError(f"a tarefa pode ter até {MAX_PESSOAS} participantes")
+    subtarefas = dados.get("subtarefas") or []
+    if len(subtarefas) > MAX_SUBTAREFAS:
+        raise ValueError(f"a tarefa pode ter até {MAX_SUBTAREFAS} subtarefas")
+    pessoas = {criador, *t["participantes"]}
+    t["subtarefas"] = [_valida_sub(s, t, pessoas, criador) for s in subtarefas]
+    return t
+
+
+def _proibido_mudar(dados: dict, s: dict) -> str | None:
+    """O que o participante pediu para mudar na subtarefa e só quem criou muda (o mesmo valor de antes não conta)."""
+    if "prazo" in dados and str(dados["prazo"] or "")[:10] != s["prazo"].isoformat():
+        return "o prazo"
+    if "hora" in dados and _hora(dados["hora"]) != s["hora"]:
+        return "o prazo"
+    if "responsavel" in dados and str(dados["responsavel"]) != str(s["responsavel"]):
+        return "o responsável"
+    return None
+
+
+class Tarefas:
+    def __init__(self, banco: Banco, hoje=dt.date.today):
+        """hoje: função que dá o dia de hoje (os testes fixam um dia)."""
+        self.banco = banco
+        self.hoje = hoje
+
+    # --- leitura ---------------------------------------------------------------------------
+    def pessoas(self, usuario: int) -> dict:
+        """Quem pode participar de uma tarefa (sem quem pergunta) e quem pergunta (eu: o formulário põe como
+        responsável)."""
+        with self.banco.conexao() as con:
+            eu = con.execute("SELECT id, nome FROM usuarios WHERE id = %s", [usuario]).fetchone()
+            linhas = con.execute(f"SELECT id, nome FROM usuarios WHERE {_COM_GESTAO} AND id <> %s "
+                                 "ORDER BY lower(nome), id", [usuario]).fetchall()
+        if not eu:
+            raise NaoEncontrada("seu usuário não existe mais")
+        return {"eu": {"id": eu[0], "nome": eu[1]}, "pessoas": [{"id": i, "nome": n} for i, n in linhas]}
+
+    @staticmethod
+    def _carregar(con, ids: list[int]) -> list[dict]:
+        """As tarefas (pelo prazo), cada uma com as pessoas (pelo nome) e as subtarefas (pelo prazo)."""
+        if not ids:
+            return []
+        tarefas = {r[0]: {**dict(zip(_T, r)), "pessoas": [], "subtarefas": []} for r in con.execute(
+            "SELECT t.id, t.criador, u.nome, t.titulo, t.descricao, t.prazo, t.hora, t.concluida_em, t.versao "
+            "FROM agenda_tarefas t JOIN usuarios u ON u.id = t.criador WHERE t.id = ANY(%s::bigint[]) "
+            "ORDER BY t.prazo, t.hora NULLS LAST, t.id", [ids])}
+        for tarefa, usuario, nome, autonomia in con.execute(
+                "SELECT p.tarefa, p.usuario, u.nome, p.autonomia FROM agenda_tarefa_pessoas p "
+                "JOIN usuarios u ON u.id = p.usuario WHERE p.tarefa = ANY(%s::bigint[]) ORDER BY lower(u.nome), u.id",
+                [ids]):
+            tarefas[tarefa]["pessoas"].append({"id": usuario, "nome": nome, "autonomia": autonomia})
+        for r in con.execute(
+                "SELECT s.tarefa, s.id, s.titulo, s.descricao, s.prazo, s.hora, s.responsavel, u.nome, s.concluida_em, "
+                "s.concluida_por, c.nome FROM agenda_subtarefas s JOIN usuarios u ON u.id = s.responsavel "
+                "LEFT JOIN usuarios c ON c.id = s.concluida_por WHERE s.tarefa = ANY(%s::bigint[]) "
+                "ORDER BY s.prazo, s.hora NULLS LAST, s.id", [ids]):
+            tarefas[r[0]]["subtarefas"].append(dict(zip(_S, r[1:])))
+        return list(tarefas.values())
+
+    @staticmethod
+    def _publica(t: dict, eu: int, hoje: dt.date) -> dict:
+        """A tarefa como a página e a agenda de `eu` veem, com o que ele pode fazer nela (pode)."""
+        criador = t["criador"] == eu
+        autonomia = not criador and any(p["id"] == eu and p["autonomia"] for p in t["pessoas"])
+        concluida = t["concluida_em"] is not None
+        subtarefas = []
+        for s in t["subtarefas"]:
+            minha, feita = s["responsavel"] == eu, concluida or s["concluida_em"] is not None
+            subtarefas.append({
+                "id": s["id"], "titulo": s["titulo"], "descricao": s["descricao"], "prazo": s["prazo"].isoformat(),
+                "hora": _hhmm(s["hora"]), "responsavel": {"id": s["responsavel"], "nome": s["responsavel_nome"]},
+                "minha": minha, "feita": feita, "pela_tarefa": concluida and s["concluida_em"] is None,
+                "concluida_em": hora(s["concluida_em"]),
+                "concluida_por": ({"id": s["concluida_por"], "nome": s["concluida_por_nome"]}
+                                  if s["concluida_por"] else None),
+                "atrasada": not feita and s["prazo"] < hoje,
+                "pode": {"concluir": (criador or minha) and not concluida,
+                         "editar_texto": criador or (minha and autonomia), "editar_prazo": criador}})
+        return {"id": t["id"], "titulo": t["titulo"], "descricao": t["descricao"], "prazo": t["prazo"].isoformat(),
+                "hora": _hhmm(t["hora"]), "versao": t["versao"],
+                "criador": {"id": t["criador"], "nome": t["criador_nome"]}, "eu_criador": criador,
+                "minha_autonomia": autonomia,
+                "participantes": [p for p in t["pessoas"] if p["id"] != t["criador"]],
+                "feita": concluida, "concluida_em": hora(t["concluida_em"]),
+                "atrasada": not concluida and t["prazo"] < hoje,
+                "feitas": sum(s["feita"] for s in subtarefas), "total": len(subtarefas),
+                "pode": {"editar": criador, "concluir": criador,
+                         "criar_subtarefa": (criador or autonomia) and not concluida},
+                "subtarefas": subtarefas}
+
+    def obter(self, usuario: int, id_) -> dict:
+        """A tarefa aberta: todas as subtarefas, de todos, para quem participa."""
+        id_ = _id(id_, _NAO_ACHOU)
+        with self.banco.conexao() as con:
+            if not con.execute("SELECT 1 FROM agenda_tarefa_pessoas WHERE tarefa = %s AND usuario = %s",
+                               [id_, usuario]).fetchone():
+                raise NaoEncontrada(_NAO_ACHOU)
+            t, = self._carregar(con, [id_])
+        return self._publica(t, usuario, self.hoje())
+
+    def no_mes(self, usuario: int, m: dict) -> dict:
+        """Acrescenta ao mês da agenda (Agenda.mes, que dá o dia de hoje) as tarefas de quem vê: em cada dia, a tarefa e
+        as subtarefas que vencem nele (dias[].tarefas: {tarefa, subtarefa, feita}, as com horário primeiro); no mês de
+        hoje, as atrasadas de qualquer mês (atrasadas, as mais antigas primeiro); e as tarefas citadas (tarefas)."""
+        hoje = dt.date.fromisoformat(m["hoje"])
+        dias = [dt.date.fromisoformat(d["data"]) for d in m["dias"]]
+        com_atrasadas = (dias[0].year, dias[0].month) == (hoje.year, hoje.month)
+        with self.banco.conexao() as con:
+            ids = [r[0] for r in con.execute(_DO_MES, {"eu": usuario, "de": dias[0], "ate": dias[-1], "hoje": hoje,
+                                                       "atrasadas": com_atrasadas})]
+            tarefas = self._carregar(con, ids)
+        por_dia, atrasadas, publicadas = {d: [] for d in dias}, [], []
+        for t in tarefas:
+            p = self._publica(t, usuario, hoje)
+            publicadas.append(p)
+            itens = [(t["prazo"], t["hora"], {"tarefa": t["id"], "subtarefa": None, "feita": p["feita"]},
+                      p["atrasada"])]
+            itens += [(s["prazo"], s["hora"], {"tarefa": t["id"], "subtarefa": s["id"], "feita": sp["feita"]},
+                       sp["atrasada"])
+                      for s, sp in zip(t["subtarefas"], p["subtarefas"]) if p["eu_criador"] or sp["minha"]]
+            for prazo, h, ref, atrasada in itens:
+                if prazo in por_dia:
+                    por_dia[prazo].append((h, ref))
+                if com_atrasadas and atrasada:
+                    atrasadas.append((prazo, h, ref))
+
+        def ordem(h, ref):  # as com horário primeiro; a tarefa antes das subtarefas dela
+            return h is None, h or dt.time(), ref["tarefa"], ref["subtarefa"] or 0
+
+        return {**m, "dias": [{**d, "tarefas": [r for _, r in sorted(por_dia[dia], key=lambda x: ordem(*x))]}
+                              for d, dia in zip(m["dias"], dias)],
+                "atrasadas": [r for _, _, r in sorted(atrasadas, key=lambda x: (x[0], *ordem(x[1], x[2])))],
+                "tarefas": publicadas}
+
+    # --- apoio das gravações ---------------------------------------------------------------
+    @staticmethod
+    def _travar(con, usuario: int, id_: int, nao_achou: str = _NAO_ACHOU) -> dict:
+        """A tarefa, travada até o fim da transação, e o papel de quem mexe (eu_criador, autonomia)."""
+        linha = con.execute(
+            "SELECT t.id, t.criador, t.prazo, t.hora, t.versao, t.concluida_em, p.autonomia FROM agenda_tarefas t "
+            "JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %s WHERE t.id = %s FOR UPDATE OF t",
+            [usuario, id_]).fetchone()
+        if not linha:
+            raise NaoEncontrada(nao_achou)
+        t = dict(zip(("id", "criador", "prazo", "hora", "versao", "concluida_em", "autonomia"), linha))
+        return {**t, "eu_criador": t["criador"] == usuario}
+
+    def _travar_sub(self, con, usuario: int, id_) -> tuple[dict, dict]:
+        """A subtarefa e a tarefa dela (travada: as gravações numa tarefa vão uma de cada vez)."""
+        id_ = _id(id_, _NAO_ACHOU_SUB)
+        linha = con.execute("SELECT tarefa FROM agenda_subtarefas WHERE id = %s", [id_]).fetchone()
+        if not linha:
+            raise NaoEncontrada(_NAO_ACHOU_SUB)
+        t = self._travar(con, usuario, linha[0], _NAO_ACHOU_SUB)
+        linha = con.execute("SELECT id, titulo, descricao, prazo, hora, responsavel, concluida_em "
+                            "FROM agenda_subtarefas WHERE id = %s AND tarefa = %s", [id_, t["id"]]).fetchone()
+        if not linha:  # saiu enquanto esperava a trava
+            raise NaoEncontrada(_NAO_ACHOU_SUB)
+        return t, dict(zip(("id", "titulo", "descricao", "prazo", "hora", "responsavel", "concluida_em"), linha))
+
+    @staticmethod
+    def _so_quem_criou(t: dict, o_que: str) -> None:
+        if not t["eu_criador"]:
+            raise PermissionError(f"só quem criou a tarefa pode {o_que}")
+
+    @staticmethod
+    def _aberta(t: dict) -> None:
+        if t["concluida_em"]:
+            raise ValueError("a tarefa já foi concluída; quem criou precisa reabrir para mexer nas subtarefas")
+
+    @staticmethod
+    def _conferir_pessoas(con, ids) -> None:
+        """Quem entra na tarefa precisa estar ativo e ter a página Gestão (onde fica a agenda)."""
+        ids = list(ids)
+        if not ids:
+            return
+        achados = {r[0] for r in con.execute(f"SELECT id FROM usuarios WHERE id = ANY(%s::bigint[]) AND {_COM_GESTAO}",
+                                             [ids])}
+        if any(i not in achados for i in ids):
+            raise ValueError("pessoa não encontrada, inativa ou sem a página Gestão (onde fica a agenda)")
+
+    @staticmethod
+    def _pessoas_da(con, tarefa: int) -> dict[int, bool]:
+        return dict(con.execute("SELECT usuario, autonomia FROM agenda_tarefa_pessoas WHERE tarefa = %s", [tarefa]))
+
+    @staticmethod
+    def _gravar_pessoas(con, tarefa: int, pessoas: dict[int, bool]) -> None:
+        with con.cursor() as cur:
+            cur.executemany("INSERT INTO agenda_tarefa_pessoas (tarefa, usuario, autonomia) VALUES (%s, %s, %s) "
+                            "ON CONFLICT (tarefa, usuario) DO UPDATE SET autonomia = EXCLUDED.autonomia",
+                            [[tarefa, p, a] for p, a in pessoas.items()])
+
+    @staticmethod
+    def _inserir_subs(con, tarefa: int, subtarefas: list[dict], criada_por: int) -> None:
+        if subtarefas:
+            with con.cursor() as cur:
+                cur.executemany("INSERT INTO agenda_subtarefas (tarefa, responsavel, titulo, descricao, prazo, hora, "
+                                "criada_por) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                [[tarefa, s["responsavel"], s["titulo"], s["descricao"], s["prazo"], s["hora"],
+                                  criada_por] for s in subtarefas])
+
+    @staticmethod
+    def _nova_versao(con, tarefa: int) -> None:
+        con.execute("UPDATE agenda_tarefas SET versao = versao + 1, atualizada_em = now() WHERE id = %s", [tarefa])
+
+    # --- tarefas (só quem criou) -----------------------------------------------------------
+    def criar(self, usuario: int, dados: dict) -> dict:
+        """A tarefa, as pessoas e as subtarefas, numa transação só."""
+        t = _valida_tarefa(dados, usuario)
+        with self.banco.conexao() as con:
+            self._conferir_pessoas(con, t["participantes"])
+            linha = con.execute("INSERT INTO agenda_tarefas (criador, titulo, descricao, prazo, hora) "
+                                "SELECT id, %(titulo)s, %(descricao)s, %(prazo)s, %(hora)s FROM usuarios "
+                                "WHERE id = %(usuario)s RETURNING id", {**t, "usuario": usuario}).fetchone()
+            if not linha:
+                raise NaoEncontrada("seu usuário não existe mais")
+            self._gravar_pessoas(con, linha[0], {usuario: False, **t["participantes"]})
+            self._inserir_subs(con, linha[0], t["subtarefas"], usuario)
+        return self.obter(usuario, linha[0])
+
+    def editar(self, usuario: int, id_, dados: dict, versao) -> dict:
+        """Troca tudo: os campos, as pessoas e as subtarefas (as com id mudam, as sem id entram, as que faltam saem; a
+        conclusão de cada uma fica). versao: a da tarefa que o formulário abriu (mudou desde então: recusa).
+        Só quem entra agora precisa ter a página Gestão; quem já participava fica mesmo sem ela."""
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "editá-la")
+            if str(versao) != str(t["versao"]):
+                raise ValueError(_MUDOU)
+            novo = _valida_tarefa(dados, usuario)
+            antes = self._pessoas_da(con, t["id"])
+            self._conferir_pessoas(con, [p for p in novo["participantes"] if p not in antes])
+            subs_antes = {r[0] for r in con.execute("SELECT id FROM agenda_subtarefas WHERE tarefa = %s", [t["id"]])}
+            ficam = [s["id"] for s in novo["subtarefas"] if s["id"]]
+            if len(set(ficam)) != len(ficam) or any(i not in subs_antes for i in ficam):
+                raise ValueError("subtarefa não encontrada nesta tarefa; abra de novo e repita")
+            # A ordem importa (o responsável precisa estar na tarefa): primeiro quem entra, depois as subtarefas e só
+            # no fim quem sai.
+            con.execute("UPDATE agenda_tarefas SET titulo = %(titulo)s, descricao = %(descricao)s, prazo = %(prazo)s, "
+                        "hora = %(hora)s, versao = versao + 1, atualizada_em = now() WHERE id = %(id)s",
+                        {**novo, "id": t["id"]})
+            self._gravar_pessoas(con, t["id"], {usuario: False, **novo["participantes"]})
+            con.execute("DELETE FROM agenda_subtarefas WHERE tarefa = %s AND NOT (id = ANY(%s::bigint[]))",
+                        [t["id"], ficam])
+            if ficam:
+                with con.cursor() as cur:
+                    cur.executemany("UPDATE agenda_subtarefas SET titulo = %(titulo)s, descricao = %(descricao)s, "
+                                    "responsavel = %(responsavel)s, prazo = %(prazo)s, hora = %(hora)s, "
+                                    "atualizada_em = now() WHERE id = %(id)s",
+                                    [s for s in novo["subtarefas"] if s["id"]])
+            self._inserir_subs(con, t["id"], [s for s in novo["subtarefas"] if not s["id"]], usuario)
+            con.execute("DELETE FROM agenda_tarefa_pessoas WHERE tarefa = %s AND usuario <> %s "
+                        "AND NOT (usuario = ANY(%s::bigint[]))", [t["id"], usuario, list(novo["participantes"])])
+        return self.obter(usuario, t["id"])
+
+    def excluir(self, usuario: int, id_) -> None:
+        """Apaga a tarefa e as subtarefas, para todos."""
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "excluí-la")
+            con.execute("DELETE FROM agenda_tarefas WHERE id = %s", [t["id"]])
+
+    def concluir(self, usuario: int, id_) -> dict:
+        """Conclui a tarefa (as subtarefas abertas passam a contar como feitas); concluir de novo não muda nada."""
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "concluí-la")
+            con.execute("UPDATE agenda_tarefas SET concluida_em = coalesce(concluida_em, now()) WHERE id = %s",
+                        [t["id"]])
+        return self.obter(usuario, t["id"])
+
+    def desfazer(self, usuario: int, id_) -> dict:
+        """Reabre a tarefa: as subtarefas que não tinham sido concluídas voltam a ficar abertas."""
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "reabri-la")
+            if not t["concluida_em"]:
+                raise ValueError("a tarefa não estava concluída")
+            con.execute("UPDATE agenda_tarefas SET concluida_em = NULL WHERE id = %s", [t["id"]])
+        return self.obter(usuario, t["id"])
+
+    # --- subtarefas ------------------------------------------------------------------------
+    def nova_subtarefa(self, usuario: int, tarefa, dados: dict) -> dict:
+        """Quem criou acrescenta uma subtarefa para qualquer pessoa da tarefa, com o prazo que quiser (até o da tarefa);
+        o participante com autonomia, só para si e com o prazo da tarefa."""
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(tarefa, _NAO_ACHOU))
+            if not t["eu_criador"]:
+                if not t["autonomia"]:
+                    raise PermissionError("só quem criou a tarefa (ou quem tem autonomia nela) cria subtarefas")
+                if dados.get("responsavel") not in (None, "") and str(dados["responsavel"]) != str(usuario):
+                    raise PermissionError("com autonomia, você cria subtarefas só para você")
+                if dados.get("prazo") or dados.get("hora"):
+                    raise PermissionError("só quem criou a tarefa define o prazo; a sua vence com a tarefa")
+                dados = {"titulo": dados.get("titulo"), "descricao": dados.get("descricao")}
+            self._aberta(t)
+            s = _valida_sub(dados, t, set(self._pessoas_da(con, t["id"])), usuario)
+            self._inserir_subs(con, t["id"], [s], usuario)
+            self._nova_versao(con, t["id"])
+        return self.obter(usuario, t["id"])
+
+    def editar_subtarefa(self, usuario: int, id_, dados: dict) -> dict:
+        """Muda só os campos enviados. Quem criou muda tudo; o responsável com autonomia, só o título e a descrição."""
+        with self.banco.conexao() as con:
+            t, s = self._travar_sub(con, usuario, id_)
+            if not t["eu_criador"]:
+                if s["responsavel"] != usuario or not t["autonomia"]:
+                    raise PermissionError("só quem criou a tarefa (ou o responsável, com autonomia) edita esta "
+                                          "subtarefa")
+                if campo := _proibido_mudar(dados, s):
+                    raise PermissionError(f"só quem criou a tarefa muda {campo} da subtarefa")
+                dados = {k: v for k, v in dados.items() if k in ("titulo", "descricao")}
+            atual = {"titulo": s["titulo"], "descricao": s["descricao"], "responsavel": s["responsavel"],
+                     "prazo": s["prazo"].isoformat(), "hora": _hhmm(s["hora"])}
+            novo = _valida_sub({**atual, **{k: v for k, v in dados.items() if k in atual}}, t,
+                               set(self._pessoas_da(con, t["id"])), usuario)
+            con.execute("UPDATE agenda_subtarefas SET titulo = %(titulo)s, descricao = %(descricao)s, "
+                        "responsavel = %(responsavel)s, prazo = %(prazo)s, hora = %(hora)s, atualizada_em = now() "
+                        "WHERE id = %(id)s", {**novo, "id": s["id"]})
+            self._nova_versao(con, t["id"])
+        return self.obter(usuario, t["id"])
+
+    def _conclusao(self, usuario: int, id_, feita: bool) -> dict:
+        with self.banco.conexao() as con:
+            t, s = self._travar_sub(con, usuario, id_)
+            if not t["eu_criador"] and s["responsavel"] != usuario:
+                raise PermissionError("só o responsável pela subtarefa (ou quem criou a tarefa) marca se ela foi feita")
+            self._aberta(t)
+            if feita:
+                con.execute("UPDATE agenda_subtarefas SET concluida_em = now(), concluida_por = %s "
+                            "WHERE id = %s AND concluida_em IS NULL", [usuario, s["id"]])
+            elif not s["concluida_em"]:
+                raise ValueError("a subtarefa não estava concluída")
+            else:
+                con.execute("UPDATE agenda_subtarefas SET concluida_em = NULL, concluida_por = NULL WHERE id = %s",
+                            [s["id"]])
+        return self.obter(usuario, t["id"])
+
+    def concluir_subtarefa(self, usuario: int, id_) -> dict:
+        """Marca a subtarefa como feita (em qualquer dia); concluir de novo não muda nada."""
+        return self._conclusao(usuario, id_, True)
+
+    def desfazer_subtarefa(self, usuario: int, id_) -> dict:
+        return self._conclusao(usuario, id_, False)
