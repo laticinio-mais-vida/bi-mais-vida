@@ -1964,17 +1964,22 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 
 /* ==========================================================================
    Minha agenda (topo da Gestão): a faixa de dias do Ritmo do mês (.faixa-dias e .dia) na largura toda e, embaixo, o
-   dia aberto com o formulário ao lado; recolhida, só a faixa
+   dia aberto; ou, na outra vista, o kanban das tarefas. Recolhida, só a faixa (no kanban, só o cabeçalho). O
+   formulário abre em tela cheia (.ag-tela)
    ========================================================================== */
 .ag-cal .cartao-cab { align-items: center; }
 .ag-cal .cartao-cab h2 { flex-wrap: wrap; row-gap: 0; }
 .ag-mes { font-weight: 600; color: var(--tinta-3); white-space: nowrap; }
 .ag-mes:not(:empty)::before { content: "· "; }
-.ag-nav { display: flex; gap: 6px; flex: none; }
+.ag-nav { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .ag-nav .btn { height: 38px; }
-.ag-baixo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 16px; align-items: start; margin-top: 18px; }
-.ag-baixo > * { min-width: 0; }
-.ag-cal.recolhida .ag-baixo, .ag-cal.recolhida .ag-legenda { display: none; }
+.ag-meses { display: flex; gap: 6px; }
+.ag-vista button { display: inline-flex; align-items: center; gap: 5px; height: 32px; }
+.ag-vista .ic { width: 14px; height: 14px; }
+.ag-baixo { margin-top: 18px; }
+.ag-cal.recolhida .ag-baixo, .ag-cal.recolhida .ag-legenda, .ag-cal.recolhida .ag-quadro { display: none; }
+.ag-cal.vista-quadro #ag-faixa, .ag-cal.vista-quadro .ag-baixo, .ag-cal.vista-quadro .ag-meses,
+.ag-cal:not(.vista-quadro) .ag-quadro { display: none; }
 .ag-faixa { padding-top: 14px; }
 .ag-faixa .dia {
   height: 66px; border: 0; font: 700 12px var(--f-texto); cursor: pointer; padding: 0 0 6px;
@@ -2077,21 +2082,85 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-fb-acoes .btn { height: 34px; font-size: 13px; }
 .ag-vazio { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--tinta-3); font-size: 13.5px; }
 
-/* atividade nova (e edição), ao lado do dia aberto */
-.ag-nova { padding: 16px; border-radius: 16px; background: var(--surface-2); border: 1px solid var(--linha); }
-.ag-nova-cab { margin-bottom: 14px; }
-.ag-nova-cab h3 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
-.ag-nova-cab h3 .ic { color: var(--acento); }
-.ag-nova-cab small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 12.5px; }
-.ag-form { display: grid; gap: 14px; }
+/* o formulário (atividade ou tarefa, nova ou em edição), em tela cheia: cabeçalho e rodapé fixos e, no meio, duas
+   colunas (uma só em telas estreitas) */
+.ag-tela {
+  width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0;
+  background: var(--bg); color: var(--tinta);
+}
+.ag-tela[open] { animation: ag-tela .35s var(--suave); }
+@keyframes ag-tela { from { opacity: 0; transform: translateY(18px); } }
+.ag-tela::backdrop { background: var(--bg); }
+.ag-tela .ag-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; }
+.ag-tela-cab, .ag-tela-rodape {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  padding: 14px max(16px, calc((100vw - 1200px) / 2)); background: var(--surface); border-bottom: 1px solid var(--linha);
+}
+.ag-tela-tit { flex: 1; min-width: 220px; }
+.ag-tela-tit h2 { display: flex; align-items: center; gap: 9px; font-size: 20px; }
+.ag-tela-tit h2 .ic { color: var(--acento); }
+.ag-tela-tit small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 13px; }
+.ag-tela-cab .ag-tipo { width: auto; min-width: 260px; margin: 0; }
+.ag-tela-cab [data-fechar-form] { order: 3; }
+.ag-tela-corpo { overflow: auto; overscroll-behavior: contain; padding: 22px 16px 32px; }
+.ag-tela-grade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 24px; max-width: 1200px; margin: 0 auto; align-items: start; }
+.ag-tela-col { display: grid; gap: 16px; min-width: 0; padding: 20px; border-radius: 18px; background: var(--surface); border: 1px solid var(--linha); }
+.ag-tela-rodape { justify-content: flex-end; border-top: 1px solid var(--linha); border-bottom: 0; }
+.ag-tela-rodape small { margin-right: auto; color: var(--tinta-3); font-size: 12.5px; }
+.ag-tela .ag-pessoa-card { background: var(--surface-2); }
+.ag-tela .ag-sub-linha { background: var(--surface); }
+.ag-hora-campo input { max-width: 180px; }
 .ag-rep { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ag-rep button:last-child { grid-column: span 2; }
-.ag-datas { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 .ag-form input[type="time"] { font-family: var(--f-texto); color: var(--tinta); }
 .ag-sub { display: grid; gap: 10px; }
 .ag-regiao { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
 .ag-form .dias-semana button { flex: 1; width: auto; }
-.ag-form-acoes { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* escolher dia (escolherdia.js): os dias em quadradinhos como os da faixa, as setas dos lados e, embaixo, o dia
+   escolhido (clicar volta a faixa para ele), os meses à vista e o que vier junto (o horário, nas subtarefas) */
+.ed { display: grid; gap: 6px; min-width: 0; font-weight: 500; }
+.ed-faixa { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 4px; }
+.ed-dias { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; padding-top: 15px; min-width: 0; }
+.ed-seta {
+  width: 28px; height: 48px; border: 0; border-radius: 9px; background: var(--surface-3); color: var(--tinta-2);
+  display: grid; place-items: center; cursor: pointer; transition: background .2s, color .2s;
+}
+.ed-seta:hover { background: color-mix(in srgb, var(--acento) 16%, var(--surface-3)); color: var(--tinta); }
+.ed-seta .ic { width: 16px; height: 16px; stroke-width: 2.4; }
+.ed-dia {
+  position: relative; min-width: 0; height: 48px; padding: 0; border: 0; border-radius: 9px; background: var(--surface-3);
+  color: var(--tinta-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font: 700 13px var(--f-texto); cursor: pointer; transition: background .2s, color .2s, box-shadow .2s, translate .3s var(--mola);
+}
+.ed-dia b { font-weight: 800; line-height: 1; }
+.ed-sem { font-size: 9px; font-weight: 600; line-height: 1; opacity: .75; }
+.ed-dia.fds { background: color-mix(in srgb, var(--surface-3) 55%, var(--surface)); }
+.ed-dia.tem { background: color-mix(in srgb, var(--acento) 20%, var(--surface)); color: var(--acento-tinta); }
+.ed-dia.feita { background: color-mix(in srgb, var(--ok-forte) 24%, var(--surface)); color: var(--ok); }
+.ed-dia.atrasada { background: var(--ruim-bg); color: var(--ruim); }
+.ed-dia:hover:not(:disabled) { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--acento) 50%, transparent); }
+.ed-dia.hoje { box-shadow: inset 0 0 0 2px var(--acento); }
+.ed-dia.escolhido { background: var(--laranja); color: #fff; translate: 0 -4px; box-shadow: 0 10px 18px -10px rgba(245, 130, 32, .95); }
+.ed-dia.fora { opacity: .35; cursor: not-allowed; }
+.ed-dia:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.ed-n {
+  position: absolute; top: 3px; right: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px;
+  display: grid; place-items: center; background: var(--laranja); color: #fff; font: normal 800 9px/1 var(--f-texto);
+}
+.ed-dia.atrasada .ed-n { background: var(--ruim-forte); }
+.ed-dia.feita .ed-n { background: var(--ok-forte); }
+.ed-dia.escolhido .ed-n { background: rgba(255, 255, 255, .3); }
+.ed-mes-tag { position: absolute; top: -15px; left: 1px; font-size: 10px; font-weight: 800; color: var(--acento-tinta); white-space: nowrap; pointer-events: none; }
+.ed-dia.escolhido .ed-mes-tag { top: -11px; } /* o quadradinho sobe; a etiqueta fica no lugar */
+.ed-rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 22px; font-size: 12.5px; }
+.ed-escolhido { padding: 0; border: 0; background: none; font: 700 13px var(--f-texto); color: var(--tinta); cursor: pointer; }
+.ed-escolhido:hover { color: var(--acento-tinta); }
+.ed-escolhido.vazio { font-weight: 600; color: var(--tinta-3); }
+.ed-mes { color: var(--tinta-3); font-weight: 600; }
+.ed-limpar { font-size: 12.5px; }
+.ed-extra { margin-left: auto; }
+.ed .ed-extra input { width: 112px; }
 
 /* histórico de uma atividade que se repete */
 .ag-historico { width: min(640px, calc(100vw - 32px)); }
@@ -2179,14 +2248,76 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-tf-acoes .btn { height: 36px; font-size: 13px; }
 .ag-itens > .ag-item-form { list-style: none; }
 .ag-sub-edit { display: grid; gap: 10px; padding: 12px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--linha); }
-.ag-sub-edit-campos { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr); gap: 10px; }
-.ag-sub-edit-campos.sem-responsavel { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); }
+.ag-sub-edit-campos { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 180px); gap: 10px; }
+.ag-sub-edit-campos.sem-responsavel { grid-template-columns: minmax(0, 180px); }
 .ag-sub-edit input[type="time"] { font-family: var(--f-texto); color: var(--tinta); }
 .ag-sub-prazo { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--tinta-3); }
 .ag-sub-prazo .ic { width: 14px; height: 14px; flex: none; }
 
-@media (max-width: 1180px) {
-  .ag-baixo { grid-template-columns: 1fr; }
+/* a situação (A fazer, Fazendo, Concluída): a cor de cada uma, no botão escolhido, no chip, na faixa à esquerda da
+   subtarefa e no topo da coluna do kanban */
+.st-a_fazer, .ag-coluna[data-coluna="a_fazer"] { --st: var(--tinta-3); }
+.st-fazendo, .ag-coluna[data-coluna="fazendo"] { --st: var(--laranja); }
+.st-concluida, .ag-coluna[data-coluna="concluida"] { --st: var(--ok-forte); }
+.ag-situacao button { display: inline-flex; align-items: center; gap: 5px; }
+.ag-situacao .ic { width: 13px; height: 13px; }
+.ag-situacao button.ativo { background: var(--st); color: #fff; }
+.chip.ag-c-a_fazer { background: var(--neutro-bg); color: var(--tinta-2); }
+.chip.ag-c-fazendo { background: var(--acento-suave); color: var(--acento-tinta); }
+.chip.ag-c-concluida { background: var(--ok-bg); color: var(--ok); }
+.ag-item.ag-sub-item { grid-template-columns: minmax(0, 1fr) auto; box-shadow: inset 4px 0 0 var(--st); }
+.ag-sub-st { margin-top: 10px; }
+.ag-sub-st .seg-mini { flex-wrap: wrap; }
+
+/* a justificativa do atraso (no dia, na janela da tarefa e o chip no card do kanban), em tom de atenção */
+.ag-just { margin-top: 10px; padding: 9px 12px; border-radius: 12px 12px 12px 4px; background: var(--atencao-bg); font-size: 13.5px; }
+.ag-just p { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 4px; color: var(--tinta); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-just p .ic { width: 14px; height: 14px; margin-top: 3px; color: var(--atencao); flex: none; }
+.ag-just small { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--tinta-3); }
+.ag-just .ge-link { font-size: 12px; }
+.ag-just-abrir { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12.5px; color: var(--atencao); }
+.ag-just-abrir .ic { width: 14px; height: 14px; }
+.ag-tf > .ag-just, .ag-tf > .ag-just-abrir, .ag-tf > .ag-just-form { margin-top: 12px; }
+.chip.ag-c-justificada { background: var(--atencao-bg); color: var(--atencao); }
+
+/* o kanban: três colunas (uma embaixo da outra no celular); a coluna onde o card vai cair se destaca */
+.ag-quadro { margin-top: 18px; }
+.ag-colunas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.ag-coluna {
+  display: grid; gap: 10px; align-content: start; min-width: 0; min-height: 240px; padding: 12px; border-radius: 16px;
+  background: var(--surface-2); border: 1px solid var(--linha); box-shadow: inset 0 4px 0 var(--st); transition: background .2s, box-shadow .2s;
+}
+.ag-coluna h3 { display: flex; align-items: center; gap: 8px; padding-top: 4px; font-size: 15px; }
+.ag-st { width: 10px; height: 10px; border-radius: 50%; background: var(--st); flex: none; }
+.ag-coluna-n {
+  margin-left: auto; min-width: 24px; height: 22px; padding: 0 7px; border-radius: 999px; display: grid; place-items: center;
+  background: var(--surface-3); color: var(--tinta-2); font: 800 12px var(--f-texto);
+}
+.ag-coluna.alvo { background: color-mix(in srgb, var(--st) 10%, var(--surface-2)); box-shadow: inset 0 4px 0 var(--st), inset 0 0 0 2px color-mix(in srgb, var(--st) 60%, transparent); }
+.ag-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ag-card {
+  display: grid; gap: 6px; padding: 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--linha);
+  box-shadow: var(--sombra-1); cursor: pointer; transition: translate .25s var(--mola), box-shadow .2s, opacity .2s;
+}
+.ag-card:hover { translate: 0 -2px; box-shadow: var(--sombra-2); }
+.ag-card:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.ag-card[draggable="true"] { cursor: grab; }
+.ag-card.arrastando { opacity: .4; }
+.ag-card.atrasada { box-shadow: inset 4px 0 0 var(--ruim-forte), var(--sombra-1); }
+.ag-card > b { font-size: 14.5px; overflow-wrap: anywhere; }
+.ag-card > p { margin: 0; font-size: 13px; color: var(--tinta-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ag-card .ag-chips { margin-top: 2px; }
+.ag-card-prog { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--tinta-3); }
+.ag-card-prog .ag-barra { width: 70px; height: 5px; margin: 0; }
+.ag-coluna-vazia { padding: 18px 10px; border: 1.5px dashed var(--linha-forte); border-radius: 12px; text-align: center; font-size: 12.5px; color: var(--tinta-3); }
+.ag-colunas.abre .ag-card { animation: subir .45s var(--suave) backwards; animation-delay: calc(var(--i, 0) * 45ms + 80ms); }
+.ag-quadro-dica { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; font-size: 12.5px; color: var(--tinta-3); }
+.ag-quadro-dica .ic { width: 15px; height: 15px; flex: none; }
+
+@media (max-width: 900px) {
+  .ag-tela-grade { grid-template-columns: 1fr; }
+  .ag-tela-col { padding: 14px; }
+  .ag-tela-rodape small { display: none; }
 }
 @media (max-width: 860px) {
   .ag-faixa .dia { height: 58px; }
@@ -2194,11 +2325,16 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
   .ag-faixa .dia.hoje::after { display: none; } /* a setinha cairia no quadrado da semana de cima */
   .ag-faixa .dia.aberto { translate: 0 -2px; }
   .ag-n, .ag-faixa .dia.hoje .ag-n { top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; font-size: 9px; }
-  .ag-dia, .ag-nova { padding: 12px; }
+  .ag-dia { padding: 12px; }
   .ag-item { grid-template-columns: auto minmax(0, 1fr); }
   .ag-item-acoes { grid-column: 2; }
-  .ag-sub-edit-campos { grid-template-columns: 1fr 1fr; }
-  .ag-sub-edit-campos > :first-child { grid-column: 1 / -1; }
+  .ag-item.ag-sub-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .ag-sub-item .ag-item-acoes { grid-column: auto; }
+  .ag-nav { justify-content: flex-start; }
+  .ag-tela-tit { min-width: 0; }
+  .ag-tela-cab .ag-tipo { order: 4; flex-basis: 100%; } /* embaixo do título e do × */
+  .ag-colunas { grid-template-columns: 1fr; }
+  .ag-coluna { min-height: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

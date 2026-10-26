@@ -5,15 +5,21 @@
 // - Atividade: concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback, desfazer e, nas que
 //   se repetem, o histórico de tudo o que foi feito.
 // - Tarefa: aparece no dia do prazo; cada subtarefa, no dia do prazo dela (quem criou vê todas; o participante, as
-//   dele). A janela da tarefa mostra um card por pessoa com as subtarefas dela, de todos: cada um conclui as suas e,
-//   com autonomia, edita o texto delas e cria subtarefas para si. No dia de hoje, um bloco lista as tarefas e
-//   subtarefas atrasadas.
-// Ao lado, o formulário de atividade nova (única, diária, semanal, mensal ou a cada N dias, com horário opcional) ou de
-// tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as subtarefas dela; a seta recolhe o card), que
-// também edita uma atividade ou uma tarefa.
-// Recolhida, fica só a faixa de dias (a escolha fica guardada neste navegador). #/gestao?dia=AAAA-MM-DD abre a agenda
-// nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da repetição ("Toda
-// segunda e quinta") e o que cada pessoa pode fazer numa tarefa vêm do servidor (bi/agenda.py e bi/tarefas.py).
+//   dele). A janela da tarefa mostra a situação dela (A fazer, Fazendo, Concluída) e um card por pessoa com as
+//   subtarefas dela, de todos: cada um muda a situação das suas e, com autonomia, edita o texto delas e cria
+//   subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas. Passado o prazo, quem
+//   responde por ela (quem criou a tarefa; o responsável pela subtarefa) justifica o atraso, que todos veem.
+// - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Quem criou arrasta
+//   o card de coluna; clicar abre a janela da tarefa.
+// O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
+// ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
+// subtarefas dela; a seta recolhe o card), que também edita uma atividade ou uma tarefa. Os dias se escolhem numa faixa
+// de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia já tem.
+// Recolhida, fica só a faixa de dias (a escolha, e a vista, ficam guardadas neste navegador). #/gestao?dia=AAAA-MM-DD
+// abre a agenda nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da
+// repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer numa tarefa vêm do servidor (bi/agenda.py e
+// bi/tarefas.py).
+import { campoDia, contarDias, focarDia, limitesDoDia, prepararDias, redesenharDias } from "./escolherdia.js";
 import { MESES, api, esc, fmt, guardar, icone, ler, ligarTooltips, linhaTT, toast } from "./util.js";
 
 const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
@@ -22,20 +28,32 @@ const MAX_SEGMENTOS = 6; // até aqui, a barrinha do dia tem um pedaço por item
 const MAX_TOOLTIP = 6;   // itens listados no tooltip do dia
 const REPETICOES = [["nenhuma", "Única"], ["diaria", "Diária"], ["semanal", "Semanal"], ["mensal", "Mensal"], ["intervalo", "A cada N dias"]];
 const TIPOS = [["atividade", "Atividade"], ["tarefa", "Tarefa"]];
+const VISTAS = [["agenda", "Agenda", "calendario"], ["quadro", "Kanban", "quadro"]];
+// A situação de uma tarefa ou subtarefa (a coluna do kanban): o nome, o ícone e o aviso ao mover a tarefa.
+const SITUACOES = [["a_fazer", "A fazer"], ["fazendo", "Fazendo"], ["concluida", "Concluída"]];
+const NOME_SITUACAO = Object.fromEntries(SITUACOES);
+const ICONE_SITUACAO = { a_fazer: "menos", fazendo: "relogio", concluida: "certo" };
+const MOVIDA = { a_fazer: "Tarefa em A fazer", fazendo: "Tarefa em Fazendo", concluida: "Tarefa concluída" };
+const COLUNA_VAZIA = { a_fazer: "Nenhuma tarefa a fazer", fazendo: "Nenhuma tarefa sendo feita", concluida: "Nenhuma concluída há pouco" };
 const DESCARTAR_FB = "Descartar o feedback que você estava escrevendo?";
 const DESCARTAR_FORM = "Descartar o que foi preenchido no formulário?";
-const DESCARTAR_SUB = "Descartar o que você mudou na subtarefa?";
+const DESCARTAR_JANELA = "Descartar o que você estava escrevendo na tarefa?";
 const CHAVE_RECOLHIDA = "mv-agenda-recolhida";
+const CHAVE_VISTA = "mv-agenda-vista";
 
-let raiz = null, dlg = null;
+let raiz = null, dlg = null, tela = null; // tela: a janela em tela cheia do formulário (dentro de #ag-raiz)
 // tipo: o do formulário (atividade ou tarefa); tf: os participantes e as subtarefas do formulário da tarefa;
-// pessoas: quem pode participar ({eu, pessoas}, carregado na primeira tarefa); editando: {tipo, ...o item}.
+// pessoas: quem pode participar ({eu, pessoas}, carregado na primeira tarefa); editando: {tipo, ...o item}; formDia: o
+// dia em que o formulário abriu. vista: agenda ou quadro (o kanban, com as tarefas de estado.quadro); arrastando: a
+// tarefa cujo card está sendo arrastado. meses: a contagem de cada dia dos meses já vistos, para escolher o dia.
 const estado = { mes: null, dados: null, aberto: null, editando: null, concluindo: null, form: null, formInicial: null, pedido: 0,
-                 tipo: "atividade", tf: null, pessoas: null };
-// A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), como o formulário dela começou, na
+                 tipo: "atividade", tf: null, pessoas: null, formDia: null, vista: "agenda", quadro: null, pedidoQuadro: 0,
+                 arrastando: null, meses: new Map() };
+// A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), a justificativa de atraso sendo
+// escrita ("tarefa", o id da subtarefa ou null; uma edição de cada vez), como o que está aberto começou, na subtarefa
 // nova, para quem (o card em que ela foi aberta) e os cards de pessoa recolhidos.
-const janela = { tarefa: null, editando: null, inicial: null, para: null, recolhidos: new Set() };
-const JANELA_VAZIA = () => ({ tarefa: null, editando: null, inicial: null, para: null, recolhidos: new Set() });
+const janela = { tarefa: null, editando: null, justificando: null, inicial: null, para: null, recolhidos: new Set() };
+const JANELA_VAZIA = () => ({ tarefa: null, editando: null, justificando: null, inicial: null, para: null, recolhidos: new Set() });
 
 // ---------- apoio ----------
 const capitalizar = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
@@ -86,33 +104,49 @@ export function agendaTemAlteracoes() {
   return (!!raiz?.isConnected && (formMudou() || feedbackEscrito())) || janelaMudou();
 }
 
-// dia: o dia a abrir (#/gestao?dia=…); sem ele, hoje.
+// dia: o dia a abrir (#/gestao?dia=…, sempre na vista da agenda); sem ele, hoje.
 export function montarAgenda(el, { dia } = {}) {
   el.innerHTML = `<section class="cartao ag-cal entra" style="--i:0" id="ag-raiz">
       <div class="cartao-cab">
         <div><h2>${icone("calendario")}Minha agenda<span class="ag-mes" id="ag-titulo"></span></h2>
           <p class="sub" id="ag-resumo">&nbsp;</p></div>
         <div class="ag-nav">
-          <button class="btn icone" type="button" data-mes="-1" title="Mês anterior" aria-label="Mês anterior">${icone("voltar")}</button>
-          <button class="btn" type="button" data-hoje>Hoje</button>
-          <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
+          <div class="seg-mini ag-vista" role="group" aria-label="Ver como">${VISTAS.map(([k, n, ic]) =>
+            `<button type="button" data-vista="${k}">${icone(ic)}${n}</button>`).join("")}</div>
+          <button class="btn primario" type="button" data-novo>${icone("mais")}Nova</button>
+          <span class="ag-meses">
+            <button class="btn icone" type="button" data-mes="-1" title="Mês anterior" aria-label="Mês anterior">${icone("voltar")}</button>
+            <button class="btn" type="button" data-hoje>Hoje</button>
+            <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
+          </span>
           <button class="btn icone" type="button" data-recolher aria-controls="ag-baixo"></button>
         </div>
       </div>
       <div id="ag-faixa"><div class="esqueleto" style="height:96px"></div></div>
-      <div class="ag-baixo" id="ag-baixo">
-        <div id="ag-dia"></div>
-        <aside class="ag-nova" id="ag-nova" aria-label="Atividade nova"></aside>
-      </div>
+      <div class="ag-baixo" id="ag-baixo"><div id="ag-dia"></div></div>
+      <div class="ag-quadro" id="ag-quadro"></div>
+      <dialog class="ag-tela" id="ag-tela" aria-labelledby="ag-tela-titulo"></dialog>
     </section>`;
   raiz = el.querySelector("#ag-raiz");
+  tela = raiz.querySelector("#ag-tela");
   raiz.addEventListener("click", aoClicar);
   raiz.addEventListener("change", aoMudar);
   raiz.addEventListener("keydown", aoTeclar);
-  Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null, tipo: "atividade", tf: null, pessoas: null });
-  recolher(ler(CHAVE_RECOLHIDA, false));
-  desenharForm();
+  raiz.addEventListener("dragstart", aoArrastar);
+  raiz.addEventListener("dragover", aoPassar);
+  raiz.addEventListener("drop", aoSoltar);
+  raiz.addEventListener("dragend", fimDoArraste);
+  tela.addEventListener("cancel", (e) => { if (formMudou() && !confirm(DESCARTAR_FORM)) e.preventDefault(); });
+  tela.addEventListener("close", () => {
+    tela.innerHTML = "";
+    Object.assign(estado, { editando: null, tf: null, formInicial: null });
+  });
   const valido = ehDia(dia);
+  Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null, tipo: "atividade", tf: null,
+                          pessoas: null, quadro: null, meses: new Map(), vista: valido ? "agenda" : ler(CHAVE_VISTA, "agenda") });
+  contarDias(contagem);
+  recolher(ler(CHAVE_RECOLHIDA, false));
+  escolherVista(estado.vista);
   carregar(valido ? mesDe(dia) : undefined, { aberto: valido ? dia : undefined });
 }
 
@@ -120,6 +154,7 @@ export function montarAgenda(el, { dia } = {}) {
 export function abrirNaAgenda(dia) {
   if (!raiz?.isConnected || !ehDia(dia)) return;
   if (raiz.classList.contains("recolhida")) recolher(false);
+  if (estado.vista !== "agenda") escolherVista("agenda");
   estado.concluindo = null;
   carregar(mesDe(dia), { aberto: dia });
   raiz.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -127,14 +162,19 @@ export function abrirNaAgenda(dia) {
 
 // A Gestão chama ao voltar para a página: o dia de hoje (e o que foi feito em outro aparelho) pode ter mudado.
 export function recarregarAgenda() {
-  if (raiz?.isConnected && estado.dados) carregar();
+  if (raiz?.isConnected && estado.dados) recarregarTudo();
 }
 
-// Recolhida: só a faixa de dias; o dia aberto e o formulário somem até abrir de novo (ou clicar num dia).
+// Depois de uma mudança: a agenda e, se ele está à vista, o kanban.
+function recarregarTudo() {
+  return Promise.all([carregar(), estado.vista === "quadro" ? carregarQuadro() : null]);
+}
+
+// Recolhida: só a faixa de dias (no kanban, só o cabeçalho) até abrir de novo (ou clicar num dia).
 function recolher(sim) {
   raiz.classList.toggle("recolhida", sim);
   const b = raiz.querySelector("[data-recolher]");
-  const dica = sim ? "Mostrar o dia e o formulário" : "Recolher a agenda";
+  const dica = sim ? "Mostrar a agenda" : "Recolher a agenda";
   b.innerHTML = icone(sim ? "mais" : "minimizar");
   b.title = dica;
   b.setAttribute("aria-label", dica);
@@ -155,9 +195,11 @@ async function carregar(mes = estado.mes, { aberto } = {}) {
     if (aberto && mesDe(aberto) === d.mes) estado.aberto = aberto;
     else if (!estado.aberto || mesDe(estado.aberto) !== d.mes) estado.aberto = mesDe(d.hoje) === d.mes ? d.hoje : `${d.mes}-01`;
     if (estado.concluindo && !d.dias.some((x) => x.data === estado.concluindo.dia)) estado.concluindo = null;
+    // a contagem dos outros meses pode ter mudado junto: o que for preciso é pedido de novo
+    estado.meses = new Map([[d.mes, contagemDoMes(d)]]);
     desenharFaixa(mesmoMes);
     desenharDia(!mesmoMes);
-    if (!estado.editando && !formMudou()) definirDiaDoForm(estado.aberto);
+    if (tela.open) redesenharDias();
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (!estado.dados) raiz.querySelector("#ag-faixa").innerHTML = `<div class="vazio">${icone("alerta")}<p>${esc(e.message)}</p></div>`;
@@ -167,11 +209,52 @@ async function carregar(mes = estado.mes, { aberto } = {}) {
   }
 }
 
-// ---------- faixa de dias ----------
-function desenharFaixa(quieta) {
+// Os quadradinhos de escolher dia contam como a faixa: quantos itens o dia tem e se está tudo feito ou ficou atrasado.
+function contagemDoMes(d) {
+  const r = {};
+  for (const x of d.dias) {
+    const lista = todos(x);
+    const faltam = lista.filter((i) => !i.feita).length;
+    if (lista.length) r[x.data] = { n: lista.length, classe: !faltam ? "feita" : x.data < d.hoje ? "atrasada" : "tem" };
+  }
+  return r;
+}
+
+// A contagem de um dia (escolherdia.js pergunta); o mês ainda não visto é pedido uma vez só e redesenha ao chegar.
+function contagem(dia) {
+  const mes = mesDe(dia);
+  if (!estado.meses.has(mes)) pedirMes(mes);
+  return estado.meses.get(mes)?.[dia] || null;
+}
+
+async function pedirMes(mes) {
+  const meses = estado.meses;
+  meses.set(mes, null);
+  try {
+    const d = await api(`/api/agenda?mes=${mes}`);
+    if (meses !== estado.meses) return; // a agenda recarregou nesse meio-tempo
+    meses.set(mes, contagemDoMes(d));
+    redesenharDias();
+  } catch { /* sem a contagem, os dias desse mês aparecem sem o número */ }
+}
+
+// O título e o resumo do cabeçalho: os do mês (agenda) ou os do kanban.
+function escreverCabecalho() {
+  const titulo = raiz.querySelector("#ag-titulo"), resumo = raiz.querySelector("#ag-resumo");
+  if (estado.vista === "quadro") {
+    titulo.textContent = "Kanban das tarefas";
+    if (!estado.quadro) return;
+    const conta = (k) => estado.quadro.tarefas.filter((t) => t.situacao === k).length;
+    const atrasadas = estado.quadro.tarefas.filter((t) => t.atrasada).length;
+    resumo.textContent = estado.quadro.tarefas.length
+      ? `${fmt.num(conta("a_fazer"))} a fazer · ${fmt.num(conta("fazendo"))} fazendo · ${plural(conta("concluida"), "concluída", "concluídas")} há pouco${atrasadas ? ` · ${plural(atrasadas, "atrasada", "atrasadas")}` : ""}`
+      : "Nenhuma tarefa por aqui";
+    return;
+  }
   const d = estado.dados;
+  if (!d) return;
   const [ano, m] = d.mes.split("-").map(Number);
-  raiz.querySelector("#ag-titulo").textContent = `${capitalizar(MESES[m - 1])} de ${ano}`;
+  titulo.textContent = `${capitalizar(MESES[m - 1])} de ${ano}`;
   let atividades = 0, tarefas = 0, feitas = 0, atrasadas = 0;
   for (const x of d.dias) {
     atividades += x.itens.length;
@@ -180,9 +263,16 @@ function desenharFaixa(quieta) {
     if (x.data < d.hoje) atrasadas += todos(x).filter((i) => !i.feita).length;
   }
   const partes = [atividades && plural(atividades, "atividade", "atividades"), tarefas && plural(tarefas, "tarefa", "tarefas")].filter(Boolean);
-  raiz.querySelector("#ag-resumo").textContent = partes.length
+  resumo.textContent = partes.length
     ? `${partes.join(" e ")} no mês · ${plural(feitas, "concluída", "concluídas")}${atrasadas ? ` · ${fmt.num(atrasadas)} sem concluir` : ""}`
     : "Nada marcado neste mês";
+}
+
+// ---------- faixa de dias ----------
+function desenharFaixa(quieta) {
+  const d = estado.dados;
+  const m = Number(d.mes.slice(5));
+  escreverCabecalho();
   raiz.querySelector("#ag-faixa").innerHTML = `<div class="faixa-dias ag-faixa ${quieta ? "quieta" : ""}" role="group" aria-label="Dias de ${MESES[m - 1]}">
     ${d.dias.map((x, n) => {
       const dia = Number(x.data.slice(8));
@@ -244,7 +334,6 @@ function abrirDia(dia) {
     b.setAttribute("aria-pressed", String(sim));
   });
   desenharDia(true);
-  if (!estado.editando && !formMudou()) definirDiaDoForm(dia);
 }
 
 // ---------- o dia aberto ----------
@@ -317,14 +406,21 @@ function itemHtml(i, dia, futuro, n) {
   </li>`;
 }
 
-// Por que o check de uma tarefa ou subtarefa está ou não liberado.
-function dicaCheck(t, s) {
+// Por que o check (ou a situação) de uma tarefa ou subtarefa está ou não liberado.
+function dicaCheck(t, s, faz = "conclui") {
   const x = s || t;
   if ((s ? s.pode : t.pode).concluir) return x.feita ? (s ? "Desfazer a conclusão" : "Reabrir a tarefa") : "Marcar como concluída";
-  if (!s) return `Só ${t.criador.nome}, que criou a tarefa, conclui`;
+  if (!s) return `Só ${t.criador.nome}, que criou a tarefa, ${faz}`;
   if (s.pela_tarefa) return "Concluída junto com a tarefa";
   if (t.feita) return "A tarefa foi concluída; quem criou reabre";
-  return `Só ${s.responsavel.nome} (o responsável) ou ${t.criador.nome} (quem criou) conclui`;
+  return `Só ${s.responsavel.nome} (o responsável) ou ${t.criador.nome} (quem criou) ${faz}`;
+}
+
+// A situação (A fazer, Fazendo, Concluída): os botões para quem pode mudar, senão só o chip.
+function situacaoHtml(x, attr, rotulo, pode, dica) {
+  if (!pode) return `<span class="chip ag-c-${x.situacao}" title="${esc(dica)}">${icone(ICONE_SITUACAO[x.situacao])}${NOME_SITUACAO[x.situacao]}</span>`;
+  return `<div class="seg-mini ag-situacao" role="group" aria-label="${esc(rotulo)}">${SITUACOES.map(([k, n]) =>
+    `<button type="button" ${attr}="${k}" class="st-${k} ${k === x.situacao ? "ativo" : ""}" aria-pressed="${k === x.situacao}">${icone(ICONE_SITUACAO[k])}${n}</button>`).join("")}</div>`;
 }
 
 // "Concluída por Beto às 14:03", "Concluída junto com a tarefa".
@@ -344,6 +440,7 @@ function refHtml(r, dia, n, vencida = false) {
   const chips = [
     `<span class="chip ag-c-tarefa">${icone("tarefa")}${s ? `Subtarefa${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}` : "Tarefa"}</span>`,
     vencida ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(x.prazo)}</span>` : "",
+    x.situacao === "fazendo" ? `<span class="chip ag-c-fazendo">${icone("relogio")}Fazendo</span>` : "",
     s ? `<span class="chip">Parte de: ${esc(t.titulo)}</span>` : "",
     !s && t.total ? `<span class="chip">${icone("visto")}${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span>` : "",
     !s && t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
@@ -357,6 +454,9 @@ function refHtml(r, dia, n, vencida = false) {
       ${x.descricao ? `<p>${esc(x.descricao)}</p>` : ""}
       <div class="ag-chips">${chips}</div>
       ${x.feita ? `<div class="ag-feito"><small><span>${textoConclusao(t, s, x.prazo)}</span></small></div>` : ""}
+      ${x.justificativa ? justHtml(x, s ? s.justificada_por?.nome : t.criador.nome,
+          x.pode.justificar ? `<button type="button" class="ge-link" data-justificar>Editar</button>` : "")
+        : x.pode.justificar ? `<button type="button" class="ge-link ag-just-abrir" data-justificar>${icone("conversa")}Justificar o atraso</button>` : ""}
     </div>
     <div class="ag-item-acoes">
       <button type="button" data-abrir-tarefa title="Abrir a tarefa" aria-label="Abrir a tarefa ${esc(t.titulo)}">${icone("olho")}</button>
@@ -370,25 +470,26 @@ const feedbackEscrito = () => !!raiz?.querySelector(".ag-fb textarea")?.value.tr
 
 // ---------- ações ----------
 async function aoClicar(e) {
+  const card = e.target.closest(".ag-card");
+  if (card && !e.target.closest("button")) return abrirTarefa(Number(card.dataset.card));
   const b = e.target.closest("button");
   if (!b || b.disabled) return;
   if (b.dataset.dia && b.closest(".ag-faixa")) return abrirDia(b.dataset.dia);
   if ("recolher" in b.dataset) return recolher(!raiz.classList.contains("recolhida"));
+  if (b.dataset.vista) {
+    if (raiz.classList.contains("recolhida")) recolher(false);
+    return escolherVista(b.dataset.vista);
+  }
   if (b.dataset.mes || "hoje" in b.dataset) {
     if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
     estado.concluindo = null;
     const hoje = estado.dados?.hoje || hojeLocal();
     return "hoje" in b.dataset ? carregar(mesDe(hoje), { aberto: hoje }) : carregar(somarMes(estado.mes, Number(b.dataset.mes)));
   }
-  if ("novoNoDia" in b.dataset) {
-    if (estado.editando) {
-      if (formMudou() && !confirm(`Descartar as mudanças nesta ${estado.editando.tipo}?`)) return;
-      cancelarEdicao();
-    }
-    definirDiaDoForm(estado.aberto);
-    raiz.querySelector("#ag-nova").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    return raiz.querySelector('#ag-form [name="titulo"]').focus();
-  }
+  // no kanban, Nova é tarefa; na agenda, o último tipo escolhido
+  if ("novo" in b.dataset) return abrirForm(null, estado.vista === "quadro" ? "tarefa" : estado.tipo);
+  if ("novoNoDia" in b.dataset) return abrirForm(null, estado.tipo);
+  if ("fecharForm" in b.dataset) return fecharForm();
   if (b.dataset.tipo) return escolherTipo(b.dataset.tipo);
   if ("rep" in b.dataset) return escolherRepeticao(b.dataset.rep);
   if (b.dataset.diaSemana) {
@@ -415,7 +516,6 @@ async function aoClicar(e) {
     estado.tf.subtarefas.splice(Number(b.dataset.tirarSub), 1);
     return desenharPessoas();
   }
-  if ("cancelarEdicao" in b.dataset) return cancelarEdicao();
   const li = b.closest(".ag-item");
   if (!li) return;
   if (li.dataset.tarefa) return aoClicarTarefa(b, li);
@@ -442,12 +542,21 @@ function aoClicarTarefa(b, li) {
   const s = li.dataset.subtarefa ? subDe(t, Number(li.dataset.subtarefa)) : null;
   if ("check" in b.dataset) return s ? alternarSub(s) : alternarTarefa(t);
   if ("abrirTarefa" in b.dataset) return abrirTarefa(t.id);
+  if ("justificar" in b.dataset) return abrirTarefa(t.id, { justificar: s ? s.id : "tarefa" }); // escreve na janela
   if ("editar" in b.dataset) return editarTarefa(t);
   if ("excluir" in b.dataset) return excluirTarefa(t);
 }
 
 function aoTeclar(e) {
   const t = e.target;
+  if (t.matches(".ag-card") && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    return abrirTarefa(Number(t.dataset.card));
+  }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && t.closest("#ag-form")) {
+    e.preventDefault();
+    return t.closest("form").requestSubmit();
+  }
   if (!t.matches(".ag-fb textarea")) return;
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); t.closest(".ag-item").querySelector("[data-confirmar]").click(); }
   if (e.key === "Escape") { estado.concluindo = null; desenharDia(false); }
@@ -498,32 +607,27 @@ async function excluir(a) {
   if (!confirm(`Excluir "${a.titulo}"?${aviso}`)) return;
   try {
     await api("/api/agenda/atividade/excluir", { json: { id: a.id } });
-    if (editandoEste("atividade", a.id)) cancelarEdicao();
     toast("Atividade excluída");
     await carregar();
   } catch (e) { toast(e.message, "erro"); }
 }
 
 // ---------- tarefas ----------
-const editandoEste = (tipo, id) => estado.editando?.tipo === tipo && estado.editando.id === id;
-
 // Grava uma mudança numa tarefa; a resposta traz a tarefa como ficou, que redesenha a janela (se for a aberta).
 async function mexer(url, json, aviso) {
   try {
     const r = await api(url, { json });
     if (aviso) toast(aviso);
     if (r.tarefa && dlg?.open && janela.tarefa?.id === r.tarefa.id) {
-      janela.editando = null;
+      Object.assign(janela, { editando: null, justificando: null });
       desenharTarefa(r.tarefa);
     }
-    await carregar();
+    await recarregarTudo();
     return r;
   } catch (e) {
     toast(e.message, "erro");
-    if (e.status === 404) { // a tarefa saiu (ou a pessoa saiu dela) em outro lugar
-      if (dlg?.open && janela.tarefa) dlg.close();
-      carregar();
-    }
+    if (e.status === 404 && dlg?.open && janela.tarefa) dlg.close(); // a tarefa saiu (ou a pessoa saiu dela) em outro lugar
+    recarregarTudo();
     return null;
   }
 }
@@ -532,10 +636,27 @@ function alternarSub(s) {
   return mexer(`/api/agenda/subtarefa/${s.feita ? "desfazer" : "concluir"}`, { id: s.id });
 }
 
-function alternarTarefa(t) {
+// Concluir com subtarefas abertas: elas passam a contar como feitas (pergunta antes).
+function podeConcluir(t) {
   const abertas = t.total - t.feitas;
-  if (!t.feita && abertas && !confirm(`Concluir "${t.titulo}"? ${abertas === 1 ? "A subtarefa que falta passa" : `As ${abertas} subtarefas que faltam passam`} a contar como feita${abertas === 1 ? "" : "s"} (reabrindo a tarefa, elas voltam).`)) return;
+  return !abertas || confirm(`Concluir "${t.titulo}"? ${abertas === 1 ? "A subtarefa que falta passa" : `As ${abertas} subtarefas que faltam passam`} a contar como feita${abertas === 1 ? "" : "s"} (reabrindo a tarefa, elas voltam).`);
+}
+
+function alternarTarefa(t) {
+  if (!t.feita && !podeConcluir(t)) return;
   return mexer(`/api/agenda/tarefa/${t.feita ? "desfazer" : "concluir"}`, { id: t.id }, t.feita ? "Tarefa reaberta" : "Tarefa concluída");
+}
+
+// Leva a tarefa para outra coluna (arrastando o card ou na janela dela). No kanban, o card já muda de lugar; a
+// resposta confirma (ou o recarregar devolve ele).
+function moverTarefa(t, situacao) {
+  if (situacao === t.situacao || (situacao === "concluida" && !podeConcluir(t))) return;
+  const card = estado.quadro?.tarefas.find((x) => x.id === t.id);
+  if (card) {
+    card.situacao = situacao;
+    if (estado.vista === "quadro") desenharQuadro(false);
+  }
+  return mexer("/api/agenda/tarefa/mover", { id: t.id, situacao }, MOVIDA[situacao]);
 }
 
 async function excluirTarefa(t) {
@@ -543,7 +664,7 @@ async function excluirTarefa(t) {
   const outros = t.participantes.length ? " Ela some da agenda de todos os participantes." : "";
   if (!confirm(`Excluir a tarefa "${t.titulo}"?${subs}${outros}`)) return;
   if (dlg?.open && janela.tarefa?.id === t.id) dlg.close();
-  if (await mexer("/api/agenda/tarefa/excluir", { id: t.id }, "Tarefa excluída") && editandoEste("tarefa", t.id)) cancelarEdicao();
+  await mexer("/api/agenda/tarefa/excluir", { id: t.id }, "Tarefa excluída");
 }
 
 async function garantirPessoas() {
@@ -557,13 +678,8 @@ async function garantirPessoas() {
   }
 }
 
-async function editarTarefa(t) {
-  if (!editandoEste("tarefa", t.id) && formMudou() && !confirm(DESCARTAR_FORM)) return;
-  if (!(await garantirPessoas())) return;
-  if (raiz.classList.contains("recolhida")) recolher(false);
-  desenharForm({ ...t, tipo: "tarefa" });
-  raiz.querySelector("#ag-nova").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  raiz.querySelector('#ag-form [name="titulo"]').focus();
+function editarTarefa(t) {
+  return abrirForm({ ...t, tipo: "tarefa" });
 }
 
 // ---------- janela: histórico de uma atividade e a tarefa aberta ----------
@@ -575,12 +691,12 @@ function criarJanela() {
   dlg.addEventListener("click", aoClicarJanela);
   dlg.addEventListener("submit", aoEnviarSub);
   dlg.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest("[data-sub-form]")) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest("[data-sub-form], [data-just-form]")) {
       e.preventDefault();
       e.target.closest("form").requestSubmit();
     }
   });
-  dlg.addEventListener("cancel", (e) => { if (janelaMudou() && !confirm(DESCARTAR_SUB)) e.preventDefault(); });
+  dlg.addEventListener("cancel", (e) => { if (janelaMudou() && !confirm(DESCARTAR_JANELA)) e.preventDefault(); });
   dlg.addEventListener("close", () => Object.assign(janela, JANELA_VAZIA()));
 }
 
@@ -620,7 +736,8 @@ async function abrirHistorico(a) {
   if (!dlg.open) dlg.showModal();
 }
 
-async function abrirTarefa(id) {
+// justificar: abre já escrevendo a justificativa do atraso ("tarefa" ou o id da subtarefa), se a pessoa pode.
+async function abrirTarefa(id, { justificar = null } = {}) {
   let t;
   try {
     t = await api(`/api/agenda/tarefa?id=${id}`);
@@ -633,9 +750,11 @@ async function abrirTarefa(id) {
   dlg.className = "dialogo camp-dialogo ag-tarefa-dlg";
   dlg.setAttribute("aria-labelledby", "ag-tf-titulo");
   if (janela.tarefa?.id !== t.id) janela.recolhidos = new Set();
-  janela.editando = null;
+  const alvo = justificar === "tarefa" ? t : subDe(t, justificar);
+  Object.assign(janela, { editando: null, justificando: alvo?.pode.justificar ? justificar : null });
   desenharTarefa(t);
   if (!dlg.open) dlg.showModal();
+  dlg.querySelector("[data-just-form] textarea")?.focus();
 }
 
 // As pessoas da tarefa, cada uma num card com as subtarefas dela: você primeiro, depois quem criou e os outros, pelo nome.
@@ -662,8 +781,11 @@ function cartaoTarefa(t, p) {
   </section>`;
 }
 
+// A janela da tarefa: o que ela é, a situação (quem criou muda: A fazer, Fazendo ou Concluída), o andamento e um card
+// por pessoa, com as subtarefas dela e a situação de cada uma.
 function desenharTarefa(t) {
   janela.tarefa = t;
+  const fazendo = t.subtarefas.filter((s) => s.situacao === "fazendo").length;
   dlg.innerHTML = `<div class="ag-tf">
     <div class="ag-hist-cab">
       <div><h2 id="ag-tf-titulo">${icone("tarefa")}${esc(t.titulo)}</h2>
@@ -673,27 +795,26 @@ function desenharTarefa(t) {
     </div>
     ${t.descricao ? `<p class="ag-tf-desc">${esc(t.descricao)}</p>` : ""}
     <div class="ag-tf-prog">
-      ${t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Tarefa concluída ${quando(t.concluida_em, t.prazo)}</span>` : ""}
-      <span>${t.total ? `${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}` : "Sem subtarefas"}</span>
+      ${situacaoHtml(t, "data-tf-situacao", "Situação da tarefa", t.pode.concluir, dicaCheck(t, null, "muda a situação"))}
+      ${t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Concluída ${quando(t.concluida_em, t.prazo)}</span>` : ""}
+      <span>${t.total ? `${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}${fazendo ? ` · ${fazendo} fazendo` : ""}` : "Sem subtarefas"}</span>
       ${t.total ? barra(t.feitas, t.total - t.feitas) : ""}
     </div>
+    ${blocoJust(t, "tarefa", t.criador.nome)}
     ${t.eu_criador ? `<div class="ag-tf-acoes">
-      <button class="btn" type="button" data-tf-concluir>${icone(t.feita ? "restaurar" : "visto")}${t.feita ? "Reabrir a tarefa" : "Concluir a tarefa"}</button>
       <button class="btn" type="button" data-tf-editar>${icone("lapis")}Editar</button>
       <button class="btn perigo" type="button" data-tf-excluir>${icone("lixeira")}Excluir</button>
     </div>` : ""}
     <span class="cf-rotulo ag-hist-rotulo">Pessoas e subtarefas</span>
     <div class="ag-pessoas">${pessoasDaTarefa(t).map((p) => cartaoTarefa(t, p)).join("")}</div>
   </div>`;
-  janela.inicial = janela.editando != null ? JSON.stringify(lerSubJanela()) : null;
+  prepararDias(dlg);
+  janela.inicial = janela.editando != null || janela.justificando != null ? JSON.stringify(lerEdicaoJanela()) : null;
 }
 
 function subHtml(t, s) {
   if (janela.editando === s.id) return `<li class="ag-item-form">${formSubHtml(t, s)}</li>`;
-  const dica = dicaCheck(t, s);
-  return `<li class="ag-item ${s.feita ? "feita" : ""}" data-sub="${s.id}">
-    <button type="button" class="ag-check ${s.feita ? "feita" : ""}" data-sub-check ${s.pode.concluir ? "" : "disabled"}
-      aria-pressed="${s.feita}" title="${esc(dica)}" aria-label="${esc(dica)}: ${esc(s.titulo)}">${icone("visto")}</button>
+  return `<li class="ag-item ag-sub-item st-${s.situacao}" data-sub="${s.id}">
     <div class="ag-item-t">
       <b>${esc(s.titulo)}</b>
       ${s.descricao ? `<p>${esc(s.descricao)}</p>` : ""}
@@ -701,11 +822,38 @@ function subHtml(t, s) {
         <span class="chip ${s.atrasada ? "ag-c-atrasada" : ""}">${icone(s.atrasada ? "alerta" : "relogio")}${s.atrasada ? "Venceu em" : "Até"} ${prazoTxt(s)}</span>
         ${s.feita ? `<span class="chip ag-c-feita">${icone("visto")}${textoConclusao(t, s, s.prazo)}</span>` : ""}
       </div>
+      <div class="ag-sub-st">${situacaoHtml(s, "data-sub-situacao", `Situação de ${s.titulo}`, s.pode.concluir, dicaCheck(t, s, "mudam a situação"))}</div>
+      ${blocoJust(s, s.id, s.justificada_por?.nome)}
     </div>
     <div class="ag-item-acoes">
       ${s.pode.editar_texto ? `<button type="button" data-sub-editar title="Editar a subtarefa" aria-label="Editar ${esc(s.titulo)}">${icone("lapis")}</button>` : ""}
     </div>
   </li>`;
+}
+
+// A justificativa do atraso de x (a tarefa ou uma subtarefa; todos da tarefa veem): o texto, de quem e quando, e o
+// que vier junto (o Editar).
+function justHtml(x, quem, extra = "") {
+  if (!x.justificativa) return "";
+  return `<div class="ag-just"><p>${icone("conversa")}<span>${esc(x.justificativa)}</span></p>
+    <small><span>Justificativa do atraso${quem ? ` · ${esc(quem)}` : ""}${x.justificada_em ? `, ${quando(x.justificada_em, x.prazo)}` : ""}</span>${extra}</small></div>`;
+}
+
+// Na janela: o formulário (se está aberto), a justificativa com o Editar ou, se ainda não tem e a pessoa pode, o botão.
+// alvo: "tarefa" ou o id da subtarefa.
+function blocoJust(x, alvo, quem) {
+  if (janela.justificando === alvo) return formJustHtml(x, alvo);
+  if (x.justificativa) return justHtml(x, quem, x.pode.justificar ? `<button type="button" class="ge-link" data-just="${alvo}">Editar</button>` : "");
+  return x.pode.justificar ? `<button type="button" class="ge-link ag-just-abrir" data-just="${alvo}">${icone("conversa")}Justificar o atraso</button>` : "";
+}
+
+function formJustHtml(x, alvo) {
+  return `<form class="ag-fb ag-just-form" data-just-form="${alvo}" novalidate>
+    <textarea data-campo="justificativa" rows="2" maxlength="2000" aria-label="Justificativa do atraso"
+      placeholder="Por que atrasou? Todos da tarefa veem.">${esc(x.justificativa)}</textarea>
+    <div class="ag-fb-acoes"><button class="btn" type="button" data-just-cancelar>Cancelar</button>
+      <button class="btn primario" type="submit">${icone("disco")}Salvar justificativa</button></div>
+  </form>`;
 }
 
 // A subtarefa nova (no card da pessoa) ou em edição, na janela: quem criou muda tudo (na edição, até passar para outra
@@ -719,9 +867,10 @@ function formSubHtml(t, s) {
     : `<input type="hidden" data-campo="responsavel" value="${v.responsavel.id}">`;
   const prazo = t.eu_criador ? `<div class="ag-sub-edit-campos ${s ? "" : "sem-responsavel"}">
       ${responsavel}
-      <label class="campo-form"><span>Prazo</span><input type="date" data-campo="prazo" value="${v.prazo}" max="${t.prazo}"></label>
       <label class="campo-form"><span>Horário <small>(opcional)</small></span><input type="time" data-campo="hora" value="${v.hora || ""}"></label>
-    </div>`
+    </div>
+    <div class="campo-form"><span>Prazo</span>${campoDia({ campo: "prazo", valor: v.prazo, max: t.prazo, maxDica: "Depois do prazo da tarefa",
+      rotulo: "Prazo da subtarefa", contar: v.responsavel.id === t.eu })}</div>`
     : `<small class="ag-sub-prazo">${icone("cadeado")}Prazo: ${s ? prazoTxt(s) : `o da tarefa (${prazoTxt(t)})`}. Só ${esc(t.criador.nome)}, que criou a tarefa, muda.</small>`;
   return `<form class="ag-sub-edit" data-sub-form="${s ? s.id : "nova"}" novalidate>
     <label class="campo-form"><span>${s ? "Subtarefa" : "Nova subtarefa"}</span>
@@ -734,8 +883,9 @@ function formSubHtml(t, s) {
   </form>`;
 }
 
-function lerSubJanela() {
-  const f = dlg?.querySelector("[data-sub-form]");
+// O que está sendo escrito na janela: a subtarefa (nova ou em edição) ou a justificativa.
+function lerEdicaoJanela() {
+  const f = dlg?.querySelector("[data-sub-form], [data-just-form]");
   if (!f) return null;
   const v = {};
   f.querySelectorAll("[data-campo]").forEach((c) => { v[c.dataset.campo] = c.dataset.campo === "responsavel" ? Number(c.value) : c.value.trim(); });
@@ -743,7 +893,7 @@ function lerSubJanela() {
   return v;
 }
 
-const janelaMudou = () => !!dlg?.open && janela.inicial != null && JSON.stringify(lerSubJanela()) !== janela.inicial;
+const janelaMudou = () => !!dlg?.open && janela.inicial != null && JSON.stringify(lerEdicaoJanela()) !== janela.inicial;
 
 // A subtarefa vence até o prazo da tarefa (no mesmo dia, o horário só conta quando os dois têm).
 const depoisDoPrazo = (s, t) => !!s.prazo && (s.prazo > t.prazo || (s.prazo === t.prazo && !!s.hora && !!t.hora && s.hora > t.hora));
@@ -752,7 +902,7 @@ function aoClicarJanela(e) {
   const b = e.target.closest("button");
   if (!b || b.disabled) return;
   if ("fechar" in b.dataset) {
-    if (janelaMudou() && !confirm(DESCARTAR_SUB)) return;
+    if (janelaMudou() && !confirm(DESCARTAR_JANELA)) return;
     return dlg.close();
   }
   const t = janela.tarefa;
@@ -760,22 +910,29 @@ function aoClicarJanela(e) {
   if (b.dataset.recolherPessoa) return alternarCard(b, janela.recolhidos);
   const s = b.closest("[data-sub]") ? subDe(t, Number(b.closest("[data-sub]").dataset.sub)) : null;
   if ("subNova" in b.dataset || "subEditar" in b.dataset) {
-    if (janelaMudou() && !confirm(DESCARTAR_SUB)) return;
-    janela.editando = s ? s.id : "nova";
-    janela.para = b.dataset.para ? Number(b.dataset.para) : null;
+    if (janelaMudou() && !confirm(DESCARTAR_JANELA)) return;
+    Object.assign(janela, { editando: s ? s.id : "nova", justificando: null, para: b.dataset.para ? Number(b.dataset.para) : null });
     desenharTarefa(t);
     return dlg.querySelector('[data-sub-form] [data-campo="titulo"]').focus();
   }
-  if ("subCancelar" in b.dataset) {
-    janela.editando = null;
+  if (b.dataset.just) {
+    if (janelaMudou() && !confirm(DESCARTAR_JANELA)) return;
+    Object.assign(janela, { editando: null, justificando: b.dataset.just === "tarefa" ? "tarefa" : Number(b.dataset.just) });
+    desenharTarefa(t);
+    return dlg.querySelector("[data-just-form] textarea").focus();
+  }
+  if ("subCancelar" in b.dataset || "justCancelar" in b.dataset) {
+    Object.assign(janela, { editando: null, justificando: null });
     return desenharTarefa(t);
   }
-  if ("subCheck" in b.dataset || "tfConcluir" in b.dataset) {
-    if (janelaMudou() && !confirm(DESCARTAR_SUB)) return;
-    return s ? alternarSub(s) : alternarTarefa(t);
+  if (b.dataset.subSituacao || b.dataset.tfSituacao) {
+    if (janelaMudou() && !confirm(DESCARTAR_JANELA)) return;
+    if (b.dataset.tfSituacao) return moverTarefa(t, b.dataset.tfSituacao);
+    if (b.dataset.subSituacao !== s.situacao) return mexer("/api/agenda/subtarefa/mover", { id: s.id, situacao: b.dataset.subSituacao });
+    return;
   }
   if ("tfEditar" in b.dataset) {
-    if (janelaMudou() && !confirm(DESCARTAR_SUB)) return;
+    if (janelaMudou() && !confirm(DESCARTAR_JANELA)) return;
     dlg.close();
     return editarTarefa(t);
   }
@@ -785,14 +942,15 @@ function aoClicarJanela(e) {
 async function aoEnviarSub(e) {
   e.preventDefault();
   const f = e.target, t = janela.tarefa;
-  const dados = lerSubJanela();
+  const dados = lerEdicaoJanela();
+  if (f.dataset.justForm) return enviarJust(f, t, dados.justificativa);
   if (!dados.titulo) {
     toast("Escreva o título da subtarefa", "erro");
     return f.querySelector('[data-campo="titulo"]').focus();
   }
   if (depoisDoPrazo(dados, t)) {
     toast(`A subtarefa vence depois da tarefa (${prazoTxt(t)}): o prazo dela vai até o da tarefa`, "erro");
-    return f.querySelector('[data-campo="prazo"]').focus();
+    return focarDia(f.querySelector('[data-campo="prazo"]'));
   }
   const botao = f.querySelector('[type="submit"]');
   botao.disabled = true;
@@ -802,49 +960,78 @@ async function aoEnviarSub(e) {
   if (!r && f.isConnected) botao.disabled = false;
 }
 
-// ---------- formulário ----------
-function desenharForm(item = null, tipo = item ? item.tipo : estado.tipo) {
-  estado.tipo = tipo;
-  estado.editando = item;
+// Grava a justificativa do atraso da tarefa ou da subtarefa (vazia apaga a que havia).
+async function enviarJust(f, t, texto) {
+  const tarefa = f.dataset.justForm === "tarefa";
+  const x = tarefa ? t : subDe(t, Number(f.dataset.justForm));
+  if (!texto && !x.justificativa) {
+    toast("Escreva por que atrasou", "erro");
+    return f.querySelector("textarea").focus();
+  }
+  if (!texto && !confirm("Apagar a justificativa do atraso?")) return;
+  const botao = f.querySelector('[type="submit"]');
+  botao.disabled = true;
+  const r = await mexer(`/api/agenda/${tarefa ? "tarefa" : "subtarefa"}/justificar`, { id: x.id, justificativa: texto },
+    texto ? "Justificativa salva" : "Justificativa apagada");
+  if (!r && f.isConnected) botao.disabled = false;
+}
+
+// ---------- formulário (em tela cheia) ----------
+// Atividade ou tarefa nova (no dia `dia`) ou a edição de uma (item, com o tipo), numa janela que cobre a tela.
+async function abrirForm(item = null, tipo = item ? item.tipo : estado.tipo, dia = estado.aberto || hojeLocal()) {
+  if (tipo === "tarefa" && !(await garantirPessoas())) return;
+  desenharForm(item, tipo, dia);
+  if (!tela.open) tela.showModal();
+  tela.querySelector('[name="titulo"]').focus();
+}
+
+// Fechar pergunta antes de descartar o que foi preenchido (depois de salvar, não).
+function fecharForm(salvo = false) {
+  if (!salvo && formMudou() && !confirm(DESCARTAR_FORM)) return;
+  tela.close();
+}
+
+function desenharForm(item, tipo, dia) {
+  Object.assign(estado, { tipo, editando: item, formDia: dia });
   const ehTarefa = tipo === "tarefa";
   const nome = ehTarefa ? "tarefa" : "atividade";
-  const el = raiz.querySelector("#ag-nova");
-  el.setAttribute("aria-label", item ? `Editar ${nome}` : `${capitalizar(nome)} nova`);
   const dica = ehTarefa
     ? (item ? "Quem participa vê as mudanças na agenda; só você muda os prazos." : "Com prazo, participantes e subtarefas para cada um.")
     : (item ? "O que já foi concluído continua no histórico." : "Só você vê as atividades da sua agenda.");
-  el.innerHTML = `<div class="ag-nova-cab">
-      <h3>${icone(item ? "lapis" : ehTarefa ? "tarefa" : "mais")}${item ? `Editar ${nome}` : `Nova ${nome}`}</h3>
-      <small>${dica}</small>
-    </div>
-    ${item ? "" : `<div class="seg-mini ag-tipo" role="group" aria-label="O que criar">${TIPOS.map(([k, n]) =>
-      `<button type="button" data-tipo="${k}" class="${k === tipo ? "ativo" : ""}" aria-pressed="${k === tipo}">${n}</button>`).join("")}</div>`}
-    <form id="ag-form" class="ag-form" novalidate>${ehTarefa ? formTarefa(item) : formAtividade(item)}</form>`;
-  el.querySelector("form").addEventListener("submit", aoEnviar);
+  tela.innerHTML = `<form id="ag-form" class="ag-form" novalidate>
+    <header class="ag-tela-cab">
+      <div class="ag-tela-tit"><h2 id="ag-tela-titulo">${icone(item ? "lapis" : ehTarefa ? "tarefa" : "calendario")}${item ? `Editar ${nome}` : `Nova ${nome}`}</h2>
+        <small>${dica}</small></div>
+      ${item ? "" : `<div class="seg-mini ag-tipo" role="group" aria-label="O que criar">${TIPOS.map(([k, n]) =>
+        `<button type="button" data-tipo="${k}" class="${k === tipo ? "ativo" : ""}" aria-pressed="${k === tipo}">${n}</button>`).join("")}</div>`}
+      <button class="btn icone" type="button" data-fechar-form title="Fechar (Esc)" aria-label="Fechar">${icone("x")}</button>
+    </header>
+    <div class="ag-tela-corpo"><div class="ag-tela-grade">${ehTarefa ? formTarefa(item, dia) : formAtividade(item, dia)}</div></div>
+    <footer class="ag-tela-rodape">
+      <small>Ctrl+Enter salva · Esc fecha</small>
+      <button class="btn" type="button" data-fechar-form>Cancelar</button>
+      <button class="btn primario" type="submit">${icone(item ? "disco" : "mais")}${item ? "Salvar" : `Criar ${nome}`}</button>
+    </footer>
+  </form>`;
+  tela.querySelector("form").addEventListener("submit", aoEnviar);
+  prepararDias(tela);
   if (ehTarefa) desenharPessoas(); else mostrarCampos();
   estado.formInicial = JSON.stringify(coletar());
 }
 
-function formAtividade(a) {
-  const inicio = a ? a.inicio : (estado.aberto || hojeLocal());
-  const v = a || { titulo: "", descricao: "", inicio, hora: null, repeticao: "nenhuma", dias_semana: null, dia_mes: null,
+// Duas colunas: o que é e se repete (à esquerda) e quando (à direita).
+function formAtividade(a, dia) {
+  const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, repeticao: "nenhuma", dias_semana: null, dia_mes: null,
                    intervalo: null, so_dias_uteis: false, regiao: null, fim: null, exige_feedback: false };
   estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES" };
-  return `<label class="campo-form"><span>Título</span>
+  return `<div class="ag-tela-col">
+      <label class="campo-form"><span>Título</span>
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(v.titulo)}" placeholder="Ex.: Visitar o Mercado do João"></label>
       <label class="campo-form"><span>Descrição <small>(opcional)</small></span>
-        <textarea name="descricao" rows="2" maxlength="2000">${esc(v.descricao)}</textarea></label>
+        <textarea name="descricao" rows="3" maxlength="2000">${esc(v.descricao)}</textarea></label>
       <div class="campo-form"><span>Repetição</span>
         <div class="seg-mini ag-rep" role="group" aria-label="Repetição">${REPETICOES.map(([k, n]) =>
           `<button type="button" data-rep="${k}" class="${k === v.repeticao ? "ativo" : ""}" aria-pressed="${k === v.repeticao}">${n}</button>`).join("")}</div></div>
-      <div class="ag-datas">
-        <label class="campo-form"><span data-rotulo-inicio>${v.repeticao === "nenhuma" ? "Dia" : "Começa em"}</span>
-          <input type="date" name="inicio" value="${v.inicio}"></label>
-        <label class="campo-form"><span>Horário <small>(opcional)</small></span>
-          <input type="time" name="hora" value="${v.hora || ""}"></label>
-        <label class="campo-form" data-para="diaria semanal mensal intervalo"><span>Termina em <small>(opcional)</small></span>
-          <input type="date" name="fim" value="${v.fim || ""}"></label>
-      </div>
       <div class="ag-sub" data-para="diaria">
         <label class="vend-op"><input type="checkbox" name="so_dias_uteis" ${v.so_dias_uteis ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
           <span class="n">Só dias úteis<small>Pula domingos, feriados e sábados sem expediente</small></span></label>
@@ -863,41 +1050,44 @@ function formAtividade(a) {
         <small>Contando do primeiro dia. Quinzenal: 15.</small></label></div>
       <label class="vend-op"><input type="checkbox" name="exige_feedback" ${v.exige_feedback ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
         <span class="n">Exige feedback ao concluir<small>Para marcar como feita, é preciso contar como foi</small></span></label>
-      <div class="ag-form-acoes">
-        ${a ? `<button class="btn" type="button" data-cancelar-edicao>Cancelar</button>` : ""}
-        <button class="btn primario" type="submit">${icone(a ? "disco" : "mais")}${a ? "Salvar" : "Criar atividade"}</button>
-      </div>`;
+    </div>
+    <div class="ag-tela-col">
+      <div class="campo-form"><span data-rotulo-inicio>${v.repeticao === "nenhuma" ? "Dia" : "Começa em"}</span>
+        ${campoDia({ nome: "inicio", valor: v.inicio, rotulo: "Dia da atividade" })}</div>
+      <label class="campo-form ag-hora-campo"><span>Horário <small>(opcional)</small></span>
+        <input type="time" name="hora" value="${v.hora || ""}"></label>
+      <div class="campo-form" data-para="diaria semanal mensal intervalo"><span>Termina em <small>(opcional)</small></span>
+        ${campoDia({ nome: "fim", valor: v.fim, min: v.inicio, vazio: "Sem data para terminar", rotulo: "Último dia da atividade" })}</div>
+    </div>`;
 }
 
-// O formulário da tarefa. Participantes e subtarefas ficam em estado.tf (desenharPessoas: um card por pessoa, com as
-// subtarefas dela; recolhidos: os cards fechados); os campos das linhas de subtarefa usam data-campo, não name: com
-// nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
-function formTarefa(t) {
+// O formulário da tarefa: o que é e o prazo (à esquerda), as pessoas e as subtarefas (à direita). Participantes e
+// subtarefas ficam em estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; recolhidos: os cards
+// fechados); os campos das linhas de subtarefa usam data-campo, não name: com nomes repetidos, f.elements.titulo
+// deixaria de ser o da tarefa.
+function formTarefa(t, dia) {
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
     subtarefas: t ? t.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
                                                prazo: s.prazo, hora: s.hora || "" })) : [],
     recolhidos: new Set(),
   };
-  return `<label class="campo-form"><span>Título</span>
+  return `<div class="ag-tela-col">
+      <label class="campo-form"><span>Título</span>
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(t?.titulo || "")}" placeholder="Ex.: Preparar a feira de novembro"></label>
       <label class="campo-form"><span>Descrição <small>(opcional)</small></span>
-        <textarea name="descricao" rows="2" maxlength="2000">${esc(t?.descricao || "")}</textarea></label>
-      <div class="ag-datas">
-        <label class="campo-form"><span>Prazo</span>
-          <input type="date" name="prazo" value="${t ? t.prazo : (estado.aberto || hojeLocal())}"></label>
-        <label class="campo-form"><span>Horário <small>(opcional)</small></span>
-          <input type="time" name="hora" value="${t?.hora || ""}"></label>
-      </div>
+        <textarea name="descricao" rows="3" maxlength="2000">${esc(t?.descricao || "")}</textarea></label>
+      <div class="campo-form"><span>Prazo</span>${campoDia({ nome: "prazo", valor: t ? t.prazo : dia, rotulo: "Prazo da tarefa" })}</div>
+      <label class="campo-form ag-hora-campo"><span>Horário do prazo <small>(opcional)</small></span>
+        <input type="time" name="hora" value="${t?.hora || ""}"></label>
+    </div>
+    <div class="ag-tela-col">
       <div class="campo-form"><span>Pessoas e subtarefas <small>(opcional)</small></span>
         <div class="ag-pessoas" id="ag-pessoas"></div>
         <span class="campo"><select data-add-pessoa aria-label="Adicionar participante"></select></span>
         <small>Com autonomia, a pessoa edita o texto das próprias subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
       </div>
-      <div class="ag-form-acoes">
-        ${t ? `<button class="btn" type="button" data-cancelar-edicao>Cancelar</button>` : ""}
-        <button class="btn primario" type="submit">${icone(t ? "disco" : "mais")}${t ? "Salvar" : "Criar tarefa"}</button>
-      </div>`;
+    </div>`;
 }
 
 // Um card por pessoa (você primeiro, depois os participantes), com as subtarefas dela dentro. Recolhido, fica só a
@@ -905,8 +1095,9 @@ function formTarefa(t) {
 function desenharPessoas() {
   const f = raiz.querySelector("#ag-form");
   const { participantes, subtarefas, recolhidos } = estado.tf;
-  const eu = estado.pessoas.eu;
-  f.querySelector("#ag-pessoas").innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
+  const eu = estado.pessoas.eu, prazo = f.elements.prazo.value;
+  const lista = f.querySelector("#ag-pessoas");
+  lista.innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
     const linhas = subtarefas.map((s, n) => [s, n]).filter(([s]) => s.responsavel === p.id);
     const quem = p.voce ? "você" : esc(p.nome);
     const resumo = linhas.length ? plural(linhas.length, "subtarefa", "subtarefas") : "sem subtarefas";
@@ -918,12 +1109,13 @@ function desenharPessoas() {
         <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>`}
       </div>
       <div class="ag-pessoa-corpo">
-        ${linhas.map(([s, n]) => linhaSub(s, n, quem)).join("")}
+        ${linhas.map(([s, n]) => linhaSub(s, n, p, prazo)).join("")}
         <button type="button" class="ag-pessoa-op ag-pessoa-sub" data-sub-para="${p.id}" title="Criar uma subtarefa para ${quem}"
           aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button>
       </div>
     </div>`;
   }).join("");
+  prepararDias(lista);
   const livres = estado.pessoas.pessoas.filter((p) => !participantes.some((q) => q.id === p.id));
   const sel = f.querySelector("[data-add-pessoa]");
   sel.innerHTML = `<option value="">${livres.length ? "Adicionar pessoa…" : "Ninguém mais com acesso à Gestão"}</option>` +
@@ -949,16 +1141,17 @@ function alternarCard(b, recolhidos) {
   b.title = b.title.replace(fechar ? "Esconder" : "Mostrar", fechar ? "Mostrar" : "Esconder");
 }
 
-function linhaSub(s, n, quem) {
+// Uma subtarefa no card da pessoa p: o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado.
+function linhaSub(s, n, p, prazoTarefa) {
+  const de = p.voce ? "você" : p.nome;
+  const hora = `<input type="time" data-campo="hora" value="${s.hora || ""}" title="Horário (opcional)" aria-label="Horário da subtarefa (opcional)">`;
   return `<div class="ag-sub-linha" data-n="${n}">
       <div class="ag-sub-topo">
-        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa de ${quem}">
+        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa de ${esc(de)}">
         <button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>
       </div>
-      <div class="ag-sub-campos">
-        <input type="date" data-campo="prazo" value="${s.prazo}" aria-label="Prazo da subtarefa">
-        <input type="time" data-campo="hora" value="${s.hora || ""}" aria-label="Horário da subtarefa (opcional)">
-      </div>
+      ${campoDia({ campo: "prazo", valor: s.prazo, max: prazoTarefa, maxDica: "Depois do prazo da tarefa", rotulo: `Prazo da subtarefa de ${de}`,
+                   contar: !!p.voce, extra: hora })}
     </div>`;
 }
 
@@ -980,12 +1173,13 @@ function maisSub(responsavel) {
   focarSub(estado.tf.subtarefas.length - 1, "titulo");
 }
 
-// Põe o cursor num campo da linha n, abrindo o card dela se estava recolhido.
+// Põe o foco num campo da linha n (no prazo, o dia escolhido), abrindo o card dela se estava recolhido.
 function focarSub(n, campo) {
   const linha = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"]`);
   const nome = linha.closest(".ag-pessoa-card").querySelector("[data-recolher-pessoa]");
   if (nome.closest(".recolhido")) alternarCard(nome, estado.tf.recolhidos);
-  linha.querySelector(`[data-campo="${campo}"]`).focus();
+  const c = linha.querySelector(`[data-campo="${campo}"]`);
+  if (c.type === "hidden") focarDia(c); else c.focus();
 }
 
 // Tira o participante da tarefa e, com ele, as subtarefas dele (perguntando antes, se houver).
@@ -1004,8 +1198,8 @@ async function escolherTipo(tipo) {
   if (tipo === estado.tipo) return;
   if (formMudou() && !confirm(DESCARTAR_FORM)) return;
   if (tipo === "tarefa" && !(await garantirPessoas())) return;
-  desenharForm(null, tipo);
-  raiz.querySelector('#ag-form [name="titulo"]').focus();
+  desenharForm(null, tipo, estado.formDia);
+  tela.querySelector('[name="titulo"]').focus();
 }
 
 // Os campos da repetição escolhida (e o rótulo da data).
@@ -1036,23 +1230,18 @@ function escolherRepeticao(rep) {
 }
 
 function aoMudar(e) {
-  if (e.target.name === "so_dias_uteis") raiz.querySelector("[data-regioes]").hidden = !e.target.checked;
-  if (e.target.matches("[data-add-pessoa]") && e.target.value) {
+  const t = e.target;
+  if (t.name === "so_dias_uteis") raiz.querySelector("[data-regioes]").hidden = !t.checked;
+  // o prazo da tarefa limita o das subtarefas; o começo da atividade, o fim
+  if (t.name === "prazo" && estado.tf) raiz.querySelectorAll('#ag-pessoas [data-campo="prazo"]').forEach((c) => limitesDoDia(c, { max: t.value }));
+  if (t.name === "inicio") limitesDoDia(t.form.elements.fim, { min: t.value });
+  if (t.matches("[data-add-pessoa]") && t.value) {
     lerSubs();
-    const p = estado.pessoas.pessoas.find((x) => x.id === Number(e.target.value));
+    const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));
     estado.tf.participantes.push({ id: p.id, nome: p.nome, autonomia: false });
     estado.tf.participantes.sort((a, b) => a.nome.localeCompare(b.nome));
     desenharPessoas();
   }
-}
-
-// O dia do formulário acompanha o dia aberto; com o formulário intocado, isso não conta como alteração.
-function definirDiaDoForm(dia) {
-  const f = raiz.querySelector("#ag-form");
-  if (!f || !dia) return;
-  const intacto = !formMudou();
-  (f.elements.inicio || f.elements.prazo).value = dia;
-  if (intacto) estado.formInicial = JSON.stringify(coletar());
 }
 
 function coletar() {
@@ -1087,18 +1276,11 @@ function coletarTarefa() {
 }
 
 function formMudou() {
-  return !!raiz?.querySelector("#ag-form") && JSON.stringify(coletar()) !== estado.formInicial;
+  return !!tela?.open && !!tela.querySelector("#ag-form") && JSON.stringify(coletar()) !== estado.formInicial;
 }
 
 function editar(a) {
-  if (!editandoEste("atividade", a.id) && formMudou() && !confirm(DESCARTAR_FORM)) return;
-  desenharForm({ ...a, tipo: "atividade" });
-  raiz.querySelector("#ag-nova").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  raiz.querySelector('#ag-form [name="titulo"]').focus();
-}
-
-function cancelarEdicao() {
-  desenharForm();
+  return abrirForm({ ...a, tipo: "atividade" });
 }
 
 async function aoEnviar(e) {
@@ -1107,7 +1289,7 @@ async function aoEnviar(e) {
   if (estado.tipo === "tarefa") return enviarTarefa(f);
   const dados = coletar();
   if (!dados.titulo) { toast("Escreva o título da atividade", "erro"); return f.elements.titulo.focus(); }
-  if (!dados.inicio) { toast("Escolha o dia da atividade", "erro"); return f.elements.inicio.focus(); }
+  if (!dados.inicio) { toast("Escolha o dia da atividade", "erro"); return focarDia(f.elements.inicio); }
   if (dados.repeticao === "semanal" && !dados.dias_semana.length) return toast("Escolha ao menos um dia da semana", "erro");
   const botao = f.querySelector('[type="submit"]');
   botao.disabled = true;
@@ -1116,7 +1298,7 @@ async function aoEnviar(e) {
     if (editando) await api("/api/agenda/atividade/editar", { json: { id: editando.id, atividade: dados } });
     else await api("/api/agenda/atividades", { json: { atividade: dados } });
     toast(editando ? "Atividade salva" : "Atividade criada");
-    desenharForm();
+    fecharForm(true);
     await (editando ? carregar() : carregar(mesDe(dados.inicio), { aberto: dados.inicio }));
   } catch (err) {
     botao.disabled = false;
@@ -1127,7 +1309,7 @@ async function aoEnviar(e) {
 async function enviarTarefa(f) {
   const dados = coletar();
   if (!dados.titulo) { toast("Escreva o título da tarefa", "erro"); return f.elements.titulo.focus(); }
-  if (!dados.prazo) { toast("Escolha o prazo da tarefa", "erro"); return f.elements.prazo.focus(); }
+  if (!dados.prazo) { toast("Escolha o prazo da tarefa", "erro"); return focarDia(f.elements.prazo); }
   for (const [n, s] of dados.subtarefas.entries()) {
     if (!s.titulo) { toast("Escreva o título da subtarefa", "erro"); return focarSub(n, "titulo"); }
     if (depoisDoPrazo(s, dados)) {
@@ -1142,10 +1324,112 @@ async function enviarTarefa(f) {
     if (editando) await api("/api/agenda/tarefa/editar", { json: { id: editando.id, versao: editando.versao, tarefa: dados } });
     else await api("/api/agenda/tarefas", { json: { tarefa: dados } });
     toast(editando ? "Tarefa salva" : "Tarefa criada");
-    desenharForm();
-    await (editando ? carregar() : carregar(mesDe(dados.prazo), { aberto: dados.prazo }));
+    fecharForm(true);
+    await Promise.all([editando ? carregar() : carregar(mesDe(dados.prazo), { aberto: dados.prazo }),
+                       estado.vista === "quadro" ? carregarQuadro() : null]);
   } catch (err) {
     botao.disabled = false;
     toast(err.message, "erro");
   }
+}
+
+// ---------- kanban ----------
+function escolherVista(vista) {
+  estado.vista = vista;
+  guardar(CHAVE_VISTA, vista);
+  raiz.classList.toggle("vista-quadro", vista === "quadro");
+  raiz.querySelectorAll("[data-vista]").forEach((b) => {
+    b.classList.toggle("ativo", b.dataset.vista === vista);
+    b.setAttribute("aria-pressed", String(b.dataset.vista === vista));
+  });
+  escreverCabecalho();
+  if (vista === "quadro") carregarQuadro();
+}
+
+async function carregarQuadro() {
+  const pedido = ++estado.pedidoQuadro;
+  const el = raiz.querySelector("#ag-quadro");
+  if (estado.quadro) el.classList.add("recarregando");
+  else el.innerHTML = `<div class="esqueleto" style="height:280px"></div>`;
+  try {
+    const q = await api("/api/agenda/quadro");
+    if (pedido !== estado.pedidoQuadro) return;
+    const primeira = !estado.quadro;
+    estado.quadro = q;
+    desenharQuadro(primeira);
+  } catch (e) {
+    if (pedido !== estado.pedidoQuadro) return;
+    if (!estado.quadro) el.innerHTML = `<div class="vazio">${icone("alerta")}<p>${esc(e.message)}</p></div>`;
+    toast(e.message, "erro");
+  } finally {
+    if (pedido === estado.pedidoQuadro) el.classList.remove("recarregando");
+  }
+}
+
+// As três colunas: A fazer e Fazendo pelo prazo; Concluída, as concluídas por último primeiro.
+function desenharQuadro(animar) {
+  const q = estado.quadro;
+  const colunas = Object.fromEntries(SITUACOES.map(([k]) => [k, []]));
+  q.tarefas.forEach((t) => colunas[t.situacao].push(t));
+  colunas.concluida.sort((a, b) => String(b.concluida_em || "~").localeCompare(String(a.concluida_em || "~")));
+  escreverCabecalho();
+  raiz.querySelector("#ag-quadro").innerHTML = `<div class="ag-colunas ${animar ? "abre" : ""}">${SITUACOES.map(([k, nome]) => `
+      <section class="ag-coluna" data-coluna="${k}" aria-label="${nome}">
+        <h3><i class="ag-st" aria-hidden="true"></i>${nome}<span class="ag-coluna-n">${colunas[k].length}</span></h3>
+        <ul class="ag-cards">${colunas[k].map(cardHtml).join("") || `<li class="ag-coluna-vazia">${COLUNA_VAZIA[k]}</li>`}</ul>
+      </section>`).join("")}</div>
+    <p class="ag-quadro-dica">${icone("info")}Arraste para outra coluna as tarefas que você criou, ou abra a tarefa e escolha a situação. As concluídas saem do kanban ${q.dias_concluidas} dias depois.</p>`;
+}
+
+function cardHtml(t, n) {
+  const minhas = t.subtarefas.filter((s) => s.minha && !s.feita).length;
+  const chips = [
+    t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Concluída em ${dataCurta(t.concluida_em.slice(0, 10))}</span>`
+      : `<span class="chip ${t.atrasada ? "ag-c-atrasada" : ""}">${icone(t.atrasada ? "alerta" : "relogio")}${t.atrasada ? "Venceu em" : "Até"} ${prazoTxt(t)}</span>`,
+    !t.eu_criador ? `<span class="chip">${icone("usuario")}De ${esc(t.criador.nome)}</span>` : "",
+    t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
+    minhas ? `<span class="chip ag-c-tarefa" title="Subtarefas suas que faltam">${icone("tarefa")}${plural(minhas, "subtarefa sua", "subtarefas suas")}</span>` : "",
+    t.justificativa ? `<span class="chip ag-c-justificada" title="${esc(t.justificativa)}">${icone("conversa")}Atraso justificado</span>` : "",
+  ].filter(Boolean).join("");
+  return `<li class="ag-card ${t.atrasada ? "atrasada" : ""}" style="--i:${n}" data-card="${t.id}" tabindex="0" role="button"
+    ${t.pode.concluir ? 'draggable="true" title="Clique para abrir; arraste para mudar de coluna"' : 'title="Clique para abrir"'} aria-label="Abrir a tarefa ${esc(t.titulo)}">
+    <b>${esc(t.titulo)}</b>
+    ${t.descricao ? `<p>${esc(t.descricao)}</p>` : ""}
+    <div class="ag-chips">${chips}</div>
+    ${t.total ? `<div class="ag-card-prog">${barra(t.feitas, t.total - t.feitas)}<span>${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span></div>` : ""}
+  </li>`;
+}
+
+// Arrastar o card (só as tarefas que eu criei são arrastáveis): a coluna de baixo se destaca e, solto, ele muda de coluna.
+function aoArrastar(e) {
+  const card = e.target.closest?.(".ag-card[draggable]");
+  if (!card) return;
+  estado.arrastando = estado.quadro.tarefas.find((t) => t.id === Number(card.dataset.card));
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", card.dataset.card);
+  requestAnimationFrame(() => card.classList.add("arrastando"));
+}
+
+function aoPassar(e) {
+  if (!estado.arrastando) return;
+  const col = e.target.closest?.(".ag-coluna");
+  const outra = !!col && col.dataset.coluna !== estado.arrastando.situacao;
+  raiz.querySelectorAll(".ag-coluna").forEach((c) => c.classList.toggle("alvo", outra && c === col));
+  if (outra) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+}
+
+function aoSoltar(e) {
+  const col = e.target.closest?.(".ag-coluna"), t = estado.arrastando;
+  if (!col || !t) return;
+  e.preventDefault();
+  fimDoArraste();
+  moverTarefa(t, col.dataset.coluna);
+}
+
+function fimDoArraste() {
+  estado.arrastando = null;
+  raiz.querySelectorAll(".ag-coluna.alvo, .ag-card.arrastando").forEach((x) => x.classList.remove("alvo", "arrastando"));
 }

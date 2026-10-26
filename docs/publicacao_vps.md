@@ -454,6 +454,19 @@ A agenda do topo da Gestão ganha as **tarefas**: prazo, participantes (com ou s
   atividades ficam como estão.
 - **Voltar atrás:** o código anterior ignora as tabelas novas (as tarefas somem da agenda e voltam com a versão nova).
 
+#### Kanban e justificativa do atraso nas tarefas (migrações 021 e 022)
+
+O formulário da agenda passa a abrir em tela cheia, os dias se escolhem em quadradinhos, as tarefas ganham o kanban
+(A fazer, Fazendo e Concluída) e o atraso de uma tarefa ou subtarefa pode ser justificado.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 021** só acrescenta a coluna `iniciada_em` (vazia) em `agenda_tarefas` e `agenda_subtarefas`: tudo o
+  que já existe começa em A fazer (ou Concluída, se já foi concluído).
+- **A migração 022** só acrescenta as colunas da justificativa (`justificativa`, vazia, e `justificada_em`; na
+  subtarefa, também `justificada_por`).
+- **Voltar atrás:** o código anterior ignora as colunas novas (quem estava em Fazendo aparece só como aberta, e as
+  justificativas ficam guardadas sem aparecer).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a

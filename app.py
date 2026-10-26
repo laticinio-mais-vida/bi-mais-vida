@@ -74,13 +74,15 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
 # Agenda, no topo da página Gestão: quem tem a Gestão lê e muda só a própria agenda (bi/agenda.py filtra pelo
 # usuário) e as tarefas de que participa (bi/tarefas.py confere quem pode o quê). Por isso não entra em ROTAS_ADMIN,
 # como as rotas que mudam a Gestão.
-ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico", "/api/agenda/pessoas", "/api/agenda/tarefa")
+ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico", "/api/agenda/pessoas", "/api/agenda/tarefa",
+                    "/api/agenda/quadro")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
                       "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer",
                       "/api/agenda/proposta", "/api/agenda/tarefas", "/api/agenda/tarefa/editar",
                       "/api/agenda/tarefa/excluir", "/api/agenda/tarefa/concluir", "/api/agenda/tarefa/desfazer",
-                      "/api/agenda/subtarefas", "/api/agenda/subtarefa/editar", "/api/agenda/subtarefa/concluir",
-                      "/api/agenda/subtarefa/desfazer"}
+                      "/api/agenda/tarefa/mover", "/api/agenda/tarefa/justificar", "/api/agenda/subtarefas",
+                      "/api/agenda/subtarefa/editar", "/api/agenda/subtarefa/concluir",
+                      "/api/agenda/subtarefa/desfazer", "/api/agenda/subtarefa/mover", "/api/agenda/subtarefa/justificar"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
@@ -575,6 +577,8 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(self.app.tarefas.pessoas(eu))
         if caminho == "/api/agenda/tarefa":  # id=…: a tarefa aberta, com as subtarefas de todos
             return self._json(self.app.tarefas.obter(eu, q.get("id")))
+        if caminho == "/api/agenda/quadro":  # o kanban: as tarefas por situação (a fazer, fazendo, concluída)
+            return self._json(self.app.tarefas.quadro(eu))
         return self._json(self.app.agenda.historico(eu, q.get("id")))
 
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
@@ -625,12 +629,20 @@ class Manipulador(BaseHTTPRequestHandler):
             t = tarefas.concluir(eu, id_)
         elif caminho == "/api/agenda/tarefa/desfazer":
             t = tarefas.desfazer(eu, id_)
+        elif caminho == "/api/agenda/tarefa/mover":  # situacao: a_fazer, fazendo ou concluida (a coluna do quadro)
+            t = tarefas.mover(eu, id_, corpo.get("situacao"))
+        elif caminho == "/api/agenda/tarefa/justificar":  # justificativa: o porquê do atraso (vazia apaga)
+            t = tarefas.justificar(eu, id_, corpo.get("justificativa"))
         elif caminho == "/api/agenda/subtarefas":  # id: a tarefa
             t = tarefas.nova_subtarefa(eu, id_, corpo.get("subtarefa") or {})
         elif caminho == "/api/agenda/subtarefa/editar":
             t = tarefas.editar_subtarefa(eu, id_, corpo.get("subtarefa") or {})
         elif caminho == "/api/agenda/subtarefa/concluir":
             t = tarefas.concluir_subtarefa(eu, id_)
+        elif caminho == "/api/agenda/subtarefa/mover":
+            t = tarefas.mover_subtarefa(eu, id_, corpo.get("situacao"))
+        elif caminho == "/api/agenda/subtarefa/justificar":
+            t = tarefas.justificar_subtarefa(eu, id_, corpo.get("justificativa"))
         else:  # /api/agenda/subtarefa/desfazer
             t = tarefas.desfazer_subtarefa(eu, id_)
         return self._json({"ok": True, "tarefa": t})

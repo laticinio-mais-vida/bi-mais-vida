@@ -11,6 +11,12 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
 - A subtarefa vence até o prazo da tarefa. Conclui o responsável (ou quem criou), em qualquer dia. Concluir a tarefa
   faz as subtarefas abertas contarem como feitas (pela_tarefa) enquanto ela estiver concluída.
 - Atrasada: o dia do prazo passou sem concluir. Fica no dia do prazo e, no mês de hoje, também na lista atrasadas.
+- Justificativa do atraso (migração 022): passado o dia do prazo sem concluir, ou concluída depois dele (venceu), quem
+  responde por ela conta por que atrasou: na tarefa, quem criou (justificar); na subtarefa, o responsável
+  (justificar_subtarefa). Todos da tarefa veem; a tarefa continua atrasada até ser concluída.
+- Quadro (kanban, quadro): as tarefas em três colunas pela situação, a fazer, fazendo (iniciada_em, migração 021) ou
+  concluída (concluida_em manda). Quem criou muda a tarefa de coluna (mover); a subtarefa (mover_subtarefa), quem
+  conclui ela. As concluídas ficam no quadro por DIAS_NO_QUADRO dias.
 - versao: sobe a cada mudança na tarefa, nas pessoas ou nas subtarefas (concluir não conta). Editar confere, para o
   Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
 """
@@ -24,14 +30,22 @@ from .conversas import NaoEncontrada
 
 MAX_PESSOAS = 30      # participantes de uma tarefa, sem quem criou
 MAX_SUBTAREFAS = 50
+DIAS_NO_QUADRO = 30   # a tarefa concluída fica na coluna Concluída do quadro por estes dias
 _NAO_ACHOU = "tarefa não encontrada; ela pode ter sido excluída ou você não participa mais dela"
 _NAO_ACHOU_SUB = "subtarefa não encontrada; ela pode ter sido excluída"
 _MUDOU = "a tarefa acabou de mudar; abra de novo e repita"
+_NAO_ATRASOU = "{} não atrasou: a justificativa é para depois do dia do prazo"
 # Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
 _COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
-_T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "concluida_em", "versao")
-_S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "concluida_em", "concluida_por",
-      "concluida_por_nome")
+_T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "iniciada_em", "concluida_em", "versao",
+      "justificativa", "justificada_em")
+_S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
+      "concluida_por", "concluida_por_nome", "justificativa", "justificada_em", "justificada_por",
+      "justificada_por_nome")
+# A situação (a coluna do quadro) e o que ela grava; o começo fica de quando começou, mesmo indo e voltando.
+_SITUACOES = {"a_fazer": "iniciada_em = NULL, concluida_em = NULL",
+              "fazendo": "iniciada_em = coalesce(iniciada_em, now()), concluida_em = NULL",
+              "concluida": "concluida_em = coalesce(concluida_em, now())"}
 # As tarefas de quem vê com algo no mês: a tarefa ou uma subtarefa que ele vê vencendo nele ou, no mês de hoje,
 # atrasada (de qualquer mês).
 _DO_MES = """SELECT t.id FROM agenda_tarefas t
@@ -46,6 +60,21 @@ WHERE t.prazo BETWEEN %(de)s AND %(ate)s
 
 def _hhmm(h: dt.time | None) -> str | None:
     return h.strftime("%H:%M") if h else None
+
+
+def _situacao(valor) -> str:
+    if not isinstance(valor, str) or valor not in _SITUACOES:
+        raise ValueError(f"situação inválida: {valor!r} (a_fazer, fazendo ou concluida)")
+    return valor
+
+
+def _na_coluna(concluida: bool, iniciada_em) -> str:
+    return "concluida" if concluida else "fazendo" if iniciada_em else "a_fazer"
+
+
+def _venceu(prazo: dt.date, concluida_em: dt.datetime | None, hoje: dt.date) -> bool:
+    """Passou do dia do prazo sem concluir, ou foi concluída depois dele: o atraso pode ser justificado."""
+    return (concluida_em.astimezone().date() if concluida_em else hoje) > prazo
 
 
 def _pessoa(valor) -> int:
@@ -142,7 +171,8 @@ class Tarefas:
         if not ids:
             return []
         tarefas = {r[0]: {**dict(zip(_T, r)), "pessoas": [], "subtarefas": []} for r in con.execute(
-            "SELECT t.id, t.criador, u.nome, t.titulo, t.descricao, t.prazo, t.hora, t.concluida_em, t.versao "
+            "SELECT t.id, t.criador, u.nome, t.titulo, t.descricao, t.prazo, t.hora, t.iniciada_em, t.concluida_em, "
+            "t.versao, t.justificativa, t.justificada_em "
             "FROM agenda_tarefas t JOIN usuarios u ON u.id = t.criador WHERE t.id = ANY(%s::bigint[]) "
             "ORDER BY t.prazo, t.hora NULLS LAST, t.id", [ids])}
         for tarefa, usuario, nome, autonomia in con.execute(
@@ -151,42 +181,56 @@ class Tarefas:
                 [ids]):
             tarefas[tarefa]["pessoas"].append({"id": usuario, "nome": nome, "autonomia": autonomia})
         for r in con.execute(
-                "SELECT s.tarefa, s.id, s.titulo, s.descricao, s.prazo, s.hora, s.responsavel, u.nome, s.concluida_em, "
-                "s.concluida_por, c.nome FROM agenda_subtarefas s JOIN usuarios u ON u.id = s.responsavel "
-                "LEFT JOIN usuarios c ON c.id = s.concluida_por WHERE s.tarefa = ANY(%s::bigint[]) "
+                "SELECT s.tarefa, s.id, s.titulo, s.descricao, s.prazo, s.hora, s.responsavel, u.nome, s.iniciada_em, "
+                "s.concluida_em, s.concluida_por, c.nome, s.justificativa, s.justificada_em, s.justificada_por, j.nome "
+                "FROM agenda_subtarefas s JOIN usuarios u ON u.id = s.responsavel "
+                "LEFT JOIN usuarios c ON c.id = s.concluida_por LEFT JOIN usuarios j ON j.id = s.justificada_por "
+                "WHERE s.tarefa = ANY(%s::bigint[]) "
                 "ORDER BY s.prazo, s.hora NULLS LAST, s.id", [ids]):
             tarefas[r[0]]["subtarefas"].append(dict(zip(_S, r[1:])))
         return list(tarefas.values())
 
     @staticmethod
     def _publica(t: dict, eu: int, hoje: dt.date) -> dict:
-        """A tarefa como a página e a agenda de `eu` veem, com o que ele pode fazer nela (pode)."""
+        """A tarefa como a página e a agenda de `eu` veem, com o que ele pode fazer nela (pode; concluir vale também
+        para mudar de coluna no quadro). venceu: passou do prazo sem concluir ou foi concluída depois dele (a
+        subtarefa aberta de uma tarefa concluída, pela conclusão da tarefa)."""
         criador = t["criador"] == eu
         autonomia = not criador and any(p["id"] == eu and p["autonomia"] for p in t["pessoas"])
         concluida = t["concluida_em"] is not None
         subtarefas = []
         for s in t["subtarefas"]:
             minha, feita = s["responsavel"] == eu, concluida or s["concluida_em"] is not None
+            venceu = _venceu(s["prazo"], s["concluida_em"] or t["concluida_em"], hoje)
             subtarefas.append({
                 "id": s["id"], "titulo": s["titulo"], "descricao": s["descricao"], "prazo": s["prazo"].isoformat(),
                 "hora": _hhmm(s["hora"]), "responsavel": {"id": s["responsavel"], "nome": s["responsavel_nome"]},
                 "minha": minha, "feita": feita, "pela_tarefa": concluida and s["concluida_em"] is None,
+                "situacao": _na_coluna(feita, s["iniciada_em"]), "iniciada_em": hora(s["iniciada_em"]),
                 "concluida_em": hora(s["concluida_em"]),
                 "concluida_por": ({"id": s["concluida_por"], "nome": s["concluida_por_nome"]}
                                   if s["concluida_por"] else None),
-                "atrasada": not feita and s["prazo"] < hoje,
+                "atrasada": not feita and s["prazo"] < hoje, "venceu": venceu,
+                "justificativa": s["justificativa"], "justificada_em": hora(s["justificada_em"]),
+                "justificada_por": ({"id": s["justificada_por"], "nome": s["justificada_por_nome"]}
+                                    if s["justificada_por"] else None),
                 "pode": {"concluir": (criador or minha) and not concluida,
-                         "editar_texto": criador or (minha and autonomia), "editar_prazo": criador}})
+                         "editar_texto": criador or (minha and autonomia), "editar_prazo": criador,
+                         "justificar": minha and venceu}})
+        venceu = _venceu(t["prazo"], t["concluida_em"], hoje)
         return {"id": t["id"], "titulo": t["titulo"], "descricao": t["descricao"], "prazo": t["prazo"].isoformat(),
                 "hora": _hhmm(t["hora"]), "versao": t["versao"],
                 "criador": {"id": t["criador"], "nome": t["criador_nome"]}, "eu": eu, "eu_criador": criador,
                 "minha_autonomia": autonomia,
                 "participantes": [p for p in t["pessoas"] if p["id"] != t["criador"]],
-                "feita": concluida, "concluida_em": hora(t["concluida_em"]),
-                "atrasada": not concluida and t["prazo"] < hoje,
+                "feita": concluida, "situacao": _na_coluna(concluida, t["iniciada_em"]),
+                "iniciada_em": hora(t["iniciada_em"]), "concluida_em": hora(t["concluida_em"]),
+                "atrasada": not concluida and t["prazo"] < hoje, "venceu": venceu,
+                "justificativa": t["justificativa"], "justificada_em": hora(t["justificada_em"]),
                 "feitas": sum(s["feita"] for s in subtarefas), "total": len(subtarefas),
                 "pode": {"editar": criador, "concluir": criador,
-                         "criar_subtarefa": (criador or autonomia) and not concluida},
+                         "criar_subtarefa": (criador or autonomia) and not concluida,
+                         "justificar": criador and venceu},
                 "subtarefas": subtarefas}
 
     def obter(self, usuario: int, id_) -> dict:
@@ -232,6 +276,20 @@ class Tarefas:
                               for d, dia in zip(m["dias"], dias)],
                 "atrasadas": [r for _, _, r in sorted(atrasadas, key=lambda x: (x[0], *ordem(x[1], x[2])))],
                 "tarefas": publicadas}
+
+    def quadro(self, usuario: int) -> dict:
+        """O quadro (kanban) de quem vê: as tarefas de que participa, abertas e as concluídas nos últimos
+        DIAS_NO_QUADRO dias, cada uma com a situação (a coluna) e as subtarefas de todos (o card mostra o andamento)."""
+        hoje = self.hoje()
+        with self.banco.conexao() as con:
+            ids = [r[0] for r in con.execute(
+                "SELECT t.id FROM agenda_tarefas t "
+                "JOIN agenda_tarefa_pessoas eu ON eu.tarefa = t.id AND eu.usuario = %s "
+                "WHERE t.concluida_em IS NULL OR t.concluida_em >= %s",
+                [usuario, hoje - dt.timedelta(days=DIAS_NO_QUADRO)])]
+            tarefas = self._carregar(con, ids)
+        return {"hoje": hoje.isoformat(), "dias_concluidas": DIAS_NO_QUADRO,
+                "tarefas": [self._publica(t, usuario, hoje) for t in tarefas]}
 
     # --- apoio das gravações ---------------------------------------------------------------
     @staticmethod
@@ -380,6 +438,29 @@ class Tarefas:
             con.execute("UPDATE agenda_tarefas SET concluida_em = NULL WHERE id = %s", [t["id"]])
         return self.obter(usuario, t["id"])
 
+    def mover(self, usuario: int, id_, situacao) -> dict:
+        """Leva a tarefa para outra coluna do quadro: a_fazer, fazendo ou concluida (concluir e reabrir, como
+        concluir e desfazer)."""
+        situacao = _situacao(situacao)
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "mudá-la de coluna")
+            con.execute(f"UPDATE agenda_tarefas SET {_SITUACOES[situacao]} WHERE id = %s", [t["id"]])
+        return self.obter(usuario, t["id"])
+
+    def justificar(self, usuario: int, id_, texto) -> dict:
+        """Quem criou conta por que a tarefa atrasou (vazio apaga a justificativa); só depois que ela venceu."""
+        texto = _texto(texto, "a justificativa")
+        with self.banco.conexao() as con:
+            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
+            self._so_quem_criou(t, "justificar o atraso dela")
+            if not _venceu(t["prazo"], t["concluida_em"], self.hoje()):
+                raise ValueError(_NAO_ATRASOU.format("a tarefa ainda"))
+            quando = "now()" if texto else "NULL"
+            con.execute(f"UPDATE agenda_tarefas SET justificativa = %s, justificada_em = {quando} WHERE id = %s",
+                        [texto, t["id"]])
+        return self.obter(usuario, t["id"])
+
     # --- subtarefas ------------------------------------------------------------------------
     def nova_subtarefa(self, usuario: int, tarefa, dados: dict) -> dict:
         """Quem criou acrescenta uma subtarefa para qualquer pessoa da tarefa, com o prazo que quiser (até o da tarefa);
@@ -421,25 +502,48 @@ class Tarefas:
             self._nova_versao(con, t["id"])
         return self.obter(usuario, t["id"])
 
-    def _conclusao(self, usuario: int, id_, feita: bool) -> dict:
+    def _situar(self, usuario: int, id_, situacao: str | None) -> dict:
+        """Muda a situação da subtarefa (None: desfaz a conclusão, e ela volta para onde estava). concluida_por fica
+        com quem concluiu; concluir de novo não muda nada."""
         with self.banco.conexao() as con:
             t, s = self._travar_sub(con, usuario, id_)
             if not t["eu_criador"] and s["responsavel"] != usuario:
-                raise PermissionError("só o responsável pela subtarefa (ou quem criou a tarefa) marca se ela foi feita")
+                raise PermissionError("só o responsável pela subtarefa (ou quem criou a tarefa) muda a situação dela")
             self._aberta(t)
-            if feita:
-                con.execute("UPDATE agenda_subtarefas SET concluida_em = now(), concluida_por = %s "
-                            "WHERE id = %s AND concluida_em IS NULL", [usuario, s["id"]])
-            elif not s["concluida_em"]:
-                raise ValueError("a subtarefa não estava concluída")
+            if situacao is None:
+                if not s["concluida_em"]:
+                    raise ValueError("a subtarefa não estava concluída")
+                mudar = "concluida_em = NULL, concluida_por = NULL"
+            elif situacao == "concluida":
+                mudar = ("concluida_por = CASE WHEN concluida_em IS NULL THEN %(eu)s ELSE concluida_por END, "
+                         + _SITUACOES[situacao])
             else:
-                con.execute("UPDATE agenda_subtarefas SET concluida_em = NULL, concluida_por = NULL WHERE id = %s",
-                            [s["id"]])
+                mudar = f"{_SITUACOES[situacao]}, concluida_por = NULL"
+            con.execute(f"UPDATE agenda_subtarefas SET {mudar} WHERE id = %(id)s", {"eu": usuario, "id": s["id"]})
+        return self.obter(usuario, t["id"])
+
+    def mover_subtarefa(self, usuario: int, id_, situacao) -> dict:
+        """A subtarefa a fazer, fazendo ou concluída (em qualquer dia)."""
+        return self._situar(usuario, id_, _situacao(situacao))
+
+    def justificar_subtarefa(self, usuario: int, id_, texto) -> dict:
+        """O responsável conta por que a subtarefa atrasou (vazio apaga); só depois que ela venceu. Vale também com a
+        tarefa concluída: é uma explicação, não uma mudança no trabalho."""
+        texto = _texto(texto, "a justificativa")
+        with self.banco.conexao() as con:
+            t, s = self._travar_sub(con, usuario, id_)
+            if s["responsavel"] != usuario:
+                raise PermissionError("só o responsável pela subtarefa justifica o atraso dela")
+            if not _venceu(s["prazo"], s["concluida_em"] or t["concluida_em"], self.hoje()):
+                raise ValueError(_NAO_ATRASOU.format("a subtarefa ainda"))
+            quando = "now()" if texto else "NULL"
+            con.execute(f"UPDATE agenda_subtarefas SET justificativa = %s, justificada_em = {quando}, "
+                        "justificada_por = %s WHERE id = %s", [texto, usuario if texto else None, s["id"]])
         return self.obter(usuario, t["id"])
 
     def concluir_subtarefa(self, usuario: int, id_) -> dict:
         """Marca a subtarefa como feita (em qualquer dia); concluir de novo não muda nada."""
-        return self._conclusao(usuario, id_, True)
+        return self._situar(usuario, id_, "concluida")
 
     def desfazer_subtarefa(self, usuario: int, id_) -> dict:
-        return self._conclusao(usuario, id_, False)
+        return self._situar(usuario, id_, None)

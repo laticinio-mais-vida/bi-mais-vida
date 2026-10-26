@@ -7,7 +7,7 @@ fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
-que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas.
+que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
@@ -439,7 +439,8 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
 administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)). Quem tem a
 página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** recolhe a agenda e deixa só a faixa de dias; o **+** mostra de novo (a escolha fica
-guardada no navegador), e clicar num dia também abre.
+guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca a faixa de dias pelo
+[kanban das tarefas](#kanban-das-tarefas) (a escolha também fica guardada; o link de um dia sempre abre a agenda).
 
 - **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, na largura toda do cartão, com hoje num
   quadrado maior. Em cada quadrado:
@@ -455,8 +456,17 @@ guardada no navegador), e clicar num dia também abre.
   exige feedback, abre o campo para contar como foi, e só conclui com o texto escrito; se não exige, conclui na hora e
   o feedback pode ser acrescentado depois. Dá para editar o feedback e desfazer a conclusão. Dias que ainda não
   chegaram não podem ser concluídos.
-- **Atividade nova** (ao lado do dia aberto): título, descrição, o dia (ou o primeiro dia, se repete), o horário
-  (opcional), a repetição, um último dia opcional e se exige feedback ao concluir. As repetições:
+- **Nova** (no cabeçalho, ou **Novo neste dia** no dia aberto) abre o formulário em **tela cheia**, com o seletor
+  **Atividade | Tarefa** em cima; editar abre o mesmo formulário. **Cancelar**, o **×** ou Esc fecham (perguntando
+  antes, se algo foi preenchido); Ctrl+Enter salva.
+- **Escolher o dia** (o dia da atividade, o fim, o prazo da tarefa e o de cada subtarefa) é numa faixa de
+  quadradinhos como a da agenda: cada um mostra o dia da semana, o número e, como na faixa, quantos itens o dia já
+  tem e a cor dele (nas subtarefas de outra pessoa, sem a contagem, que é da sua agenda). As setas dos lados mostram
+  os dias de antes e os de depois (cabem quantos a largura deixa); o dia escolhido aparece embaixo, e clicar nele
+  volta a faixa para ele. Com o foco num dia, as setas do teclado andam um dia. Os dias depois do prazo da tarefa
+  ficam bloqueados nas subtarefas, e os antes do começo, no fim da atividade.
+- **Atividade nova:** título, descrição, o dia (ou o primeiro dia, se repete), o horário (opcional), a repetição, um
+  último dia opcional e se exige feedback ao concluir. As repetições:
 
   | Repetição | Acontece |
   |---|---|
@@ -482,10 +492,10 @@ guardada no navegador), e clicar num dia também abre.
 
 #### Tarefas
 
-No formulário ao lado do dia, **Tarefa** (em vez de **Atividade**) cria uma tarefa: título, descrição, o **prazo**
-(dia e horário opcional) e um card por pessoa (você e os **participantes**) com as **subtarefas** dela, cada uma
-com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card e deixa
-só a pessoa; clicar de novo mostra as subtarefas.
+No formulário, **Tarefa** (em vez de **Atividade**) cria uma tarefa: à esquerda, título, descrição e o **prazo**
+(dia e horário opcional); à direita, um card por pessoa (você e os **participantes**) com as **subtarefas** dela,
+cada uma com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card
+e deixa só a pessoa; clicar de novo mostra as subtarefas.
 
 - **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O
   **+ Subtarefa** dentro do card de cada um cria uma subtarefa para a pessoa, no formulário e na janela da tarefa.
@@ -493,23 +503,46 @@ só a pessoa; clicar de novo mostra as subtarefas.
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
   |---|---|---|---|
-  | Editar, concluir, reabrir e excluir a tarefa | sim | não | não |
+  | Editar, concluir, reabrir e excluir a tarefa; mudar a situação dela (a coluna do kanban) | sim | não | não |
   | Mudar prazos e responsáveis | sim | não | não |
   | Editar título e descrição de uma subtarefa | todas | as próprias | não |
   | Criar subtarefa | para qualquer participante | só para si, com o prazo da tarefa | não |
-  | Concluir uma subtarefa | todas | as próprias | as próprias |
+  | Concluir uma subtarefa e mudar a situação dela | todas | as próprias | as próprias |
+  | Justificar o atraso | da tarefa e das próprias subtarefas | das próprias subtarefas | das próprias subtarefas |
 
 - **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela: quem criou vê
   todas, o participante vê as dele. O ícone de olho abre a tarefa com um card por pessoa e as subtarefas de todos, e
-  ali cada um conclui as suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
+  ali cada um muda a situação das suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
+- **Situação:** a tarefa e cada subtarefa estão **A fazer**, **Fazendo** ou **Concluída**. Na janela da tarefa, quem
+  pode mudar vê os três botões; os outros veem só a situação. Concluir pelo círculo da agenda é o mesmo que
+  Concluída; desfazer volta para onde estava (Fazendo, se tinha começado).
 - **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo. Concluir a tarefa faz as
   subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
 - **Atrasadas:** o que passou do dia do prazo sem concluir fica vermelho no dia do prazo e aparece também no bloco
   **Atrasadas** do dia de hoje, até ser concluído.
+- **Justificar o atraso:** depois do dia do prazo (sem concluir, ou concluída depois dele), quem responde pela tarefa
+  (quem criou) ou pela subtarefa (o responsável) vê **Justificar o atraso**, no dia e na janela da tarefa, e conta por
+  que atrasou. A justificativa aparece para todos da tarefa, com quem escreveu e quando, e o card do kanban ganha o
+  chip **Atraso justificado**. Ela não tira o item das atrasadas; dá para editar, e apagar o texto apaga a
+  justificativa.
 - **Editar** (só quem criou) muda tudo. Tirar um participante tira junto as subtarefas dele (a página pergunta
   antes); para passar uma subtarefa a outra pessoa, use o lápis dela na janela da tarefa. Se um participante mudou a
   tarefa enquanto o formulário estava aberto, o Salvar avisa e pede para abrir de novo. **Excluir** apaga a tarefa e
   as subtarefas para todos.
+
+#### Kanban das tarefas
+
+Em **Kanban**, as tarefas que você criou ou de que participa ficam em três colunas: **A fazer**, **Fazendo** e
+**Concluída** (as concluídas nos últimos 30 dias, as mais recentes em cima; as outras colunas, pelo prazo). As
+subtarefas não aparecem no kanban.
+
+- **O card** mostra o título, o prazo (vermelho se venceu), quem criou (se não foi você), quantas pessoas
+  participam, quantas subtarefas suas faltam e o andamento das subtarefas.
+- **Mudar de coluna:** quem criou arrasta o card; arrastar para Concluída com subtarefas abertas pergunta antes,
+  como o círculo da agenda. Os participantes veem o kanban sem arrastar.
+- **Clicar no card** abre a janela da tarefa, com a situação dela e a de cada subtarefa (veja **Situação** acima).
+  No celular, onde não dá para arrastar, a situação se muda por ali.
+- **Nova**, no kanban, já abre o formulário em **Tarefa**.
 
 ### Pelo Assistente
 
@@ -597,7 +630,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
-| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), e a justificativa do atraso (migração 022). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -742,7 +775,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
-| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia e as atrasadas (no PostgreSQL) |
+| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas com a justificativa do atraso e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

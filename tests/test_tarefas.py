@@ -1,5 +1,6 @@
 """Tarefas da agenda (bi/tarefas.py): a conferência do formulário e, no PostgreSQL, quem vê o quê, quem pode o quê, a
-conclusão, as atrasadas, a edição (com a versão) e o que acontece quando um usuário é excluído.
+conclusão, as colunas do quadro (kanban), as atrasadas, a edição (com a versão) e o que acontece quando um usuário é
+excluído.
 
 Os testes com o banco precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
 from __future__ import annotations
@@ -111,11 +112,12 @@ class TestTarefasNoBanco(BaseBanco):
         aberta = self.tarefas.obter(self.beto, t["id"])  # aberta, todas as subtarefas para todos
         self.assertEqual(len(aberta["subtarefas"]), 3)
         self.assertEqual((aberta["eu"], aberta["eu_criador"], aberta["minha_autonomia"], aberta["pode"]),
-                         (self.beto, False, True, {"editar": False, "concluir": False, "criar_subtarefa": True}))
+                         (self.beto, False, True, {"editar": False, "concluir": False, "criar_subtarefa": True,
+                                                   "justificar": False}))
         self.assertEqual(self.sub(aberta, "Estande")["pode"], {"concluir": True, "editar_texto": True,
-                                                               "editar_prazo": False})
+                                                               "editar_prazo": False, "justificar": False})
         self.assertEqual(self.sub(aberta, "Material")["pode"], {"concluir": False, "editar_texto": False,
-                                                                "editar_prazo": False})
+                                                                "editar_prazo": False, "justificar": False})
         self.assertEqual([p["nome"] for p in aberta["participantes"]], ["Beto", "Caio"])  # sem quem criou
         self.assertEqual((aberta["criador"]["nome"], aberta["hora"], aberta["feitas"], aberta["total"]),
                          ("Ana", "14:00", 0, 3))
@@ -204,6 +206,69 @@ class TestTarefasNoBanco(BaseBanco):
         with self.assertRaises(ValueError):
             self.tarefas.desfazer(self.ana, t["id"])
 
+    def test_mover(self):
+        t = self.criar()
+        estande, material = self.sub(t, "Estande")["id"], self.sub(t, "Material")["id"]
+        self.assertEqual((t["situacao"], self.sub(t, "Estande")["situacao"]), ("a_fazer", "a_fazer"))
+        # a tarefa, só quem criou muda de coluna; ir e voltar de Fazendo guarda quando começou
+        r = self.tarefas.mover(self.ana, t["id"], "fazendo")
+        comecou = r["iniciada_em"]
+        self.assertEqual((r["situacao"], r["feita"], bool(comecou)), ("fazendo", False, True))
+        r = self.tarefas.mover(self.ana, t["id"], "concluida")
+        self.assertEqual((r["situacao"], r["feita"], r["feitas"]), ("concluida", True, 3))
+        r = self.tarefas.desfazer(self.ana, t["id"])  # reabrir volta para Fazendo
+        self.assertEqual((r["situacao"], r["iniciada_em"]), ("fazendo", comecou))
+        r = self.tarefas.mover(self.ana, t["id"], "a_fazer")
+        self.assertEqual((r["situacao"], r["iniciada_em"]), ("a_fazer", None))
+        for u in (self.beto, self.caio):
+            with self.assertRaises(PermissionError):
+                self.tarefas.mover(u, t["id"], "fazendo")
+        with self.assertRaises(NaoEncontrada):
+            self.tarefas.mover(self.dani, t["id"], "fazendo")
+        for errada in ("feita", None, ["fazendo"]):
+            with self.subTest(errada), self.assertRaises(ValueError):
+                self.tarefas.mover(self.ana, t["id"], errada)
+        # a subtarefa: o responsável (com ou sem autonomia) e quem criou
+        r = self.tarefas.mover_subtarefa(self.caio, material, "fazendo")
+        self.assertEqual(self.sub(r, "Material")["situacao"], "fazendo")
+        r = self.tarefas.mover_subtarefa(self.caio, material, "concluida")
+        self.assertEqual((self.sub(r, "Material")["feita"], self.sub(r, "Material")["concluida_por"]["nome"]),
+                         (True, "Caio"))
+        r = self.tarefas.mover_subtarefa(self.ana, material, "concluida")  # de novo: continua do Caio
+        self.assertEqual(self.sub(r, "Material")["concluida_por"]["nome"], "Caio")
+        r = self.tarefas.desfazer_subtarefa(self.caio, material)  # desfeita, volta para Fazendo
+        self.assertEqual((self.sub(r, "Material")["situacao"], self.sub(r, "Material")["concluida_por"]), ("fazendo", None))
+        r = self.tarefas.mover_subtarefa(self.ana, material, "a_fazer")
+        self.assertEqual((self.sub(r, "Material")["situacao"], self.sub(r, "Material")["iniciada_em"]), ("a_fazer", None))
+        with self.assertRaises(PermissionError):
+            self.tarefas.mover_subtarefa(self.beto, material, "fazendo")  # não é dele
+        with self.assertRaises(NaoEncontrada):
+            self.tarefas.mover_subtarefa(self.dani, material, "fazendo")
+        self.tarefas.mover_subtarefa(self.beto, estande, "fazendo")
+        r = self.tarefas.concluir(self.ana, t["id"])  # com a tarefa concluída, todas contam como concluídas
+        self.assertEqual({s["situacao"] for s in r["subtarefas"]}, {"concluida"})
+        with self.assertRaises(ValueError):
+            self.tarefas.mover_subtarefa(self.beto, estande, "a_fazer")
+        r = self.tarefas.desfazer(self.ana, t["id"])
+        self.assertEqual(self.sub(r, "Estande")["situacao"], "fazendo")
+        self.assertEqual(r["versao"], t["versao"])  # mudar de coluna não é edição
+
+    def test_quadro(self):
+        t = self.criar()
+        recente = self.tarefas.criar(self.ana, {"titulo": "Recente", "prazo": "2026-10-20"})
+        antiga = self.tarefas.criar(self.ana, {"titulo": "Antiga", "prazo": "2026-09-01"})
+        for x in (recente, antiga):
+            self.tarefas.concluir(self.ana, x["id"])
+        with self.banco.conexao() as con:  # a antiga foi concluída antes dos 30 dias do quadro
+            con.execute("UPDATE agenda_tarefas SET concluida_em = '2026-09-02 10:00-03' WHERE id = %s", [antiga["id"]])
+        q = self.tarefas.quadro(self.ana)
+        self.assertEqual((q["hoje"], q["dias_concluidas"]), ("2026-10-26", 30))
+        self.assertEqual([(x["titulo"], x["situacao"]) for x in q["tarefas"]],
+                         [("Recente", "concluida"), ("Feira", "a_fazer")])  # pelo prazo
+        beto = self.tarefas.quadro(self.beto)["tarefas"]  # participa só da feira; vê todas as subtarefas
+        self.assertEqual(([x["id"] for x in beto], beto[0]["total"], beto[0]["pode"]["concluir"]), ([t["id"]], 3, False))
+        self.assertEqual(self.tarefas.quadro(self.dani)["tarefas"], [])
+
     def test_atrasadas(self):
         t = self.criar(prazo="2026-10-23", hora=None, subtarefas=[
             {"titulo": "Estande", "responsavel": self.beto, "prazo": "2026-10-20"},
@@ -225,6 +290,53 @@ class TestTarefasNoBanco(BaseBanco):
         # o prazo de hoje ainda não atrasou
         self.tarefas.criar(self.ana, {"titulo": "Hoje", "prazo": "2026-10-26"})
         self.assertEqual(len(self.mes(self.ana)["atrasadas"]), 1)
+
+    def test_justificar(self):
+        # no prazo ainda: não há o que justificar
+        noprazo = self.criar()
+        with self.assertRaises(ValueError) as e:
+            self.tarefas.justificar(self.ana, noprazo["id"], "x")
+        self.assertIn("não atrasou", str(e.exception))
+        r = self.tarefas.concluir_subtarefa(self.beto, self.sub(noprazo, "Estande")["id"])  # concluída antes do prazo
+        self.assertFalse(self.sub(r, "Estande")["venceu"])
+        with self.assertRaises(ValueError):
+            self.tarefas.justificar_subtarefa(self.beto, self.sub(r, "Estande")["id"], "x")
+        # venceu em 23/10: quem criou justifica a tarefa; o responsável, a subtarefa
+        t = self.criar(prazo="2026-10-23", hora=None, subtarefas=[
+            {"titulo": "Estande", "responsavel": self.beto, "prazo": "2026-10-20"},
+            {"titulo": "Material", "responsavel": self.caio, "prazo": "2026-10-23"}])
+        estande, material = self.sub(t, "Estande")["id"], self.sub(t, "Material")["id"]
+        self.assertEqual((t["venceu"], t["pode"]["justificar"], t["justificativa"]), (True, True, ""))
+        r = self.tarefas.justificar(self.ana, t["id"], "  Faltou o caminhão  ")
+        self.assertEqual((r["justificativa"], bool(r["justificada_em"]), r["versao"]), ("Faltou o caminhão", True, t["versao"]))
+        r = self.tarefas.justificar_subtarefa(self.beto, estande, "Choveu no dia da montagem")
+        estande_j = self.sub(r, "Estande")
+        self.assertEqual((estande_j["justificativa"], estande_j["justificada_por"]["nome"]), ("Choveu no dia da montagem", "Beto"))
+        caio = self.tarefas.obter(self.caio, t["id"])  # todos da tarefa veem; cada um justifica só a sua
+        self.assertEqual((caio["justificativa"], caio["pode"]["justificar"]), ("Faltou o caminhão", False))
+        self.assertEqual([(s["titulo"], s["pode"]["justificar"]) for s in caio["subtarefas"]],
+                         [("Estande", False), ("Material", True)])
+        for u, chamada in ((self.beto, lambda u: self.tarefas.justificar(u, t["id"], "x")),
+                           (self.caio, lambda u: self.tarefas.justificar_subtarefa(u, estande, "x")),
+                           (self.ana, lambda u: self.tarefas.justificar_subtarefa(u, material, "x"))):
+            with self.subTest(u), self.assertRaises(PermissionError):
+                chamada(u)
+        with self.assertRaises(NaoEncontrada):
+            self.tarefas.justificar(self.dani, t["id"], "x")
+        with self.assertRaises(ValueError):
+            self.tarefas.justificar(self.ana, t["id"], "x" * 2001)
+        # vazia apaga; concluída depois do prazo continua podendo justificar (também com a tarefa concluída)
+        r = self.tarefas.justificar_subtarefa(self.beto, estande, "")
+        self.assertEqual((self.sub(r, "Estande")["justificativa"], self.sub(r, "Estande")["justificada_por"]), ("", None))
+        self.tarefas.concluir(self.ana, t["id"])
+        r = self.tarefas.justificar_subtarefa(self.caio, material, "Esperei o fornecedor")
+        self.assertEqual((r["atrasada"], r["venceu"], self.sub(r, "Material")["venceu"]), (False, True, True))
+        # a tarefa concluída no prazo não venceu
+        with self.banco.conexao() as con:
+            con.execute("UPDATE agenda_tarefas SET concluida_em = '2026-10-22 18:00-03' WHERE id = %s", [t["id"]])
+        r = self.tarefas.obter(self.ana, t["id"])
+        self.assertEqual((r["venceu"], self.sub(r, "Material")["venceu"], self.sub(r, "Estande")["venceu"]),
+                         (False, False, True))  # a do Beto vencia em 20/10
 
     def test_editar(self):
         t = self.criar()
