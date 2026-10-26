@@ -2122,6 +2122,7 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 }
 .ag-pessoa > .ic { width: 14px; height: 14px; color: var(--tinta-3); }
 .ag-pessoa b { font-weight: 700; margin-right: 2px; }
+.ag-pessoa small { margin-right: 2px; font-size: 12px; font-weight: 600; color: var(--tinta-3); }
 .ag-pessoa button {
   display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px; border: 0; border-radius: 999px;
   background: none; color: var(--tinta-3); font-size: 11.5px; font-weight: 700; cursor: pointer; transition: background .2s, color .2s;
@@ -2129,6 +2130,7 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-pessoa button .ic { width: 12px; height: 12px; }
 .ag-pessoa button:hover { background: var(--surface-3); color: var(--tinta); }
 .ag-pessoa button.ativo { background: var(--acento-suave); color: var(--acento-tinta); }
+.ag-pessoa .ag-pessoa-sub .ic { color: var(--acento); }
 .ag-pessoa button[data-tirar-pessoa] { width: 26px; padding: 0; justify-content: center; }
 .ag-pessoa button[data-tirar-pessoa]:hover { background: var(--ruim-bg); color: var(--ruim); }
 .ag-sem-pessoas { font-size: 13px; font-weight: 500; color: var(--tinta-3); }

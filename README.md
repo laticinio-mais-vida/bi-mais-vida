@@ -486,7 +486,9 @@ No formulário ao lado do dia, **Tarefa** (em vez de **Atividade**) cria uma tar
 (dia e horário opcional), os **participantes** e as **subtarefas**, cada uma com um responsável (quem criou ou um
 participante) e o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
 
-- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**.
+- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O botão
+  **+ Subtarefa** ao lado do nome de cada um cria uma subtarefa já com a pessoa como responsável, no formulário e na
+  janela da tarefa.
 - **Quem pode o quê:**
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
