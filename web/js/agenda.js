@@ -9,8 +9,8 @@
 //   subtarefas dela, de todos: cada um muda a situação das suas e, com autonomia, edita o texto delas e cria
 //   subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas. Passado o prazo, quem
 //   responde por ela (quem criou a tarefa; o responsável pela subtarefa) justifica o atraso, que todos veem.
-// - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Quem criou arrasta
-//   o card de coluna; clicar abre a janela da tarefa.
+// - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Qualquer pessoa da
+//   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
 // ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
 // subtarefas dela; a seta recolhe o card), que também edita uma atividade ou uma tarefa. Os dias se escolhem numa faixa
@@ -409,10 +409,10 @@ function itemHtml(i, dia, futuro, n) {
 // Por que o check (ou a situação) de uma tarefa ou subtarefa está ou não liberado.
 function dicaCheck(t, s, faz = "conclui") {
   const x = s || t;
+  // a tarefa, qualquer pessoa dela conclui e reabre: o que não está liberado é sempre uma subtarefa
   if ((s ? s.pode : t.pode).concluir) return x.feita ? (s ? "Desfazer a conclusão" : "Reabrir a tarefa") : "Marcar como concluída";
-  if (!s) return `Só ${t.criador.nome}, que criou a tarefa, ${faz}`;
   if (s.pela_tarefa) return "Concluída junto com a tarefa";
-  if (t.feita) return "A tarefa foi concluída; quem criou reabre";
+  if (t.feita) return "A tarefa foi concluída; reabra a tarefa para mudar";
   return `Só ${s.responsavel.nome} (o responsável) ou ${t.criador.nome} (quem criou) ${faz}`;
 }
 
@@ -423,12 +423,13 @@ function situacaoHtml(x, attr, rotulo, pode, dica) {
     `<button type="button" ${attr}="${k}" class="st-${k} ${k === x.situacao ? "ativo" : ""}" aria-pressed="${k === x.situacao}">${icone(ICONE_SITUACAO[k])}${n}</button>`).join("")}</div>`;
 }
 
-// "Concluída por Beto às 14:03", "Concluída junto com a tarefa".
+// "Concluída por Beto às 14:03", "Concluída junto com a tarefa" (sem o "por" quando foi você, na tarefa, ou o
+// responsável, na sua subtarefa).
 function textoConclusao(t, s, dia) {
   if (s?.pela_tarefa) return "Concluída junto com a tarefa";
-  const x = s || t;
-  const por = s?.concluida_por && !(s.minha && s.concluida_por.id === s.responsavel.id) ? ` por ${esc(s.concluida_por.nome)}` : "";
-  return `Concluída${por} ${quando(x.concluida_em, dia)}`;
+  const x = s || t, quem = x.concluida_por;
+  const proprio = s ? s.minha && quem?.id === s.responsavel.id : quem?.id === t.eu;
+  return `Concluída${quem && !proprio ? ` por ${esc(quem.nome)}` : ""} ${quando(x.concluida_em, dia)}`;
 }
 
 // Uma tarefa ou subtarefa no painel do dia (vencida: na lista de atrasadas de hoje, com o dia do prazo).
@@ -511,9 +512,16 @@ async function aoClicar(e) {
   if (b.dataset.tirarPessoa) return tirarPessoa(Number(b.dataset.tirarPessoa));
   if (b.dataset.subPara) return maisSub(Number(b.dataset.subPara));
   if (b.dataset.recolherPessoa) return alternarCard(b, estado.tf.recolhidos);
+  if (b.dataset.abrirSub) {
+    abrirSub(Number(b.dataset.abrirSub));
+    return raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${b.dataset.abrirSub}"] [data-campo="titulo"]`).focus();
+  }
+  if ("fecharSub" in b.dataset) return abrirSub(null);
   if (b.dataset.tirarSub) {
     lerSubs();
-    estado.tf.subtarefas.splice(Number(b.dataset.tirarSub), 1);
+    const n = Number(b.dataset.tirarSub), aberta = estado.tf.aberta;
+    estado.tf.subtarefas.splice(n, 1);
+    estado.tf.aberta = aberta == null || aberta === n ? null : aberta > n ? aberta - 1 : aberta;
     return desenharPessoas();
   }
   const li = b.closest(".ag-item");
@@ -781,8 +789,8 @@ function cartaoTarefa(t, p) {
   </section>`;
 }
 
-// A janela da tarefa: o que ela é, a situação (quem criou muda: A fazer, Fazendo ou Concluída), o andamento e um card
-// por pessoa, com as subtarefas dela e a situação de cada uma.
+// A janela da tarefa: o que ela é, a situação (qualquer pessoa dela muda: A fazer, Fazendo ou Concluída), o andamento
+// e um card por pessoa, com as subtarefas dela e a situação de cada uma.
 function desenharTarefa(t) {
   janela.tarefa = t;
   const fazendo = t.subtarefas.filter((s) => s.situacao === "fazendo").length;
@@ -796,7 +804,7 @@ function desenharTarefa(t) {
     ${t.descricao ? `<p class="ag-tf-desc">${esc(t.descricao)}</p>` : ""}
     <div class="ag-tf-prog">
       ${situacaoHtml(t, "data-tf-situacao", "Situação da tarefa", t.pode.concluir, dicaCheck(t, null, "muda a situação"))}
-      ${t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Concluída ${quando(t.concluida_em, t.prazo)}</span>` : ""}
+      ${t.feita ? `<span class="chip ag-c-feita">${icone("visto")}${textoConclusao(t, null, t.prazo)}</span>` : ""}
       <span>${t.total ? `${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}${fazendo ? ` · ${fazendo} fazendo` : ""}` : "Sem subtarefas"}</span>
       ${t.total ? barra(t.feitas, t.total - t.feitas) : ""}
     </div>
@@ -1019,7 +1027,7 @@ function desenharForm(item, tipo, dia) {
   estado.formInicial = JSON.stringify(coletar());
 }
 
-// Duas colunas: o que é e se repete (à esquerda) e quando (à direita).
+// Duas partes, uma embaixo da outra: o que é (e se pede feedback) e quando (a repetição e os dias).
 function formAtividade(a, dia) {
   const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, repeticao: "nenhuma", dias_semana: null, dia_mes: null,
                    intervalo: null, so_dias_uteis: false, regiao: null, fim: null, exige_feedback: false };
@@ -1029,6 +1037,10 @@ function formAtividade(a, dia) {
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(v.titulo)}" placeholder="Ex.: Visitar o Mercado do João"></label>
       <label class="campo-form"><span>Descrição <small>(opcional)</small></span>
         <textarea name="descricao" rows="3" maxlength="2000">${esc(v.descricao)}</textarea></label>
+      <label class="vend-op"><input type="checkbox" name="exige_feedback" ${v.exige_feedback ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
+        <span class="n">Exige feedback ao concluir<small>Para marcar como feita, é preciso contar como foi</small></span></label>
+    </div>
+    <div class="ag-tela-col">
       <div class="campo-form"><span>Repetição</span>
         <div class="seg-mini ag-rep" role="group" aria-label="Repetição">${REPETICOES.map(([k, n]) =>
           `<button type="button" data-rep="${k}" class="${k === v.repeticao ? "ativo" : ""}" aria-pressed="${k === v.repeticao}">${n}</button>`).join("")}</div></div>
@@ -1048,10 +1060,6 @@ function formAtividade(a, dia) {
       <div class="ag-sub" data-para="intervalo"><label class="campo-form"><span>A cada quantos dias</span>
         <input type="number" name="intervalo" min="2" max="365" inputmode="numeric" value="${v.intervalo ?? 15}">
         <small>Contando do primeiro dia. Quinzenal: 15.</small></label></div>
-      <label class="vend-op"><input type="checkbox" name="exige_feedback" ${v.exige_feedback ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
-        <span class="n">Exige feedback ao concluir<small>Para marcar como feita, é preciso contar como foi</small></span></label>
-    </div>
-    <div class="ag-tela-col">
       <div class="campo-form"><span data-rotulo-inicio>${v.repeticao === "nenhuma" ? "Dia" : "Começa em"}</span>
         ${campoDia({ nome: "inicio", valor: v.inicio, rotulo: "Dia da atividade" })}</div>
       <label class="campo-form ag-hora-campo"><span>Horário <small>(opcional)</small></span>
@@ -1061,16 +1069,17 @@ function formAtividade(a, dia) {
     </div>`;
 }
 
-// O formulário da tarefa: o que é e o prazo (à esquerda), as pessoas e as subtarefas (à direita). Participantes e
-// subtarefas ficam em estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; recolhidos: os cards
-// fechados); os campos das linhas de subtarefa usam data-campo, não name: com nomes repetidos, f.elements.titulo
-// deixaria de ser o da tarefa.
+// O formulário da tarefa: o que é e o prazo; embaixo, as pessoas e as subtarefas. Participantes e subtarefas ficam em
+// estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; recolhidos: os cards fechados; aberta: a
+// subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto); os campos da subtarefa
+// usam data-campo, não name: com nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
 function formTarefa(t, dia) {
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
     subtarefas: t ? t.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
                                                prazo: s.prazo, hora: s.hora || "" })) : [],
     recolhidos: new Set(),
+    aberta: null,
   };
   return `<div class="ag-tela-col">
       <label class="campo-form"><span>Título</span>
@@ -1091,11 +1100,11 @@ function formTarefa(t, dia) {
 }
 
 // Um card por pessoa (você primeiro, depois os participantes), com as subtarefas dela dentro. Recolhido, fica só a
-// pessoa; as linhas continuam na página (escondidas), para lerSubs ler tudo.
+// pessoa; a linha aberta continua na página (escondida), para lerSubs ler o que foi digitado nela.
 function desenharPessoas() {
   const f = raiz.querySelector("#ag-form");
   const { participantes, subtarefas, recolhidos } = estado.tf;
-  const eu = estado.pessoas.eu, prazo = f.elements.prazo.value;
+  const eu = estado.pessoas.eu, prazo = f.elements.prazo.value, hora = f.elements.hora.value || null;
   const lista = f.querySelector("#ag-pessoas");
   lista.innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
     const linhas = subtarefas.map((s, n) => [s, n]).filter(([s]) => s.responsavel === p.id);
@@ -1109,7 +1118,7 @@ function desenharPessoas() {
         <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>`}
       </div>
       <div class="ag-pessoa-corpo">
-        ${linhas.map(([s, n]) => linhaSub(s, n, p, prazo)).join("")}
+        ${linhas.map(([s, n]) => linhaSub(s, n, p, prazo, hora)).join("")}
         <button type="button" class="ag-pessoa-op ag-pessoa-sub" data-sub-para="${p.id}" title="Criar uma subtarefa para ${quem}"
           aria-label="Criar uma subtarefa para ${quem}">${icone("mais")}Subtarefa</button>
       </div>
@@ -1141,18 +1150,39 @@ function alternarCard(b, recolhidos) {
   b.title = b.title.replace(fechar ? "Esconder" : "Mostrar", fechar ? "Mostrar" : "Esconder");
 }
 
-// Uma subtarefa no card da pessoa p: o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado.
-function linhaSub(s, n, p, prazoTarefa) {
+// Uma subtarefa no card da pessoa p. Recolhida: só o texto e o prazo (em vermelho se passa do da tarefa), e clicar
+// abre. Aberta (a de estado.tf.aberta): o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado.
+function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
   const de = p.voce ? "você" : p.nome;
+  const tirar = `<button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>`;
+  if (estado.tf.aberta !== n) {
+    const fora = depoisDoPrazo(s, { prazo: prazoTarefa, hora: horaTarefa });
+    return `<div class="ag-sub-linha fechada" data-n="${n}">
+      <button type="button" class="ag-sub-resumo" data-abrir-sub="${n}" aria-expanded="false" title="Abrir para editar">
+        ${icone("setaBaixo", "ag-seta")}<span class="ag-sub-txt">${s.titulo.trim() ? esc(s.titulo) : "<i>Sem título</i>"}</span>
+        ${s.prazo ? `<small class="${fora ? "fora" : ""}"${fora ? ' title="Vence depois da tarefa"' : ""}>até ${prazoTxt(s)}</small>` : ""}</button>
+      ${tirar}
+    </div>`;
+  }
   const hora = `<input type="time" data-campo="hora" value="${s.hora || ""}" title="Horário (opcional)" aria-label="Horário da subtarefa (opcional)">`;
   return `<div class="ag-sub-linha" data-n="${n}">
       <div class="ag-sub-topo">
+        <button type="button" class="ag-sub-recolher" data-fechar-sub title="Recolher a subtarefa" aria-expanded="true"
+          aria-label="Recolher a subtarefa">${icone("setaBaixo")}</button>
         <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}" placeholder="O que fazer" aria-label="Subtarefa de ${esc(de)}">
-        <button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>
+        ${tirar}
       </div>
       ${campoDia({ campo: "prazo", valor: s.prazo, max: prazoTarefa, maxDica: "Depois do prazo da tarefa", rotulo: `Prazo da subtarefa de ${de}`,
                    contar: !!p.voce, extra: hora })}
     </div>`;
+}
+
+// Abre a subtarefa n para editar (a que estava aberta se recolhe) ou, com null, recolhe a aberta.
+function abrirSub(n) {
+  lerSubs();
+  estado.tf.aberta = n;
+  if (n != null) estado.tf.recolhidos.delete(estado.tf.subtarefas[n].responsavel);
+  desenharPessoas();
 }
 
 // Copia o que foi digitado nas linhas de subtarefa para estado.tf (antes de redesenhar ou de enviar).
@@ -1163,22 +1193,19 @@ function lerSubs() {
   });
 }
 
-// Uma linha de subtarefa nova no card da pessoa (aberto, se estava recolhido), com o prazo da tarefa.
+// Uma subtarefa nova no card da pessoa (aberto, se estava recolhido), com o prazo da tarefa: ela abre para escrever e
+// as outras ficam recolhidas, só com o texto.
 function maisSub(responsavel) {
   lerSubs();
   const f = raiz.querySelector("#ag-form");
-  estado.tf.recolhidos.delete(responsavel);
   estado.tf.subtarefas.push({ id: null, titulo: "", descricao: "", responsavel, prazo: f.elements.prazo.value || hojeLocal(), hora: "" });
-  desenharPessoas();
   focarSub(estado.tf.subtarefas.length - 1, "titulo");
 }
 
-// Põe o foco num campo da linha n (no prazo, o dia escolhido), abrindo o card dela se estava recolhido.
+// Põe o foco num campo da subtarefa n (no prazo, o dia escolhido), abrindo ela e o card dela.
 function focarSub(n, campo) {
-  const linha = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"]`);
-  const nome = linha.closest(".ag-pessoa-card").querySelector("[data-recolher-pessoa]");
-  if (nome.closest(".recolhido")) alternarCard(nome, estado.tf.recolhidos);
-  const c = linha.querySelector(`[data-campo="${campo}"]`);
+  if (estado.tf.aberta !== n || raiz.querySelector(`#ag-pessoas .recolhido .ag-sub-linha[data-n="${n}"]`)) abrirSub(n);
+  const c = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"] [data-campo="${campo}"]`);
   if (c.type === "hidden") focarDia(c); else c.focus();
 }
 
@@ -1191,6 +1218,7 @@ function tirarPessoa(id) {
   estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s.responsavel !== id);
   estado.tf.participantes = estado.tf.participantes.filter((x) => x.id !== id);
   estado.tf.recolhidos.delete(id);
+  estado.tf.aberta = null; // as posições das subtarefas mudaram
   desenharPessoas();
 }
 
@@ -1232,8 +1260,11 @@ function escolherRepeticao(rep) {
 function aoMudar(e) {
   const t = e.target;
   if (t.name === "so_dias_uteis") raiz.querySelector("[data-regioes]").hidden = !t.checked;
-  // o prazo da tarefa limita o das subtarefas; o começo da atividade, o fim
-  if (t.name === "prazo" && estado.tf) raiz.querySelectorAll('#ag-pessoas [data-campo="prazo"]').forEach((c) => limitesDoDia(c, { max: t.value }));
+  // o prazo da tarefa limita o das subtarefas (e as recolhidas avisam se passam dele); o começo da atividade, o fim
+  if ((t.name === "prazo" || t.name === "hora") && estado.tf) {
+    lerSubs();
+    desenharPessoas();
+  }
   if (t.name === "inicio") limitesDoDia(t.form.elements.fim, { min: t.value });
   if (t.matches("[data-add-pessoa]") && t.value) {
     lerSubs();
@@ -1378,7 +1409,7 @@ function desenharQuadro(animar) {
         <h3><i class="ag-st" aria-hidden="true"></i>${nome}<span class="ag-coluna-n">${colunas[k].length}</span></h3>
         <ul class="ag-cards">${colunas[k].map(cardHtml).join("") || `<li class="ag-coluna-vazia">${COLUNA_VAZIA[k]}</li>`}</ul>
       </section>`).join("")}</div>
-    <p class="ag-quadro-dica">${icone("info")}Arraste para outra coluna as tarefas que você criou, ou abra a tarefa e escolha a situação. As concluídas saem do kanban ${q.dias_concluidas} dias depois.</p>`;
+    <p class="ag-quadro-dica">${icone("info")}Arraste o card para outra coluna, ou abra a tarefa e escolha a situação. As concluídas saem do kanban ${q.dias_concluidas} dias depois.</p>`;
 }
 
 function cardHtml(t, n) {
@@ -1400,7 +1431,7 @@ function cardHtml(t, n) {
   </li>`;
 }
 
-// Arrastar o card (só as tarefas que eu criei são arrastáveis): a coluna de baixo se destaca e, solto, ele muda de coluna.
+// Arrastar o card (qualquer pessoa da tarefa): a coluna de baixo se destaca e, solto, ele muda de coluna.
 function aoArrastar(e) {
   const card = e.target.closest?.(".ag-card[draggable]");
   if (!card) return;

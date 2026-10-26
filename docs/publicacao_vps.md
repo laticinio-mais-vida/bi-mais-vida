@@ -467,6 +467,15 @@ O formulário da agenda passa a abrir em tela cheia, os dias se escolhem em quad
 - **Voltar atrás:** o código anterior ignora as colunas novas (quem estava em Fazendo aparece só como aberta, e as
   justificativas ficam guardadas sem aparecer).
 
+#### Situação da tarefa por qualquer participante (migração 023)
+
+Qualquer pessoa da tarefa muda a situação dela (arrasta no kanban, conclui e reabre), não só quem criou.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 023** só acrescenta `concluida_por` (vazia) em `agenda_tarefas`; as tarefas concluídas antes dela
+  ficam sem quem concluiu.
+- **Voltar atrás:** o código anterior ignora a coluna nova e volta a deixar só quem criou mudar a situação.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a

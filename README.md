@@ -459,12 +459,13 @@ guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca
 - **Nova** (no cabeçalho, ou **Novo neste dia** no dia aberto) abre o formulário em **tela cheia**, com o seletor
   **Atividade | Tarefa** em cima; editar abre o mesmo formulário. **Cancelar**, o **×** ou Esc fecham (perguntando
   antes, se algo foi preenchido); Ctrl+Enter salva.
-- **Escolher o dia** (o dia da atividade, o fim, o prazo da tarefa e o de cada subtarefa) é numa faixa de
-  quadradinhos como a da agenda: cada um mostra o dia da semana, o número e, como na faixa, quantos itens o dia já
-  tem e a cor dele (nas subtarefas de outra pessoa, sem a contagem, que é da sua agenda). As setas dos lados mostram
-  os dias de antes e os de depois (cabem quantos a largura deixa); o dia escolhido aparece embaixo, e clicar nele
-  volta a faixa para ele. Com o foco num dia, as setas do teclado andam um dia. Os dias depois do prazo da tarefa
-  ficam bloqueados nas subtarefas, e os antes do começo, no fim da atividade.
+- **Escolher o dia** (o dia da atividade, o fim, o prazo da tarefa e o de cada subtarefa) é no mês inteiro em
+  quadradinhos, como a faixa da agenda: cada um mostra o dia da semana, o número e, como na faixa, quantos itens o
+  dia já tem e a cor dele (nas subtarefas de outra pessoa, sem a contagem, que é da sua agenda). O mês fica numa
+  linha só; sem largura para isso (no celular), em semanas de segunda a domingo. As setas ao lado do nome do mês
+  mostram o mês anterior e o seguinte, inteiros; o dia escolhido aparece à direita, e clicar nele volta para o mês
+  dele. Com o foco num dia, as setas do teclado andam um dia (para cima e para baixo, uma semana). Os dias depois do
+  prazo da tarefa ficam bloqueados nas subtarefas, e os antes do começo, no fim da atividade.
 - **Atividade nova:** título, descrição, o dia (ou o primeiro dia, se repete), o horário (opcional), a repetição, um
   último dia opcional e se exige feedback ao concluir. As repetições:
 
@@ -492,10 +493,15 @@ guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca
 
 #### Tarefas
 
-No formulário, **Tarefa** (em vez de **Atividade**) cria uma tarefa: à esquerda, título, descrição e o **prazo**
-(dia e horário opcional); à direita, um card por pessoa (você e os **participantes**) com as **subtarefas** dela,
-cada uma com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card
-e deixa só a pessoa; clicar de novo mostra as subtarefas.
+No formulário, **Tarefa** (em vez de **Atividade**) cria uma tarefa: título, descrição e o **prazo** (dia e
+horário opcional) e, embaixo, um card por pessoa (você e os **participantes**) com as **subtarefas** dela, cada uma
+com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa). A seta no nome recolhe o card e deixa
+só a pessoa; clicar de novo mostra as subtarefas.
+
+- **As subtarefas no card** ficam recolhidas, só com o texto e o prazo (em vermelho, se passa do da tarefa). Uma de
+  cada vez fica aberta para editar o título, o prazo e o horário: **+ Subtarefa** abre uma nova no mesmo card e
+  recolhe as outras; clicar numa recolhida abre ela, e a seta à esquerda do título recolhe. Ao editar uma tarefa,
+  todas começam recolhidas. Salvar com uma subtarefa sem título abre ela com o cursor no título.
 
 - **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O
   **+ Subtarefa** dentro do card de cada um cria uma subtarefa para a pessoa, no formulário e na janela da tarefa.
@@ -503,7 +509,8 @@ e deixa só a pessoa; clicar de novo mostra as subtarefas.
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
   |---|---|---|---|
-  | Editar, concluir, reabrir e excluir a tarefa; mudar a situação dela (a coluna do kanban) | sim | não | não |
+  | Editar e excluir a tarefa | sim | não | não |
+  | Mudar a situação da tarefa (a coluna do kanban), inclusive concluir e reabrir | sim | sim | sim |
   | Mudar prazos e responsáveis | sim | não | não |
   | Editar título e descrição de uma subtarefa | todas | as próprias | não |
   | Criar subtarefa | para qualquer participante | só para si, com o prazo da tarefa | não |
@@ -512,12 +519,13 @@ e deixa só a pessoa; clicar de novo mostra as subtarefas.
 
 - **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela: quem criou vê
   todas, o participante vê as dele. O ícone de olho abre a tarefa com um card por pessoa e as subtarefas de todos, e
-  ali cada um muda a situação das suas (e, com autonomia, edita o texto delas e cria subtarefas para si).
+  ali cada um muda a situação da tarefa e a das suas subtarefas (e, com autonomia, edita o texto delas e cria
+  subtarefas para si).
 - **Situação:** a tarefa e cada subtarefa estão **A fazer**, **Fazendo** ou **Concluída**. Na janela da tarefa, quem
-  pode mudar vê os três botões; os outros veem só a situação. Concluir pelo círculo da agenda é o mesmo que
-  Concluída; desfazer volta para onde estava (Fazendo, se tinha começado).
-- **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo. Concluir a tarefa faz as
-  subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
+  pode mudar vê os três botões (na tarefa, todos); os outros veem só a situação. Concluir pelo círculo da agenda é o
+  mesmo que Concluída; desfazer volta para onde estava (Fazendo, se tinha começado).
+- **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo, e mostram quem concluiu.
+  Concluir a tarefa faz as subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
 - **Atrasadas:** o que passou do dia do prazo sem concluir fica vermelho no dia do prazo e aparece também no bloco
   **Atrasadas** do dia de hoje, até ser concluído.
 - **Justificar o atraso:** depois do dia do prazo (sem concluir, ou concluída depois dele), quem responde pela tarefa
@@ -538,8 +546,8 @@ subtarefas não aparecem no kanban.
 
 - **O card** mostra o título, o prazo (vermelho se venceu), quem criou (se não foi você), quantas pessoas
   participam, quantas subtarefas suas faltam e o andamento das subtarefas.
-- **Mudar de coluna:** quem criou arrasta o card; arrastar para Concluída com subtarefas abertas pergunta antes,
-  como o círculo da agenda. Os participantes veem o kanban sem arrastar.
+- **Mudar de coluna:** qualquer pessoa da tarefa arrasta o card; arrastar para Concluída com subtarefas abertas
+  pergunta antes, como o círculo da agenda.
 - **Clicar no card** abre a janela da tarefa, com a situação dela e a de cada subtarefa (veja **Situação** acima).
   No celular, onde não dá para arrastar, a situação se muda por ali.
 - **Nova**, no kanban, já abre o formulário em **Tarefa**.
@@ -630,7 +638,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
-| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), e a justificativa do atraso (migração 022). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no

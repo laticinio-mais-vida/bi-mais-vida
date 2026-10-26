@@ -112,7 +112,7 @@ class TestTarefasNoBanco(BaseBanco):
         aberta = self.tarefas.obter(self.beto, t["id"])  # aberta, todas as subtarefas para todos
         self.assertEqual(len(aberta["subtarefas"]), 3)
         self.assertEqual((aberta["eu"], aberta["eu_criador"], aberta["minha_autonomia"], aberta["pode"]),
-                         (self.beto, False, True, {"editar": False, "concluir": False, "criar_subtarefa": True,
+                         (self.beto, False, True, {"editar": False, "concluir": True, "criar_subtarefa": True,
                                                    "justificar": False}))
         self.assertEqual(self.sub(aberta, "Estande")["pode"], {"concluir": True, "editar_texto": True,
                                                                "editar_prazo": False, "justificar": False})
@@ -161,9 +161,8 @@ class TestTarefasNoBanco(BaseBanco):
                 self.tarefas.nova_subtarefa(self.beto, t["id"], dados)
         with self.assertRaises(PermissionError):
             self.tarefas.nova_subtarefa(self.caio, t["id"], {"titulo": "Caio sem autonomia"})
-        # a tarefa, só quem criou
-        for chamada in (lambda u: self.editar(t, u, titulo="Outra"), lambda u: self.tarefas.excluir(u, t["id"]),
-                        lambda u: self.tarefas.concluir(u, t["id"])):
+        # editar e excluir a tarefa, só quem criou (a situação dela, todos: test_mover)
+        for chamada in (lambda u: self.editar(t, u, titulo="Outra"), lambda u: self.tarefas.excluir(u, t["id"])):
             for u in (self.beto, self.caio):
                 with self.assertRaises(PermissionError):
                     chamada(u)
@@ -202,15 +201,23 @@ class TestTarefasNoBanco(BaseBanco):
         with self.assertRaises(ValueError):
             self.tarefas.nova_subtarefa(self.ana, t["id"], {"titulo": "Mais uma"})
         r = self.tarefas.desfazer(self.ana, t["id"])
-        self.assertEqual((r["feita"], r["feitas"]), (False, 1))
+        self.assertEqual((r["feita"], r["feitas"], r["concluida_por"]), (False, 1, None))
         with self.assertRaises(ValueError):
             self.tarefas.desfazer(self.ana, t["id"])
+        # qualquer pessoa da tarefa conclui e reabre; fica quem concluiu primeiro
+        r = self.tarefas.concluir(self.caio, t["id"])
+        self.assertEqual((r["feita"], r["concluida_por"]["nome"]), (True, "Caio"))
+        r = self.tarefas.concluir(self.ana, t["id"])
+        self.assertEqual(r["concluida_por"]["nome"], "Caio")
+        self.assertEqual(self.tarefas.desfazer(self.beto, t["id"])["feita"], False)
+        with self.assertRaises(NaoEncontrada):
+            self.tarefas.concluir(self.dani, t["id"])
 
     def test_mover(self):
         t = self.criar()
         estande, material = self.sub(t, "Estande")["id"], self.sub(t, "Material")["id"]
         self.assertEqual((t["situacao"], self.sub(t, "Estande")["situacao"]), ("a_fazer", "a_fazer"))
-        # a tarefa, só quem criou muda de coluna; ir e voltar de Fazendo guarda quando começou
+        # a tarefa, qualquer pessoa dela muda de coluna; ir e voltar de Fazendo guarda quando começou
         r = self.tarefas.mover(self.ana, t["id"], "fazendo")
         comecou = r["iniciada_em"]
         self.assertEqual((r["situacao"], r["feita"], bool(comecou)), ("fazendo", False, True))
@@ -220,9 +227,11 @@ class TestTarefasNoBanco(BaseBanco):
         self.assertEqual((r["situacao"], r["iniciada_em"]), ("fazendo", comecou))
         r = self.tarefas.mover(self.ana, t["id"], "a_fazer")
         self.assertEqual((r["situacao"], r["iniciada_em"]), ("a_fazer", None))
-        for u in (self.beto, self.caio):
-            with self.assertRaises(PermissionError):
-                self.tarefas.mover(u, t["id"], "fazendo")
+        self.assertEqual(self.tarefas.mover(self.caio, t["id"], "fazendo")["situacao"], "fazendo")  # sem autonomia
+        r = self.tarefas.mover(self.beto, t["id"], "concluida")
+        self.assertEqual((r["situacao"], r["concluida_por"]["nome"]), ("concluida", "Beto"))
+        r = self.tarefas.mover(self.caio, t["id"], "a_fazer")
+        self.assertEqual((r["situacao"], r["concluida_por"]), ("a_fazer", None))
         with self.assertRaises(NaoEncontrada):
             self.tarefas.mover(self.dani, t["id"], "fazendo")
         for errada in ("feita", None, ["fazendo"]):
@@ -266,7 +275,7 @@ class TestTarefasNoBanco(BaseBanco):
         self.assertEqual([(x["titulo"], x["situacao"]) for x in q["tarefas"]],
                          [("Recente", "concluida"), ("Feira", "a_fazer")])  # pelo prazo
         beto = self.tarefas.quadro(self.beto)["tarefas"]  # participa só da feira; vê todas as subtarefas
-        self.assertEqual(([x["id"] for x in beto], beto[0]["total"], beto[0]["pode"]["concluir"]), ([t["id"]], 3, False))
+        self.assertEqual(([x["id"] for x in beto], beto[0]["total"], beto[0]["pode"]["concluir"]), ([t["id"]], 3, True))
         self.assertEqual(self.tarefas.quadro(self.dani)["tarefas"], [])
 
     def test_atrasadas(self):
@@ -432,6 +441,8 @@ class TestTarefasNoBanco(BaseBanco):
             con.execute("DELETE FROM agenda_tarefa_pessoas WHERE tarefa = %s AND usuario = %s", [t["id"], self.caio])
         with self.assertRaises(CheckViolation), self.banco.conexao() as con:
             con.execute("UPDATE agenda_tarefas SET titulo = '  ' WHERE id = %s", [t["id"]])
+        with self.assertRaises(CheckViolation), self.banco.conexao() as con:  # quem concluiu, sem estar concluída
+            con.execute("UPDATE agenda_tarefas SET concluida_por = %s WHERE id = %s", [self.ana, t["id"]])
 
 
 if __name__ == "__main__":

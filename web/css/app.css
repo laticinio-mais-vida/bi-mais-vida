@@ -2082,8 +2082,8 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-fb-acoes .btn { height: 34px; font-size: 13px; }
 .ag-vazio { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--tinta-3); font-size: 13.5px; }
 
-/* o formulário (atividade ou tarefa, nova ou em edição), em tela cheia: cabeçalho e rodapé fixos e, no meio, duas
-   colunas (uma só em telas estreitas) */
+/* o formulário (atividade ou tarefa, nova ou em edição), em tela cheia: cabeçalho e rodapé fixos e, no meio, as
+   partes uma embaixo da outra, numa coluna só (larga o bastante para o mês caber numa linha ao escolher o dia) */
 .ag-tela {
   width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0;
   background: var(--bg); color: var(--tinta);
@@ -2094,7 +2094,7 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-tela .ag-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; }
 .ag-tela-cab, .ag-tela-rodape {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
-  padding: 14px max(16px, calc((100vw - 1200px) / 2)); background: var(--surface); border-bottom: 1px solid var(--linha);
+  padding: 14px max(16px, calc((100vw - 980px) / 2)); background: var(--surface); border-bottom: 1px solid var(--linha);
 }
 .ag-tela-tit { flex: 1; min-width: 220px; }
 .ag-tela-tit h2 { display: flex; align-items: center; gap: 9px; font-size: 20px; }
@@ -2103,7 +2103,7 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-tela-cab .ag-tipo { width: auto; min-width: 260px; margin: 0; }
 .ag-tela-cab [data-fechar-form] { order: 3; }
 .ag-tela-corpo { overflow: auto; overscroll-behavior: contain; padding: 22px 16px 32px; }
-.ag-tela-grade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 24px; max-width: 1200px; margin: 0 auto; align-items: start; }
+.ag-tela-grade { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; max-width: 980px; margin: 0 auto; }
 .ag-tela-col { display: grid; gap: 16px; min-width: 0; padding: 20px; border-radius: 18px; background: var(--surface); border: 1px solid var(--linha); }
 .ag-tela-rodape { justify-content: flex-end; border-top: 1px solid var(--linha); border-bottom: 0; }
 .ag-tela-rodape small { margin-right: auto; color: var(--tinta-3); font-size: 12.5px; }
@@ -2117,50 +2117,53 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-regiao { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
 .ag-form .dias-semana button { flex: 1; width: auto; }
 
-/* escolher dia (escolherdia.js): os dias em quadradinhos como os da faixa, as setas dos lados e, embaixo, o dia
-   escolhido (clicar volta a faixa para ele), os meses à vista e o que vier junto (o horário, nas subtarefas) */
-.ed { display: grid; gap: 6px; min-width: 0; font-weight: 500; }
-.ed-faixa { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 4px; }
-.ed-dias { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; padding-top: 15px; min-width: 0; }
+/* escolher dia (escolherdia.js): em cima, as setas com o mês e, à direita, o dia escolhido (clicar volta para o mês
+   dele) e o que vier junto (o horário, nas subtarefas); embaixo, o mês inteiro em quadradinhos como os da faixa, numa
+   linha só ou, sem largura para isso (.grade), em semanas de segunda a domingo */
+.ed { display: grid; gap: 8px; min-width: 0; font-weight: 500; }
+.ed-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .ed-seta {
-  width: 28px; height: 48px; border: 0; border-radius: 9px; background: var(--surface-3); color: var(--tinta-2);
+  width: 30px; height: 30px; border: 0; border-radius: 9px; background: var(--surface-3); color: var(--tinta-2);
   display: grid; place-items: center; cursor: pointer; transition: background .2s, color .2s;
 }
 .ed-seta:hover { background: color-mix(in srgb, var(--acento) 16%, var(--surface-3)); color: var(--tinta); }
 .ed-seta .ic { width: 16px; height: 16px; stroke-width: 2.4; }
+.ed-mes { min-width: 132px; text-align: center; font: 700 13.5px var(--f-texto); color: var(--tinta); }
+.ed-lado { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-left: auto; }
+.ed-escolhido { padding: 0; border: 0; background: none; font: 700 13px var(--f-texto); color: var(--acento-tinta); cursor: pointer; }
+.ed-escolhido:hover { text-decoration: underline; }
+.ed-escolhido.vazio { font-weight: 600; color: var(--tinta-3); }
+.ed-limpar { font-size: 12.5px; }
+.ed .ed-extra input { width: 112px; }
+.ed-dias { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; min-width: 0; padding-top: 4px; }
+.ed.grade .ed-dias { grid-auto-flow: row; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.ed.grade .ed-dia:first-child { grid-column-start: var(--col, 1); }
 .ed-dia {
-  position: relative; min-width: 0; height: 48px; padding: 0; border: 0; border-radius: 9px; background: var(--surface-3);
+  position: relative; min-width: 0; height: 44px; padding: 0; border: 0; border-radius: 8px; background: var(--surface-3);
   color: var(--tinta-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  font: 700 13px var(--f-texto); cursor: pointer; transition: background .2s, color .2s, box-shadow .2s, translate .3s var(--mola);
+  font: 700 12.5px var(--f-texto); cursor: pointer; transition: background .2s, color .2s, box-shadow .2s, translate .3s var(--mola);
 }
+.ed.grade .ed-dia { height: 40px; }
 .ed-dia b { font-weight: 800; line-height: 1; }
-.ed-sem { font-size: 9px; font-weight: 600; line-height: 1; opacity: .75; }
+.ed-sem { font-size: 8.5px; font-weight: 600; line-height: 1; opacity: .75; }
 .ed-dia.fds { background: color-mix(in srgb, var(--surface-3) 55%, var(--surface)); }
 .ed-dia.tem { background: color-mix(in srgb, var(--acento) 20%, var(--surface)); color: var(--acento-tinta); }
 .ed-dia.feita { background: color-mix(in srgb, var(--ok-forte) 24%, var(--surface)); color: var(--ok); }
 .ed-dia.atrasada { background: var(--ruim-bg); color: var(--ruim); }
 .ed-dia:hover:not(:disabled) { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--acento) 50%, transparent); }
 .ed-dia.hoje { box-shadow: inset 0 0 0 2px var(--acento); }
-.ed-dia.escolhido { background: var(--laranja); color: #fff; translate: 0 -4px; box-shadow: 0 10px 18px -10px rgba(245, 130, 32, .95); }
+.ed-dia.escolhido { background: var(--laranja); color: #fff; translate: 0 -3px; box-shadow: 0 10px 18px -10px rgba(245, 130, 32, .95); }
 .ed-dia.fora { opacity: .35; cursor: not-allowed; }
-.ed-dia:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.ed-dia:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; z-index: 2; }
+/* quantos itens o dia já tem: no canto, por cima da borda (o quadradinho é estreito) */
 .ed-n {
-  position: absolute; top: 3px; right: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px;
-  display: grid; place-items: center; background: var(--laranja); color: #fff; font: normal 800 9px/1 var(--f-texto);
+  position: absolute; top: -5px; right: -3px; z-index: 1; min-width: 13px; height: 13px; padding: 0 3px; border-radius: 999px;
+  display: grid; place-items: center; background: var(--laranja); color: #fff; font: normal 800 8.5px/1 var(--f-texto);
+  box-shadow: 0 0 0 1.5px var(--surface);
 }
 .ed-dia.atrasada .ed-n { background: var(--ruim-forte); }
 .ed-dia.feita .ed-n { background: var(--ok-forte); }
-.ed-dia.escolhido .ed-n { background: rgba(255, 255, 255, .3); }
-.ed-mes-tag { position: absolute; top: -15px; left: 1px; font-size: 10px; font-weight: 800; color: var(--acento-tinta); white-space: nowrap; pointer-events: none; }
-.ed-dia.escolhido .ed-mes-tag { top: -11px; } /* o quadradinho sobe; a etiqueta fica no lugar */
-.ed-rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 22px; font-size: 12.5px; }
-.ed-escolhido { padding: 0; border: 0; background: none; font: 700 13px var(--f-texto); color: var(--tinta); cursor: pointer; }
-.ed-escolhido:hover { color: var(--acento-tinta); }
-.ed-escolhido.vazio { font-weight: 600; color: var(--tinta-3); }
-.ed-mes { color: var(--tinta-3); font-weight: 600; }
-.ed-limpar { font-size: 12.5px; }
-.ed-extra { margin-left: auto; }
-.ed .ed-extra input { width: 112px; }
+.ed-dia.escolhido .ed-n { background: var(--marinho); }
 
 /* histórico de uma atividade que se repete */
 .ag-historico { width: min(640px, calc(100vw - 32px)); }
@@ -2220,12 +2223,25 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
   background: var(--surface); font: 500 13.5px var(--f-texto); color: var(--tinta); transition: border-color .2s, box-shadow .2s;
 }
 .ag-sub-linha input:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
-.ag-sub-campos { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 6px; }
-.ag-sub-tirar {
+.ag-sub-tirar, .ag-sub-recolher {
   flex: none; width: 30px; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--tinta-3);
   display: grid; place-items: center; cursor: pointer; transition: background .2s, color .2s;
 }
 .ag-sub-tirar:hover { background: var(--ruim-bg); color: var(--ruim); }
+.ag-sub-recolher:hover { background: var(--surface-3); color: var(--tinta); }
+.ag-sub-recolher .ic { width: 15px; height: 15px; }
+/* a subtarefa recolhida (só o texto e o prazo): clicar abre para editar */
+.ag-sub-linha.fechada { display: flex; align-items: center; gap: 2px; padding: 2px; }
+.ag-sub-resumo {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 10px;
+  background: none; color: var(--tinta); font: 600 13.5px var(--f-texto); text-align: left; cursor: pointer; transition: background .2s;
+}
+.ag-sub-resumo:hover { background: var(--surface-3); }
+.ag-sub-resumo .ag-seta { width: 14px; height: 14px; flex: none; color: var(--tinta-3); transform: rotate(-90deg); }
+.ag-sub-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-sub-txt i { font-weight: 500; color: var(--tinta-3); }
+.ag-sub-resumo small { flex: none; font-size: 12px; font-weight: 600; color: var(--tinta-3); }
+.ag-sub-resumo small.fora { color: var(--ruim); }
 .ag-item.ag-tarefa { box-shadow: inset 4px 0 0 var(--azul); }
 .ag-item.ag-subtarefa { box-shadow: inset 4px 0 0 color-mix(in srgb, var(--azul) 45%, transparent); }
 .chip.ag-c-tarefa { background: color-mix(in srgb, var(--azul) 14%, transparent); color: color-mix(in srgb, var(--azul) 45%, var(--tinta)); }
@@ -2315,7 +2331,6 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-quadro-dica .ic { width: 15px; height: 15px; flex: none; }
 
 @media (max-width: 900px) {
-  .ag-tela-grade { grid-template-columns: 1fr; }
   .ag-tela-col { padding: 14px; }
   .ag-tela-rodape small { display: none; }
 }

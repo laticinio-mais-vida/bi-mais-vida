@@ -6,8 +6,9 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   com o motivo.
 - Na agenda (no_mes): a tarefa no dia do prazo, para todos; cada subtarefa no dia do prazo dela, todas para quem
   criou e só as próprias para o participante. Aberta (obter), a tarefa mostra todas as subtarefas a todos.
-- Só quem criou edita, exclui e conclui a tarefa e muda prazos. Com autonomia, o participante edita o título e a
-  descrição das próprias subtarefas e cria subtarefas para si, com o prazo da tarefa.
+- Só quem criou edita e exclui a tarefa e muda prazos. A situação da tarefa (concluir e reabrir também), qualquer
+  pessoa dela muda (migração 023: concluida_por guarda quem concluiu). Com autonomia, o participante edita o título e
+  a descrição das próprias subtarefas e cria subtarefas para si, com o prazo da tarefa.
 - A subtarefa vence até o prazo da tarefa. Conclui o responsável (ou quem criou), em qualquer dia. Concluir a tarefa
   faz as subtarefas abertas contarem como feitas (pela_tarefa) enquanto ela estiver concluída.
 - Atrasada: o dia do prazo passou sem concluir. Fica no dia do prazo e, no mês de hoje, também na lista atrasadas.
@@ -15,8 +16,8 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   responde por ela conta por que atrasou: na tarefa, quem criou (justificar); na subtarefa, o responsável
   (justificar_subtarefa). Todos da tarefa veem; a tarefa continua atrasada até ser concluída.
 - Quadro (kanban, quadro): as tarefas em três colunas pela situação, a fazer, fazendo (iniciada_em, migração 021) ou
-  concluída (concluida_em manda). Quem criou muda a tarefa de coluna (mover); a subtarefa (mover_subtarefa), quem
-  conclui ela. As concluídas ficam no quadro por DIAS_NO_QUADRO dias.
+  concluída (concluida_em manda). Qualquer pessoa da tarefa muda ela de coluna (mover); a subtarefa
+  (mover_subtarefa), o responsável ou quem criou. As concluídas ficam no quadro por DIAS_NO_QUADRO dias.
 - versao: sobe a cada mudança na tarefa, nas pessoas ou nas subtarefas (concluir não conta). Editar confere, para o
   Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
 """
@@ -38,7 +39,7 @@ _NAO_ATRASOU = "{} não atrasou: a justificativa é para depois do dia do prazo"
 # Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
 _COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
 _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "iniciada_em", "concluida_em", "versao",
-      "justificativa", "justificada_em")
+      "justificativa", "justificada_em", "concluida_por", "concluida_por_nome")
 _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
       "concluida_por", "concluida_por_nome", "justificativa", "justificada_em", "justificada_por",
       "justificada_por_nome")
@@ -46,6 +47,17 @@ _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_
 _SITUACOES = {"a_fazer": "iniciada_em = NULL, concluida_em = NULL",
               "fazendo": "iniciada_em = coalesce(iniciada_em, now()), concluida_em = NULL",
               "concluida": "concluida_em = coalesce(concluida_em, now())"}
+
+
+def _mudar_situacao(situacao: str | None) -> str:
+    """O SET de uma mudança de situação da tarefa ou da subtarefa (None: desfaz a conclusão, e ela volta para onde
+    estava). concluida_por fica com quem concluiu primeiro (%(eu)s); concluir de novo não muda nada."""
+    if situacao is None:
+        return "concluida_em = NULL, concluida_por = NULL"
+    if situacao == "concluida":
+        return ("concluida_por = CASE WHEN concluida_em IS NULL THEN %(eu)s ELSE concluida_por END, "
+                + _SITUACOES[situacao])
+    return f"{_SITUACOES[situacao]}, concluida_por = NULL"
 # As tarefas de quem vê com algo no mês: a tarefa ou uma subtarefa que ele vê vencendo nele ou, no mês de hoje,
 # atrasada (de qualquer mês).
 _DO_MES = """SELECT t.id FROM agenda_tarefas t
@@ -172,8 +184,9 @@ class Tarefas:
             return []
         tarefas = {r[0]: {**dict(zip(_T, r)), "pessoas": [], "subtarefas": []} for r in con.execute(
             "SELECT t.id, t.criador, u.nome, t.titulo, t.descricao, t.prazo, t.hora, t.iniciada_em, t.concluida_em, "
-            "t.versao, t.justificativa, t.justificada_em "
-            "FROM agenda_tarefas t JOIN usuarios u ON u.id = t.criador WHERE t.id = ANY(%s::bigint[]) "
+            "t.versao, t.justificativa, t.justificada_em, t.concluida_por, c.nome "
+            "FROM agenda_tarefas t JOIN usuarios u ON u.id = t.criador LEFT JOIN usuarios c ON c.id = t.concluida_por "
+            "WHERE t.id = ANY(%s::bigint[]) "
             "ORDER BY t.prazo, t.hora NULLS LAST, t.id", [ids])}
         for tarefa, usuario, nome, autonomia in con.execute(
                 "SELECT p.tarefa, p.usuario, u.nome, p.autonomia FROM agenda_tarefa_pessoas p "
@@ -225,10 +238,12 @@ class Tarefas:
                 "participantes": [p for p in t["pessoas"] if p["id"] != t["criador"]],
                 "feita": concluida, "situacao": _na_coluna(concluida, t["iniciada_em"]),
                 "iniciada_em": hora(t["iniciada_em"]), "concluida_em": hora(t["concluida_em"]),
+                "concluida_por": ({"id": t["concluida_por"], "nome": t["concluida_por_nome"]}
+                                  if t["concluida_por"] else None),
                 "atrasada": not concluida and t["prazo"] < hoje, "venceu": venceu,
                 "justificativa": t["justificativa"], "justificada_em": hora(t["justificada_em"]),
                 "feitas": sum(s["feita"] for s in subtarefas), "total": len(subtarefas),
-                "pode": {"editar": criador, "concluir": criador,
+                "pode": {"editar": criador, "concluir": True,  # a situação da tarefa, qualquer pessoa dela muda
                          "criar_subtarefa": (criador or autonomia) and not concluida,
                          "justificar": criador and venceu},
                 "subtarefas": subtarefas}
@@ -419,34 +434,28 @@ class Tarefas:
             self._so_quem_criou(t, "excluí-la")
             con.execute("DELETE FROM agenda_tarefas WHERE id = %s", [t["id"]])
 
-    def concluir(self, usuario: int, id_) -> dict:
-        """Conclui a tarefa (as subtarefas abertas passam a contar como feitas); concluir de novo não muda nada."""
+    def _situar_tarefa(self, usuario: int, id_, situacao: str | None) -> dict:
+        """Muda a situação da tarefa (None: desfaz a conclusão); qualquer pessoa da tarefa pode."""
         with self.banco.conexao() as con:
             t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
-            self._so_quem_criou(t, "concluí-la")
-            con.execute("UPDATE agenda_tarefas SET concluida_em = coalesce(concluida_em, now()) WHERE id = %s",
-                        [t["id"]])
+            if situacao is None and not t["concluida_em"]:
+                raise ValueError("a tarefa não estava concluída")
+            con.execute(f"UPDATE agenda_tarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
+                        {"eu": usuario, "id": t["id"]})
         return self.obter(usuario, t["id"])
+
+    def concluir(self, usuario: int, id_) -> dict:
+        """Conclui a tarefa (as subtarefas abertas passam a contar como feitas); concluir de novo não muda nada."""
+        return self._situar_tarefa(usuario, id_, "concluida")
 
     def desfazer(self, usuario: int, id_) -> dict:
         """Reabre a tarefa: as subtarefas que não tinham sido concluídas voltam a ficar abertas."""
-        with self.banco.conexao() as con:
-            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
-            self._so_quem_criou(t, "reabri-la")
-            if not t["concluida_em"]:
-                raise ValueError("a tarefa não estava concluída")
-            con.execute("UPDATE agenda_tarefas SET concluida_em = NULL WHERE id = %s", [t["id"]])
-        return self.obter(usuario, t["id"])
+        return self._situar_tarefa(usuario, id_, None)
 
     def mover(self, usuario: int, id_, situacao) -> dict:
         """Leva a tarefa para outra coluna do quadro: a_fazer, fazendo ou concluida (concluir e reabrir, como
         concluir e desfazer)."""
-        situacao = _situacao(situacao)
-        with self.banco.conexao() as con:
-            t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
-            self._so_quem_criou(t, "mudá-la de coluna")
-            con.execute(f"UPDATE agenda_tarefas SET {_SITUACOES[situacao]} WHERE id = %s", [t["id"]])
-        return self.obter(usuario, t["id"])
+        return self._situar_tarefa(usuario, id_, _situacao(situacao))
 
     def justificar(self, usuario: int, id_, texto) -> dict:
         """Quem criou conta por que a tarefa atrasou (vazio apaga a justificativa); só depois que ela venceu."""
@@ -503,23 +512,16 @@ class Tarefas:
         return self.obter(usuario, t["id"])
 
     def _situar(self, usuario: int, id_, situacao: str | None) -> dict:
-        """Muda a situação da subtarefa (None: desfaz a conclusão, e ela volta para onde estava). concluida_por fica
-        com quem concluiu; concluir de novo não muda nada."""
+        """Muda a situação da subtarefa (None: desfaz a conclusão): o responsável ou quem criou a tarefa."""
         with self.banco.conexao() as con:
             t, s = self._travar_sub(con, usuario, id_)
             if not t["eu_criador"] and s["responsavel"] != usuario:
                 raise PermissionError("só o responsável pela subtarefa (ou quem criou a tarefa) muda a situação dela")
             self._aberta(t)
-            if situacao is None:
-                if not s["concluida_em"]:
-                    raise ValueError("a subtarefa não estava concluída")
-                mudar = "concluida_em = NULL, concluida_por = NULL"
-            elif situacao == "concluida":
-                mudar = ("concluida_por = CASE WHEN concluida_em IS NULL THEN %(eu)s ELSE concluida_por END, "
-                         + _SITUACOES[situacao])
-            else:
-                mudar = f"{_SITUACOES[situacao]}, concluida_por = NULL"
-            con.execute(f"UPDATE agenda_subtarefas SET {mudar} WHERE id = %(id)s", {"eu": usuario, "id": s["id"]})
+            if situacao is None and not s["concluida_em"]:
+                raise ValueError("a subtarefa não estava concluída")
+            con.execute(f"UPDATE agenda_subtarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
+                        {"eu": usuario, "id": s["id"]})
         return self.obter(usuario, t["id"])
 
     def mover_subtarefa(self, usuario: int, id_, situacao) -> dict:
