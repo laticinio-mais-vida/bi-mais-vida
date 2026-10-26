@@ -8,6 +8,8 @@
 // conversa nova com a pergunta escrita (a página Gestão usa isso), sem enviar sozinho.
 // Arquivos: quando a IA prepara um Excel ou PDF (gerar_arquivo), a resposta traz um card com "Baixar"; o servidor monta
 // o arquivo no clique, com todas as linhas e o acesso de agora.
+// Agenda: quando a IA propõe criar, mudar, encerrar, excluir ou concluir uma atividade da agenda de quem pergunta
+// (propor_agenda), a resposta traz um card com o botão que aplica; nada muda na agenda sem o clique.
 import { MESES, api, esc, fmt, icone, irParaLogin, toast } from "./util.js";
 import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase, visual } from "./indicadores.js";
 
@@ -31,6 +33,9 @@ const FERRAMENTA = {
   andamento_acao: { nome: "Andamento da campanha", icone: "bandeira" },
   propor_acao: { nome: "Rascunho de campanha", icone: "bandeira" },
   gerar_arquivo: { nome: "Arquivo para baixar", icone: "abaixo" },
+  ver_agenda: { nome: "Agenda", icone: "calendario" },
+  historico_atividade: { nome: "Histórico da atividade", icone: "caderneta" },
+  propor_agenda: { nome: "Proposta para a agenda", icone: "calendario" },
   // nomes de antes (conversas gravadas)
   listar_campanhas: { nome: "Campanhas", icone: "quadro" },
   andamento_campanha: { nome: "Andamento da campanha", icone: "quadro" },
@@ -45,7 +50,8 @@ let pendente = null;    // {conversa, nova, pergunta, inicio}: pergunta que o se
                         // aba ou antes de recarregar a página
 let busca = "", pedidoLista = 0, abrindo = 0, acompanhando = false;
 
-// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?, rascunhos?, arquivos?}]
+// mensagens: [{papel: "usuario"|"assistente", texto, consultas?, passos?, data_ref?, aviso?, uso?, rascunhos?, arquivos?,
+//              agenda?}]
 function nova() { return { id: null, titulo: "", mensagens: [] }; }
 const linkDe = (id) => `#/assistente?c=${encodeURIComponent(id)}`;
 const idDoHash = () => new URLSearchParams(location.hash.split("?")[1] || "").get("c");
@@ -91,6 +97,7 @@ export async function montarAssistente(container, contexto) {
   container.querySelector("#a-form").addEventListener("submit", (e) => { e.preventDefault(); enviar(); });
   container.querySelector("#a-nova").addEventListener("click", () => novaConversa());
   container.querySelector("#a-msgs").addEventListener("click", aoClicarRascunho);
+  container.querySelector("#a-msgs").addEventListener("click", aoClicarAgenda);
   container.querySelector("#a-msgs").addEventListener("click", baixarArquivo);
   ligarLista();
   window.addEventListener("hashchange", aoMudarHash);
@@ -455,7 +462,7 @@ async function enviar(textoPronto) {
     // O servidor lê a conversa do banco: vai só a pergunta.
     const r = await api("/api/assistente", { json: { conversa: conversa.id, pergunta: texto }, signal: controle.signal });
     conversa.mensagens.push({ papel: "assistente", texto: r.resposta, consultas: r.consultas, passos: r.passos,
-      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso, rascunhos: r.rascunhos, arquivos: r.arquivos });
+      data_ref: r.data_ref, aviso: r.aviso, uso: r.uso, rascunhos: r.rascunhos, arquivos: r.arquivos, agenda: r.agenda });
     if (r.conversa) gravada(conversa, r.conversa);
     if (r.restantes !== undefined) mostrarRestantes(r.restantes);
     pararEspera(limite);
@@ -557,6 +564,7 @@ function balaoIA(m, i) {
       <div class="chat-balao chat-texto">${markdown(m.texto)}</div>
       ${(m.arquivos || []).map(cartaoArquivo).join("")}
       ${(m.rascunhos || []).map((r, j) => cartaoRascunho(r, i, j)).join("")}
+      ${(m.agenda || []).map((p, j) => cartaoAgenda(p, i, j)).join("")}
       ${m.aviso ? `<p class="chat-aviso">${icone("alerta")}${esc(m.aviso)}</p>` : ""}
       <div class="chat-meta">${meta}<button type="button" class="chat-acao" data-copiar="${i}">${icone("copiar")}Copiar</button></div>
       ${passos.length ? desenharPassos(passos) : ""}
@@ -676,6 +684,79 @@ async function aoClicarRascunho(e) {
   }
 }
 
+// ---------- proposta para a agenda ----------
+// A IA não grava na agenda: propor_agenda monta a proposta e o botão aplica (/api/agenda/proposta), uma vez só. A
+// conversa reaberta traz em "aplicada" as que já foram aplicadas.
+const ACAO_AGENDA = {
+  criar: { titulo: "Nova atividade", botao: "Adicionar à agenda", feito: "Adicionada à agenda", icone: "mais" },
+  editar: { titulo: "Mudar a atividade", botao: "Salvar a mudança", feito: "Mudança salva", icone: "lapis" },
+  encerrar: { titulo: "Encerrar a repetição", botao: "Encerrar", feito: "Repetição encerrada", icone: "bandeira" },
+  excluir: { titulo: "Excluir a atividade", botao: "Excluir", feito: "Atividade excluída", icone: "lixeira", perigo: true },
+  concluir: { titulo: "Marcar como feita", botao: "Marcar como feita", feito: "Marcada como feita", icone: "certo" },
+};
+const valorMudanca = (v) => (v === null || v === "" ? "—" : typeof v === "boolean" ? (v ? "exigido" : "opcional")
+  : /^\d{4}-\d{2}-\d{2}$/.test(v) ? fmt.data(v) : String(v));
+
+function cartaoAgenda(p, i, j) {
+  const t = ACAO_AGENDA[p.acao] || ACAO_AGENDA.criar;
+  const d = p.dados || {};
+  let linhas;
+  if (p.acao === "criar") {
+    linhas = [
+      ["calendario", "Quando", d.repeticao === "nenhuma" ? `${fmt.semana(d.inicio)}, ${fmt.data(d.inicio)}` : `${d.quando}, a partir de ${fmt.data(d.inicio)}`],
+      ...(d.hora ? [["relogio", "Horário", d.hora]] : []),
+      ["conversa", "Feedback", d.exige_feedback ? "exigido ao concluir" : "opcional"],
+      ...(d.descricao ? [["info", "Detalhes", d.descricao]] : []),
+    ];
+  } else if (p.acao === "editar") {
+    linhas = (p.mudancas || []).map((m) => ["lapis", m.campo, `${valorMudanca(m.de)} → ${valorMudanca(m.para)}`]);
+  } else if (p.acao === "encerrar") {
+    linhas = [["calendario", "Repetição", p.quando], ["bandeira", "Último dia", fmt.data(p.fim)],
+      ["caderneta", "Histórico", "continua guardado"]];
+  } else if (p.acao === "excluir") {
+    linhas = [["calendario", "Repetição", p.quando],
+      ["alerta", "Histórico", p.registros ? `${p.registros} dia${p.registros === 1 ? "" : "s"} concluído${p.registros === 1 ? "" : "s"} também ${p.registros === 1 ? "é apagado" : "são apagados"}` : "nenhum dia concluído"]];
+  } else {
+    linhas = [["calendario", "Dia", `${fmt.semana(p.dia)}, ${fmt.data(p.dia)}`],
+      ["conversa", "Feedback", p.feedback || "sem feedback"]];
+  }
+  let acoes;
+  if (p.aplicada) {
+    acoes = `<span class="chip camp-criada">${icone("certo")}${t.feito}</span>
+      ${p.acao !== "excluir" ? `<a class="btn" href="#/gestao${p.dia ? `?dia=${p.dia}` : ""}">${icone("calendario")}Ver na agenda</a>` : ""}`;
+  } else if (info?.gestao) {
+    acoes = `<button class="btn ${t.perigo ? "perigo" : "primario"}" type="button" data-agenda="${i}:${j}">${icone(t.icone)}${t.botao}</button>`;
+  } else {
+    acoes = `<span class="fraco">A agenda fica na página Gestão; peça o acesso ao administrador.</span>`;
+  }
+  return `<div class="camp-rascunho ag-proposta" style="--c:${t.perigo ? "var(--ruim-forte)" : "var(--acento)"}">
+    <div class="camp-rascunho-cab">${icone("calendario")}<span>${p.aplicada ? "Agenda · confirmado" : "Agenda · proposta, ainda não confirmada"}</span></div>
+    <h4>${esc(t.titulo)}: ${esc(p.titulo)}</h4>
+    <dl>${linhas.map(([ic, rot, val]) => `<div>${icone(ic)}<dt>${esc(rot)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>
+    <div class="camp-rascunho-acoes">${acoes}</div>
+  </div>`;
+}
+
+async function aoClicarAgenda(e) {
+  const b = e.target.closest("[data-agenda]");
+  if (!b || b.disabled) return;
+  const [i, j] = b.dataset.agenda.split(":").map(Number);
+  const conversa = atual;
+  const p = conversa.mensagens[i]?.agenda?.[j];
+  if (!p || p.aplicada) return;
+  if (p.acao === "excluir" && !confirm(`Excluir “${p.titulo}”? A atividade e todo o histórico dela são apagados.`)) return;
+  b.disabled = true;
+  try {
+    const r = await api("/api/agenda/proposta", { json: { id: p.id } });
+    p.aplicada = { atividade: r.atividade };
+    toast(r.ja_aplicada ? "Esta proposta já tinha sido confirmada" : ACAO_AGENDA[p.acao].feito);
+    if (conversa === atual) desenharMensagens();
+  } catch (err) {
+    b.disabled = false;
+    toast(err.message, "erro");
+  }
+}
+
 function desenharPassos(passos) {
   return `<details class="chat-passos"><summary>${icone("banco")}Como cheguei nesse número
       <span class="fraco">${passos.length} consulta${passos.length === 1 ? "" : "s"}</span></summary>
@@ -705,6 +786,9 @@ function descricao(p) {
   if (p.ferramenta === "andamento_campanha") return p.resumo || `campanha ${a.campanha}`;
   if (p.ferramenta === "propor_acao" || p.ferramenta === "propor_campanha") return a.nome || "";
   if (p.ferramenta === "gerar_arquivo") return `${a.titulo || ""} (${a.formato === "pdf" ? "PDF" : "Excel"})`;
+  if (p.ferramenta === "ver_agenda") return `${a.de ? fmt.data(a.de) : "?"} a ${a.ate ? fmt.data(a.ate) : "?"}${a.texto ? ` · “${a.texto}”` : ""}`;
+  if (p.ferramenta === "historico_atividade") return p.resumo || `atividade ${a.atividade}`;
+  if (p.ferramenta === "propor_agenda") return `${a.acao || ""}${a.titulo ? `: ${a.titulo}` : a.atividade ? ` #${a.atividade}` : ""}`;
   return p.objetivo || a.objetivo || "";
 }
 

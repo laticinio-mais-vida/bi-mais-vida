@@ -1,17 +1,22 @@
-"""Página Agenda (bi/agenda.py): em que dias cada repetição acontece, a conferência do formulário e, no PostgreSQL, as
-atividades de cada pessoa, a conclusão com feedback e o histórico.
+"""Agenda (bi/agenda.py): em que dias cada repetição acontece, a conferência do formulário e, no PostgreSQL, as
+atividades de cada pessoa, a conclusão com feedback, o histórico e as propostas do Assistente (ferramentas e botão).
 
 Os testes com o banco precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
 from __future__ import annotations
 
 import datetime as dt
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from bi.agenda import Agenda, _valida, ocorre
+from bi.agenda import Agenda, _hora, _valida, ocorre, texto_repeticao
+from bi.assistente import Ferramentas
 from bi.calendario import Calendario
 from bi.configuracao import padrao
-from bi.conversas import NaoEncontrada
-from tests.apoio import BaseBanco, ConfiguracaoFixa
+from bi.conversas import Conversas, NaoEncontrada
+from tests.apoio import (BaseBanco, ClienteFalso, ConfiguracaoFixa, bloco_ferramenta, bloco_texto, criar_assistente,
+                         criar_calc, resposta)
 
 D = dt.date
 HOJE = D(2026, 10, 26)  # segunda-feira
@@ -209,3 +214,202 @@ class TestAgendaNoBanco(BaseBanco):
         with self.assertRaises(CheckViolation), self.banco.conexao() as con:
             con.execute("INSERT INTO agenda_atividades (usuario, titulo, inicio, repeticao) "
                         "VALUES (%s, 'x', '2026-10-26', 'semanal')", [self.ana])  # semanal sem os dias
+
+
+class TestHorarioETexto(unittest.TestCase):
+    def test_horario(self):
+        self.assertEqual([_hora(h) for h in ("09:00", "9:30", "14h", "14h15", "07:05:00", "", None)],
+                         [dt.time(9), dt.time(9, 30), dt.time(14), dt.time(14, 15), dt.time(7, 5), None, None])
+        for ruim in ("25:00", "9:60", "nove", "1430"):
+            with self.subTest(ruim), self.assertRaises(ValueError):
+                _hora(ruim)
+        self.assertEqual(atividade(hora="8:00")["hora"], dt.time(8))
+
+    def test_texto_da_repeticao(self):
+        casos = [
+            ({}, "Só neste dia"),
+            ({"repeticao": "diaria"}, "Todo dia"),
+            ({"repeticao": "diaria", "so_dias_uteis": True, "regiao": "BA"}, "Todo dia útil (BA)"),
+            ({"repeticao": "semanal", "dias_semana": [4, 1]}, "Toda segunda e quinta"),
+            ({"repeticao": "semanal", "dias_semana": [6, 7]}, "Todo sábado e domingo"),
+            ({"repeticao": "semanal", "dias_semana": [1, 3, 6]}, "Semanal: segunda, quarta e sábado"),
+            ({"repeticao": "mensal", "dia_mes": 31}, "Todo dia 31 (ou o último do mês)"),
+            ({"repeticao": "intervalo", "intervalo": 15, "fim": "2026-11-30"}, "A cada 15 dias, até 30/11"),
+            ({"repeticao": "diaria", "fim": "2027-01-05"}, "Todo dia, até 05/01/2027"),
+        ]
+        for campos, esperado in casos:
+            with self.subTest(esperado):
+                self.assertEqual(texto_repeticao(atividade(**campos), HOJE), esperado)
+
+
+class TestPropostasNoBanco(BaseBanco):
+    """Horário, o período que o Assistente lê, as propostas e o botão que as aplica. Hoje é segunda, 26/10/2026."""
+
+    def setUp(self):
+        super().setUp()
+        self.agenda = Agenda(self.banco, ConfiguracaoFixa(), hoje=lambda: HOJE)
+        self.ana = self.criar_usuario("ana")
+        self.beto = self.criar_usuario("beto")
+
+    def criar(self, dono=None, **campos) -> int:
+        return self.agenda.criar(dono or self.ana, {"titulo": "Visitar a loja", "inicio": "2026-10-01", **campos})["id"]
+
+    def test_no_dia_as_com_horario_vem_primeiro(self):
+        sem = self.criar(titulo="Sem horário", inicio="2026-10-26")
+        tarde = self.criar(titulo="Tarde", inicio="2026-10-26", hora="15:30")
+        manha = self.criar(titulo="Manhã", inicio="2026-10-26", hora="08:00")
+        m = self.agenda.mes(self.ana, "2026-10")
+        dia = next(d for d in m["dias"] if d["data"] == "2026-10-26")
+        self.assertEqual([i["atividade"] for i in dia["itens"]], [manha, tarde, sem])
+        horas = {a["id"]: (a["hora"], a["quando"]) for a in m["atividades"]}
+        self.assertEqual(horas[tarde], ("15:30", "Só neste dia"))
+        self.assertEqual(horas[sem], (None, "Só neste dia"))
+
+    def test_periodo(self):
+        visita = self.criar(titulo="Visita ao Mercado", repeticao="semanal", dias_semana=[1, 4], hora="09:00")
+        self.criar(titulo="Relatório", inicio="2026-10-30")
+        self.criar(self.beto, titulo="Do Beto", inicio="2026-10-26")
+        self.agenda.concluir(self.ana, visita, "2026-10-19", "pedido de 40 kg")
+        r = self.agenda.periodo(self.ana, "2026-10-19", "2026-10-30")
+        # visita: 19 (feita), 22 (atrasada), 26 (hoje), 29 (prevista); relatório: 30 (prevista)
+        self.assertEqual(r["totais"], {"ocorrencias": 5, "feitas": 1, "atrasadas": 1, "hoje": 1, "previstas": 2})
+        self.assertEqual([(d["data"], d["dia_semana"]) for d in r["dias"]][:2], [("2026-10-19", "segunda"),
+                                                                                 ("2026-10-22", "quinta")])
+        primeiro = r["dias"][0]["itens"][0]
+        self.assertEqual((primeiro["hora"], primeiro["situacao"], primeiro["feedback"]),
+                         ("09:00", "feita", "pedido de 40 kg"))
+        self.assertEqual({a["titulo"] for a in r["atividades"]}, {"Visita ao Mercado", "Relatório"})
+        so_visita = self.agenda.periodo(self.ana, "2026-10-19", "2026-10-30", "mercado")
+        self.assertEqual(so_visita["totais"]["ocorrencias"], 4)
+        with self.assertRaises(ValueError):
+            self.agenda.periodo(self.ana, "2026-01-01", "2026-12-31")  # mais de 93 dias
+        with self.assertRaises(ValueError):
+            self.agenda.periodo(self.ana, "2026-10-30", "2026-10-01")
+
+    def test_propor_nao_grava(self):
+        p = self.agenda.propor(self.ana, "criar", dados={"titulo": "Ligar para o gerente", "inicio": "2026-10-28",
+                                                         "hora": "14h", "repeticao": "semanal", "dias_semana": [3]})
+        self.assertEqual((p["acao"], p["titulo"], p["dados"]["hora"], p["dados"]["quando"], p["dia"]),
+                         ("criar", "Ligar para o gerente", "14:00", "Toda quarta", "2026-10-28"))
+        self.assertEqual(self.contar("agenda_atividades"), 0)
+        a = self.criar(repeticao="semanal", dias_semana=[1], exige_feedback=True)
+        e = self.agenda.propor(self.ana, "editar", atividade=a, dados={"hora": "09:00", "dias_semana": [1, 4]})
+        self.assertEqual([m["campo"] for m in e["mudancas"]], ["Horário", "Repetição"])
+        self.assertEqual((e["mudancas"][0]["de"], e["mudancas"][0]["para"]), (None, "09:00"))
+        self.assertEqual(e["mudancas"][1]["para"], "Toda segunda e quinta")
+        with self.assertRaises(ValueError):
+            self.agenda.propor(self.ana, "editar", atividade=a, dados={"titulo": "Visitar a loja"})  # nada muda
+        with self.assertRaises(ValueError):
+            self.agenda.propor(self.ana, "concluir", atividade=a, dia="2026-10-26", feedback="")  # exige feedback
+        with self.assertRaises(ValueError):
+            self.agenda.propor(self.ana, "concluir", atividade=a, dia="2026-11-02", feedback="x")  # ainda não chegou
+        c = self.agenda.propor(self.ana, "concluir", atividade=a, feedback="feito")  # sem dia: hoje
+        self.assertEqual(c["dia"], "2026-10-26")
+        with self.assertRaises(ValueError):
+            self.agenda.propor(self.ana, "encerrar", atividade=self.criar(inicio="2026-10-26"))  # única
+        self.assertEqual(self.agenda.propor(self.ana, "encerrar", atividade=a)["fim"], "2026-10-26")
+        self.agenda.concluir(self.ana, a, "2026-10-19", "ok")
+        self.assertEqual(self.agenda.propor(self.ana, "excluir", atividade=a)["registros"], 1)
+        with self.assertRaises(NaoEncontrada):
+            self.agenda.propor(self.beto, "excluir", atividade=a)  # a atividade é da Ana
+        with self.assertRaises(ValueError):
+            self.agenda.propor(self.ana, "apagar_tudo", atividade=a)
+        self.assertEqual(self.contar("agenda_registros"), 1)  # só o concluir feito direto
+
+    def test_aplicar_uma_vez_so(self):
+        p = self.agenda.propor(self.ana, "criar", dados={"titulo": "Reunião", "inicio": "2026-10-27", "hora": "10:00"})
+        r = self.agenda.aplicar(self.ana, p)
+        self.assertFalse(r["ja_aplicada"])
+        de_novo = self.agenda.aplicar(self.ana, p)
+        self.assertEqual((de_novo["ja_aplicada"], de_novo["atividade"]), (True, r["atividade"]))
+        self.assertEqual(self.contar("agenda_atividades"), 1)
+        self.assertEqual(set(self.agenda.aplicadas(self.ana, [p["id"], "nao-e-uuid"])), {p["id"]})
+        self.assertEqual(self.agenda.aplicadas(self.beto, [p["id"]]), {})
+        with self.assertRaises(NaoEncontrada):
+            self.agenda.aplicar(self.beto, p)  # a proposta é da Ana
+        a = r["atividade"]
+        self.agenda.aplicar(self.ana, self.agenda.propor(self.ana, "editar", atividade=a, dados={"hora": "11:00"}))
+        self.assertEqual(self.agenda.mes(self.ana, "2026-10")["atividades"][0]["hora"], "11:00")
+        diaria = self.criar(titulo="Pedidos", repeticao="diaria")
+        self.agenda.aplicar(self.ana, self.agenda.propor(self.ana, "concluir", atividade=diaria, dia="2026-10-25",
+                                                         feedback="domingo"))
+        self.agenda.aplicar(self.ana, self.agenda.propor(self.ana, "encerrar", atividade=diaria))
+        self.assertEqual(self.agenda.historico(self.ana, diaria)["atividade"]["fim"], "2026-10-26")
+        self.assertEqual(self.agenda.historico(self.ana, diaria)["registros"][0]["feedback"], "domingo")
+        # a atividade some antes do clique: não aplica e o botão pode tentar de novo (sem reserva presa)
+        excluir = self.agenda.propor(self.ana, "excluir", atividade=diaria)
+        self.agenda.excluir(self.ana, diaria)
+        with self.assertRaises(NaoEncontrada):
+            self.agenda.aplicar(self.ana, excluir)
+        self.assertEqual(self.agenda.aplicadas(self.ana, [excluir["id"]]), {})
+
+
+class TestAgendaNoAssistente(BaseBanco):
+    """As ferramentas da agenda no Assistente (cliente falso da API): lê, propõe sem gravar, a conversa guarda a
+    proposta e o botão (Agenda.aplicar, pela proposta achada na conversa) grava uma vez só."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.pasta = Path(self._tmp.name)
+        self.calc = criar_calc(self.pasta, fora=(999,))
+        self.agenda = Agenda(self.banco, ConfiguracaoFixa(), hoje=lambda: HOJE)
+        self.conversas = Conversas(self.banco)
+        self.id_ana = self.criar_usuario("ana")
+        self.ana = {"id": self.id_ana, "login": "ana", "nome": "Ana", "papel": "visualizador"}
+
+    def tearDown(self):
+        self.calc.cache._con.close()
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def ferramentas(self, agenda=True) -> Ferramentas:
+        a = criar_assistente(self.pasta, self.calc)
+        return Ferramentas(a.recorte(None), self.calc, a.cfg, None,
+                           agenda=self.agenda.contexto(self.id_ana) if agenda else None)
+
+    def test_ferramentas(self):
+        visita = self.agenda.criar(self.id_ana, {"titulo": "Visita ao Mercado", "inicio": "2026-10-01",
+                                                 "repeticao": "semanal", "dias_semana": [1]})["id"]
+        self.agenda.concluir(self.id_ana, visita, "2026-10-19", "pedido de 40 kg")
+        f = self.ferramentas()
+        r, passo = f.executar("ver_agenda", {"de": "2026-10-19", "ate": "2026-10-26"})
+        self.assertIsNone(passo["erro"])
+        self.assertEqual(r["totais"]["feitas"], 1)
+        self.assertIn(f"#{visita} Visita ao Mercado", passo["resumo"])
+        r, passo = f.executar("historico_atividade", {"atividade": visita})
+        self.assertEqual(r["registros"][0]["feedback"], "pedido de 40 kg")
+        r, passo = f.executar("propor_agenda", {"acao": "concluir", "atividade": visita, "feedback": "pedido de 50 kg"})
+        self.assertIn("AINDA NÃO APLICADA", r["situacao"])
+        self.assertEqual((r["proposta"]["dia"], r["proposta"]["feedback"]), ("2026-10-26", "pedido de 50 kg"))
+        self.assertEqual(len(f.agenda_propostas), 1)
+        self.assertEqual(self.contar("agenda_registros"), 1)  # nada gravado
+        r, passo = f.executar("propor_agenda", {"acao": "criar", "titulo": "", "inicio": "2026-10-27"})
+        self.assertIn("título", passo["erro"])  # o erro volta para a IA corrigir
+        r, passo = self.ferramentas(agenda=False).executar("ver_agenda", {"de": "2026-10-19", "ate": "2026-10-26"})
+        self.assertIn("Gestão", passo["erro"])
+
+    def test_da_conversa_ao_botao(self):
+        api = ClienteFalso([
+            resposta(bloco_ferramenta("t1", "propor_agenda", {
+                "acao": "criar", "titulo": "Visitar o Mercado do João", "inicio": "2026-10-26", "hora": "9:00",
+                "repeticao": "semanal", "dias_semana": [1, 4], "exige_feedback": True}), parada="tool_use"),
+            resposta(bloco_texto("A proposta está pronta: confirme no botão abaixo.")),
+        ])
+        a = criar_assistente(self.pasta, self.calc, cliente=api, conversas=self.conversas)
+        r = a.perguntar(self.ana, None, "põe na minha agenda visitar o Mercado do João toda segunda e quinta às 9h",
+                        None, None, agenda=self.agenda.contexto(self.id_ana))
+        p = r["agenda"][0]
+        self.assertEqual((p["acao"], p["dados"]["hora"], p["dados"]["quando"], p["dados"]["exige_feedback"]),
+                         ("criar", "09:00", "Toda segunda e quinta", True))
+        resultado = json.loads(api.pedidos[1]["messages"][-1]["content"][0]["content"])
+        self.assertIn("AINDA NÃO APLICADA", resultado["situacao"])
+        self.assertIn("Agenda (topo da página Gestão): tem a própria agenda", api.pedidos[0]["system"][1]["text"])
+        self.assertEqual(self.contar("agenda_atividades"), 0)
+        # o botão: a proposta é achada na conversa da pessoa e aplicada uma vez só
+        guardada = self.conversas.proposta_agenda(self.id_ana, p["id"])
+        self.assertEqual(guardada["dados"]["titulo"], "Visitar o Mercado do João")
+        self.assertIsNone(self.conversas.proposta_agenda(self.criar_usuario("beto"), p["id"]))
+        self.assertFalse(self.agenda.aplicar(self.id_ana, guardada)["ja_aplicada"])
+        self.assertTrue(self.agenda.aplicar(self.id_ana, guardada)["ja_aplicada"])
+        self.assertEqual(self.contar("agenda_atividades"), 1)

@@ -10,8 +10,9 @@
 // opção de uma meta própria (no preço médio, o preço-alvo do vendedor em cada produto). A conta é toda no servidor
 // (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
 // por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js),
-// só dela, com os próprios eventos: os daqui ignoram o que acontece dentro dela (#g-agenda).
-import { agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
+// só dela, com os próprios eventos: os daqui ignoram o que acontece dentro dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD>
+// abre a agenda nesse dia.
+import { abrirNaAgenda, agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
 import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
          duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
@@ -167,7 +168,7 @@ export function montarGestao(container, contexto) {
   raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
   criarJanela();
-  montarAgenda(raiz.querySelector("#g-agenda"));
+  montarAgenda(raiz.querySelector("#g-agenda"), { dia: parametros().get("dia") });
   if (!ligado) {
     ligado = true;
     window.addEventListener("hashchange", aoMudarHash);
@@ -208,6 +209,7 @@ function aoMudarHash() {
   }
   const q = parametros();
   if (!estado.naPagina) { estado.naPagina = true; carregar(true); recarregarAgenda(); }
+  if (q.get("dia")) abrirNaAgenda(q.get("dia")); // o link de uma proposta do Assistente
   if (q.get("rascunho")) return abrirRascunho(q.get("rascunho"));
   const antes = [estado.regiao, estado.vista, estado.vendedor, estado.acao].join();
   lerUrl();

@@ -198,6 +198,7 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - resumo de vendas por período, com filtros e agrupamentos;
   - metas e realizado (os mesmos números da página Metas);
   - crédito de um cliente (os mesmos números da Reavaliação de Crédito; só para quem tem essa página);
+  - a agenda de quem pergunta (só para quem tem a página Gestão; veja [Minha agenda](#minha-agenda));
   - para o resto, uma consulta SQL que só lê os dados;
   - um arquivo Excel ou PDF para baixar (veja [Arquivos](#arquivos-excel-e-pdf)).
 - **As regras são as das metas.**
@@ -436,18 +437,25 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 
 No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
 administrador vê as dos outros). Quem tem a página Gestão tem a agenda, inclusive o visualizador, que na equipe só
-acompanha. O botão de recolher deixa só a faixa de dias (a escolha fica guardada no navegador); clicar num dia abre
-de novo.
+acompanha. O botão **−** recolhe a agenda e deixa só a faixa de dias; o **+** mostra de novo (a escolha fica
+guardada no navegador), e clicar num dia também abre.
 
-- **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, com hoje num quadrado maior. A cor diz
-  como está o dia: com atividade, tudo concluído ou com alguma atividade que ficou sem concluir. O número em cima é
-  quantas faltam. As setas trocam de mês, e **Hoje** volta para o dia de hoje.
-- **Clicar num dia** abre as atividades dele embaixo da faixa. O círculo marca a atividade como concluída. Se ela
+- **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, na largura toda do cartão, com hoje num
+  quadrado maior. Em cada quadrado:
+  - o número em cima é quantas atividades o dia tem;
+  - a barrinha embaixo do dia mostra as feitas (verde) e as que faltam (laranja; vermelho se o dia já passou), um
+    pedaço por atividade (com mais de 6, só as duas partes);
+  - a cor do quadrado diz como está o dia: com atividade, tudo feito ou com alguma que ficou sem concluir;
+  - passando o mouse, aparecem o total, as feitas, as que faltam e a lista das atividades com o horário.
+
+  As setas trocam de mês, e **Hoje** volta para o dia de hoje.
+- **Clicar num dia** abre as atividades dele embaixo da faixa, as com horário primeiro, em ordem. O círculo marca a
+  atividade como concluída. Se ela
   exige feedback, abre o campo para contar como foi, e só conclui com o texto escrito; se não exige, conclui na hora e
   o feedback pode ser acrescentado depois. Dá para editar o feedback e desfazer a conclusão. Dias que ainda não
   chegaram não podem ser concluídos.
-- **Atividade nova** (à direita): título, descrição, o dia (ou o primeiro dia, se repete), a repetição, um último dia
-  opcional e se exige feedback ao concluir. As repetições:
+- **Atividade nova** (ao lado do dia aberto): título, descrição, o dia (ou o primeiro dia, se repete), o horário
+  (opcional), a repetição, um último dia opcional e se exige feedback ao concluir. As repetições:
 
   | Repetição | Acontece |
   |---|---|
@@ -457,10 +465,19 @@ de novo.
   | Mensal | num dia fixo do mês; o mês que não tem esse dia usa o último |
   | A cada N dias | contando do primeiro dia (quinzenal: 15) |
 
-- **Histórico** (nas atividades que se repetem): cada dia concluído com o feedback, quantas vezes ela aconteceu até
-  hoje, quantas foram concluídas e os dias que ficaram sem concluir.
+- **Histórico de feedbacks** (o ícone de caderneta, nas atividades que se repetem): cada dia concluído com o
+  feedback, quantas vezes ela aconteceu até hoje, quantas foram concluídas e os dias que ficaram sem concluir.
 - **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
   de hoje e mantém o histórico. **Excluir** apaga a atividade e todo o histórico dela.
+- **Pelo Assistente** (para quem tem a Gestão), com a agenda de quem pergunta:
+  - **resumos**, como "o que fiz esta semana?", "o que ficou atrasado?" ou "como foram as visitas ao Mercado do
+    João?", com os feedbacks;
+  - **mudanças**: criar ("visitar o Mercado do João toda segunda e quinta às 9h"), mudar, encerrar, excluir ou
+    concluir com feedback.
+
+  O Assistente nunca grava sozinho: a resposta traz a proposta com um botão (**Adicionar à agenda**, **Salvar a
+  mudança**, **Encerrar**, **Excluir** ou **Marcar como feita**), e só o clique aplica, uma vez só. Depois, o cartão
+  mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia.
 
 ### Pelo Assistente
 
@@ -546,7 +563,8 @@ O painel usa dois bancos, cada um para uma coisa:
 | `gestao_eventos` | o histórico interno de cada vendedor: observações e o que aconteceu nas ações dele (lançada, editada, prorrogada, encerrada, resultado) |
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
-| `agenda_atividades` e `agenda_registros` | a Agenda de cada pessoa: as atividades com a repetição, e cada dia concluído com o feedback (migração 018) |
+| `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
+| `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no

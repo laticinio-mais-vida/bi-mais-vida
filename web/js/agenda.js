@@ -1,14 +1,18 @@
 // Minha agenda, no topo da página Gestão (gestao.js monta): as atividades de cada pessoa (só ela vê), na faixa de dias
-// do mês (a mesma do "Ritmo do mês" da página Metas), com o dia de hoje num quadrado maior. Clicar num dia amplia o
-// painel com as atividades dele: concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback,
-// desfazer e, nas que se repetem, o histórico de tudo o que foi feito. À direita, o formulário da atividade nova (única,
-// diária, semanal, mensal ou a cada N dias), que também edita uma atividade. Recolhida, fica só a faixa de dias (a
-// escolha fica guardada neste navegador). Em que dias cada atividade acontece é conta do servidor (bi/agenda.py).
+// do mês (a mesma do "Ritmo do mês" da página Metas), com o dia de hoje num quadrado maior. Cada quadrado mostra quantas
+// atividades o dia tem e, numa barrinha, as feitas (verde) e as que faltam (laranja; vermelho se o dia passou). Clicar
+// num dia amplia o painel com as atividades dele (as com horário primeiro): concluir (com o feedback, obrigatório quando
+// a atividade pede), editar o feedback, desfazer e, nas que se repetem, o histórico de tudo o que foi feito. Ao lado, o
+// formulário da atividade nova (única, diária, semanal, mensal ou a cada N dias, com horário opcional), que também edita
+// uma atividade. Recolhida, fica só a faixa de dias (a escolha fica guardada neste navegador). #/gestao?dia=AAAA-MM-DD
+// abre a agenda nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, e o texto da
+// repetição ("Toda segunda e quinta"), vêm do servidor (bi/agenda.py).
 import { MESES, api, esc, fmt, guardar, icone, ler, ligarTooltips, linhaTT, toast } from "./util.js";
 
 const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
 const DIAS = [[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [7, "Dom"]]; // date.isoweekday()
-const NOME_DIA = ["", "segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"];
+const MAX_SEGMENTOS = 6; // até aqui, a barrinha do dia tem um pedaço por atividade; acima, só as duas partes
+const MAX_TOOLTIP = 6;   // atividades listadas no tooltip do dia
 const REPETICOES = [["nenhuma", "Única"], ["diaria", "Diária"], ["semanal", "Semanal"], ["mensal", "Mensal"], ["intervalo", "A cada N dias"]];
 const DESCARTAR_FB = "Descartar o feedback que você estava escrevendo?";
 const CHAVE_RECOLHIDA = "mv-agenda-recolhida";
@@ -22,6 +26,7 @@ const mesDe = (iso) => iso.slice(0, 7);
 const hora = (iso) => (iso ? iso.slice(11, 16) : "");
 const diaDaSemana = (iso) => new Date(`${iso}T12:00`).getDay() || 7; // 1 = segunda ... 7 = domingo
 const atividade = (id) => estado.dados.atividades.find((a) => a.id === id);
+const ehDia = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t || "");
 
 function hojeLocal() {
   const d = new Date();
@@ -32,9 +37,6 @@ function somarMes(mes, n) {
   const d = new Date(a, m - 1 + n, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
-function listaE(itens) {
-  return itens.length < 2 ? itens.join("") : `${itens.slice(0, -1).join(", ")} e ${itens[itens.length - 1]}`;
-}
 // "26/10" no ano de hoje; "26/10/2025" em outro ano.
 function dataCurta(iso) {
   return iso.slice(0, 4) === (estado.dados?.hoje || hojeLocal()).slice(0, 4) ? fmt.dataCurta(iso) : fmt.data(iso);
@@ -44,30 +46,14 @@ function quando(iso, dia) {
   return iso.slice(0, 10) === dia ? `às ${hora(iso)}` : `em ${dataCurta(iso.slice(0, 10))} às ${hora(iso)}`;
 }
 
-// "Só neste dia", "Todo dia útil (ES)", "Toda segunda e quinta", "Todo dia 5", "A cada 15 dias" (e "até 30/11").
-function textoRepeticao(a) {
-  let t;
-  if (a.repeticao === "nenhuma") t = "Só neste dia";
-  else if (a.repeticao === "diaria") t = a.so_dias_uteis ? `Todo dia útil (${a.regiao})` : "Todo dia";
-  else if (a.repeticao === "semanal") {
-    const nomes = listaE(a.dias_semana.map((d) => NOME_DIA[d]));
-    if (a.dias_semana.length === 7) t = "Todo dia da semana";
-    else if (a.dias_semana.every((d) => d <= 5)) t = `Toda ${nomes}`;
-    else if (a.dias_semana.every((d) => d >= 6)) t = `Todo ${nomes}`;
-    else t = `Semanal: ${nomes}`;
-  } else if (a.repeticao === "mensal") t = `Todo dia ${a.dia_mes}${a.dia_mes > 28 ? " (ou o último do mês)" : ""}`;
-  else t = `A cada ${a.intervalo} dias`;
-  return a.fim ? `${t}, até ${dataCurta(a.fim)}` : t;
-}
-
 // ---------- montagem ----------
 export function agendaTemAlteracoes() {
   return !!raiz?.isConnected && (formMudou() || feedbackEscrito());
 }
 
-export function montarAgenda(el) {
-  el.innerHTML = `<div class="ag-layout" id="ag-raiz">
-    <section class="cartao ag-cal entra" style="--i:0">
+// dia: o dia a abrir (#/gestao?dia=…); sem ele, hoje.
+export function montarAgenda(el, { dia } = {}) {
+  el.innerHTML = `<section class="cartao ag-cal entra" style="--i:0" id="ag-raiz">
       <div class="cartao-cab">
         <div><h2>${icone("calendario")}Minha agenda<span class="ag-mes" id="ag-titulo"></span></h2>
           <p class="sub" id="ag-resumo">&nbsp;</p></div>
@@ -75,14 +61,15 @@ export function montarAgenda(el) {
           <button class="btn icone" type="button" data-mes="-1" title="Mês anterior" aria-label="Mês anterior">${icone("voltar")}</button>
           <button class="btn" type="button" data-hoje>Hoje</button>
           <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
-          <button class="btn icone" type="button" data-recolher aria-controls="ag-dia ag-nova"></button>
+          <button class="btn icone" type="button" data-recolher aria-controls="ag-baixo"></button>
         </div>
       </div>
-      <div id="ag-faixa"><div class="esqueleto" style="height:80px"></div></div>
-      <div id="ag-dia"></div>
-    </section>
-    <aside class="cartao ag-nova entra" style="--i:1" id="ag-nova" aria-label="Atividade nova"></aside>
-  </div>`;
+      <div id="ag-faixa"><div class="esqueleto" style="height:96px"></div></div>
+      <div class="ag-baixo" id="ag-baixo">
+        <div id="ag-dia"></div>
+        <aside class="ag-nova" id="ag-nova" aria-label="Atividade nova"></aside>
+      </div>
+    </section>`;
   raiz = el.querySelector("#ag-raiz");
   raiz.addEventListener("click", aoClicar);
   raiz.addEventListener("change", aoMudar);
@@ -90,7 +77,17 @@ export function montarAgenda(el) {
   Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null });
   recolher(ler(CHAVE_RECOLHIDA, false));
   desenharForm();
-  carregar();
+  const valido = ehDia(dia);
+  carregar(valido ? mesDe(dia) : undefined, { aberto: valido ? dia : undefined });
+}
+
+// O link de uma proposta do Assistente (#/gestao?dia=…) com a Gestão já montada: abre a agenda nesse dia.
+export function abrirNaAgenda(dia) {
+  if (!raiz?.isConnected || !ehDia(dia)) return;
+  if (raiz.classList.contains("recolhida")) recolher(false);
+  estado.concluindo = null;
+  carregar(mesDe(dia), { aberto: dia });
+  raiz.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // A Gestão chama ao voltar para a página: o dia de hoje (e o que foi feito em outro aparelho) pode ter mudado.
@@ -103,7 +100,7 @@ function recolher(sim) {
   raiz.classList.toggle("recolhida", sim);
   const b = raiz.querySelector("[data-recolher]");
   const dica = sim ? "Mostrar o dia e o formulário" : "Recolher a agenda";
-  b.innerHTML = icone(sim ? "expandir" : "recolher");
+  b.innerHTML = icone(sim ? "mais" : "minimizar");
   b.title = dica;
   b.setAttribute("aria-label", dica);
   b.setAttribute("aria-expanded", String(!sim));
@@ -112,9 +109,9 @@ function recolher(sim) {
 
 async function carregar(mes = estado.mes, { aberto } = {}) {
   const pedido = ++estado.pedido;
-  const cal = raiz.querySelector(".ag-cal");
+  const blocos = [raiz.querySelector("#ag-faixa"), raiz.querySelector("#ag-dia")];
   const mesmoMes = !!estado.dados && estado.dados.mes === (mes || estado.mes);
-  if (estado.dados) cal.classList.add("recarregando");
+  if (estado.dados) blocos.forEach((b) => b.classList.add("recarregando"));
   try {
     const d = await api(`/api/agenda${mes ? `?mes=${mes}` : ""}`);
     if (pedido !== estado.pedido) return;
@@ -131,7 +128,7 @@ async function carregar(mes = estado.mes, { aberto } = {}) {
     if (!estado.dados) raiz.querySelector("#ag-faixa").innerHTML = `<div class="vazio">${icone("alerta")}<p>${esc(e.message)}</p></div>`;
     toast(e.message, "erro");
   } finally {
-    if (pedido === estado.pedido) cal.classList.remove("recarregando");
+    if (pedido === estado.pedido) blocos.forEach((b) => b.classList.remove("recarregando"));
   }
 }
 
@@ -159,18 +156,36 @@ function desenharFaixa(quieta) {
         pendentes && x.data < d.hoje ? "atrasada" : "", hoje ? "hoje" : "", x.data === estado.aberto ? "aberto" : "",
         dow === 0 || dow === 6 ? "ag-fds" : ""].filter(Boolean).join(" ");
       const col = n === 0 ? `;--col:${((dow + 6) % 7) + 1}` : "";
+      const total = x.itens.length, feitas = total - pendentes;
       const tt = `<div class='tt-t'>${fmt.dataCurta(x.data)} · ${fmt.semana(x.data)}${hoje ? " · hoje" : ""}</div>` +
-        (x.itens.length ? linhaTT("Atividades", fmt.num(x.itens.length)) + linhaTT("Concluídas", fmt.num(x.itens.length - pendentes))
+        (total ? linhaTT("Atividades", fmt.num(total)) + linhaTT("Feitas", fmt.num(feitas)) + linhaTT("Faltam", fmt.num(pendentes)) +
+          x.itens.slice(0, MAX_TOOLTIP).map((i) => linhaItemTT(i)).join("") +
+          (total > MAX_TOOLTIP ? `<div class='tt-l'><span>e mais ${total - MAX_TOOLTIP}</span></div>` : "")
           : linhaTT("Atividades", "nenhuma"));
-      const marca = pendentes ? `<i class="ag-n">${pendentes}</i>` : x.itens.length ? `<i class="ag-n ok">${icone("visto")}</i>` : "";
-      const rotulo = `${dia} de ${MESES[m - 1]}${hoje ? ", hoje" : ""}: ${x.itens.length ? `${x.itens.length} atividades, ${pendentes} pendentes` : "nenhuma atividade"}`;
+      const rotulo = `${dia} de ${MESES[m - 1]}${hoje ? ", hoje" : ""}: ${total ? `${total} ${total === 1 ? "atividade" : "atividades"}, ${feitas} ${feitas === 1 ? "feita" : "feitas"}, faltam ${pendentes}` : "nenhuma atividade"}`;
       return `<button type="button" class="${classes}" style="--i:${n}${col}" data-dia="${x.data}" data-tt="${esc(tt)}"
-        aria-pressed="${x.data === estado.aberto}" aria-label="${esc(rotulo)}">${marca}${dia}<span class="sem">${SEMANA[dow]}</span></button>`;
+        aria-pressed="${x.data === estado.aberto}" aria-label="${esc(rotulo)}">${total ? `<i class="ag-n">${total}</i>` : ""}${dia}${barra(feitas, pendentes)}<span class="sem">${SEMANA[dow]}</span></button>`;
     }).join("")}
   </div>
-  <div class="ag-legenda" aria-hidden="true"><span><i></i>Livre</span><span><i class="tem"></i>Com atividade</span>
-    <span><i class="feita"></i>Tudo concluído</span><span><i class="atrasada"></i>Ficou sem concluir</span></div>`;
+  <div class="ag-legenda" aria-hidden="true"><span><b class="ag-n">3</b>atividades no dia</span>
+    <span><span class="ag-barra"><i class="f"></i><i></i><i></i></span>feitas e as que faltam</span>
+    <span><i class="tem"></i>Com atividade</span><span><i class="feita"></i>Tudo feito</span>
+    <span><i class="atrasada"></i>Ficou sem concluir</span></div>`;
   ligarTooltips(raiz.querySelector("#ag-faixa"));
+}
+
+// A barrinha do quadrado: um pedaço por atividade (as feitas primeiro); com muitas, só as duas partes.
+function barra(feitas, faltam) {
+  if (!feitas && !faltam) return "";
+  const pedacos = feitas + faltam <= MAX_SEGMENTOS
+    ? '<i class="f"></i>'.repeat(feitas) + "<i></i>".repeat(faltam)
+    : `<i class="f" style="flex:${feitas}"></i><i style="flex:${faltam}"></i>`;
+  return `<span class="ag-barra" aria-hidden="true">${pedacos}</span>`;
+}
+
+function linhaItemTT(i) {
+  const a = atividade(i.atividade);
+  return `<div class='tt-l'><span>${a.hora ? `${a.hora} ` : ""}${esc(a.titulo)}</span><b>${i.feita ? "feita" : "falta"}</b></div>`;
 }
 
 function abrirDia(dia) {
@@ -237,14 +252,14 @@ function itemHtml(i, dia, futuro, n) {
     <button type="button" class="ag-check ${i.feita ? "feita" : ""}" data-check ${futuro ? "disabled" : ""}
       aria-pressed="${i.feita}" title="${dica}" aria-label="${dica}: ${esc(a.titulo)}">${icone("visto")}</button>
     <div class="ag-item-t">
-      <b>${esc(a.titulo)}</b>
+      <b>${a.hora ? `<span class="ag-hora">${icone("relogio")}${a.hora}</span>` : ""}${esc(a.titulo)}</b>
       ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ""}
-      <div class="ag-chips"><span class="chip">${icone(repete ? "atualizar" : "calendario")}${esc(textoRepeticao(a))}</span>
+      <div class="ag-chips"><span class="chip">${icone(repete ? "atualizar" : "calendario")}${esc(a.quando)}</span>
         ${a.exige_feedback ? `<span class="chip laranja">${icone("conversa")}Pede feedback</span>` : ""}</div>
       ${rodape}
     </div>
     <div class="ag-item-acoes">
-      ${repete ? `<button type="button" data-historico title="Histórico" aria-label="Histórico de ${esc(a.titulo)}">${icone("restaurar")}</button>` : ""}
+      ${repete ? `<button type="button" data-historico title="Histórico de feedbacks" aria-label="Histórico de feedbacks de ${esc(a.titulo)}">${icone("caderneta")}</button>` : ""}
       <button type="button" data-editar title="Editar a atividade" aria-label="Editar ${esc(a.titulo)}">${icone("lapis")}</button>
       ${encerravel ? `<button type="button" data-encerrar title="Parar de repetir depois de hoje" aria-label="Encerrar ${esc(a.titulo)}">${icone("bandeira")}</button>` : ""}
       <button type="button" class="perigo" data-excluir title="Excluir a atividade" aria-label="Excluir ${esc(a.titulo)}">${icone("lixeira")}</button>
@@ -393,8 +408,8 @@ async function abrirHistorico(a) {
     </li>`).join("") : `<li class="ag-vazio">${icone("info")}Nada concluído ainda.</li>`;
   dlg.innerHTML = `<div class="ag-hist">
     <div class="ag-hist-cab">
-      <div><h2 id="ag-hist-titulo">${icone("restaurar")}${esc(at.titulo)}</h2>
-        <p class="sub">${esc(textoRepeticao(at))} · desde ${dataCurta(at.inicio)}</p></div>
+      <div><h2 id="ag-hist-titulo">${icone("caderneta")}${esc(at.titulo)}</h2>
+        <p class="sub">${esc(at.quando)}${at.hora ? ` · ${at.hora}` : ""} · desde ${dataCurta(at.inicio)}</p></div>
       <button class="btn icone" type="button" data-fechar title="Fechar" aria-label="Fechar">${icone("x")}</button>
     </div>
     <div class="ag-hist-resumo">
@@ -411,16 +426,16 @@ async function abrirHistorico(a) {
 // ---------- formulário ----------
 function desenharForm(a = null) {
   const inicio = a ? a.inicio : (estado.aberto || hojeLocal());
-  const v = a || { titulo: "", descricao: "", inicio, repeticao: "nenhuma", dias_semana: null, dia_mes: null, intervalo: null,
-                   so_dias_uteis: false, regiao: null, fim: null, exige_feedback: false };
+  const v = a || { titulo: "", descricao: "", inicio, hora: null, repeticao: "nenhuma", dias_semana: null, dia_mes: null,
+                   intervalo: null, so_dias_uteis: false, regiao: null, fim: null, exige_feedback: false };
   estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES" };
   estado.editando = a;
   const el = raiz.querySelector("#ag-nova");
   el.setAttribute("aria-label", a ? "Editar atividade" : "Atividade nova");
-  el.innerHTML = `<div class="cartao-cab"><div>
-      <h2>${icone(a ? "lapis" : "mais")}${a ? "Editar atividade" : "Nova atividade"}</h2>
-      <p class="sub">${a ? "O que já foi concluído continua no histórico." : "Só você vê as atividades da sua agenda."}</p>
-    </div></div>
+  el.innerHTML = `<div class="ag-nova-cab">
+      <h3>${icone(a ? "lapis" : "mais")}${a ? "Editar atividade" : "Nova atividade"}</h3>
+      <small>${a ? "O que já foi concluído continua no histórico." : "Só você vê as atividades da sua agenda."}</small>
+    </div>
     <form id="ag-form" class="ag-form" novalidate>
       <label class="campo-form"><span>Título</span>
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(v.titulo)}" placeholder="Ex.: Visitar o Mercado do João"></label>
@@ -432,6 +447,8 @@ function desenharForm(a = null) {
       <div class="ag-datas">
         <label class="campo-form"><span data-rotulo-inicio>${v.repeticao === "nenhuma" ? "Dia" : "Começa em"}</span>
           <input type="date" name="inicio" value="${v.inicio}"></label>
+        <label class="campo-form"><span>Horário <small>(opcional)</small></span>
+          <input type="time" name="hora" value="${v.hora || ""}"></label>
         <label class="campo-form" data-para="diaria semanal mensal intervalo"><span>Termina em <small>(opcional)</small></span>
           <input type="date" name="fim" value="${v.fim || ""}"></label>
       </div>
@@ -510,7 +527,7 @@ function coletar() {
   const num = (n) => (f.elements[n].value === "" ? null : Number(f.elements[n].value));
   return {
     titulo: f.elements.titulo.value.trim(), descricao: f.elements.descricao.value.trim(), inicio: f.elements.inicio.value,
-    repeticao: rep, dias_semana: rep === "semanal" ? [...estado.form.dias].sort() : null,
+    hora: f.elements.hora.value || null, repeticao: rep, dias_semana: rep === "semanal" ? [...estado.form.dias].sort() : null,
     dia_mes: rep === "mensal" ? num("dia_mes") : null, intervalo: rep === "intervalo" ? num("intervalo") : null,
     so_dias_uteis: uteis, regiao: uteis ? estado.form.regiao : null,
     fim: rep !== "nenhuma" && f.elements.fim.value ? f.elements.fim.value : null,

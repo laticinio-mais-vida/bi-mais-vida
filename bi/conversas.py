@@ -18,7 +18,7 @@ MAX_MENSAGENS_CONVERSA = 200  # 100 perguntas; a IA vê só as últimas (MAX_MEN
 TAM_TITULO = 60
 MAX_TITULO = 80
 # O que a página mostra junto da resposta.
-DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso", "rascunhos", "arquivos")
+DETALHES = ("consultas", "passos", "data_ref", "aviso", "uso", "rascunhos", "arquivos", "agenda")
 _META = "id, titulo, criada_em, atualizada_em"
 
 
@@ -107,6 +107,12 @@ class Conversas:
     def rascunho(self, usuario: int, id_) -> dict | None:
         """Um rascunho de campanha que o Assistente montou numa conversa da pessoa (para abrir na página Gestão)."""
         achado = self._da_resposta(usuario, "rascunhos", id_)
+        return achado[0] if achado else None
+
+    def proposta_agenda(self, usuario: int, id_) -> dict | None:
+        """Uma proposta para a agenda (criar, editar, encerrar, excluir ou concluir) que o Assistente montou numa
+        conversa da pessoa (bi/agenda.py aplica no botão)."""
+        achado = self._da_resposta(usuario, "agenda", id_)
         return achado[0] if achado else None
 
     def arquivo(self, usuario: int, id_) -> tuple[dict, str] | None:

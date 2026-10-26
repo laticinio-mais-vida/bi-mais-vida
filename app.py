@@ -74,7 +74,8 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
 # usuário). Por isso não entra em ROTAS_ADMIN, como as rotas que mudam a Gestão.
 ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
-                      "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer"}
+                      "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer",
+                      "/api/agenda/proposta"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
@@ -438,12 +439,13 @@ class Manipulador(BaseHTTPRequestHandler):
         if not self._pode_assistente(usuario):
             return
         vendedores, equipes = escopo_assistente(usuario)
-        gestao = (self.app.gestao.contexto(usuario, escopo_gestao(usuario))
-                  if "gestao" in paginas_permitidas(usuario) else None)
+        tem_gestao = "gestao" in paginas_permitidas(usuario)
+        gestao = self.app.gestao.contexto(usuario, escopo_gestao(usuario)) if tem_gestao else None
+        agenda = self.app.agenda.contexto(usuario["id"]) if tem_gestao else None  # a agenda fica na Gestão
         try:
             return self._json(self.app.assistente.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"),
                                                             vendedores, equipes, gestao,
-                                                            "credito" in paginas_permitidas(usuario)))
+                                                            "credito" in paginas_permitidas(usuario), agenda=agenda))
         except ErroAssistente as e:
             log.warning("Assistente (%s): %s", usuario["login"], e)
             return self._erro(str(e), e.status)
@@ -466,6 +468,11 @@ class Manipulador(BaseHTTPRequestHandler):
             lancadas = self.app.gestao.criadas_por_rascunho(usuario, [r["id"] for r in rascunhos])
             for r in rascunhos:
                 r["acao"] = lancadas.get(r["id"])
+        propostas = [p for m in (conversa or {}).get("mensagens", []) for p in m.get("agenda") or []]
+        if propostas and "gestao" in paginas_permitidas(usuario):  # as que já foram aplicadas mostram o link
+            aplicadas = self.app.agenda.aplicadas(usuario["id"], [p.get("id") for p in propostas])
+            for p in propostas:
+                p["aplicada"] = aplicadas.get(p.get("id"))
         return self._json({"conversa": conversa, "pendente": pendente})
 
     def _baixar_arquivo(self, usuario: dict, q: dict):
@@ -577,6 +584,15 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         if caminho == "/api/agenda/concluir":
             return self._json({"ok": True, "item": agenda.concluir(eu, id_, corpo.get("dia"), corpo.get("feedback"))})
+        if caminho == "/api/agenda/proposta":  # o botão de uma proposta do Assistente (criar, editar, concluir…)
+            proposta = self.app.conversas.proposta_agenda(eu, id_)
+            if proposta is None:
+                raise NaoEncontrada("proposta não encontrada; a conversa pode ter sido excluída")
+            r = agenda.aplicar(eu, proposta)
+            if not r["ja_aplicada"]:
+                log.info("%s aplicou na agenda uma proposta do Assistente (%s, atividade %s)", usuario["login"],
+                         r["acao"], r["atividade"])
+            return self._json({"ok": True, **r})
         agenda.desfazer(eu, id_, corpo.get("dia"))  # /api/agenda/desfazer
         return self._json({"ok": True})
 

@@ -9,6 +9,10 @@ Como funciona:
   Exceção: as ferramentas de campanhas (listar, andamento e propor) usam bi/gestao.py, com o acesso da pessoa na
   página Gestão, para darem os mesmos números da página; quem não tem a Gestão recebe um erro dentro delas (e só o
   administrador propõe campanhas).
+- Agenda: as ferramentas da agenda (ver_agenda, historico_atividade, propor_agenda) usam bi/agenda.py, só com a
+  agenda de quem pergunta (cada pessoa tem a sua, no topo da página Gestão; sem a Gestão, um erro dentro delas). A IA
+  nunca grava na agenda: propor_agenda monta a proposta (criar, editar, encerrar, excluir ou concluir) e a resposta
+  mostra o botão que a aplica.
 - Crédito: os títulos a receber e o limite de crédito só entram no recorte de quem tem a página Reavaliação de
   Crédito (para os outros, as tabelas e colunas nem existem); a ferramenta credito_cliente usa bi/credito.py, com
   os títulos dos vendedores do acesso, para dar os números da página.
@@ -39,6 +43,7 @@ import time
 import duckdb
 import pandas as pd
 
+from .agenda import ACOES as ACOES_AGENDA, MAX_PERIODO as MAX_PERIODO_AGENDA, REPETICOES as REPETICOES_AGENDA
 from .arquivos import (EXCEL, MAX_LINHAS as MAX_LINHAS_ARQUIVO, PDF, TIPOS as TIPOS_ARQUIVO, FaltaPacote,
                        excel as montar_excel, formatos as formatos_colunas, nome_arquivo, pdf as montar_pdf)
 from .banco import BancoForaDoAr
@@ -58,6 +63,7 @@ ESFORCOS = ("low", "medium", "high", "xhigh", "max")
 DIAS_SEMANA = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
 NOME_TIPO = {"FUNCIONARIO": "Funcionário", "FORNECEDOR": "Fornecedor", "PRODUTOR": "Produtor"}
 MAX_MENSAGENS = 20
+MAX_REGISTROS_AGENDA = 60  # dias concluídos que historico_atividade devolve (os mais recentes)
 MAX_TEXTO = {"usuario": 4000, "assistente": 16000}
 MAX_RESULTADO = 12000  # caracteres de um resultado de ferramenta devolvido à IA
 MAX_SQL = 8000
@@ -532,6 +538,64 @@ FERRAMENTAS = [
         "strict": False,
     },
     {
+        "name": "ver_agenda",
+        "description": ("A agenda de quem pergunta (cada pessoa tem a sua, no topo da página Gestão): as atividades "
+                        f"entre de e ate (até {MAX_PERIODO_AGENDA} dias), dia a dia, com o horário, a situação (feita; "
+                        "atrasada = o dia passou sem concluir; hoje; prevista) e o feedback das feitas, os totais e a "
+                        "repetição de cada atividade (quando). texto filtra pelo título e pela descrição. Use para os "
+                        "resumos e para achar o código de uma atividade antes de propor uma mudança."),
+        "input_schema": _objeto({
+            "de": {"type": "string", "format": "date", "description": "primeiro dia (AAAA-MM-DD)"},
+            "ate": {"type": "string", "format": "date", "description": "último dia, inclusive (AAAA-MM-DD)"},
+            "texto": {"type": "string", "description": "parte do título ou da descrição; vazio = todas"},
+        }, ["de", "ate"]),
+        "strict": True,
+    },
+    {
+        "name": "historico_atividade",
+        "description": ("O histórico de uma atividade da agenda de quem pergunta: cada dia concluído com o feedback "
+                        "(do mais recente para o mais antigo), quantas vezes ela aconteceu até hoje, quantas foram "
+                        "concluídas e os dias que ficaram sem concluir. Use para resumir o que foi feito numa "
+                        "atividade que se repete."),
+        "input_schema": _objeto({
+            "atividade": {"type": "integer", "description": "código da atividade (de ver_agenda)"},
+        }, ["atividade"]),
+        "strict": True,
+    },
+    {
+        "name": "propor_agenda",
+        "description": ("Monta uma PROPOSTA para a agenda de quem pergunta, sem gravar: a pessoa confirma no botão "
+                        "que aparece abaixo da sua resposta. acao: criar (titulo e inicio; o resto é opcional), editar "
+                        "(atividade e só os campos que mudam), encerrar (a repetição para depois de hoje; o histórico "
+                        "fica), excluir (apaga a atividade e todo o histórico) ou concluir (atividade, dia e "
+                        "feedback). Devolve a proposta conferida, ou o erro para corrigir."),
+        "input_schema": _objeto({
+            "acao": {"type": "string", "enum": list(ACOES_AGENDA)},
+            "atividade": {"type": "integer", "description": "código da atividade (de ver_agenda); não vai no criar"},
+            "titulo": {"type": "string", "description": "curto, até 120 letras"},
+            "descricao": {"type": "string", "description": "detalhes (pode ser vazio)"},
+            "inicio": {"type": "string", "format": "date",
+                       "description": "o dia da atividade única, ou o primeiro dia da que se repete (AAAA-MM-DD)"},
+            "hora": {"type": "string", "description": "horário HH:MM (opcional); no editar, vazio tira o horário"},
+            "repeticao": {"type": "string", "enum": list(REPETICOES_AGENDA),
+                          "description": "nenhuma = só no dia do início (padrão); intervalo = a cada N dias"},
+            "dias_semana": {**_INTEIROS, "description": "semanal: 1 = segunda ... 7 = domingo"},
+            "dia_mes": {"type": "integer", "description": "mensal: o dia, de 1 a 31 (o mês sem esse dia usa o último)"},
+            "intervalo": {"type": "integer",
+                          "description": "intervalo: a cada quantos dias, contando do início (2 a 365; quinzenal = 15)"},
+            "so_dias_uteis": {"type": "boolean",
+                              "description": "diária: pula domingos, feriados e sábados sem expediente"},
+            "regiao": {"type": "string", "enum": ["ES", "BA"], "description": "o calendário dos dias úteis"},
+            "fim": {"type": "string", "description": "a que se repete: o último dia (AAAA-MM-DD; vazio tira o fim)"},
+            "exige_feedback": {"type": "boolean", "description": "para concluir, é preciso escrever um feedback"},
+            "dia": {"type": "string", "format": "date", "description": "concluir: o dia feito (padrão hoje; até hoje)"},
+            "feedback": {"type": "string",
+                         "description": "concluir: como foi (obrigatório se a atividade exige feedback)"},
+        }, ["acao"]),
+        # Sem strict: muitos campos opcionais; a conferência é do servidor (bi/agenda.py), que devolve o erro.
+        "strict": False,
+    },
+    {
         "name": "credito_cliente",
         "description": ("Reavaliação de crédito de um cliente: os números da página Reavaliação de Crédito (limite, "
                         "prazo, títulos em aberto, limite restante, compras, ticket médio, pontualidade, "
@@ -637,9 +701,10 @@ class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
     def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None,
-                 credito: Credito | None = None):
+                 credito: Credito | None = None, agenda=None):
         """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão).
-        credito: bi/credito.py (None = o acesso não inclui a página Reavaliação de Crédito)."""
+        credito: bi/credito.py (None = o acesso não inclui a página Reavaliação de Crédito).
+        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda)."""
         self.cur = recorte.cursor()
         self.ids = recorte.ids
         self.calc = calc
@@ -649,6 +714,8 @@ class Ferramentas:
         self.credito = credito
         self.rascunhos: list[dict] = []  # campanhas propostas nesta pergunta (a página mostra o botão de lançar)
         self.arquivos: list[dict] = []   # arquivos preparados nesta pergunta (a página mostra o botão de baixar)
+        self.agenda = agenda
+        self.agenda_propostas: list[dict] = []  # propostas para a agenda (a página mostra o botão de aplicar)
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
     def executar(self, nome: str, args: dict) -> tuple[dict, dict]:
@@ -665,8 +732,8 @@ class Ferramentas:
         except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada) as e:
             passo["erro"] = str(e).split("\n")[0][:500] if isinstance(e, duckdb.Error) else str(e)
             resultado = {"erro": passo["erro"]}
-        except BancoForaDoAr as e:  # as campanhas ficam no PostgreSQL
-            passo["erro"] = f"as campanhas não puderam ser lidas: {e.aviso}"
+        except BancoForaDoAr as e:  # as campanhas e a agenda ficam no PostgreSQL
+            passo["erro"] = f"as campanhas e a agenda não puderam ser lidas: {e.aviso}"
             resultado = {"erro": passo["erro"]}
         except Exception as e:  # argumento que a ferramenta não tem, ou defeito: a IA fica sabendo e segue
             log.exception("falha na ferramenta %s %s", nome, args)
@@ -1031,6 +1098,57 @@ class Ferramentas:
         }
 
 
+    # --- agenda de quem pergunta (topo da página Gestão) -------------------------------
+    def _agenda(self):
+        if self.agenda is None:
+            raise ValueError("o acesso de quem pergunta não inclui a página Gestão, onde fica a agenda")
+        return self.agenda
+
+    def f_ver_agenda(self, passo: dict, de: str, ate: str, texto: str = "") -> dict:
+        r = self._agenda().periodo(de, ate, texto)
+        itens = [(d["data"], i) for d in r["dias"] for i in d["itens"]]
+        passo.update(colunas=["dia", "hora", "atividade", "situação"],
+                     amostra=[[dia, i["hora"] or "", i["titulo"], i["situacao"]] for dia, i in itens[:10]],
+                     linhas=len(itens), resumo=", ".join(f"#{a['id']} {a['titulo']}" for a in r["atividades"][:12]))
+        if not itens:
+            r["aviso"] = "nenhuma atividade no período" + (" com esse texto" if texto else "")
+        return r
+
+    def f_historico_atividade(self, passo: dict, atividade: int) -> dict:
+        r = self._agenda().historico(atividade)
+        if len(r["registros"]) > MAX_REGISTROS_AGENDA:
+            r["aviso"] = f"os {MAX_REGISTROS_AGENDA} registros mais recentes, de {len(r['registros'])}"
+            r["registros"] = r["registros"][:MAX_REGISTROS_AGENDA]
+        passo.update(colunas=["dia", "feedback"], amostra=[[x["dia"], x["feedback"]] for x in r["registros"][:10]],
+                     linhas=len(r["registros"]), resumo=f"#{r['atividade']['id']} {r['atividade']['titulo']}")
+        return r
+
+    def f_propor_agenda(self, passo: dict, acao: str, atividade=None, titulo=None, descricao=None, inicio=None,
+                        hora=None, repeticao=None, dias_semana=None, dia_mes=None, intervalo=None, so_dias_uteis=None,
+                        regiao=None, fim=None, exige_feedback=None, dia=None, feedback=None) -> dict:
+        campos = {k: v for k, v in {"titulo": titulo, "descricao": descricao, "inicio": inicio, "hora": hora,
+                                    "repeticao": repeticao, "dias_semana": dias_semana, "dia_mes": dia_mes,
+                                    "intervalo": intervalo, "so_dias_uteis": so_dias_uteis, "regiao": regiao,
+                                    "fim": fim, "exige_feedback": exige_feedback}.items() if v is not None}
+        agenda = self._agenda()
+        if acao in ("criar", "editar"):
+            p = agenda.propor(acao, atividade=atividade, dados=campos)
+        elif acao == "concluir":
+            p = agenda.propor(acao, atividade=atividade, dia=dia, feedback=feedback)
+        else:
+            p = agenda.propor(acao, atividade=atividade)
+        self.agenda_propostas.append(p)
+        passo.update(colunas=["proposta", "atividade"], amostra=[[p["acao"], p["titulo"]]], linhas=1,
+                     resumo=f"proposta {p['id']} (ainda não aplicada): {p['acao']} {p['titulo']}")
+        detalhes = {k: p[k] for k in ("dados", "mudancas", "dia", "feedback", "fim", "quando", "registros") if k in p}
+        if "dados" in detalhes:
+            detalhes["dados"] = {k: v for k, v in detalhes["dados"].items()
+                                 if k in ("titulo", "descricao", "inicio", "hora", "quando", "exige_feedback")}
+        return {"situacao": ("PROPOSTA, AINDA NÃO APLICADA. A pessoa confirma no botão que aparece abaixo da sua "
+                             "resposta."),
+                "proposta": {"acao": p["acao"], "atividade": p["atividade"], "titulo": p["titulo"], **detalhes}}
+
+
 def _sql_legivel(sql: str, params: list) -> str:
     """SQL com os parâmetros no lugar (só para mostrar na tela e no registro; a consulta usa parâmetros)."""
     partes = sql.split("?")
@@ -1106,7 +1224,7 @@ WHERE data BETWEEN DATE '2026-09-01' AND DATE '2026-09-30' GROUP BY ALL ORDER BY
 INSTRUCOES = f"""\
 Você é o Assistente do Painel Mais Vida, o painel de indicadores do Laticínio Mais Vida (vendas no Espírito Santo \
 e na Bahia). Responde a vendedores, supervisores e à diretoria sobre vendas, devoluções, clientes, produtos e \
-metas, consultando os dados com as ferramentas.
+metas, consultando os dados com as ferramentas, e cuida da agenda de quem pergunta.
 
 # Regras
 - Todo número da resposta sai de uma ferramenta. Nunca estime nem complete de cabeça; se os dados não respondem, \
@@ -1218,6 +1336,27 @@ explique que só o administrador lança, e ofereça o andamento.
 use listar_acoes; para os números por vendedor (base, meta, resultado), andamento_acao (os mesmos da página \
 Gestão). Se \
 houver mais de uma candidata, use a mais recente e diga qual.
+
+# Agenda (de quem pergunta)
+- Cada pessoa tem a própria agenda, no topo da página Gestão: atividades únicas ou que se repetem (diária, só em \
+dias úteis, semanal, mensal ou a cada N dias), com horário opcional, e o que foi feito em cada dia, com o feedback. \
+Você só vê a agenda de quem pergunta; a de outra pessoa não existe para você.
+- Para resumos ("o que fiz esta semana", "o que ficou atrasado", "como foram as visitas"), use ver_agenda no \
+período (até {MAX_PERIODO_AGENDA} dias por vez) e, para tudo o que foi feito numa atividade que se repete, \
+historico_atividade. Atrasada = o dia passou sem concluir; hoje ainda dá tempo. Diga o período e cite os feedbacks \
+quando ajudarem.
+- Para criar, mudar, encerrar, excluir ou concluir uma atividade, use propor_agenda: ela confere e monta uma \
+PROPOSTA, sem gravar, e a pessoa confirma no botão que aparece abaixo da sua resposta. Nunca diga que a atividade foi \
+criada, mudada, encerrada, excluída ou concluída: diga que a proposta está pronta para confirmar e resuma o que \
+ficou. Para mudar, encerrar, excluir ou concluir, ache antes o código com ver_agenda; se houver mais de uma \
+candidata, pergunte qual. Encerrar mantém o histórico; excluir apaga tudo: na dúvida, proponha encerrar.
+- Como traduzir: "toda segunda e quinta às 9h" = semanal, dias_semana [1, 4], hora 09:00; "todo dia útil" = diaria \
+com so_dias_uteis e a regiao (ES ou BA; na dúvida, pergunte); "todo dia 5" = mensal, dia_mes 5; "de 15 em 15 dias" \
+ou "quinzenal" = intervalo 15; "amanhã às 14h" = nenhuma, inicio amanhã, hora 14:00; "precisa de retorno" ou "com \
+feedback" = exige_feedback. Sem o dia, pergunte (ou use hoje, se o pedido for para hoje). Para concluir uma \
+atividade que exige feedback, peça o feedback antes.
+- Se a ferramenta devolver erro, corrija e chame de novo. Sem a página Gestão no acesso, diga que a agenda fica lá e \
+que quem libera é o administrador.
 
 # Arquivos (Excel e PDF)
 - Quando a pessoa pedir um arquivo, planilha, Excel, PDF ou relatório para baixar, imprimir ou enviar, use \
@@ -1398,7 +1537,7 @@ class Assistente:
             self._cliente = anthropic.Anthropic(api_key=self.cfg.chave, max_retries=2, timeout=self.cfg.timeout)
         return self._cliente
 
-    def _contexto(self, usuario: dict, escopo: str, gestao=None, credito: bool = False) -> str:
+    def _contexto(self, usuario: dict, escopo: str, gestao=None, credito: bool = False, agenda=None) -> str:
         """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa). gestao: o
         ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão). credito: se o acesso inclui a
         página Reavaliação de Crédito."""
@@ -1417,6 +1556,8 @@ class Assistente:
                 f"vê {escopo}.\n"
                 f"- Campanhas (página Gestão): "
                 f"{('pode lançar e acompanhar' if gestao.admin else 'pode acompanhar (só o administrador lança)') if gestao else 'o acesso não inclui'}.\n"
+                f"- Agenda (topo da página Gestão): "
+                f"{'tem a própria agenda' if agenda else 'o acesso não inclui (sem a página Gestão)'}.\n"
                 f"- Crédito (página Reavaliação de Crédito): "
                 f"{'o acesso inclui' + self._dados_credito() if credito else 'o acesso não inclui'}.\n"
                 f"- Categorias das outras linhas: {', '.join(regras.categorias) or 'nenhuma'}.\n"
@@ -1458,11 +1599,12 @@ class Assistente:
         return saida
 
     def perguntar(self, usuario: dict, conversa_id, pergunta, vendedores: set[int] | None,
-                  equipes: set[str] | None, gestao=None, credito: bool = False) -> dict:
+                  equipes: set[str] | None, gestao=None, credito: bool = False, agenda=None) -> dict:
         """Pergunta numa conversa do histórico (sem conversa_id, começa uma nova). A pergunta e a resposta são
         gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas.
         gestao: bi/gestao.py ContextoGestao de quem pergunta, para as ferramentas de campanha (None = sem a página).
-        credito: se o acesso inclui a página Reavaliação de Crédito (os dados de crédito)."""
+        credito: se o acesso inclui a página Reavaliação de Crédito (os dados de crédito).
+        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda)."""
         pergunta = str(pergunta or "").strip()
         if not pergunta:
             raise ErroAssistente("escreva uma pergunta")
@@ -1493,7 +1635,7 @@ class Assistente:
 
         return self.responder(usuario, anteriores + [{"papel": "usuario", "texto": pergunta}], vendedores, equipes,
                               pendente={"conversa": conversa_id, "nova": not anteriores, "pergunta": pergunta},
-                              guardar=guardar, gestao=gestao, credito=credito)
+                              guardar=guardar, gestao=gestao, credito=credito, agenda=agenda)
 
     def pendente(self, usuario: int) -> dict | None:
         """A pergunta que ainda está sendo respondida para esta pessoa (de outra aba ou de antes de recarregar a
@@ -1505,7 +1647,8 @@ class Assistente:
             return {**{k: p[k] for k in ("conversa", "nova", "pergunta")}, "segundos": round(time.time() - p["inicio"])}
 
     def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None,
-                  pendente: dict | None = None, guardar=None, gestao=None, credito: bool = False) -> dict:
+                  pendente: dict | None = None, guardar=None, gestao=None, credito: bool = False,
+                  agenda=None) -> dict:
         """mensagens: a conversa inteira, terminando na pergunta (perguntar() monta a partir do histórico).
         pendente: o que pendente() mostra enquanto a pergunta roda. guardar(resultado): grava a resposta antes de
         liberar a pessoa; devolve o "conversa"."""
@@ -1534,7 +1677,7 @@ class Assistente:
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
                 r = self._responder(usuario, api_mensagens, vendedores, equipes, (pendente or {}).get("conversa"),
-                                    gestao, credito)
+                                    gestao, credito, agenda)
             finally:
                 self._vagas.release()
             r["restantes"] = None if admin else max(0, self.cfg.limite_diario - perguntas - 1)
@@ -1546,7 +1689,7 @@ class Assistente:
                 self._ocupados.pop(dono, None)
 
     def _responder(self, usuario, api_mensagens, vendedores, equipes, conversa: str | None = None,
-                   gestao=None, credito: bool = False) -> dict:
+                   gestao=None, credito: bool = False, agenda=None) -> dict:
         t0 = time.time()
         pergunta = _sem_prefixo(api_mensagens[-1]["content"])
         ids = self.ids_do_escopo(vendedores, equipes)
@@ -1554,9 +1697,9 @@ class Assistente:
             raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
         escopo = self.descrever_escopo(ids, vendedores, equipes)
         ferramentas = Ferramentas(self.recorte(ids, credito), self.calc, self.cfg, equipes, gestao=gestao,
-                                  credito=self.credito if credito else None)
+                                  credito=self.credito if credito else None, agenda=agenda)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito)}]
+                  {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito, agenda)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}
         passos: list[dict] = []
         texto, aviso, erro, modelo, parada, ids_req = "", None, None, self.cfg.modelo, None, []
@@ -1615,6 +1758,7 @@ class Assistente:
         return {
             "resposta": texto, "aviso": aviso, "consultas": _resumo_consultas(passos), "passos": passos,
             "rascunhos": ferramentas.rascunhos, "arquivos": ferramentas.arquivos,
+            "agenda": ferramentas.agenda_propostas,
             "data_ref": self.calc.cache.info.get("data_ref"), "escopo": escopo,
             "uso": uso if admin else {"segundos": uso["segundos"]},
         }
