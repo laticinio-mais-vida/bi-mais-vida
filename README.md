@@ -502,6 +502,10 @@ só a pessoa; clicar de novo mostra as subtarefas.
   cada vez fica aberta para editar o título, o prazo e o horário: **+ Subtarefa** abre uma nova no mesmo card e
   recolhe as outras; clicar numa recolhida abre ela, e a seta à esquerda do título recolhe. Ao editar uma tarefa,
   todas começam recolhidas. Salvar com uma subtarefa sem título abre ela com o cursor no título.
+- **Escolher o dia grava a subtarefa:** com o título escrito, clicar no dia (ou Enter nele) recolhe a subtarefa e,
+  se ela era nova, já abre outra em branco para a mesma pessoa, sem precisar do **+ Subtarefa** (o horário, se
+  tiver, vai antes do dia). As setas do teclado só andam pelos dias; Enter no título vai para eles, sem salvar a
+  tarefa. A subtarefa nova deixada em branco não conta ao salvar e some quando outra abre.
 
 - **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. O
   **+ Subtarefa** dentro do card de cada um cria uma subtarefa para a pessoa, no formulário e na janela da tarefa.

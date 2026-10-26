@@ -4,6 +4,8 @@
 // agenda no celular.
 // O valor fica num input escondido (name ou data-campo), que avisa "change" a cada escolha: o formulário lê como lia o
 // <input type="date">. Com o foco num dia, as setas do teclado andam a escolha (para cima e para baixo, uma semana).
+// Clicar num dia (ou Enter nele) avisa também "dia-escolhido", mesmo que seja o dia que já estava: as setas só andam,
+// o clique confirma.
 // - campoDia({...}): o HTML do campo; prepararDias(raiz) desenha os campos novos depois que o HTML entra na página.
 // - limitesDoDia(input, {min, max}): os dias de fora ficam bloqueados. focarDia(input): o foco vai para o dia escolhido.
 // - contarDias(fn): fn(dia) → {n, classe} (os itens do dia; classe tem, feita ou atrasada) ou null; redesenharDias()
@@ -140,7 +142,10 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest(".ed button");
   if (!b || b.disabled) return;
   const el = b.closest(".ed");
-  if (b.dataset.edDia) return escolher(el, b.dataset.edDia);
+  if (b.dataset.edDia) {
+    escolher(el, b.dataset.edDia);
+    return el.querySelector("input").dispatchEvent(new Event("dia-escolhido", { bubbles: true }));
+  }
   if ("edLimpar" in b.dataset) return escolher(el, "");
   if (b.dataset.edMover) el.dataset.mes = somarMes(el.dataset.mes, Number(b.dataset.edMover));
   else if ("edIr" in b.dataset) el.dataset.mes = (el.querySelector("input").value || hoje()).slice(0, 7);

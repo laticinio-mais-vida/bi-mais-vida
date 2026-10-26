@@ -132,6 +132,7 @@ export function montarAgenda(el, { dia } = {}) {
   raiz.addEventListener("click", aoClicar);
   raiz.addEventListener("change", aoMudar);
   raiz.addEventListener("keydown", aoTeclar);
+  raiz.addEventListener("dia-escolhido", aoEscolherDia);
   raiz.addEventListener("dragstart", aoArrastar);
   raiz.addEventListener("dragover", aoPassar);
   raiz.addEventListener("drop", aoSoltar);
@@ -512,10 +513,7 @@ async function aoClicar(e) {
   if (b.dataset.tirarPessoa) return tirarPessoa(Number(b.dataset.tirarPessoa));
   if (b.dataset.subPara) return maisSub(Number(b.dataset.subPara));
   if (b.dataset.recolherPessoa) return alternarCard(b, estado.tf.recolhidos);
-  if (b.dataset.abrirSub) {
-    abrirSub(Number(b.dataset.abrirSub));
-    return raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${b.dataset.abrirSub}"] [data-campo="titulo"]`).focus();
-  }
+  if (b.dataset.abrirSub) return focarSub(Number(b.dataset.abrirSub), "titulo");
   if ("fecharSub" in b.dataset) return abrirSub(null);
   if (b.dataset.tirarSub) {
     lerSubs();
@@ -564,6 +562,11 @@ function aoTeclar(e) {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && t.closest("#ag-form")) {
     e.preventDefault();
     return t.closest("form").requestSubmit();
+  }
+  // Enter no título da subtarefa vai para os dias (escolher um grava a subtarefa), em vez de salvar a tarefa inteira
+  if (e.key === "Enter" && t.matches('#ag-pessoas .ag-sub-linha [data-campo="titulo"]')) {
+    e.preventDefault();
+    return focarDia(t.closest(".ag-sub-linha").querySelector('[data-campo="prazo"]'));
   }
   if (!t.matches(".ag-fb textarea")) return;
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); t.closest(".ag-item").querySelector("[data-confirmar]").click(); }
@@ -1109,7 +1112,8 @@ function desenharPessoas() {
   lista.innerHTML = [{ id: eu.id, nome: eu.nome, voce: true }, ...participantes].map((p) => {
     const linhas = subtarefas.map((s, n) => [s, n]).filter(([s]) => s.responsavel === p.id);
     const quem = p.voce ? "você" : esc(p.nome);
-    const resumo = linhas.length ? plural(linhas.length, "subtarefa", "subtarefas") : "sem subtarefas";
+    const escritas = linhas.filter(([s]) => !emBranco(s)).length; // a nova em branco ainda não conta
+    const resumo = escritas ? plural(escritas, "subtarefa", "subtarefas") : "sem subtarefas";
     return `<div class="ag-pessoa-card ${recolhidos.has(p.id) ? "recolhido" : ""}">
       <div class="ag-pessoa-cab">
         ${nomeDoCard(p, resumo, recolhidos.has(p.id))}
@@ -1177,12 +1181,31 @@ function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
     </div>`;
 }
 
-// Abre a subtarefa n para editar (a que estava aberta se recolhe) ou, com null, recolhe a aberta.
+// Uma subtarefa nova em que nada foi escrito: não conta ao salvar e some quando outra abre.
+const emBranco = (s) => !s.id && !s.titulo.trim();
+
+// Abre a subtarefa n para editar (a que estava aberta se recolhe) ou, com null, recolhe a aberta; as novas deixadas
+// em branco saem. Devolve a posição de n depois disso.
 function abrirSub(n) {
   lerSubs();
-  estado.tf.aberta = n;
-  if (n != null) estado.tf.recolhidos.delete(estado.tf.subtarefas[n].responsavel);
+  const alvo = n == null ? null : estado.tf.subtarefas[n];
+  estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s === alvo || !emBranco(s));
+  estado.tf.aberta = alvo ? estado.tf.subtarefas.indexOf(alvo) : null;
+  if (alvo) estado.tf.recolhidos.delete(alvo.responsavel);
   desenharPessoas();
+  return estado.tf.aberta;
+}
+
+// Escolher o dia da subtarefa aberta grava ela, sem precisar do + Subtarefa: recolhe e, se era nova, abre outra em
+// branco para a mesma pessoa. Sem título ainda, fica aberta e o cursor vai para ele.
+function aoEscolherDia(e) {
+  const linha = e.target.closest("#ag-pessoas .ag-sub-linha");
+  if (!linha) return;
+  lerSubs();
+  const s = estado.tf.subtarefas[Number(linha.dataset.n)];
+  if (!s.titulo.trim()) return linha.querySelector('[data-campo="titulo"]').focus();
+  if (s.id) return abrirSub(null);
+  maisSub(s.responsavel);
 }
 
 // Copia o que foi digitado nas linhas de subtarefa para estado.tf (antes de redesenhar ou de enviar).
@@ -1204,7 +1227,7 @@ function maisSub(responsavel) {
 
 // Põe o foco num campo da subtarefa n (no prazo, o dia escolhido), abrindo ela e o card dela.
 function focarSub(n, campo) {
-  if (estado.tf.aberta !== n || raiz.querySelector(`#ag-pessoas .recolhido .ag-sub-linha[data-n="${n}"]`)) abrirSub(n);
+  if (estado.tf.aberta !== n || raiz.querySelector(`#ag-pessoas .recolhido .ag-sub-linha[data-n="${n}"]`)) n = abrirSub(n);
   const c = raiz.querySelector(`#ag-pessoas .ag-sub-linha[data-n="${n}"] [data-campo="${campo}"]`);
   if (c.type === "hidden") focarDia(c); else c.focus();
 }
@@ -1301,8 +1324,8 @@ function coletarTarefa() {
     titulo: f.elements.titulo.value.trim(), descricao: f.elements.descricao.value.trim(),
     prazo: f.elements.prazo.value, hora: f.elements.hora.value || null,
     participantes: estado.tf.participantes.map((p) => ({ id: p.id, autonomia: p.autonomia })),
-    subtarefas: estado.tf.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo.trim(), descricao: s.descricao, responsavel: s.responsavel,
-                                                   prazo: s.prazo, hora: s.hora || null })),
+    subtarefas: estado.tf.subtarefas.filter((s) => !emBranco(s)).map((s) => ({
+      id: s.id, titulo: s.titulo.trim(), descricao: s.descricao, responsavel: s.responsavel, prazo: s.prazo, hora: s.hora || null })),
   };
 }
 
@@ -1341,8 +1364,10 @@ async function enviarTarefa(f) {
   const dados = coletar();
   if (!dados.titulo) { toast("Escreva o título da tarefa", "erro"); return f.elements.titulo.focus(); }
   if (!dados.prazo) { toast("Escolha o prazo da tarefa", "erro"); return focarDia(f.elements.prazo); }
-  for (const [n, s] of dados.subtarefas.entries()) {
-    if (!s.titulo) { toast("Escreva o título da subtarefa", "erro"); return focarSub(n, "titulo"); }
+  // pelas posições em estado.tf (as em branco, que não vão, ficam de fora), para abrir a que tem problema
+  for (const [n, s] of estado.tf.subtarefas.entries()) {
+    if (emBranco(s)) continue;
+    if (!s.titulo.trim()) { toast("Escreva o título da subtarefa", "erro"); return focarSub(n, "titulo"); }
     if (depoisDoPrazo(s, dados)) {
       toast(`A subtarefa "${s.titulo}" vence depois da tarefa: o prazo dela vai até o da tarefa`, "erro");
       return focarSub(n, "prazo");
