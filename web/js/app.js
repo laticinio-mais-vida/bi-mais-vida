@@ -16,6 +16,7 @@ import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
+import { ligarAvisos } from "./avisos.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
 const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "gestao", "credito"];
@@ -298,6 +299,8 @@ async function iniciar() {
   window.addEventListener("hashchange", rotear);
   await rotear();
   vigiar();
+  // a agenda fica na Gestão: quem tem a página é cobrado pelos atrasos em qualquer página do painel
+  if (paginasPermitidas().includes("gestao")) ligarAvisos();
 }
 
 iniciar().catch((e) => toast(e.message, "erro"));

@@ -678,13 +678,33 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
   mesmo que Concluída; desfazer volta para onde estava (Fazendo, se tinha começado).
 - **Concluir:** tarefa e subtarefa podem ser concluídas a qualquer dia, até antes do prazo, e mostram quem concluiu.
   Concluir a tarefa faz as subtarefas que faltavam contarem como feitas; reabrir traz elas de volta.
-- **Atrasadas:** o que passou do dia do prazo sem concluir fica vermelho no dia do prazo e aparece também no bloco
-  **Atrasadas** do dia de hoje, até ser concluído.
-- **Justificar o atraso:** depois do dia do prazo (sem concluir, ou concluída depois dele), quem responde pela tarefa
-  (quem criou) ou pela subtarefa (o responsável) vê **Justificar o atraso**, no dia e na janela da tarefa, e conta por
-  que atrasou. A justificativa aparece para todos da tarefa, com quem escreveu e quando, e o card do kanban ganha o
-  chip **Atraso justificado**. Ela não tira o item das atrasadas; dá para editar, e apagar o texto apaga a
-  justificativa.
+- **Atrasadas:** o que passou do prazo sem concluir (com horário, logo depois dele; sem horário, quando o dia acaba)
+  fica vermelho no dia do prazo (o que venceu hoje ganha o aviso "Venceu às 10:00") e, o dos dias anteriores, aparece
+  também no bloco **Atrasadas** do dia de hoje, até ser concluído.
+- **Justificar o atraso:** depois do prazo (sem concluir, ou concluída depois dele), quem responde pela tarefa (quem
+  criou) ou pela subtarefa (o responsável) conta por que atrasou: no dia e na janela da tarefa (**Justificar o
+  atraso**, ou **Justificar de novo**). As justificativas formam um **histórico**, que não se edita nem se apaga: todos
+  da tarefa veem, com quem escreveu, quando e, se o prazo mudou depois, de que prazo era; no dia aparece a última, e
+  na janela da tarefa, todas. O card do kanban ganha o chip **Atraso justificado**. A justificativa não tira o item
+  das atrasadas.
+- **Justificativa obrigatória:** vencida e ainda aberta, a tarefa ou a subtarefa bloqueia o painel de quem responde
+  por ela, em qualquer página, até ele justificar (a janela não fecha; o painel confere a cada minuto e ao voltar para
+  a aba). A janela mostra quando venceu, a última justificativa (quando pede de novo) e o aviso **"Caso queira
+  prorrogamento do prazo, solicite ao criador da tarefa"** (para quem criou: editar a tarefa depois de justificar);
+  **Enviar e concluir** é para quem já terminou. Se continuar atrasada, a justificativa é pedida de novo **24 horas**
+  depois; a de um prazo que foi prorrogado não vale para o novo. Exemplo, com a subtarefa do Beto até 27/10 às 10:00:
+
+  | Quando | O que acontece | O painel do Beto |
+  |---|---|---|
+  | 27/10 10:01 | venceu sem concluir | bloqueia até ele justificar |
+  | 27/10 10:15 | Beto justifica | libera |
+  | 28/10 10:15 | 24 horas depois, ainda aberta | bloqueia de novo, com a justificativa anterior |
+  | 28/10 11:00 | quem criou prorroga para 31/10 | não está mais atrasada |
+  | 01/11 00:00 | venceu o prazo novo | bloqueia já (a justificativa de antes era de outro prazo) |
+  | 01/11 08:00 | Beto justifica e conclui | sai da lista |
+
+  A subtarefa de uma tarefa concluída conta como feita e não pede nada; a concluída depois do prazo também não obriga
+  (a justificativa continua possível).
 - **Editar** (só quem criou) muda tudo. Tirar um participante tira junto as subtarefas dele (a página pergunta
   antes); para passar uma subtarefa a outra pessoa, use o lápis dela na janela da tarefa. Se um participante mudou a
   tarefa enquanto o formulário estava aberto, o Salvar avisa e pede para abrir de novo. **Excluir** apaga a tarefa e
@@ -791,7 +811,8 @@ O painel usa dois bancos, cada um para uma coisa:
 | `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019); o fim do horário, o horário ocupado e a única de vários dias (migração 026) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
-| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -940,7 +961,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
-| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas com a justificativa do atraso e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
+| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

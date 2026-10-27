@@ -324,14 +324,17 @@ class TestTarefasNoBanco(BaseBanco):
             {"titulo": "Estande", "responsavel": self.beto, "prazo": "2026-10-20"},
             {"titulo": "Material", "responsavel": self.caio, "prazo": "2026-10-23"}])
         estande, material = self.sub(t, "Estande")["id"], self.sub(t, "Material")["id"]
-        self.assertEqual((t["venceu"], t["pode"]["justificar"], t["justificativa"]), (True, True, ""))
+        self.assertEqual((t["venceu"], t["pode"]["justificar"], t["justificativas"]), (True, True, []))
         r = self.tarefas.justificar(self.ana, t["id"], "  Faltou o caminhão  ")
-        self.assertEqual((r["justificativa"], bool(r["justificada_em"]), r["versao"]), ("Faltou o caminhão", True, t["versao"]))
+        self.assertEqual(r["justificativas"], [{"texto": "Faltou o caminhão", "criada_em": "2026-10-26T00:00:00",
+                                                "por": {"id": self.ana, "nome": "Ana"}, "prazo": "2026-10-23",
+                                                "hora": None, "do_prazo": True}])
+        self.assertEqual(r["versao"], t["versao"])  # justificar não é edição
         r = self.tarefas.justificar_subtarefa(self.beto, estande, "Choveu no dia da montagem")
-        estande_j = self.sub(r, "Estande")
-        self.assertEqual((estande_j["justificativa"], estande_j["justificada_por"]["nome"]), ("Choveu no dia da montagem", "Beto"))
+        estande_j = self.sub(r, "Estande")["justificativas"]
+        self.assertEqual([(j["texto"], j["por"]["nome"]) for j in estande_j], [("Choveu no dia da montagem", "Beto")])
         caio = self.tarefas.obter(self.caio, t["id"])  # todos da tarefa veem; cada um justifica só a sua
-        self.assertEqual((caio["justificativa"], caio["pode"]["justificar"]), ("Faltou o caminhão", False))
+        self.assertEqual((caio["justificativas"][0]["texto"], caio["pode"]["justificar"]), ("Faltou o caminhão", False))
         self.assertEqual([(s["titulo"], s["pode"]["justificar"]) for s in caio["subtarefas"]],
                          [("Estande", False), ("Material", True)])
         for u, chamada in ((self.beto, lambda u: self.tarefas.justificar(u, t["id"], "x")),
@@ -343,9 +346,14 @@ class TestTarefasNoBanco(BaseBanco):
             self.tarefas.justificar(self.dani, t["id"], "x")
         with self.assertRaises(ValueError):
             self.tarefas.justificar(self.ana, t["id"], "x" * 2001)
-        # vazia apaga; concluída depois do prazo continua podendo justificar (também com a tarefa concluída)
-        r = self.tarefas.justificar_subtarefa(self.beto, estande, "")
-        self.assertEqual((self.sub(r, "Estande")["justificativa"], self.sub(r, "Estande")["justificada_por"]), ("", None))
+        # é um histórico: vazia não vale (não apaga), e outra se acrescenta, a mais nova primeiro
+        with self.assertRaises(ValueError) as e:
+            self.tarefas.justificar_subtarefa(self.beto, estande, "   ")
+        self.assertIn("por que atrasou", str(e.exception))
+        r = self.tarefas.justificar_subtarefa(self.beto, estande, "Faltou a lona")
+        self.assertEqual([j["texto"] for j in self.sub(r, "Estande")["justificativas"]],
+                         ["Faltou a lona", "Choveu no dia da montagem"])
+        # concluída depois do prazo continua podendo justificar (também com a tarefa concluída)
         self.tarefas.concluir(self.ana, t["id"])
         r = self.tarefas.justificar_subtarefa(self.caio, material, "Esperei o fornecedor")
         self.assertEqual((r["atrasada"], r["venceu"], self.sub(r, "Material")["venceu"]), (False, True, True))
@@ -355,6 +363,67 @@ class TestTarefasNoBanco(BaseBanco):
         r = self.tarefas.obter(self.ana, t["id"])
         self.assertEqual((r["venceu"], self.sub(r, "Material")["venceu"], self.sub(r, "Estande")["venceu"]),
                          (False, False, True))  # a do Beto vencia em 20/10
+
+    def test_vence_no_horario(self):
+        """Com horário, a tarefa vence logo depois dele; sem horário, quando o dia acaba. A que venceu hoje fica no dia
+        de hoje, sem repetir no bloco das atrasadas (que é dos dias anteriores)."""
+        relogio = {"agora": dt.datetime(2026, 10, 26, 9, 0)}
+        tarefas = Tarefas(self.banco, agora=lambda: relogio["agora"])
+        t = tarefas.criar(self.ana, {"titulo": "Ligar", "prazo": "2026-10-26", "hora": "09:00",
+                                     "subtarefas": [{"titulo": "Sem horário", "prazo": "2026-10-26", "hora": None}]})
+        self.assertEqual((t["atrasada"], t["venceu"], t["subtarefas"][0]["atrasada"]), (False, False, False))
+        relogio["agora"] = dt.datetime(2026, 10, 26, 9, 1)
+        t = tarefas.obter(self.ana, t["id"])
+        self.assertEqual((t["atrasada"], t["venceu"], t["subtarefas"][0]["atrasada"]), (True, True, False))
+        m = tarefas.no_mes(self.ana, self.agenda.mes(self.ana, "2026-10"))
+        self.assertEqual((self.no_dia(m, "2026-10-26")[0], m["atrasadas"]), ((t["id"], None), []))
+        relogio["agora"] = dt.datetime(2026, 10, 27, 0, 0, 1)  # o dia da subtarefa sem horário acabou
+        self.assertTrue(tarefas.obter(self.ana, t["id"])["subtarefas"][0]["atrasada"])
+
+    def test_pendencias_e_as_24_horas(self):
+        """A linha do tempo do plano: subtarefa do Beto até 27/10 às 10:00, numa tarefa da Ana até 31/10."""
+        relogio = {"agora": dt.datetime(2026, 10, 27, 10, 0)}
+        tarefas = Tarefas(self.banco, agora=lambda: relogio["agora"])
+        t = tarefas.criar(self.ana, {"titulo": "Feira", "prazo": "2026-10-31", "participantes": [{"id": self.beto}],
+                                     "subtarefas": [{"titulo": "Preços", "responsavel": self.beto,
+                                                     "prazo": "2026-10-27", "hora": "10:00"}]})
+        sub = t["subtarefas"][0]["id"]
+
+        def em(*quando):
+            relogio["agora"] = dt.datetime(2026, *quando)
+            return [(p["titulo"], p["ultima"] and p["ultima"]["texto"]) for p in tarefas.pendencias(self.beto)]
+
+        self.assertEqual(em(10, 27, 10, 0), [])  # no horário do prazo ainda não venceu
+        self.assertEqual(em(10, 27, 10, 1), [("Preços", None)])
+        p, = tarefas.pendencias(self.beto)
+        self.assertEqual({k: p[k] for k in ("tarefa", "subtarefa", "tarefa_titulo", "prazo", "hora", "vence_em",
+                                            "eu_criador")},
+                         {"tarefa": t["id"], "subtarefa": sub, "tarefa_titulo": "Feira", "prazo": "2026-10-27",
+                          "hora": "10:00", "vence_em": "2026-10-27T10:00:00", "eu_criador": False})
+        self.assertEqual((p["criador"]["nome"], tarefas.pendencias(self.ana)), ("Ana", []))  # é só do responsável
+        em(10, 27, 10, 15)
+        tarefas.justificar_subtarefa(self.beto, sub, "o fornecedor não respondeu")
+        self.assertEqual(em(10, 28, 10, 14), [])
+        self.assertEqual(em(10, 28, 10, 16), [("Preços", "o fornecedor não respondeu")])  # 24 h depois, de novo
+        tarefas.justificar_subtarefa(self.beto, sub, "liguei de novo")
+        self.assertEqual(em(10, 28, 11, 0), [])
+        t = tarefas.obter(self.ana, t["id"])  # a Ana prorroga para 31/10, sem horário
+        prorrogada = {"titulo": "Feira", "prazo": "2026-10-31", "participantes": [{"id": self.beto}],
+                      "subtarefas": [{"id": sub, "titulo": "Preços", "responsavel": self.beto, "prazo": "2026-10-31"}]}
+        tarefas.editar(self.ana, t["id"], prorrogada, t["versao"])
+        self.assertEqual(em(10, 31, 23, 59), [])
+        self.assertEqual(em(11, 1, 0, 0, 1), [("Preços", "liguei de novo")])  # a de antes era de outro prazo
+        r = tarefas.justificar_subtarefa(self.beto, sub, "terminei ontem", concluir=True)
+        self.assertEqual((r["subtarefas"][0]["feita"], em(11, 1, 8, 0)), (True, []))
+        js = r["subtarefas"][0]["justificativas"]
+        self.assertEqual([(j["texto"], j["prazo"], j["do_prazo"]) for j in js],
+                         [("terminei ontem", "2026-10-31", True), ("liguei de novo", "2026-10-27", False),
+                          ("o fornecedor não respondeu", "2026-10-27", False)])
+        # a tarefa vencida pede a justificativa a quem criou; concluída, não pede nada
+        self.assertEqual([p["titulo"] for p in tarefas.pendencias(self.ana)], ["Feira"])
+        self.assertEqual(tarefas.pendencias(self.ana)[0]["eu_criador"], True)
+        tarefas.justificar(self.ana, t["id"], "a gráfica atrasou", concluir=True)
+        self.assertEqual(tarefas.pendencias(self.ana), [])
 
     def test_editar(self):
         t = self.criar()
@@ -452,6 +521,42 @@ class TestTarefasNoBanco(BaseBanco):
             con.execute("UPDATE agenda_tarefas SET titulo = '  ' WHERE id = %s", [t["id"]])
         with self.assertRaises(CheckViolation), self.banco.conexao() as con:  # quem concluiu, sem estar concluída
             con.execute("UPDATE agenda_tarefas SET concluida_por = %s WHERE id = %s", [self.ana, t["id"]])
+
+
+class TestMigracao027(BaseBanco):
+    def test_justificativas_viram_historico(self):
+        """As justificativas de antes (colunas da 022) entram no histórico com o prazo de agora; as colunas saem."""
+        from unittest import mock
+        from bi.banco import Banco
+        todas = Banco._arquivos_migracao()
+        with mock.patch.object(Banco, "_arquivos_migracao", staticmethod(lambda: [a for a in todas if a.stem < "027"])):
+            self.banco.migrar()
+        ana, beto = self.criar_usuario("ana", paginas=GESTAO), self.criar_usuario("beto", paginas=GESTAO)
+        with self.banco.conexao() as con:
+            t = con.execute("INSERT INTO agenda_tarefas (criador, titulo, prazo, hora, justificativa, justificada_em) "
+                            "VALUES (%s, 'Feira', '2026-10-23', '14:00', 'Faltou o caminhão', '2026-10-24 09:00-03') "
+                            "RETURNING id", [ana]).fetchone()[0]
+            con.execute("INSERT INTO agenda_tarefa_pessoas (tarefa, usuario) VALUES (%s, %s), (%s, %s)",
+                        [t, ana, t, beto])
+            con.execute("INSERT INTO agenda_subtarefas (tarefa, responsavel, titulo, prazo, justificativa, "
+                        "justificada_em, justificada_por) VALUES "
+                        "(%s, %s, 'Estande', '2026-10-20', 'Choveu', '2026-10-21 10:00-03', %s), "
+                        "(%s, %s, 'Sem atraso', '2026-10-20', '', NULL, NULL)", [t, beto, beto, t, beto])
+        self.assertIn("027_agenda_justificativas", self.banco.migrar())
+        with self.banco.conexao() as con:
+            linhas = con.execute("SELECT j.subtarefa IS NULL, u.nome, j.prazo, j.hora, j.texto, j.criada_em "
+                                 "FROM agenda_justificativas j JOIN usuarios u ON u.id = j.usuario "
+                                 "ORDER BY j.criada_em").fetchall()
+            colunas = {r[0] for r in con.execute("SELECT column_name FROM information_schema.columns "
+                                                 "WHERE table_schema = current_schema() "
+                                                 "AND table_name IN ('agenda_tarefas', 'agenda_subtarefas')")}
+        self.assertEqual([(tarefa, nome, str(prazo), hora, texto) for tarefa, nome, prazo, hora, texto, _ in linhas],
+                         [(False, "Beto", "2026-10-20", None, "Choveu"),
+                          (True, "Ana", "2026-10-23", T(14), "Faltou o caminhão")])
+        utc = dt.timezone.utc  # o dia em que foram escritas (10:00 e 09:00 em Brasília)
+        self.assertEqual([c for *_, c in linhas], [dt.datetime(2026, 10, 21, 13, tzinfo=utc),
+                                                   dt.datetime(2026, 10, 24, 12, tzinfo=utc)])
+        self.assertFalse(colunas & {"justificativa", "justificada_em", "justificada_por"})
 
 
 if __name__ == "__main__":

@@ -514,6 +514,22 @@ fim).
 - **Voltar atrás:** nada muda no banco. O código anterior ignora `hora_fim` e `ocupado` (o horário deixa de ser
   conferido) e mostra a Única de vários dias só no primeiro dia.
 
+#### Justificativa obrigatória, com histórico (migração 027)
+
+Tarefa ou subtarefa vencida e ainda aberta bloqueia o painel de quem responde por ela até ele justificar e, se
+continuar atrasada, pede de novo a cada 24 horas. As justificativas viram um histórico (tabela nova
+`agenda_justificativas`), e o prazo com horário passa a vencer no horário, não no dia seguinte.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 027** cria `agenda_justificativas`, copia para ela as justificativas que existem (com o prazo de agora
+  e o dia em que foram escritas) e **tira as colunas** `justificativa` e `justificada_em` de `agenda_tarefas` e de
+  `agenda_subtarefas`, e `justificada_por` de `agenda_subtarefas`. Ensaie em BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** quem tem tarefa ou subtarefa vencida e aberta é bloqueado no primeiro acesso até justificar;
+  uma justificativa de antes com mais de 24 horas, de item ainda aberto, é pedida de novo. Vale avisar a equipe
+  antes de publicar.
+- **Voltar atrás:** o código anterior lê as colunas que a 027 tirou: é preciso restaurar o dump de antes da
+  publicação (as justificativas escritas depois dela se perdem).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

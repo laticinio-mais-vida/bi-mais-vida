@@ -597,6 +597,13 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(self.app.tarefas.quadro(eu))
         return self._json(self.app.agenda.historico(eu, q.get("id")))
 
+    def _avisos(self, usuario: dict):
+        """O que o painel de quem tem a Gestão confere a cada minuto (web/js/avisos.js): as tarefas e subtarefas
+        vencidas que a pessoa precisa justificar agora (o painel fica bloqueado até ela justificar)."""
+        if not self._pode_gestao(usuario):
+            return
+        return self._json({"pendencias": self.app.tarefas.pendencias(usuario["id"])})
+
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
         if not self._pode_gestao(usuario):
             return
@@ -647,8 +654,8 @@ class Manipulador(BaseHTTPRequestHandler):
             t = tarefas.desfazer(eu, id_)
         elif caminho == "/api/agenda/tarefa/mover":  # situacao: a_fazer, fazendo ou concluida (a coluna do quadro)
             t = tarefas.mover(eu, id_, corpo.get("situacao"))
-        elif caminho == "/api/agenda/tarefa/justificar":  # justificativa: o porquê do atraso (vazia apaga)
-            t = tarefas.justificar(eu, id_, corpo.get("justificativa"))
+        elif caminho == "/api/agenda/tarefa/justificar":  # justificativa: o porquê do atraso; concluir: e conclui
+            t = tarefas.justificar(eu, id_, corpo.get("justificativa"), bool(corpo.get("concluir")))
         elif caminho == "/api/agenda/subtarefas":  # id: a tarefa
             t = tarefas.nova_subtarefa(eu, id_, corpo.get("subtarefa") or {})
         elif caminho == "/api/agenda/subtarefa/editar":
@@ -658,7 +665,7 @@ class Manipulador(BaseHTTPRequestHandler):
         elif caminho == "/api/agenda/subtarefa/mover":
             t = tarefas.mover_subtarefa(eu, id_, corpo.get("situacao"))
         elif caminho == "/api/agenda/subtarefa/justificar":
-            t = tarefas.justificar_subtarefa(eu, id_, corpo.get("justificativa"))
+            t = tarefas.justificar_subtarefa(eu, id_, corpo.get("justificativa"), bool(corpo.get("concluir")))
         else:  # /api/agenda/subtarefa/desfazer
             t = tarefas.desfazer_subtarefa(eu, id_)
         return self._json({"ok": True, "tarefa": t})
@@ -744,6 +751,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self._config_gestao())
             if url.path in ROTAS_AGENDA_LER:
                 return self._ler_agenda(usuario, url.path, q)
+            if url.path == "/api/avisos":  # o que o painel confere a cada minuto: as justificativas que faltam
+                return self._avisos(usuario)
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
                                    **self._visualizadores()})

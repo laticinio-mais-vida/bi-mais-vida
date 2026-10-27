@@ -7,8 +7,10 @@
 // - Tarefa: aparece no dia do prazo; cada subtarefa, no dia do prazo dela (quem criou vê todas; o participante, as
 //   dele). A janela da tarefa mostra a situação dela (A fazer, Fazendo, Concluída) e um card por pessoa com as
 //   subtarefas dela, de todos: cada um muda a situação das suas e, com autonomia, edita o texto delas e cria
-//   subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas. Passado o prazo, quem
-//   responde por ela (quem criou a tarefa; o responsável pela subtarefa) justifica o atraso, que todos veem.
+//   subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas dos dias anteriores (a que
+//   venceu hoje, no horário do prazo, fica no dia). Passado o prazo, quem responde por ela (quem criou a tarefa; o
+//   responsável pela subtarefa) justifica o atraso: as justificativas formam um histórico, que todos veem. Vencida e
+//   aberta, ela bloqueia o painel de quem responde até ele justificar (avisos.js).
 // - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Qualquer pessoa da
 //   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
@@ -171,6 +173,15 @@ export function abrirNaAgenda(dia) {
 // A Gestão chama ao voltar para a página: o dia de hoje (e o que foi feito em outro aparelho) pode ter mudado.
 export function recarregarAgenda() {
   if (raiz?.isConnected && estado.dados) recarregarTudo();
+}
+
+// Depois de uma mudança feita fora da agenda (a janela do bloqueio, avisos.js): a janela da tarefa, se é ela que está
+// aberta e nada está sendo escrito nela, mostra como ficou.
+export async function atualizarTarefaAberta(id) {
+  if (!dlg?.open || janela.tarefa?.id !== id || janelaMudou()) return;
+  try {
+    desenharTarefa(await api(`/api/agenda/tarefa?id=${id}`));
+  } catch { /* a janela fica como estava */ }
 }
 
 // Depois de uma mudança: a agenda e, se ele está à vista, o kanban.
@@ -450,6 +461,8 @@ function refHtml(r, dia, n, vencida = false) {
   const chips = [
     `<span class="chip ag-c-tarefa">${icone("tarefa")}${s ? `Subtarefa${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}` : "Tarefa"}</span>`,
     vencida ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(x.prazo)}</span>` : "",
+    // venceu hoje, no horário do prazo: fica no dia, sem ir para o bloco das atrasadas (que é dos dias de antes)
+    !vencida && x.atrasada && x.prazo === estado.dados.hoje ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu às ${x.hora}</span>` : "",
     x.situacao === "fazendo" ? `<span class="chip ag-c-fazendo">${icone("relogio")}Fazendo</span>` : "",
     s ? `<span class="chip">Parte de: ${esc(t.titulo)}</span>` : "",
     !s && t.total ? `<span class="chip">${icone("visto")}${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span>` : "",
@@ -464,9 +477,7 @@ function refHtml(r, dia, n, vencida = false) {
       ${x.descricao ? `<p>${esc(x.descricao)}</p>` : ""}
       <div class="ag-chips">${chips}</div>
       ${x.feita ? `<div class="ag-feito"><small><span>${textoConclusao(t, s, x.prazo)}</span></small></div>` : ""}
-      ${x.justificativa ? justHtml(x, s ? s.justificada_por?.nome : t.criador.nome,
-          x.pode.justificar ? `<button type="button" class="ge-link" data-justificar>Editar</button>` : "")
-        : x.pode.justificar ? `<button type="button" class="ge-link ag-just-abrir" data-justificar>${icone("conversa")}Justificar o atraso</button>` : ""}
+      ${justHtml(x, 1)}${botaoJust(x, "data-justificar")}
     </div>
     <div class="ag-item-acoes">
       <button type="button" data-abrir-tarefa title="Abrir a tarefa" aria-label="Abrir a tarefa ${esc(t.titulo)}">${icone("olho")}</button>
@@ -821,7 +832,7 @@ function desenharTarefa(t) {
       <span>${t.total ? `${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}${fazendo ? ` · ${fazendo} fazendo` : ""}` : "Sem subtarefas"}</span>
       ${t.total ? barra(t.feitas, t.total - t.feitas) : ""}
     </div>
-    ${blocoJust(t, "tarefa", t.criador.nome)}
+    ${blocoJust(t, "tarefa")}
     ${t.eu_criador ? `<div class="ag-tf-acoes">
       <button class="btn" type="button" data-tf-editar>${icone("lapis")}Editar</button>
       <button class="btn perigo" type="button" data-tf-excluir>${icone("lixeira")}Excluir</button>
@@ -844,7 +855,7 @@ function subHtml(t, s) {
         ${s.feita ? `<span class="chip ag-c-feita">${icone("visto")}${textoConclusao(t, s, s.prazo)}</span>` : ""}
       </div>
       <div class="ag-sub-st">${situacaoHtml(s, "data-sub-situacao", `Situação de ${s.titulo}`, s.pode.concluir, dicaCheck(t, s, "mudam a situação"))}</div>
-      ${blocoJust(s, s.id, s.justificada_por?.nome)}
+      ${blocoJust(s, s.id)}
     </div>
     <div class="ag-item-acoes">
       ${s.pode.editar_texto ? `<button type="button" data-sub-editar title="Editar a subtarefa" aria-label="Editar ${esc(s.titulo)}">${icone("lapis")}</button>` : ""}
@@ -852,28 +863,34 @@ function subHtml(t, s) {
   </li>`;
 }
 
-// A justificativa do atraso de x (a tarefa ou uma subtarefa; todos da tarefa veem): o texto, de quem e quando, e o
-// que vier junto (o Editar).
-function justHtml(x, quem, extra = "") {
-  if (!x.justificativa) return "";
-  return `<div class="ag-just"><p>${icone("conversa")}<span>${esc(x.justificativa)}</span></p>
-    <small><span>Justificativa do atraso${quem ? ` · ${esc(quem)}` : ""}${x.justificada_em ? `, ${quando(x.justificada_em, x.prazo)}` : ""}</span>${extra}</small></div>`;
+// As justificativas do atraso de x (a tarefa ou uma subtarefa; todos da tarefa veem), da mais nova para a mais
+// antiga, cada uma com quem escreveu, quando e, se foi de um prazo que depois mudou, qual. quantas: no dia, só a
+// última (com quantas há antes); na janela da tarefa, todas.
+function justHtml(x, quantas = Infinity) {
+  const js = x.justificativas, mostrar = js.slice(0, quantas), antes = js.length - mostrar.length;
+  return mostrar.map((j, n) => `<div class="ag-just"><p>${icone("conversa")}<span>${esc(j.texto)}</span></p>
+    <small><span>Justificativa do atraso${j.por ? ` · ${esc(j.por.nome)}` : ""}, ${quando(j.criada_em, x.prazo)}${j.do_prazo ? "" : ` · do prazo de ${prazoTxt(j)}`}${n === mostrar.length - 1 && antes ? ` · e ${plural(antes, "outra antes", "outras antes")}` : ""}</span></small></div>`).join("");
 }
 
-// Na janela: o formulário (se está aberto), a justificativa com o Editar ou, se ainda não tem e a pessoa pode, o botão.
-// alvo: "tarefa" ou o id da subtarefa.
-function blocoJust(x, alvo, quem) {
-  if (janela.justificando === alvo) return formJustHtml(x, alvo);
-  if (x.justificativa) return justHtml(x, quem, x.pode.justificar ? `<button type="button" class="ge-link" data-just="${alvo}">Editar</button>` : "");
-  return x.pode.justificar ? `<button type="button" class="ge-link ag-just-abrir" data-just="${alvo}">${icone("conversa")}Justificar o atraso</button>` : "";
+// O botão de justificar (attr: data-justificar, no dia, ou data-just="alvo", na janela), para quem responde pelo
+// atraso: cada justificativa se acrescenta às de antes.
+function botaoJust(x, attr) {
+  if (!x.pode.justificar) return "";
+  return `<button type="button" class="ge-link ag-just-abrir" ${attr}>${icone("conversa")}${x.justificativas.length ? "Justificar de novo" : "Justificar o atraso"}</button>`;
 }
 
-function formJustHtml(x, alvo) {
+// Na janela: as justificativas e, embaixo, o formulário (se está aberto) ou o botão. alvo: "tarefa" ou o id da
+// subtarefa.
+function blocoJust(x, alvo) {
+  return justHtml(x) + (janela.justificando === alvo ? formJustHtml(alvo) : botaoJust(x, `data-just="${alvo}"`));
+}
+
+function formJustHtml(alvo) {
   return `<form class="ag-fb ag-just-form" data-just-form="${alvo}" novalidate>
     <textarea data-campo="justificativa" rows="2" maxlength="2000" aria-label="Justificativa do atraso"
-      placeholder="Por que atrasou? Todos da tarefa veem.">${esc(x.justificativa)}</textarea>
+      placeholder="Por que atrasou? Todos da tarefa veem."></textarea>
     <div class="ag-fb-acoes"><button class="btn" type="button" data-just-cancelar>Cancelar</button>
-      <button class="btn primario" type="submit">${icone("disco")}Salvar justificativa</button></div>
+      <button class="btn primario" type="submit">${icone("enviar")}Enviar justificativa</button></div>
   </form>`;
 }
 
@@ -981,19 +998,18 @@ async function aoEnviarSub(e) {
   if (!r && f.isConnected) botao.disabled = false;
 }
 
-// Grava a justificativa do atraso da tarefa ou da subtarefa (vazia apaga a que havia).
+// Acrescenta uma justificativa do atraso da tarefa ou da subtarefa (as de antes ficam: é um histórico).
 async function enviarJust(f, t, texto) {
   const tarefa = f.dataset.justForm === "tarefa";
   const x = tarefa ? t : subDe(t, Number(f.dataset.justForm));
-  if (!texto && !x.justificativa) {
+  if (!texto) {
     toast("Escreva por que atrasou", "erro");
     return f.querySelector("textarea").focus();
   }
-  if (!texto && !confirm("Apagar a justificativa do atraso?")) return;
   const botao = f.querySelector('[type="submit"]');
   botao.disabled = true;
   const r = await mexer(`/api/agenda/${tarefa ? "tarefa" : "subtarefa"}/justificar`, { id: x.id, justificativa: texto },
-    texto ? "Justificativa salva" : "Justificativa apagada");
+    "Justificativa enviada");
   if (!r && f.isConnected) botao.disabled = false;
 }
 
@@ -1511,7 +1527,7 @@ function cardHtml(t, n) {
     !t.eu_criador ? `<span class="chip">${icone("usuario")}De ${esc(t.criador.nome)}</span>` : "",
     t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
     minhas ? `<span class="chip ag-c-tarefa" title="Subtarefas suas que faltam">${icone("tarefa")}${plural(minhas, "subtarefa sua", "subtarefas suas")}</span>` : "",
-    t.justificativa ? `<span class="chip ag-c-justificada" title="${esc(t.justificativa)}">${icone("conversa")}Atraso justificado</span>` : "",
+    t.justificativas.length ? `<span class="chip ag-c-justificada" title="${esc(t.justificativas[0].texto)}">${icone("conversa")}Atraso justificado</span>` : "",
   ].filter(Boolean).join("");
   return `<li class="ag-card ${t.atrasada ? "atrasada" : ""}" style="--i:${n}" data-card="${t.id}" tabindex="0" role="button"
     ${t.pode.concluir ? 'draggable="true" title="Clique para abrir; arraste para mudar de coluna"' : 'title="Clique para abrir"'} aria-label="Abrir a tarefa ${esc(t.titulo)}">
