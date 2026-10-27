@@ -38,8 +38,7 @@ export function contarDias(fn) {
 // nome (name="…") ou campo (data-campo="…"): onde o valor fica. rotulo: o nome do grupo de dias, para leitor de tela.
 // vazio: o texto de quando não há dia, só nos campos opcionais (aparece também o botão que limpa). maxDica: por que os
 // dias depois de max ficam bloqueados. contar: false nos campos de outra pessoa (a contagem é a da minha agenda).
-// extra: HTML ao lado do dia escolhido (o horário, nas subtarefas).
-export function campoDia({ nome, campo, valor = "", min = "", max = "", rotulo, vazio = "", maxDica = "", contar = true, extra = "" }) {
+export function campoDia({ nome, campo, valor = "", min = "", max = "", rotulo, vazio = "", maxDica = "", contar = true }) {
   return `<div class="ed" data-min="${min}" data-max="${max}" data-vazio="${esc(vazio)}" data-max-dica="${esc(maxDica)}" ${contar ? "" : "data-sem-contagem"}>
     <input type="hidden" ${nome ? `name="${nome}"` : `data-campo="${campo}"`} value="${valor || ""}">
     <div class="ed-cab">
@@ -49,7 +48,6 @@ export function campoDia({ nome, campo, valor = "", min = "", max = "", rotulo, 
       <span class="ed-lado">
         <button type="button" class="ed-escolhido" data-ed-ir title="Mostrar o mês do dia escolhido"></button>
         ${vazio ? `<button type="button" class="ge-link ed-limpar" data-ed-limpar>Limpar</button>` : ""}
-        ${extra ? `<span class="ed-extra">${extra}</span>` : ""}
       </span>
     </div>
     <div class="ed-dias" role="group" aria-label="${esc(rotulo)}"></div>

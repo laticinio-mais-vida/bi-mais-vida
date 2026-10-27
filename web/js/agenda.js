@@ -13,9 +13,10 @@
 //   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
 // ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
-// subtarefas dela; clicar no nome abre o card já com uma subtarefa nova, e escolher o dia dela grava e abre a
-// próxima), que também edita uma atividade ou uma tarefa. Os dias se escolhem numa faixa
-// de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia já tem.
+// subtarefas dela; clicar no nome abre o card já com uma subtarefa nova: escolhe-se o dia, escreve-se o nome, e o dia
+// escolhido depois já é o da próxima, que abre com a anterior guardada), que também edita uma atividade ou uma
+// tarefa. Os dias se escolhem numa faixa de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia
+// já tem.
 // Recolhida, fica só a faixa de dias (a escolha, e a vista, ficam guardadas neste navegador). #/gestao?dia=AAAA-MM-DD
 // abre a agenda nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da
 // repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer numa tarefa vêm do servidor (bi/agenda.py e
@@ -564,7 +565,8 @@ function aoTeclar(e) {
     e.preventDefault();
     return t.closest("form").requestSubmit();
   }
-  // Enter no título da subtarefa vai para os dias (escolher um grava a subtarefa), em vez de salvar a tarefa inteira
+  // Enter no título da subtarefa vai para os dias (Enter num deles guarda a subtarefa e abre a próxima nele), em vez
+  // de salvar a tarefa inteira
   if (e.key === "Enter" && t.matches('#ag-pessoas .ag-sub-linha [data-campo="titulo"]')) {
     e.preventDefault();
     return focarDia(t.closest(".ag-sub-linha").querySelector('[data-campo="prazo"]'));
@@ -1075,8 +1077,9 @@ function formAtividade(a, dia) {
 
 // O formulário da tarefa: o que é e o prazo; embaixo, as pessoas e as subtarefas. Participantes e subtarefas ficam em
 // estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; expandida: a pessoa com o card aberto, uma
-// de cada vez; aberta: a subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto);
-// os campos da subtarefa usam data-campo, não name: com nomes repetidos, f.elements.titulo deixaria de ser o da tarefa.
+// de cada vez; aberta: a subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto; a
+// nova que está sendo escrita leva compondo); os campos da subtarefa usam data-campo, não name: com nomes repetidos,
+// f.elements.titulo deixaria de ser o da tarefa.
 function formTarefa(t, dia) {
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
@@ -1098,8 +1101,9 @@ function formTarefa(t, dia) {
       <div class="campo-form"><span>Pessoas e subtarefas <small>(opcional)</small></span>
         <div class="ag-pessoas" id="ag-pessoas"></div>
         <span class="campo"><select data-add-pessoa aria-label="Adicionar participante"></select></span>
-        <small>Clique no nome de uma pessoa para ver as subtarefas dela e criar outra. Com autonomia, a pessoa edita o texto
-          das próprias subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
+        <small>Clique no nome de uma pessoa para criar as subtarefas dela: escolha o dia, escreva o que fazer e escolha o
+          dia da próxima (a que você escreveu fica guardada). Com autonomia, a pessoa edita o texto das próprias
+          subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
       </div>
     </div>`;
 }
@@ -1154,8 +1158,8 @@ function alternarCard(b, recolhidos) {
 }
 
 // Uma subtarefa no card da pessoa p. Recolhida: só o texto e o prazo (em vermelho se passa do da tarefa), e clicar
-// abre. Aberta (a de estado.tf.aberta): o título e, embaixo, o prazo (até o da tarefa) com o horário ao lado; a nova
-// em branco, sem a seta e o x (não há o que recolher nem tirar).
+// abre. Aberta (a de estado.tf.aberta): em cima, os dias (até o prazo da tarefa); embaixo, o título com o horário ao
+// lado. A que está sendo escrita (compondo) fica sem a seta e o x: escolher outro dia guarda ela e abre a próxima.
 function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
   const de = p.voce ? "você" : p.nome;
   const tirar = `<button type="button" class="ag-sub-tirar" data-tirar-sub="${n}" title="Tirar a subtarefa" aria-label="Tirar a subtarefa">${icone("x")}</button>`;
@@ -1169,17 +1173,18 @@ function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
     </div>`;
   }
   const hora = `<input type="time" data-campo="hora" value="${s.hora || ""}" title="Horário (opcional)" aria-label="Horário da subtarefa (opcional)">`;
-  const nova = emBranco(s);
-  return `<div class="ag-sub-linha" data-n="${n}">
+  const nova = !!s.compondo;
+  return `<div class="ag-sub-linha ${nova ? "compondo" : ""}" data-n="${n}">
+      ${campoDia({ campo: "prazo", valor: s.prazo, max: prazoTarefa, maxDica: "Depois do prazo da tarefa", rotulo: `Prazo da subtarefa de ${de}`,
+                   contar: !!p.voce })}
       <div class="ag-sub-topo">
         ${nova ? "" : `<button type="button" class="ag-sub-recolher" data-fechar-sub title="Recolher a subtarefa" aria-expanded="true"
           aria-label="Recolher a subtarefa">${icone("setaBaixo")}</button>`}
         <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}"
           placeholder="${nova ? "Nova subtarefa: o que fazer" : "O que fazer"}" aria-label="Subtarefa de ${esc(de)}">
+        ${hora}
         ${nova ? "" : tirar}
       </div>
-      ${campoDia({ campo: "prazo", valor: s.prazo, max: prazoTarefa, maxDica: "Depois do prazo da tarefa", rotulo: `Prazo da subtarefa de ${de}`,
-                   contar: !!p.voce, extra: hora })}
     </div>`;
 }
 
@@ -1187,51 +1192,65 @@ function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
 const emBranco = (s) => !s.id && !s.titulo.trim();
 
 // Abre a subtarefa n para editar (a que estava aberta se recolhe) ou, com null, recolhe a aberta; as novas deixadas
-// em branco saem. Devolve a posição de n depois disso.
+// em branco saem, e a que estava sendo escrita, com o nome, fica guardada. Devolve a posição de n depois disso.
 function abrirSub(n) {
   lerSubs();
   const alvo = n == null ? null : estado.tf.subtarefas[n];
   estado.tf.subtarefas = estado.tf.subtarefas.filter((s) => s === alvo || !emBranco(s));
+  estado.tf.subtarefas.forEach((s) => { if (s !== alvo) delete s.compondo; });
   estado.tf.aberta = alvo ? estado.tf.subtarefas.indexOf(alvo) : null;
   if (alvo) estado.tf.expandida = alvo.responsavel;
   desenharPessoas();
   return estado.tf.aberta;
 }
 
-// Clicar no nome da pessoa abre o card dela (o que estava aberto se recolhe) já com uma subtarefa nova em branco,
-// pronta para escrever; clicar de novo recolhe.
+// Clicar no nome da pessoa abre o card dela (o que estava aberto se recolhe) já com uma subtarefa nova no prazo da
+// tarefa e o foco nos dias, para escolher o dia antes do nome; clicar de novo recolhe.
 function expandirPessoa(id) {
   if (estado.tf.expandida !== id) return maisSub(id);
   estado.tf.expandida = null;
   abrirSub(null);
 }
 
-// Escolher o dia da subtarefa aberta grava ela: recolhe e abre outra em branco para a mesma pessoa. Sem título ainda,
-// fica aberta e o cursor vai para ele.
+// O dia escolhido (clique ou Enter num quadradinho) na subtarefa aberta:
+// - na que está sendo escrita, ainda sem nome, ele é o dia dela, e o cursor vai para o nome;
+// - na que está sendo escrita, com o nome, ele é o da próxima: ela fica guardada com o dia que tinha e abre outra
+//   nesse dia;
+// - numa que estava sendo corrigida, ele é o novo dia dela, que se recolhe, e abre outra nesse dia.
 function aoEscolherDia(e) {
   const linha = e.target.closest("#ag-pessoas .ag-sub-linha");
   if (!linha) return;
-  lerSubs();
   const s = estado.tf.subtarefas[Number(linha.dataset.n)];
-  if (!s.titulo.trim()) return linha.querySelector('[data-campo="titulo"]').focus();
-  maisSub(s.responsavel);
+  const dia = e.target.value;
+  lerSubs(); // com o nome escrito, a que está sendo escrita não lê o dia (lerSubs)
+  if (s.compondo) {
+    if (!s.titulo.trim()) return linha.querySelector('[data-campo="titulo"]').focus();
+    delete s.compondo;
+    linha.querySelector('[data-campo="prazo"]').value = s.prazo; // o próximo lerSubs lê o dia dela, não o clicado
+  }
+  maisSub(s.responsavel, dia, "titulo");
 }
 
-// Copia o que foi digitado nas linhas de subtarefa para estado.tf (antes de redesenhar ou de enviar).
+// Copia o que foi digitado nas linhas de subtarefa para estado.tf (antes de redesenhar ou de enviar). Na que está
+// sendo escrita, com o nome já escrito, os dias são os da próxima: o dia dela fica o que era.
 function lerSubs() {
   raiz.querySelectorAll("#ag-pessoas .ag-sub-linha").forEach((linha) => {
     const s = estado.tf.subtarefas[Number(linha.dataset.n)];
-    linha.querySelectorAll("[data-campo]").forEach((c) => { s[c.dataset.campo] = c.value; });
+    const comNome = s.compondo && !!linha.querySelector('[data-campo="titulo"]')?.value.trim();
+    linha.querySelectorAll("[data-campo]").forEach((c) => {
+      if (!(comNome && c.dataset.campo === "prazo")) s[c.dataset.campo] = c.value;
+    });
   });
 }
 
-// Uma subtarefa nova em branco no card da pessoa (que abre), com o prazo da tarefa: ela abre para escrever e as
-// outras ficam recolhidas, só com o texto.
-function maisSub(responsavel) {
+// Uma subtarefa nova (a que está sendo escrita) no card da pessoa, que abre: no dia `dia` (sem ele, no prazo da
+// tarefa), com o foco nos dias ou no nome (foco: "prazo" ou "titulo"). As outras ficam recolhidas, só com o texto.
+function maisSub(responsavel, dia = null, foco = "prazo") {
   lerSubs();
   const f = raiz.querySelector("#ag-form");
-  estado.tf.subtarefas.push({ id: null, titulo: "", descricao: "", responsavel, prazo: f.elements.prazo.value || hojeLocal(), hora: "" });
-  focarSub(estado.tf.subtarefas.length - 1, "titulo");
+  estado.tf.subtarefas.push({ id: null, titulo: "", descricao: "", responsavel, prazo: dia || f.elements.prazo.value || hojeLocal(),
+                              hora: "", compondo: true });
+  focarSub(estado.tf.subtarefas.length - 1, foco);
 }
 
 // Põe o foco num campo da subtarefa n (no prazo, o dia escolhido), abrindo ela e o card dela.
@@ -1298,6 +1317,12 @@ function aoMudar(e) {
     desenharPessoas();
   }
   if (t.name === "inicio") limitesDoDia(t.form.elements.fim, { min: t.value });
+  // a subtarefa sendo escrita, ainda sem nome: o dia escolhido (também andando com as setas) é o dela
+  if (t.dataset.campo === "prazo" && estado.tf) {
+    const linha = t.closest("#ag-pessoas .ag-sub-linha");
+    const s = linha && estado.tf.subtarefas[Number(linha.dataset.n)];
+    if (s?.compondo && !linha.querySelector('[data-campo="titulo"]').value.trim()) s.prazo = t.value;
+  }
   if (t.matches("[data-add-pessoa]") && t.value) {
     lerSubs();
     const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));

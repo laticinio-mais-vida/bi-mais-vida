@@ -2118,8 +2118,8 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-form .dias-semana button { flex: 1; width: auto; }
 
 /* escolher dia (escolherdia.js): em cima, as setas com o mês e, à direita, o dia escolhido (clicar volta para o mês
-   dele) e o que vier junto (o horário, nas subtarefas); embaixo, o mês inteiro em quadradinhos como os da faixa, numa
-   linha só ou, sem largura para isso (.grade), em semanas de segunda a domingo */
+   dele); embaixo, o mês inteiro em quadradinhos como os da faixa, numa linha só ou, sem largura para isso (.grade),
+   em semanas de segunda a domingo */
 .ed { display: grid; gap: 8px; min-width: 0; font-weight: 500; }
 .ed-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .ed-seta {
@@ -2134,7 +2134,6 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ed-escolhido:hover { text-decoration: underline; }
 .ed-escolhido.vazio { font-weight: 600; color: var(--tinta-3); }
 .ed-limpar { font-size: 12.5px; }
-.ed .ed-extra input { width: 112px; }
 .ed-dias { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; min-width: 0; padding-top: 4px; }
 .ed.grade .ed-dias { grid-auto-flow: row; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 .ed.grade .ed-dia:first-child { grid-column-start: var(--col, 1); }
@@ -2217,7 +2216,10 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-pessoa-card.recolhido .ag-pessoa-corpo { display: none; }
 .ag-pessoa-card .ag-sub-edit { background: var(--surface); }
 .ag-sub-linha { display: grid; gap: 6px; padding: 8px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--linha); }
+/* a subtarefa sendo escrita: os dias em cima e, escolhido outro dia com o nome escrito, ela fica guardada */
+.ag-sub-linha.compondo { border-style: dashed; border-color: color-mix(in srgb, var(--acento) 40%, var(--linha)); }
 .ag-sub-topo { display: flex; align-items: center; gap: 4px; }
+.ag-sub-topo input[type="time"] { flex: none; width: 112px; }
 .ag-sub-linha input {
   width: 100%; min-width: 0; height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--linha);
   background: var(--surface); font: 500 13.5px var(--f-texto); color: var(--tinta); transition: border-color .2s, box-shadow .2s;

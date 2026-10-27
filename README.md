@@ -609,16 +609,26 @@ horário opcional) e, embaixo, um card por pessoa (você e os **participantes**)
 com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
 
 - **Os cards das pessoas** começam recolhidos, só com o nome e quantas subtarefas cada uma tem. Clicar no nome abre
-  o card (o que estava aberto se recolhe) com as subtarefas da pessoa e, embaixo, já uma subtarefa nova em branco,
-  com o cursor no título; clicar de novo recolhe. Quem entra na tarefa já tem o card aberto.
+  o card (o que estava aberto se recolhe) com as subtarefas da pessoa e, embaixo, já uma subtarefa nova no prazo da
+  tarefa, com o foco nos dias; clicar de novo recolhe. Quem entra na tarefa já tem o card aberto.
+- **Criar as subtarefas: dia, nome, dia da próxima.** Na subtarefa nova, os dias ficam em cima e o nome (com o
+  horário opcional ao lado) embaixo. Escolher o dia com o nome ainda vazio muda o dia dela e leva o cursor ao nome.
+  Com o nome escrito, o dia escolhido é o da **próxima**: a que foi escrita fica guardada com o dia que tinha e abre
+  outra, já no dia escolhido (o mesmo dia de novo abre a próxima nesse dia). Quem escreve o nome antes de escolher o
+  dia fica com o prazo da tarefa. Enter no nome vai para os dias, sem salvar a tarefa; as setas do teclado só andam
+  pelos dias, e Enter num deles escolhe. A subtarefa nova deixada em branco não conta ao salvar.
+
+  | Você | Fica assim |
+  |---|---|
+  | Clica em 28, escreve "Levantar preços" | a subtarefa nova em 28/10, com o nome |
+  | Clica em 29 | "Levantar preços · até 28/10" guardada; abre outra em 29/10 |
+  | Escreve "Montar planilha" e clica em 29 de novo | "Montar planilha · até 29/10" guardada; abre outra em 29/10 |
+
 - **As subtarefas no card** ficam recolhidas, só com o texto e o prazo (em vermelho, se passa do da tarefa). Uma de
-  cada vez fica aberta para editar o título, o prazo e o horário: clicar numa recolhida abre ela, e a seta à esquerda
-  do título recolhe (e volta a subtarefa nova em branco). Salvar com uma subtarefa sem título abre ela com o cursor
-  no título.
-- **Escolher o dia grava a subtarefa:** com o título escrito, clicar no dia (ou Enter nele) recolhe a subtarefa e
-  abre outra em branco para a mesma pessoa (o horário, se tiver, vai antes do dia). As setas do teclado só andam
-  pelos dias; Enter no título vai para eles, sem salvar a tarefa. A subtarefa nova deixada em branco não conta ao
-  salvar.
+  cada vez fica aberta para corrigir o prazo, o título e o horário: clicar numa recolhida abre ela, do mesmo jeito,
+  com os dias em cima. Escolher um dia muda o dia dela, que se recolhe, e abre uma nova nesse dia; a seta à esquerda
+  do título recolhe sem mudar o dia (e volta a subtarefa nova). Salvar com uma subtarefa sem título abre ela com o
+  cursor no título.
 
 - **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. Na janela
   da tarefa, o **+ Subtarefa** no card de cada um cria uma subtarefa para a pessoa (quem criou, para qualquer uma;
