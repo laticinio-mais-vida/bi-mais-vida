@@ -7,6 +7,8 @@ import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
+import { montarSugestao, recarregarSugestao } from "./sugestao.js";
+import { montarConfigSugestao, configSugestaoTemAlteracoes } from "./configsugestao.js";
 import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
@@ -16,7 +18,7 @@ import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "gestao", "credito"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "gestao", "credito"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -53,6 +55,21 @@ const PAGINAS = {
     sempreMonta: true,
     pendente: configProjecoesTemAlteracoes,
     montar: (el) => montarConfigProjecoes(el, { aoSalvar: () => app.remontar.add("projecoes") }),
+  },
+  sugestao: {
+    nome: "Sugestão de Metas",
+    titulo: "Sugestão de metas",
+    montar: (el) => montarSugestao(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("sugestao", d) }),
+    recarregar: recarregarSugestao,
+  },
+  "config-sugestao": {
+    titulo: "Configurações da sugestão de metas",
+    fixo: "Crescimento desejado no ano, tetos e os faturamentos das áreas do BA",
+    pai: "sugestao",
+    admin: true,
+    sempreMonta: true,
+    pendente: configSugestaoTemAlteracoes,
+    montar: (el) => montarConfigSugestao(el, { aoSalvar: () => app.remontar.add("sugestao") }),
   },
   assistente: {
     nome: "Assistente",
@@ -109,6 +126,7 @@ const PAGINAS = {
 const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
+  sugestao: (d) => `Meta de ${d.mes.rotulo_meta} · base ${d.mes.rotulo_base} · ${d.estado}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,

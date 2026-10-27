@@ -28,8 +28,9 @@ from .banco import Banco, hora
 from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
-PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "assistente": "Assistente", "gestao": "Gestão",
-           "credito": "Reavaliação de Crédito"}  # Crédito: sem escolha de vendedores (quem tem a página vê todos)
+PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "sugestao": "Sugestão de Metas", "assistente": "Assistente",
+           "gestao": "Gestão", "credito": "Reavaliação de Crédito"}
+# Crédito: sem escolha de vendedores (quem tem a página vê todos). Sugestão de Metas: os vendedores de Metas.
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
 PAGINAS_COM_ESCOPO = ("projecoes", "assistente", "gestao")  # páginas com essa escolha de vendedores na configuração
@@ -382,6 +383,14 @@ def escopo_assistente(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
 def escopo_gestao(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
     """(vendedores, equipes) que o usuário pode pôr nas campanhas da Gestão e ver no andamento; None = sem limite."""
     return _escopo(usuario, "gestao")
+
+
+def escopo_sugestao(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) que o usuário vê na Sugestão de Metas: os mesmos de Metas (as equipes das abas liberadas
+    e os vendedores liberados); None = sem limite."""
+    if eh_admin(usuario):
+        return None, None
+    return vendedores_permitidos(usuario), equipes_permitidas(usuario)
 
 
 def _escopo(usuario: dict, pagina: str) -> tuple[set[int] | None, set[str] | None]:

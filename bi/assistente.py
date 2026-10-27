@@ -596,6 +596,23 @@ FERRAMENTAS = [
         "strict": False,
     },
     {
+        "name": "sugestao_metas",
+        "description": ("Meta sugerida do mês seguinte, exatamente como na página Sugestão de Metas (a conta das "
+                        "páginas de sugestão do Power BI): sem vendedor, o resumo de todos os vendedores do estado "
+                        "(base do mês anterior em R$, meta sugerida em R$, crescimento e a meta já lançada na "
+                        "planilha METAS.xlsx); com vendedor, os números dele e a meta por produto (volume e R$). "
+                        "produtos=true traz os produtos também sem vendedor (soma dos vendedores). Só para quem tem "
+                        "a página."),
+        "input_schema": _objeto({
+            "estado": {"type": "string", "enum": ["ES", "BA"], "description": "BA inclui o Edir"},
+            "mes": {"type": "string", "description": ("mês da meta, AAAA-MM (o mês base é o anterior); vazio = o mês "
+                                                      "dos dados")},
+            "vendedor": {"type": "integer", "description": "código do vendedor (opcional; use buscar_vendedor antes)"},
+            "produtos": {"type": "boolean", "description": "traz a meta por produto (opcional)"},
+        }, ["estado"]),
+        "strict": True,
+    },
+    {
         "name": "credito_cliente",
         "description": ("Reavaliação de crédito de um cliente: os números da página Reavaliação de Crédito (limite, "
                         "prazo, títulos em aberto, limite restante, compras, ticket médio, pontualidade, "
@@ -701,10 +718,11 @@ class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
     def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None,
-                 credito: Credito | None = None, agenda=None):
+                 credito: Credito | None = None, agenda=None, sugestao=None):
         """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão).
         credito: bi/credito.py (None = o acesso não inclui a página Reavaliação de Crédito).
-        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda)."""
+        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda).
+        sugestao: (bi/sugestao.py Sugestao, vendedores, equipes) da página Sugestão de Metas (None = sem a página)."""
         self.cur = recorte.cursor()
         self.ids = recorte.ids
         self.calc = calc
@@ -716,6 +734,7 @@ class Ferramentas:
         self.arquivos: list[dict] = []   # arquivos preparados nesta pergunta (a página mostra o botão de baixar)
         self.agenda = agenda
         self.agenda_propostas: list[dict] = []  # propostas para a agenda (a página mostra o botão de aplicar)
+        self.sugestao = sugestao
         self.data_ref = calc.cache.data_ref() or dt.date.today()
 
     def executar(self, nome: str, args: dict) -> tuple[dict, dict]:
@@ -952,6 +971,22 @@ class Ferramentas:
         passo.update(sql=None, colunas=["visão", "período"], amostra=[[resultado["visao"], resultado["periodo"]]],
                      linhas=len(linhas))
         return resultado
+
+    # --- sugestão de metas (página Sugestão de Metas) ---------------------------------
+    def f_sugestao_metas(self, passo: dict, estado: str, mes: str | None = None, vendedor: int | None = None,
+                         produtos: bool = False) -> dict:
+        if self.sugestao is None:
+            raise ValueError("o acesso de quem pergunta não inclui a página Sugestão de Metas")
+        sugestao, vendedores, equipes = self.sugestao
+        try:
+            r = sugestao.para_ia(estado, mes or None, int(vendedor) if vendedor else None, bool(produtos),
+                                 vendedores, equipes)
+        except PermissionError as e:
+            raise ValueError(str(e)) from None
+        linhas = r.get("vendedores") or r.get("produtos") or []
+        passo.update(sql=None, colunas=["estado", "mês da meta"], amostra=[[r["estado"], r["mes_da_meta"]]],
+                     linhas=len(linhas))
+        return r
 
     # --- crédito (página Reavaliação de Crédito) ---------------------------------------
     def f_credito_cliente(self, passo: dict, id_cliente: int, ano: int | None = None, mes: int | None = None,
@@ -1267,6 +1302,13 @@ pedido e repita o parecer, os motivos e o limite sugerido: é a regra da página
 Não indicado). Não use outro critério nem dê outro veredito; a decisão final é de quem libera o crédito.
 - "Hoje", nos dias de atraso, é o dia da extração dos dados.
 
+# Sugestão de metas (página Sugestão de Metas)
+- Para meta sugerida, sugestão de meta ou "quanto devia ser a meta" de um mês, use sugestao_metas: são os números da \
+página (a conta das páginas de sugestão do Power BI, com o preço médio pelo faturamento bruto). Só quem tem a página \
+usa; para os outros, diga que o acesso não inclui a sugestão. Não refaça a conta com consultar_sql.
+- O mês informado é o da meta; o mês base é o anterior. A meta é da carteira atual de cada vendedor (clientes que \
+estão hoje com ele), não do vendedor da venda. "Meta lançada na planilha" é a META FATURAMENTO da METAS.xlsx.
+
 # Campanhas e objetivos (página Gestão)
 - Uma campanha mede um indicador por vendedor, numa região (ES ou BA; o Edir é da BA), num prazo (semanas, ou até \
 uma data). A base de cada vendedor é o mesmo indicador num período fechado que o administrador escolhe (base: \
@@ -1537,7 +1579,8 @@ class Assistente:
             self._cliente = anthropic.Anthropic(api_key=self.cfg.chave, max_retries=2, timeout=self.cfg.timeout)
         return self._cliente
 
-    def _contexto(self, usuario: dict, escopo: str, gestao=None, credito: bool = False, agenda=None) -> str:
+    def _contexto(self, usuario: dict, escopo: str, gestao=None, credito: bool = False, agenda=None,
+                  sugestao=None) -> str:
         """Parte das instruções que muda com o dia, os dados e quem pergunta (fica depois da parte fixa). gestao: o
         ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão). credito: se o acesso inclui a
         página Reavaliação de Crédito."""
@@ -1560,6 +1603,8 @@ class Assistente:
                 f"{'tem a própria agenda' if agenda else 'o acesso não inclui (sem a página Gestão)'}.\n"
                 f"- Crédito (página Reavaliação de Crédito): "
                 f"{'o acesso inclui' + self._dados_credito() if credito else 'o acesso não inclui'}.\n"
+                f"- Sugestão de metas (página Sugestão de Metas): "
+                f"{'o acesso inclui' if sugestao else 'o acesso não inclui'}.\n"
                 f"- Categorias das outras linhas: {', '.join(regras.categorias) or 'nenhuma'}.\n"
                 f"- Motivos de devolução que descontam: {descontam}.")
 
@@ -1599,12 +1644,13 @@ class Assistente:
         return saida
 
     def perguntar(self, usuario: dict, conversa_id, pergunta, vendedores: set[int] | None,
-                  equipes: set[str] | None, gestao=None, credito: bool = False, agenda=None) -> dict:
+                  equipes: set[str] | None, gestao=None, credito: bool = False, agenda=None, sugestao=None) -> dict:
         """Pergunta numa conversa do histórico (sem conversa_id, começa uma nova). A pergunta e a resposta são
         gravadas antes de a pessoa ser liberada para a próxima, para quem acompanha ver as duas juntas.
         gestao: bi/gestao.py ContextoGestao de quem pergunta, para as ferramentas de campanha (None = sem a página).
         credito: se o acesso inclui a página Reavaliação de Crédito (os dados de crédito).
-        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda)."""
+        agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda).
+        sugestao: (bi/sugestao.py Sugestao, vendedores, equipes) da página Sugestão de Metas (None = sem a página)."""
         pergunta = str(pergunta or "").strip()
         if not pergunta:
             raise ErroAssistente("escreva uma pergunta")
@@ -1635,7 +1681,7 @@ class Assistente:
 
         return self.responder(usuario, anteriores + [{"papel": "usuario", "texto": pergunta}], vendedores, equipes,
                               pendente={"conversa": conversa_id, "nova": not anteriores, "pergunta": pergunta},
-                              guardar=guardar, gestao=gestao, credito=credito, agenda=agenda)
+                              guardar=guardar, gestao=gestao, credito=credito, agenda=agenda, sugestao=sugestao)
 
     def pendente(self, usuario: int) -> dict | None:
         """A pergunta que ainda está sendo respondida para esta pessoa (de outra aba ou de antes de recarregar a
@@ -1648,7 +1694,7 @@ class Assistente:
 
     def responder(self, usuario: dict, mensagens: list, vendedores: set[int] | None, equipes: set[str] | None,
                   pendente: dict | None = None, guardar=None, gestao=None, credito: bool = False,
-                  agenda=None) -> dict:
+                  agenda=None, sugestao=None) -> dict:
         """mensagens: a conversa inteira, terminando na pergunta (perguntar() monta a partir do histórico).
         pendente: o que pendente() mostra enquanto a pergunta roda. guardar(resultado): grava a resposta antes de
         liberar a pessoa; devolve o "conversa"."""
@@ -1677,7 +1723,7 @@ class Assistente:
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
                 r = self._responder(usuario, api_mensagens, vendedores, equipes, (pendente or {}).get("conversa"),
-                                    gestao, credito, agenda)
+                                    gestao, credito, agenda, sugestao)
             finally:
                 self._vagas.release()
             r["restantes"] = None if admin else max(0, self.cfg.limite_diario - perguntas - 1)
@@ -1689,7 +1735,7 @@ class Assistente:
                 self._ocupados.pop(dono, None)
 
     def _responder(self, usuario, api_mensagens, vendedores, equipes, conversa: str | None = None,
-                   gestao=None, credito: bool = False, agenda=None) -> dict:
+                   gestao=None, credito: bool = False, agenda=None, sugestao=None) -> dict:
         t0 = time.time()
         pergunta = _sem_prefixo(api_mensagens[-1]["content"])
         ids = self.ids_do_escopo(vendedores, equipes)
@@ -1697,9 +1743,9 @@ class Assistente:
             raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
         escopo = self.descrever_escopo(ids, vendedores, equipes)
         ferramentas = Ferramentas(self.recorte(ids, credito), self.calc, self.cfg, equipes, gestao=gestao,
-                                  credito=self.credito if credito else None, agenda=agenda)
+                                  credito=self.credito if credito else None, agenda=agenda, sugestao=sugestao)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
-                  {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito, agenda)}]
+                  {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito, agenda, sugestao)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}
         passos: list[dict] = []
         texto, aviso, erro, modelo, parada, ids_req = "", None, None, self.cfg.modelo, None, []

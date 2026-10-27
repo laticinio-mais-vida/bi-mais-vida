@@ -4,7 +4,8 @@ Versão em Python das páginas de metas do Power BI (Metas ES, Metas BA, Metas E
 Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtros de vendedores, meses e anos
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
-faturamento bruto dos próximos 6 meses. A página **Assistente** responde perguntas sobre os dados com IA
+faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
+produto (as páginas de sugestão do Power BI). A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban.
@@ -14,7 +15,8 @@ aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegad
 uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção Administração, que só o
 administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
 administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
-Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa acompanha.
+Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa acompanha; na Sugestão de
+Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA.
 
 ## Como abrir
 
@@ -182,6 +184,80 @@ O método foi escolhido testando seis alternativas (Holt-Winters entre elas) nos
 Erro médio de 1 a 6 meses à frente, sem filtro: **faturamento 6,6%**, **mix 5,7%** e **mussarela 11,5%** (a
 mussarela varia mais). Por vendedor o erro fica perto de 19% no mix e 26% na mussarela, e a faixa da página
 mostra isso. As constantes ficam no topo de `bi/projecoes.py`.
+
+## Página Sugestão de Metas
+
+A meta do mês seguinte de cada vendedor, por produto, como nas páginas **Sugestão de Meta BA**, **Sugestão de Meta ES** e
+**Duplicata de Sugestão de Meta BA** do Power BI. Do BA saem a METAS PRODUTOS.xlsx (volume por produto) e a META FATURAMENTO
+da METAS.xlsx; no ES, a sugestão é a referência para a meta.
+
+- **Filtros:** ES ou BA (o BA inclui o Edir), um vendedor ou todos, uma área comercial ou todas e o **mês da meta** (o padrão é
+  o mês dos dados; o mês base é o anterior). Entram os vendedores do estado que têm meta na METAS.xlsx no mês da meta ou
+  nos dois anteriores e clientes na carteira (como as listas fixas de nomes do Power BI). O filtro fica no endereço da
+  página.
+- **Cartões:** a meta sugerida em R$, a base (o mês base na mesma conta) e as parcelas da conta (sazonalidade, faturamentos
+  e crescimento proposto, em média ponderada quando há várias linhas).
+- **Evolução:** o volume de cada mês do ano do mês base e do ano anterior e a sazonalidade de cada mês para o seguinte, como
+  no Power BI. Clicar num produto da tabela mostra o gráfico só dele.
+- **Meta por produto:** volume base, faturamentos, sazonalidade, acumulado do ano, crescimento proposto, meta em volume, preço
+  médio e meta em R$. No BA, também **por área**, com os produtos de cada área.
+- **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada na
+  METAS.xlsx (Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
+- **Como a sugestão é calculada:** o passo a passo com os números em vigor.
+- **Acesso:** a página é liberada em Usuários; os vendedores que cada pessoa vê são os do acesso de Metas (as abas ES e BA
+  liberadas e os vendedores marcados).
+- **Assistente:** quem tem a página pergunta "qual a meta sugerida da Jamille para novembro?" e recebe os mesmos números.
+
+### Como a sugestão é calculada
+
+Por linha (BA: vendedor × área × produto; ES: vendedor × produto, como no Power BI), com os clientes que estão **hoje** na
+carteira de cada vendedor (o cliente repassado leva o histórico, como nas Projeções; a área é a atual do cliente):
+
+1. **Volume do mês base:** vendas válidas − devoluções que descontam (as regras de Metas), com as equivalências de produto.
+2. **Por faturamento:** volume ÷ faturamentos do mês base. **BA:** os da área: cada dia de atendimento (Gestão ›
+   Configurar) é faturado no prazo da área, em dias úteis (1 = o dia útil seguinte; sexta e sábado → segunda; feriado empurra
+   para o próximo). Eunápolis (segunda) e Eunápolis (terça) faturam 2 dias úteis depois, como mostram as vendas. **ES:** os
+   dias úteis do ES.
+3. **Sazonalidade:** (volume do mês da meta no ano passado ÷ faturamentos dele) ÷ (volume do mês base no ano passado ÷
+   faturamentos dele). Sem venda no ano passado = 1; teto de +20%; queda reduz a meta.
+4. **Crescimento proposto:** 12% − (acumulado do ano até o mês base ÷ mesmo período do ano passado − 1), entre 0% e +20%. Sem
+   venda no acumulado do ano passado = 0%.
+5. **Meta (volume)** = por faturamento × sazonalidade × faturamentos do mês da meta × crescimento proposto.
+6. **Meta (R$)** = meta (volume) × preço médio do mês base, que é o faturamento **bruto** ÷ o volume vendido. O total é a soma
+   das linhas; "todos os vendedores" é a soma de cada um.
+
+Área sem dia de atendimento e sem número fixo fica fora, como no Power BI (que deixava fora as áreas ausentes da planilha
+"Quantidades Faturamentos.xlsx"), e um aviso diz quantos clientes e quanto do mês base ficaram fora. Mês base ainda aberto
+também tem aviso.
+
+### Configurar (Sugestão de Metas)
+
+O botão **Configurar** (só administradores) tem duas seções, gravadas no banco com versões, como as regras de Metas:
+
+- **Regras da conta:** crescimento desejado no ano (ES e BA, 12%), teto da sazonalidade (20%) e teto do crescimento proposto
+  (20%), com "Restaurar padrão do Power BI".
+- **Faturamentos por área (BA):** para o mês da meta escolhido, os quatro meses que a conta usa (base, meta e os dois do ano
+  passado). Para cada área: os dias de atendimento (mudam em Gestão › Configurar), o prazo do faturamento com o dia em que
+  a área de fato fatura nas vendas dos últimos 6 meses, o número **fixo** por mês (as quinzenais: Itamaraju, Teixeira,
+  Itabatã e Posto da Mata, com 2) e o número de cada mês, que pode ser **ajustado à mão** (apagar volta ao automático).
+
+### Diferenças em relação ao Power BI (sugestão)
+
+1. **Preço médio:** faturamento bruto ÷ volume vendido. O Power BI usava o líquido de todas as devoluções e dos brindes.
+2. **Faturamentos:** calculados sozinhos, com prazo, número fixo e ajuste por área. A planilha do Power BI era digitada todo
+   mês. A conta bate com ela em 120 de 140 células de set–out de 2025 e 2026. Nas que não batem, as vendas mostraram que a
+   planilha errou: Baianão e Eunápolis faturaram 5 vezes em set/26 (a planilha tinha 4), e Trancoso faturou 4 vezes em
+   out/25 (tinha 5).
+3. **Acumulado do ano:** até o mês base. O Power BI ia até o último mês fechado pela data de hoje; em janeiro dava +20% para
+   todos, porque o ano atual vinha vazio.
+4. **Devoluções canceladas** não descontam, como no resto do painel; **metas negativas** contam como zero; venda a
+   funcionário, fornecedor ou produtor fica fora (código de outro cadastro).
+5. **Sazonalidade na tela:** a mesma da conta. A página Duplicata mostrava as quedas como 0%, mas a meta usava a queda.
+
+Conferência em 27/10/2026 (meta de out/26, com as regras do Power BI ligadas: faturamentos da planilha e devoluções canceladas
+descontando): dos 246 volumes por produto da METAS PRODUTOS.xlsx, 179 bateram (os de Jamille, Franquelin e Vicente, todos). A
+maior parte dos outros é da Thais e do Ricardo - EU, que tiveram clientes repassados desde então; nos demais vendedores, até
+3%, com um produto da Mauricia fora disso.
 
 ## Página Assistente
 
@@ -636,7 +712,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | Tabela | O que guarda |
 |---|---|
 | `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
-| `regras` | as regras de Metas e os vendedores de Projeções; cada Salvar vira uma versão nova, com quem salvou e quando |
+| `regras` | as regras de Metas, os vendedores de Projeções e as regras da Sugestão de Metas (migração 024); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
 | `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado (no preço médio, também o preço de cada produto: `base_precos` e `resultado_precos`, migração 013) |
@@ -680,7 +756,8 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
 abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
-Reavaliação de Crédito não tem configuração: quem tem a página vê todos os clientes. Quem foi cadastrado antes de uma
+Sugestão de Metas segue o acesso de Metas, sem escolha própria. A Reavaliação de Crédito não tem configuração: quem tem a
+página vê todos os clientes. Quem foi cadastrado antes de uma
 página existir não a recebe sozinho: o administrador marca a página nova.
 
 Exemplos (em Metas › Configurar › Acesso por usuário):
@@ -697,7 +774,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -775,6 +852,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
    de cada vendedor.
 4. **Vendas com data errada no futuro** (ex.: ano 7190) ficam de fora.
 5. **Reavaliação de Crédito:** veja as diferenças na [seção da página](#página-reavaliação-de-crédito).
+6. **Sugestão de Metas:** veja as [diferenças da sugestão](#diferenças-em-relação-ao-power-bi-sugestão).
 
 ## Arquivos
 
@@ -784,6 +862,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber, as parcelas e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
+| `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores e a ferramenta do Assistente |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, e a busca de cliente |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |

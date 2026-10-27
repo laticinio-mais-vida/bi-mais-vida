@@ -41,7 +41,8 @@ RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
 from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
-                       escopo_gestao, escopo_projecoes, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+                       escopo_gestao, escopo_projecoes, escopo_sugestao, paginas_permitidas, vendedores_permitidos,
+                       visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
@@ -55,6 +56,7 @@ from bi.metas import Calculadora  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
+from bi.sugestao import ConfigSugestao, Sugestao  # noqa: E402
 from bi.tarefas import Tarefas  # noqa: E402
 from bi.uso import RegistroUso  # noqa: E402
 
@@ -85,7 +87,8 @@ ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", 
                       "/api/agenda/subtarefa/desfazer", "/api/agenda/subtarefa/mover", "/api/agenda/subtarefa/justificar"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
-               "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/assistente/config",
+               "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
+               "/api/assistente/config",
                "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
@@ -131,6 +134,9 @@ class Aplicacao:
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
+        self.config_sugestao = ConfigSugestao(self.banco)
+        # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
+        self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores)
         self.agenda = Agenda(self.banco, self.configuracao)
         self.tarefas = Tarefas(self.banco)
         self.tentativas = LimiteTentativas()
@@ -450,10 +456,13 @@ class Manipulador(BaseHTTPRequestHandler):
         tem_gestao = "gestao" in paginas_permitidas(usuario)
         gestao = self.app.gestao.contexto(usuario, escopo_gestao(usuario)) if tem_gestao else None
         agenda = self.app.agenda.contexto(usuario["id"]) if tem_gestao else None  # a agenda fica na Gestão
+        sugestao = ((self.app.sugestao, *escopo_sugestao(usuario)) if "sugestao" in paginas_permitidas(usuario)
+                    else None)
         try:
             return self._json(self.app.assistente.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"),
                                                             vendedores, equipes, gestao,
-                                                            "credito" in paginas_permitidas(usuario), agenda=agenda))
+                                                            "credito" in paginas_permitidas(usuario), agenda=agenda,
+                                                            sugestao=sugestao))
         except ErroAssistente as e:
             log.warning("Assistente (%s): %s", usuario["login"], e)
             return self._erro(str(e), e.status)
@@ -687,6 +696,14 @@ class Manipulador(BaseHTTPRequestHandler):
                                                                  permitidos, equipes))
                 except SemVendedores as e:
                     return self._erro(str(e), HTTPStatus.FORBIDDEN)
+            if url.path == "/api/sugestao":
+                if "sugestao" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página Sugestão de Metas", HTTPStatus.FORBIDDEN)
+                # estado=BA&mes=2026-11 (o mês da meta; o base é o anterior)&vendedor=98&area=170 (vazios = todos)
+                return self._json(self.app.sugestao.calcular(q.get("estado"), q.get("mes"), q.get("vendedor"),
+                                                             q.get("area"), *escopo_sugestao(usuario)))
+            if url.path == "/api/sugestao/config":
+                return self._json(self.app.sugestao.config_dados(q.get("mes")))
             if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise"):
                 if "credito" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
@@ -779,6 +796,11 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._salvar_config_metas(usuario, self._corpo_json())
             if url.path == "/api/projecoes/config":
                 return self._salvar_config_projecoes(usuario, self._corpo_json())
+            if url.path == "/api/sugestao/config":
+                corpo = self._corpo_json()
+                self.app.config_sugestao.salvar(corpo.get("config") or {}, usuario)
+                log.info("%s salvou as regras da Sugestão de Metas", usuario["login"])
+                return self._json({"ok": True, **self.app.sugestao.config_dados(corpo.get("mes"))})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):

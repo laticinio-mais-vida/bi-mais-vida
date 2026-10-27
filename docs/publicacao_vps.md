@@ -476,13 +476,27 @@ Qualquer pessoa da tarefa muda a situação dela (arrasta no kanban, conclui e r
   ficam sem quem concluiu.
 - **Voltar atrás:** o código anterior ignora a coluna nova e volta a deixar só quem criou mudar a situação.
 
+#### Sugestão de Metas (migração 024)
+
+A página nova **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por produto (as páginas de sugestão
+do Power BI), com a configuração própria e a ferramenta `sugestao_metas` no Assistente.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram (a página usa as vendas
+  por cliente do cache, a METAS.xlsx e os dias de atendimento das áreas, que já chegam ao site).
+- **A migração 024** só troca o CHECK de `regras.nome` para aceitar `'sugestao'`; nenhuma regra existente muda.
+- **Depois de publicar:** os administradores já veem a página; para os outros, marque a página em Usuários (os
+  vendedores seguem o acesso de Metas). Em Configurar › Faturamentos por área, confira as áreas "fica fora" e o prazo do
+  faturamento contra o dia que as vendas mostram.
+- **Voltar atrás:** o código anterior ignora as regras com nome `sugestao` (ficam guardadas) e o CHECK novo não o atrapalha.
+
 #### Voltar as regras para uma versão anterior
 
-Cada Salvar em Metas › Configurar e em Projeções › Configurar grava uma versão nova na tabela `regras`. Para voltar a
+Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na
+tabela `regras`. Para voltar a
 uma delas, no console SQL (`docker exec -it bi_banco psql -U bi -d bi`):
 
 ```sql
--- as versões, da mais nova para a mais antiga (nome = metas ou projecoes)
+-- as versões, da mais nova para a mais antiga (nome = metas, projecoes ou sugestao)
 SELECT id, nome, salva_em, salva_por_nome FROM regras ORDER BY id DESC LIMIT 20;
 -- copia a versão 12 como a mais nova (troque o 12)
 INSERT INTO regras (nome, dados, salva_por_nome) SELECT nome, dados, 'volta para a versão 12' FROM regras WHERE id = 12;

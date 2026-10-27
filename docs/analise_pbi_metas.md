@@ -218,7 +218,34 @@ Os números de outubro/2026 calculados pelo app foram conferidos com os prints d
 
 ---
 
-## 9. Decisões (pendentes na análise; resolvidas no app pela página Configurações)
+## 9. Páginas de sugestão de metas (analisadas em 27/10/2026)
+
+Páginas **Sugestão de Meta BA**, **Sugestão de Meta ES** e **Duplicata de Sugestão de Meta BA** (esta mostra as parcelas da
+conta em cartões: Crescimento Proposto, Sazonalidade, Fat Mês Atual, Fat Mês Seguinte, Crescimento em Fat). Medidas da
+tabela "Medidas Criar Metas":
+
+| Medida | Definição |
+|---|---|
+| Volume Liquido (Devoluções Proprias) | Σ QUANTIDADE das vendas válidas − Σ QUANTIDADE das devoluções dos motivos {1,2,5,6,7,8,9} (com as canceladas) |
+| Variação LY | (vol. do ano passado + 1 mês ÷ Quant Faturamentos Mes Seguinte LY) ÷ (vol. do ano passado ÷ Quant Faturamentos Mês Atual LY) |
+| Variação Ano Completo | vol. do ano de hoje até o fim do último mês fechado ÷ mesmo período do ano passado (usa TODAY()) |
+| Percentual Crescimento | 1,12 (fixo; o ES tem outra medida igual) |
+| Meta Sugerida | vol. ÷ Fat Mês Atual × [Variação LY: ≤0 → 1, >1,2 → 1,2] × Fat Mês Seguinte × [1,12 − Variação Ano Completo + 1, entre 1 e 1,2] |
+| Meta Sugerida Faturamento | Meta Sugerida × Preço Medio (Faturamento Liquido ÷ Volume Vendido: vendas − todas as devoluções não canceladas − brindes) |
+| Meta Sugerida Por Vendedor Faturamento | BA: SUMX em área × produto; ES: SUMX por produto (só as linhas ≠ 0) |
+
+- Vendedor = `dClientes[NOME VENDEDOR]`, o vendedor da **carteira atual** do cliente; a área é a do cliente.
+- BA: os faturamentos vêm da planilha "Quantidades Faturamentos.xlsx" (por área: mês passado, atual, seguinte e os dois do
+  ano passado), digitada à mão, ligada só pela área (sem data). Áreas fora dela ficam sem meta. ES: 21, 21, 22 e 23 fixos no DAX.
+- A tabela filtra Faturamento Liquido > 0; o cartão soma todas as linhas ≠ 0 (as negativas também).
+- A página Duplicata mostra a sazonalidade travada entre 0% e 20% (Variação LY ajustada), mas a meta usa a variação abaixo de 1.
+- Em janeiro, Variação Ano Completo fica vazia (ano de hoje sem nenhum mês fechado) e o crescimento proposto vai a +20%.
+
+Conferência com o cache de 27/10/2026: com essas regras e a planilha de faturamentos, os volumes por produto de out/26 do
+EDIR batem com a METAS PRODUTOS.xlsx, e o R$ de 8 dos 10 vendedores do BA fica a menos de 1% da META FATURAMENTO (os outros
+dois tiveram mudança de carteira). No painel, ver a página Sugestão de Metas no README (as diferenças estão lá).
+
+## 10. Decisões (pendentes na análise; resolvidas no app pela página Configurações)
 
 1. **Fidelidade**: reproduzir o PBI exatamente (com as divergências da seção 7) ou já corrigir.
 2. **Regras**: manter as listas de produtos do PBI ou alinhar com o Painel Comercial ES (linhas de produto, CFOPs, tipo de cliente).
