@@ -60,7 +60,8 @@ cada um (quantas, quantas pagas e quanto já foi pago) e o limite de crédito e 
 - **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
   atualiza o cache em segundo plano (cerca de 40 segundos). O botão **Atualizar dados** força a leitura na hora.
 - **Planilhas de metas:** são relidas sempre que o arquivo muda. Se estiverem abertas e bloqueadas, vale a
-  última leitura boa e aparece um aviso no painel.
+  última leitura boa e aparece um aviso no painel. A meta **aprovada no painel** (Sugestão de Metas › Configurar ›
+  Aprovação de metas) vale no lugar das linhas das duas planilhas daquele vendedor e mês.
 
 ## Página Metas
 
@@ -192,17 +193,17 @@ A meta do mês seguinte de cada vendedor, por produto, como nas páginas **Suges
 da METAS.xlsx; no ES, a sugestão é a referência para a meta.
 
 - **Filtros:** ES ou BA (o BA inclui o Edir), um vendedor ou todos, uma área comercial ou todas e o **mês da meta** (o padrão é
-  o mês dos dados; o mês base é o anterior). Entram os vendedores do estado que têm meta na METAS.xlsx no mês da meta ou
-  nos dois anteriores e clientes na carteira (como as listas fixas de nomes do Power BI). O filtro fica no endereço da
-  página.
+  o mês dos dados; o mês base é o anterior). Entram os vendedores do estado que têm meta (na METAS.xlsx ou aprovada no
+  painel) no mês da meta ou nos dois anteriores e clientes na carteira (como as listas fixas de nomes do Power BI). O
+  filtro fica no endereço da página.
 - **Cartões:** a meta sugerida em R$, a base (o mês base na mesma conta) e as parcelas da conta (sazonalidade, faturamentos
   e crescimento proposto, em média ponderada quando há várias linhas).
 - **Evolução:** o volume de cada mês do ano do mês base e do ano anterior e a sazonalidade de cada mês para o seguinte, como
   no Power BI. Clicar num produto da tabela mostra o gráfico só dele.
 - **Meta por produto:** volume base, faturamentos, sazonalidade, acumulado do ano, crescimento proposto, meta em volume, preço
   médio e meta em R$. No BA, também **por área**, com os produtos de cada área.
-- **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada na
-  METAS.xlsx (Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
+- **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada
+  (a aprovada no painel, com ✓, ou a da METAS.xlsx; Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
 - **Como a sugestão é calculada:** o passo a passo com os números em vigor.
 - **Acesso:** a página é liberada em Usuários; os vendedores que cada pessoa vê são os do acesso de Metas (as abas ES e BA
   liberadas e os vendedores marcados).
@@ -232,7 +233,8 @@ também tem aviso.
 
 ### Configurar (Sugestão de Metas)
 
-O botão **Configurar** (só administradores) tem duas seções, gravadas no banco com versões, como as regras de Metas:
+O botão **Configurar** (só administradores) tem três seções. As duas primeiras são as regras da conta, gravadas no banco
+com versões, como as regras de Metas:
 
 - **Regras da conta:** crescimento desejado no ano (ES e BA, 12%), teto da sazonalidade (20%) e teto do crescimento proposto
   (20%), com "Restaurar padrão do Power BI".
@@ -240,6 +242,39 @@ O botão **Configurar** (só administradores) tem duas seções, gravadas no ban
   passado). Para cada área: os dias de atendimento (mudam em Gestão › Configurar), o prazo do faturamento com o dia em que
   a área de fato fatura nas vendas dos últimos 6 meses, o número **fixo** por mês (as quinzenais: Itamaraju, Teixeira,
   Itabatã e Posto da Mata, com 2) e o número de cada mês, que pode ser **ajustado à mão** (apagar volta ao automático).
+- **Aprovação de metas:** veja abaixo.
+
+### Aprovação de metas
+
+Em Configurar › **Aprovação de metas**, o administrador escolhe o estado e o mês da meta e vê cada vendedor com a meta que a
+sugestão gerou. Ao aprovar, a meta passa a valer sozinha no **painel de Metas** (faturamento, clientes e, no ES, mussarela e
+outras linhas; no BA, a meta de volume por produto na aba Produtos BA), no Assistente e na Gestão, **no lugar das linhas da
+METAS.xlsx e da METAS PRODUTOS.xlsx daquele vendedor e mês**. Os outros vendedores e meses seguem as planilhas. Um mês
+aprovado aparece no filtro de Metas mesmo sem estar nas planilhas.
+
+- **Meta (R$):** vem com a sugestão, arredondada ao real, e pode ser editada. A **meta de volume** de cada produto muda no
+  mesmo percentual: no BA, volume sugerido × (meta aprovada ÷ sugerida). Clicar no nome do vendedor mostra os produtos com a
+  meta de volume que vai para o painel.
+- **Mussarela (só no ES):** vem com a soma dos produtos do grupo mussarela da sugestão (Configurações das metas). O
+  administrador pode mudar, e outras linhas é o resto. Ao editar o total, a mussarela acompanha no mesmo percentual. Os
+  produtos de mussarela seguem o fator da mussarela, e os outros o das outras linhas.
+- **Clientes:** vêm com os clientes ativos da carteira no **dia 1º** do mês da meta, sem os de pedido bloqueado, pelo
+  histórico da carteira. Esse é o número que a META CLIENTE da planilha acompanha: em out/26 bateu em quase todos (Antonio
+  90 = 90, Edir 37 = 37, Rubens 137 × 136). O valor pode ser editado. Se o dia 1º ainda não chegou, vale a carteira da data
+  dos dados. Antes do histórico (15/09/2026), vale a META CLIENTE da planilha.
+- **Aprovar:** a chave da linha, ou "Aprovar as pendentes". Editar uma linha pendente já marca para aprovar. Tudo vale
+  depois de **Salvar**.
+- **Congelada:** a aprovação guarda o retrato da sugestão naquele momento (total, mussarela, clientes da carteira e volume e
+  preço de cada produto). Se a conta mudar depois (devoluções lançadas tarde, troca de carteira), a meta não muda, e a
+  linha mostra "hoje: R$ X". Editar uma aprovada aplica o novo valor sobre o retrato guardado.
+- **Retirar:** desligar a chave de uma aprovada volta a valer a planilha. Aprovar de novo refaz a meta pela sugestão do dia.
+- **Histórico:** cada gravação é uma linha nova na tabela `metas_aprovadas`, com quem salvou. A tela mostra quem aprovou,
+  quem alterou e quem retirou. Se outro administrador gravou a mesma meta enquanto você editava, o painel recusa e pede
+  para recarregar.
+- **Vendedor novo:** quem não tem meta nos últimos 3 meses não está na lista da página. Se for do grupo do estado e tiver
+  vendido no mês base, aparece em "Mostrar N vendedores sem meta recente". Depois de aprovado, entra na lista.
+- **Só no site:** a aprovação fica no banco de onde foi feita. O painel do PC tem o próprio banco e continua só com as
+  planilhas.
 
 ### Diferenças em relação ao Power BI (sugestão)
 
@@ -719,6 +754,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `gestao_eventos` | o histórico interno de cada vendedor: observações e o que aconteceu nas ações dele (lançada, editada, prorrogada, encerrada, resultado) |
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
+| `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
@@ -862,7 +898,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber, as parcelas e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
-| `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores e a ferramenta do Assistente |
+| `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
+| `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, e a busca de cliente |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |

@@ -489,6 +489,19 @@ do Power BI), com a configuração própria e a ferramenta `sugestao_metas` no A
   faturamento contra o dia que as vendas mostram.
 - **Voltar atrás:** o código anterior ignora as regras com nome `sugestao` (ficam guardadas) e o CHECK novo não o atrapalha.
 
+#### Aprovação de metas (migração 025)
+
+A aba **Aprovação de metas** (Sugestão de Metas › Configurar) grava as metas aprovadas na tabela nova `metas_aprovadas`, e o
+painel de Metas passa a usar a aprovada no lugar das linhas das planilhas daquele vendedor e mês.
+
+- **Ordem:** só o site precisa da versão nova. Os dados que o PC manda não mudaram, e as planilhas continuam chegando
+  como antes.
+- **A migração 025** só cria a tabela `metas_aprovadas` e o índice; nada existente muda. Ensaie em BEGIN/ROLLBACK como as
+  outras.
+- **Depois de publicar:** sem nenhuma aprovação, o painel de Metas fica igual (só as planilhas). Aprovar no site não muda o
+  painel do PC, que tem o próprio banco.
+- **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e volta a mostrar só as planilhas.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

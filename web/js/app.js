@@ -64,12 +64,19 @@ const PAGINAS = {
   },
   "config-sugestao": {
     titulo: "Configurações da sugestão de metas",
-    fixo: "Crescimento desejado no ano, tetos e os faturamentos das áreas do BA",
+    fixo: "Regras da conta, faturamentos das áreas do BA e aprovação das metas",
     pai: "sugestao",
     admin: true,
     sempreMonta: true,
     pendente: configSugestaoTemAlteracoes,
-    montar: (el) => montarConfigSugestao(el, { aoSalvar: () => app.remontar.add("sugestao") }),
+    // Aprovar metas muda o painel de Metas (e os meses do filtro): as páginas de dados remontam com as opções novas.
+    montar: (el) => montarConfigSugestao(el, {
+      aoSalvar: async (metas) => {
+        if (!metas) { app.remontar.add("sugestao"); return; }
+        try { app.opcoes = await api("/api/opcoes"); } catch { /* fica com as opções de antes */ }
+        PAGINAS_DE_DADOS.forEach((p) => app.remontar.add(p));
+      },
+    }),
   },
   assistente: {
     nome: "Assistente",
@@ -157,7 +164,7 @@ function rodape() {
   document.getElementById("rodape").innerHTML = `
     <span>Fonte: cópia do ERP de ${fmt.dataHora(e.banco_copia)}</span>
     ${origem}${envio}
-    <span>Metas: METAS.xlsx e METAS PRODUTOS.xlsx</span>
+    <span>Metas: aprovadas no painel, METAS.xlsx e METAS PRODUTOS.xlsx</span>
     <span>Laticínio Mais Vida</span>`;
 }
 

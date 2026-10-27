@@ -340,7 +340,7 @@ class TestSugestao(unittest.TestCase):
         self.assertNotIn("produtos", r)
         r = self.sug.para_ia("BA", "2026-10", JAMILLE)
         self.assertAlmostEqual(next(p for p in r["produtos"] if p["id"] == BEBIDA)["meta_rs"], 21414.66, places=1)
-        self.assertEqual(r["vendedor"]["meta_lancada_na_planilha"], 25000.0)
+        self.assertEqual(r["vendedor"]["meta_lancada"], 25000.0)
 
     def test_ferramenta_do_assistente(self):
         self.assertTrue(next(t for t in FERRAMENTAS if t["name"] == "sugestao_metas")["strict"])

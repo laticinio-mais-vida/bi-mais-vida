@@ -348,11 +348,13 @@ class Recorte:
 
 
 def _metas_vendedor(calc: Calculadora, ids):
-    linhas = [m for m in calc.metas.dados() if ids is None or m["id_vendedor"] in ids]
-    df = pd.DataFrame(linhas, columns=["mes", "id_vendedor", "vendedor", "meta_fat", "meta_mus", "meta_out", "meta_cli"])
+    linhas = [{**m, "aprovada": bool(m.get("aprovada"))} for m in calc.metas.dados()
+              if ids is None or m["id_vendedor"] in ids]
+    df = pd.DataFrame(linhas, columns=["mes", "id_vendedor", "vendedor", "meta_fat", "meta_mus", "meta_out", "meta_cli",
+                                       "aprovada"])
     df = df.groupby(["mes", "id_vendedor"], as_index=False).agg(
         vendedor=("vendedor", "last"), meta_faturamento=("meta_fat", "sum"), meta_mussarela=("meta_mus", "sum"),
-        meta_outras=("meta_out", "sum"), meta_clientes=("meta_cli", "sum"))
+        meta_outras=("meta_out", "sum"), meta_clientes=("meta_cli", "sum"), aprovada_no_painel=("aprovada", "max"))
     df["vendedor"] = df["vendedor"].map(nome_bonito)
     df.insert(0, "ano", [m.year for m in df["mes"]])
     df["mes"] = [m.month for m in df["mes"]]
@@ -360,11 +362,12 @@ def _metas_vendedor(calc: Calculadora, ids):
 
 
 def _metas_produto(calc: Calculadora, regras, ids):
-    linhas = [{**m, "id_produto": regras.produto(m["id_produto"])} for m in calc.metas_produtos.dados()
-              if ids is None or m["id_vendedor"] in ids]
-    df = pd.DataFrame(linhas, columns=["mes", "id_vendedor", "vendedor", "id_produto", "produto", "meta_volume"])
+    linhas = [{**m, "id_produto": regras.produto(m["id_produto"]), "aprovada": bool(m.get("aprovada"))}
+              for m in calc.metas_produtos.dados() if ids is None or m["id_vendedor"] in ids]
+    df = pd.DataFrame(linhas, columns=["mes", "id_vendedor", "vendedor", "id_produto", "produto", "meta_volume", "aprovada"])
     df = df.groupby(["mes", "id_vendedor", "id_produto"], as_index=False).agg(
-        vendedor=("vendedor", "last"), produto=("produto", "last"), meta_volume=("meta_volume", "sum"))
+        vendedor=("vendedor", "last"), produto=("produto", "last"), meta_volume=("meta_volume", "sum"),
+        aprovada_no_painel=("aprovada", "max"))
     df["vendedor"] = df["vendedor"].map(nome_bonito)
     df.insert(0, "ano", [m.year for m in df["mes"]])
     df["mes"] = [m.month for m in df["mes"]]
@@ -599,8 +602,8 @@ FERRAMENTAS = [
         "name": "sugestao_metas",
         "description": ("Meta sugerida do mês seguinte, exatamente como na página Sugestão de Metas (a conta das "
                         "páginas de sugestão do Power BI): sem vendedor, o resumo de todos os vendedores do estado "
-                        "(base do mês anterior em R$, meta sugerida em R$, crescimento e a meta já lançada na "
-                        "planilha METAS.xlsx); com vendedor, os números dele e a meta por produto (volume e R$). "
+                        "(base do mês anterior em R$, meta sugerida em R$, crescimento e a meta já lançada: a "
+                        "aprovada no painel ou a da planilha METAS.xlsx); com vendedor, os números dele e a meta por produto (volume e R$). "
                         "produtos=true traz os produtos também sem vendedor (soma dos vendedores). Só para quem tem "
                         "a página."),
         "input_schema": _objeto({
@@ -1224,10 +1227,11 @@ clientes — cadastro (só tipo CLIENTE): id_cliente, cliente, razao_social, cid
 produtos — id_produto, produto, linha, unidade, inativo, grupo ('mussarela', 'outras' ou 'fora'), categoria
 vendedores — id_vendedor, vendedor, nome_erp, equipe ('ES', 'BA', 'Edir', 'Outros'), supervisor, inativo
 motivos — id_motivo, motivo, desconta (se a devolução por esse motivo desconta das vendas)
-metas_vendedor — metas mensais (planilha METAS.xlsx): ano, mes, id_vendedor, vendedor, meta_faturamento,
-  meta_mussarela, meta_outras, meta_clientes
-metas_produto — metas de volume (planilha METAS PRODUTOS.xlsx): ano, mes, id_vendedor, vendedor, id_produto,
-  produto, meta_volume
+metas_vendedor — metas mensais (a aprovada no painel, na Sugestão de Metas, ou senão a da planilha METAS.xlsx): ano,
+  mes, id_vendedor, vendedor, meta_faturamento, meta_mussarela, meta_outras, meta_clientes, aprovada_no_painel (a
+  aprovação vale para a linha inteira: faturamento, clientes e as metas de volume do mesmo vendedor e mês)
+metas_produto — metas de volume (a aprovada no painel ou senão a da planilha METAS PRODUTOS.xlsx): ano, mes,
+  id_vendedor, vendedor, id_produto, produto, meta_volume, aprovada_no_painel
 clientes_vigencias — o histórico da carteira, registrado pelo painel a cada atualização desde 15/09/2026 (o ERP não
   guarda): um trecho por cliente ativo e vendedor, de quando (de) até quando (ate; vazio = ainda vale) valeu:
   id_cliente, de, ate, id_vendedor (o da carteira), bloqueado ("PEDIDO BLOQUEADO" no nome), uf, id_area, area,
@@ -1307,7 +1311,8 @@ Não indicado). Não use outro critério nem dê outro veredito; a decisão fina
 página (a conta das páginas de sugestão do Power BI, com o preço médio pelo faturamento bruto). Só quem tem a página \
 usa; para os outros, diga que o acesso não inclui a sugestão. Não refaça a conta com consultar_sql.
 - O mês informado é o da meta; o mês base é o anterior. A meta é da carteira atual de cada vendedor (clientes que \
-estão hoje com ele), não do vendedor da venda. "Meta lançada na planilha" é a META FATURAMENTO da METAS.xlsx.
+estão hoje com ele), não do vendedor da venda. meta_lancada é a meta aprovada no painel (aprovada_no_painel) ou, \
+sem aprovação, a META FATURAMENTO da METAS.xlsx.
 
 # Campanhas e objetivos (página Gestão)
 - Uma campanha mede um indicador por vendedor, numa região (ES ou BA; o Edir é da BA), num prazo (semanas, ou até \

@@ -250,7 +250,8 @@ function kpi({ i, cor, ic, rotulo, valor, contar, meta, rodape = [], extra = "" 
 
 function kpis(d) {
   const c = d.cartoes, p = d.parametros, m = d.mes;
-  const lancada = d.filtros.vendedor && !d.filtros.area ? d.resumo.find((r) => r.id === d.filtros.vendedor)?.meta_lancada : null;
+  const doVendedor = d.filtros.vendedor && !d.filtros.area ? d.resumo.find((r) => r.id === d.filtros.vendedor) : null;
+  const lancada = doVendedor ? doVendedor.meta_lancada : null;
   const tt = `<div class='tt-t'>Meta sugerida sobre a base</div>${fmt.moeda(c.meta_rs)} contra ${fmt.moeda(c.base_rs)} em ${esc(m.curto_base)} (volume × o mesmo preço médio)`;
   const meta = kpi({
     i: 1, cor: "var(--s-fat)", ic: "alvo", rotulo: "Meta sugerida", valor: "R$ 0", contar: c.meta_rs,
@@ -258,7 +259,7 @@ function kpis(d) {
     meta: `para <b>${esc(m.rotulo_meta)}</b> · ${esc(descricaoFiltro(d))}`,
     rodape: [
       [`Base de ${esc(m.curto_base)} (mesma conta)`, fmt.moeda(c.base_rs)],
-      ...(lancada != null ? [["Meta lançada na planilha", fmt.moeda(lancada)]] : []),
+      ...(lancada != null ? [[doVendedor.aprovada ? "Meta aprovada" : "Meta lançada na planilha", fmt.moeda(lancada)]] : []),
       ["Produtos com meta", fmt.num(d.produtos.length)],
     ],
   });
@@ -428,7 +429,7 @@ function resumo(d, i) {
       <tbody>${linhas.map((r) => `<tr data-vendedor="${r.id}" class="${r.id === d.filtros.vendedor ? "sel" : ""}" title="Clique para ver só ${esc(r.nome)}">
         <td class="rotulo">${esc(r.nome)}${r.equipe === "EDIR" ? " <small>(Edir)</small>" : ""}</td>
         <td>${fmt.moeda(r.base_rs)}</td><td class="total">${fmt.moeda(r.meta_rs)}</td><td>${sinal(r.crescimento)}</td>
-        <td>${r.meta_lancada != null ? fmt.moeda(r.meta_lancada) : "—"}</td><td>${dif(r.diferenca)}</td></tr>`).join("")}</tbody>
+        <td>${r.meta_lancada != null ? fmt.moeda(r.meta_lancada) : "—"}${r.aprovada ? ` <span class="sug-aprovada" title="Aprovada no painel (Configurar › Aprovação de metas)">${icone("visto")}</span>` : ""}</td><td>${dif(r.diferenca)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td class="rotulo">Total</td><td>${fmt.moeda(base)}</td><td class="total">${fmt.moeda(meta)}</td>
         <td>${base > 0 ? sinal(meta / base - 1) : "—"}</td><td>${lancadas.length ? fmt.moeda(totalLancada) : "—"}</td>
         <td>${lancadas.length ? dif(totalLancada - lancadas.reduce((a, r) => a + r.meta_rs, 0)) : "—"}</td></tr></tfoot>
@@ -438,7 +439,7 @@ function resumo(d, i) {
   <section class="cartao secao entra" style="--i:${i}">
     <div class="cartao-cab">
       <div><h3>${icone("pessoas")}Resumo dos vendedores do ${esc(d.estado)}</h3>
-        <p class="sub">Todos os vendedores do seu acesso, sem os filtros de vendedor e área · clique num vendedor para ver só ele · a meta lançada é a META FATURAMENTO da METAS.xlsx</p></div>
+        <p class="sub">Todos os vendedores do seu acesso, sem os filtros de vendedor e área · clique num vendedor para ver só ele · a meta lançada é a aprovada no painel (com ✓) ou a META FATURAMENTO da METAS.xlsx</p></div>
       <div class="acoes-relatorio">
         <button class="btn" data-captura="copiar" data-arquivo="${arquivo}" title="Copia a tabela como imagem para colar no WhatsApp">${icone("disco")}Copiar imagem</button>
         <button class="btn icone" data-captura="baixar" data-arquivo="${arquivo}" title="Baixar a tabela como imagem (PNG)">${icone("abaixo")}</button>

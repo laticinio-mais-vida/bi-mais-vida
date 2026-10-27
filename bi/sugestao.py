@@ -25,9 +25,13 @@ fixo e qualquer área pode ser ajustada num mês (regras da página, tabela regr
 sem número fixo) fica fora, como no Power BI (que deixava fora as áreas ausentes da planilha), e a página avisa quanto
 ficou fora.
 
-Vendedores: os do estado (grupos das Configurações das metas; o BA inclui o Edir) que têm meta na METAS.xlsx no mês da
-meta ou nos dois anteriores e clientes na carteira, como as listas fixas de nomes das páginas do Power BI (sem isso, as
-contas internas ainda não configuradas, que caem no ES, entravam).
+Vendedores: os do estado (grupos das Configurações das metas; o BA inclui o Edir) que têm meta (na METAS.xlsx ou
+aprovada no painel) no mês da meta ou nos dois anteriores e clientes na carteira, como as listas fixas de nomes das
+páginas do Power BI (sem isso, as contas internas ainda não configuradas, que caem no ES, entravam).
+
+Aprovação de metas (Configurar, só administrador; bi/aprovacao.py): a meta de cada vendedor como a sugestão gerou,
+para aprovar com o total, a mussarela (ES) e os clientes editáveis. Os clientes vêm preenchidos com os ativos da carteira
+no dia 1º do mês da meta, o número que a META CLIENTE da planilha acompanha.
 
 O acumulado do ano vai até o mês base (no Power BI ia até o último mês fechado pela data de hoje, o mesmo resultado no
 uso normal; em janeiro o Power BI dava +20% para todos, porque o ano atual vinha vazio).
@@ -41,6 +45,8 @@ import re
 import threading
 from collections import defaultdict
 
+from .aprovacao import distribuir
+from .banco import hora
 from .configuracao import RegrasNoBanco
 from .metas import MESES, Calculadora
 
@@ -266,14 +272,15 @@ class _Soma:
 
 # --- a página --------------------------------------------------------------------------------
 class Sugestao:
-    def __init__(self, calc: Calculadora, config, areas, nomes):
+    def __init__(self, calc: Calculadora, config, areas, nomes, aprovadas=None):
         """config: ConfigSugestao (ou algo com atual()). areas: função que devolve os dias de atendimento das áreas
         ({id_area: [dias ISO]}, bi/gestao.py). nomes: função com {id_vendedor: nome} (o da planilha de metas mais
-        recente, senão o do ERP)."""
+        recente, senão o do ERP). aprovadas: MetasAprovadas (bi/aprovacao.py), para a aba de aprovação."""
         self.calc = calc
         self.config = config
         self.areas = areas
         self.nomes = nomes
+        self.aprovadas = aprovadas
         self._trava = threading.Lock()
         self._memo: tuple = (None, None)
 
@@ -330,12 +337,13 @@ class Sugestao:
             self._memo = (chave, dados)
         return dados
 
-    def _vendedores(self, d: dict, regras, estado: str, permitidos, equipes, i_meta: int) -> list[int]:
-        """Vendedores do estado com meta na METAS.xlsx no mês da meta ou nos dois anteriores e clientes na carteira,
-        dentro do acesso."""
+    def _vendedores(self, d: dict, regras, estado: str, permitidos, equipes, i_meta: int,
+                    sem_meta: bool = False) -> list[int]:
+        """Vendedores do estado com meta (planilha ou aprovada) no mês da meta ou nos dois anteriores e clientes na
+        carteira, dentro do acesso. sem_meta: também os do grupo sem meta recente (a aprovação mostra, recolhidos)."""
         com_meta = {m["id_vendedor"] for m in self.calc.metas.dados() if i_meta - 2 <= indice(m["mes"]) <= i_meta}
         return sorted(v for v in d["carteira"]
-                      if v in com_meta and regras.grupo_vendedor(v) in GRUPOS[estado]
+                      if (sem_meta or v in com_meta) and regras.grupo_vendedor(v) in GRUPOS[estado]
                       and (equipes is None or regras.grupo_vendedor(v) in equipes)
                       and (permitidos is None or v in permitidos))
 
@@ -484,16 +492,20 @@ class Sugestao:
                 areas.append({"id": a, "nome": nome_area(a), **s.saida(), "origem": origem,
                               "produtos": [{**produto(p), **x.saida()} for p, x in filhos]})
 
-        # Resumo: todos os vendedores do estado do acesso, sem os filtros de vendedor e área, com a meta da METAS.xlsx.
+        # Resumo: todos os vendedores do estado do acesso, sem os filtros de vendedor e área, com a meta lançada (a da
+        # METAS.xlsx ou a aprovada no painel, que a substitui).
         linhas_resumo = linhas if (vendedor is None and area is None) else self._linhas(d, k, todos, None, i_meta)[0]
         por_vendedor: dict[int, _Soma] = defaultdict(lambda: _Soma("base_rs"))
         for ln in linhas_resumo:
             por_vendedor[ln["v"]].somar(ln)
         mes_meta = dt.date(i_meta // 12, i_meta % 12 + 1, 1)
         lancadas: dict[int, float] = defaultdict(float)
+        aprovadas = set()
         for m in self.calc.metas.dados():
             if m["mes"] == mes_meta and m["id_vendedor"] in todos:
                 lancadas[m["id_vendedor"]] += m["meta_fat"]
+                if m.get("aprovada"):
+                    aprovadas.add(m["id_vendedor"])
         resumo = []
         for v in todos:
             s = por_vendedor.get(v)
@@ -501,7 +513,8 @@ class Sugestao:
             resumo.append({"id": v, "nome": nome(v), "equipe": regras.grupo_vendedor(v),
                            "base_rs": s.base_rs if s else 0.0, "meta_rs": meta_rs,
                            "crescimento": (meta_rs / s.base_rs - 1) if s and s.base_rs > 0 else None,
-                           "meta_lancada": lancadas.get(v), "diferenca": (lancadas[v] - meta_rs) if v in lancadas else None})
+                           "meta_lancada": lancadas.get(v), "aprovada": v in aprovadas,
+                           "diferenca": (lancadas[v] - meta_rs) if v in lancadas else None})
         resumo.sort(key=lambda r: (-r["meta_rs"], r["nome"]))
 
         avisos = list(self.calc.avisos())
@@ -607,7 +620,8 @@ class Sugestao:
         if vendedor is None:
             saida["vendedores"] = [{"id": v["id"], "vendedor": v["nome"], "base_rs": enxuto(v["base_rs"]),
                                     "meta_sugerida_rs": enxuto(v["meta_rs"]), "crescimento": enxuto(v["crescimento"]),
-                                    "meta_lancada_na_planilha": enxuto(v["meta_lancada"])} for v in r["resumo"]]
+                                    "meta_lancada": enxuto(v["meta_lancada"]),
+                                    "aprovada_no_painel": v["aprovada"]} for v in r["resumo"]]
             saida["total_meta_sugerida_rs"] = enxuto(sum(v["meta_rs"] for v in r["resumo"]))
         else:
             c = r["cartoes"] or {}
@@ -617,7 +631,8 @@ class Sugestao:
                                  "sazonalidade_media": enxuto(c.get("sazonalidade")),
                                  "crescimento_proposto_medio": enxuto(c.get("crescimento")),
                                  "efeito_dos_faturamentos": enxuto(c.get("efeito_faturamentos")),
-                                 "meta_lancada_na_planilha": enxuto(v.get("meta_lancada"))}
+                                 "meta_lancada": enxuto(v.get("meta_lancada")),
+                                 "aprovada_no_painel": v.get("aprovada", False)}
         if produtos or vendedor is not None:
             saida["produtos"] = [{"id": x["id"], "produto": x["nome"], "unidade": x["unidade"],
                                   "volume_base": enxuto(x["volume_base"]), "meta_volume": enxuto(x["meta_volume"]),
@@ -693,3 +708,218 @@ class Sugestao:
                 "mes": texto_mes(i_meta), "meses": [{"valor": texto_mes(i), "rotulo": curto_mes(i)} for i in meses],
                 "papeis": ["base", "meta", "base_ly", "meta_ly"],
                 "opcoes_meses": [{"valor": texto_mes(i), "rotulo": rotulo_mes(i)} for i in range(ultimo, primeiro - 1, -1)]}
+
+    # --- aprovação de metas ------------------------------------------------------------------------
+    def _por_vendedor(self, d: dict, k: dict, regras, vendedores: list[int], i_meta: int) -> dict[int, dict]:
+        """A sugestão de cada vendedor por produto (no BA, as áreas somadas), para aprovar: {v: {"fat", "mus",
+        "produtos": [{id, produto, unidade, grupo, volume_sugerido, preco}]}}. O preço é o da soma (meta R$ ÷ meta de
+        volume), para que volume × preço dê a meta R$ do produto."""
+        linhas, _ = self._linhas(d, k, vendedores, None, i_meta)
+        soma: dict[tuple, list] = defaultdict(lambda: [0.0, 0.0])
+        for ln in linhas:
+            x = soma[(ln["v"], ln["p"])]
+            x[0] += ln["meta"]
+            x[1] += ln["meta_rs"]
+        saida = {v: {"fat": 0.0, "mus": 0.0, "produtos": []} for v in vendedores}
+        for (v, p), (vol, rs) in soma.items():
+            if vol <= 0 or rs <= 0:
+                continue
+            grupo = "mussarela" if regras.grupo_produto(p) == "mussarela" else "outras"
+            nome, unidade = d["produtos"].get(p, (f"Produto {p}", ""))
+            s = saida[v]
+            s["fat"] += rs
+            s["mus"] += rs if grupo == "mussarela" else 0.0
+            s["produtos"].append({"id": p, "produto": nome, "unidade": unidade or "", "grupo": grupo,
+                                  "volume_sugerido": vol, "preco": rs / vol})
+        for s in saida.values():
+            s["produtos"].sort(key=lambda x: -x["volume_sugerido"] * x["preco"])
+        return saida
+
+    def _clientes_no_dia(self, i_meta: int) -> tuple[dict[int, int], dict]:
+        """({vendedor: clientes}, {dia, fonte}): os clientes ativos da carteira no dia 1º do mês da meta, sem os de
+        pedido bloqueado, pelo histórico da carteira (bi/carteira.py), o número que a META CLIENTE da planilha
+        acompanha. Se o dia 1º ainda não chegou, a carteira da data dos dados (fonte "carteira_hoje"); antes do
+        histórico, a META CLIENTE da planilha do mês (fonte "planilha")."""
+        cache = self.calc.cache
+        dia1 = dt.date(i_meta // 12, i_meta % 12 + 1, 1)
+        dia = min(dia1, cache.data_ref())
+        inicio = cache.consulta("SELECT min(data) FROM carteira_retratos")[0][0]
+        if inicio and inicio <= dia:
+            n = dict(cache.consulta(
+                "WITH t AS (SELECT * FROM clientes_vigencias WHERE de <= ? AND (ate IS NULL OR ate >= ?) "
+                "QUALIFY row_number() OVER (PARTITION BY id_cliente ORDER BY de DESC) = 1) "
+                "SELECT id_vendedor, COUNT(*) FROM t WHERE NOT bloqueado AND id_vendedor IS NOT NULL GROUP BY 1",
+                [dia, dia]))
+            return n, {"dia": dia.isoformat(), "fonte": "carteira" if dia == dia1 else "carteira_hoje"}
+        n: dict[int, int] = defaultdict(int)
+        for m in getattr(self.calc.metas, "planilha", self.calc.metas).dados():
+            if m["mes"] == dia1:
+                n[m["id_vendedor"]] += int(m["meta_cli"])
+        return dict(n), {"dia": dia1.isoformat(), "fonte": "planilha"}
+
+    def _base_aprovacao(self, estado: str | None, mes: str | None) -> dict:
+        """O que a aba e a gravação usam: os vendedores (os da página, os do grupo sem meta recente que venderam no mês
+        base e os aprovados que saíram da lista), a sugestão de cada um, os clientes do dia 1º, a planilha e o que já
+        foi aprovado no mês."""
+        if self.aprovadas is None:
+            raise RuntimeError("a aprovação de metas precisa do banco de dados")
+        self._conferir()
+        regras = self.calc.regras()
+        d = self._dados(regras)
+        data_ref = self.calc.cache.data_ref()
+        primeiro, ultimo = self.meses_possiveis()
+        i_meta = ler_mes(mes) if mes else indice(data_ref)
+        if not primeiro <= i_meta <= ultimo:
+            raise ValueError(f"escolha um mês da meta entre {curto_mes(primeiro)} e {curto_mes(ultimo)}")
+        estado = (estado or "BA").upper()
+        if estado not in ESTADOS:
+            raise ValueError(f"estado inválido: {estado}")
+        dia1 = dt.date(i_meta // 12, i_meta % 12 + 1, 1)
+        lista = self._vendedores(d, regras, estado, None, None, i_meta)
+        outros = [v for v in self._vendedores(d, regras, estado, None, None, i_meta, sem_meta=True) if v not in lista]
+        sugestao = self._por_vendedor(d, self._contexto(regras, estado), regras, lista + outros, i_meta)
+        outros = [v for v in outros if sugestao[v]["fat"] > 0]  # sem venda no mês base: contas internas, inativos
+        registros = self.aprovadas.do_mes(dia1)
+        fora = sorted(v for v, r in registros.items()
+                      if r["ultima"]["aprovada"] and r["ultima"]["estado"] == estado and v not in lista and v not in outros)
+        clientes, info_clientes = self._clientes_no_dia(i_meta)
+        planilha: dict[int, dict] = {}
+        for m in getattr(self.calc.metas, "planilha", self.calc.metas).dados():
+            if m["mes"] == dia1:
+                x = planilha.setdefault(m["id_vendedor"], {"fat": 0.0, "mus": 0.0, "out": 0.0, "cli": 0.0})
+                for a, c in (("fat", "meta_fat"), ("mus", "meta_mus"), ("out", "meta_out"), ("cli", "meta_cli")):
+                    x[a] += m[c]
+        nomes = self.nomes()
+        return {"regras": regras, "estado": estado, "i_meta": i_meta, "dia1": dia1, "data_ref": data_ref,
+                "primeiro": primeiro, "ultimo": ultimo, "lista": lista, "outros": outros, "fora": fora,
+                "sugestao": sugestao,
+                "registros": registros, "clientes": clientes, "info_clientes": info_clientes, "planilha": planilha,
+                "nome": lambda v: nomes.get(v) or f"Vendedor {v}"}
+
+    def aprovacao(self, estado: str | None = None, mes: str | None = None) -> dict:
+        """A aba Aprovação de metas: cada vendedor do estado com a sugestão (total, mussarela, produtos), os clientes
+        do dia 1º, a meta da planilha e a aprovação em vigor (com quem aprovou e quem alterou)."""
+        b = self._base_aprovacao(estado, mes)
+        regras = b["regras"]
+        sem_numero = b["info_clientes"]["fonte"] == "planilha"
+
+        def linha(v: int, grupo: str) -> dict:
+            s, r = b["sugestao"].get(v), b["registros"].get(v)
+            ultima = r["ultima"] if r else None
+            vigente = ultima if ultima and ultima["aprovada"] else None
+            return {
+                "id": v, "nome": b["nome"](v), "equipe": regras.grupo_vendedor(v), "grupo": grupo,
+                "sugerida": ({"fat": round(s["fat"], 2), "mus": round(s["mus"], 2), "produtos": s["produtos"]}
+                             if s else None),
+                "clientes": b["clientes"].get(v, None if sem_numero else 0),
+                "planilha": b["planilha"].get(v),
+                "versao": ultima["id"] if ultima else None,
+                "aprovada": None if vigente is None else {
+                    **{c: vigente[c] for c in ("estado", "meta_fat", "meta_mus", "meta_out", "meta_cli", "sugerida_fat",
+                                               "sugerida_mus", "clientes_carteira", "produtos")},
+                    "clientes_dia": vigente["clientes_dia"].isoformat() if vigente["clientes_dia"] else None,
+                    "aprovada_em": r["aprovada_em"], "aprovada_por": r["aprovada_por"],
+                    "alterada_em": r["alterada_em"], "alterada_por": r["alterada_por"]},
+                "retirada": ({"em": hora(ultima["salva_em"]), "por": ultima["salva_por_nome"]}
+                             if ultima and not ultima["aprovada"] else None),
+            }
+
+        ordem = lambda x: (-((x["sugerida"] or {}).get("fat") or 0), x["nome"])  # noqa: E731
+        i_meta, ib = b["i_meta"], b["i_meta"] - 1
+        avisos = [a for a in (self.aprovadas.aviso,) if a]
+        if b["data_ref"] < _fim(ib):
+            avisos.append(f"O mês base ({rotulo_mes(ib)}) ainda não fechou: a sugestão usa só as vendas até "
+                          f"{b['data_ref']:%d/%m/%Y}, e aprovar agora congela esse número.")
+        return {
+            "estado": b["estado"], "estados": list(ESTADOS), "data_ref": b["data_ref"].isoformat(),
+            "mes": {"meta": texto_mes(i_meta), "base": texto_mes(ib), "rotulo_meta": rotulo_mes(i_meta),
+                    "rotulo_base": rotulo_mes(ib), "curto_meta": curto_mes(i_meta),
+                    "base_fechado": b["data_ref"] >= _fim(ib)},
+            "opcoes_meses": [{"valor": texto_mes(i), "rotulo": rotulo_mes(i)}
+                             for i in range(b["ultimo"], b["primeiro"] - 1, -1)],
+            "clientes": b["info_clientes"],
+            "vendedores": sorted((linha(v, "lista") for v in b["lista"]), key=ordem),
+            "outros": sorted((linha(v, "outros") for v in b["outros"]), key=ordem),
+            "fora": [linha(v, "fora") for v in b["fora"]],
+            "avisos": avisos,
+        }
+
+    def aprovar(self, estado: str | None, mes: str | None, itens: list, autor: dict | None) -> dict:
+        """Grava a aba: itens = [{id_vendedor, aprovada, meta_fat, meta_mus (ES), meta_cli, versao}], só os que
+        mudaram. A aprovação nova tira o retrato da sugestão de agora (calculada aqui, não a do navegador); a edição
+        de uma aprovada parte do retrato dela; aprovada falso retira. Devolve a aba de novo."""
+        if not isinstance(itens, list) or not itens:
+            raise ValueError("nenhuma meta para gravar")
+        b = self._base_aprovacao(estado, mes)
+        registros, vistos = [], set()
+        for it in itens:
+            if not isinstance(it, dict):
+                raise ValueError("meta inválida")
+            try:
+                v = int(it.get("id_vendedor"))
+            except (TypeError, ValueError):
+                raise ValueError(f"vendedor inválido: {it.get('id_vendedor')!r}") from None
+            if v in vistos:
+                raise ValueError(f"o vendedor {v} veio duas vezes")
+            vistos.add(v)
+            nome = b["nome"](v)
+            r = b["registros"].get(v)
+            ultima = r["ultima"] if r else None
+            vigente = ultima if ultima and ultima["aprovada"] else None
+            versao = it.get("versao")
+            if versao is not None and (isinstance(versao, bool) or not isinstance(versao, int)):
+                raise ValueError(f"versão inválida na meta de {nome}")
+            base = {"id_vendedor": v, "vendedor": nome, "versao": versao}
+            if not it.get("aprovada"):
+                if vigente:  # retirar: a linha nova repete a última, com aprovada falso
+                    registros.append({**vigente, **base, "aprovada": False})
+                continue
+            if vigente:
+                retrato = {c: vigente[c] for c in ("estado", "sugerida_fat", "sugerida_mus", "clientes_carteira",
+                                                    "clientes_dia", "produtos")}
+            elif v in b["sugestao"]:
+                s, fonte = b["sugestao"][v], b["info_clientes"]["fonte"]
+                retrato = {"estado": b["estado"], "sugerida_fat": round(s["fat"], 2), "sugerida_mus": round(s["mus"], 2),
+                           "clientes_carteira": None if fonte == "planilha" else b["clientes"].get(v, 0),
+                           "clientes_dia": (None if fonte == "planilha"
+                                            else dt.date.fromisoformat(b["info_clientes"]["dia"])),
+                           "produtos": s["produtos"]}
+            else:
+                raise ValueError(f"{nome} não está entre os vendedores do {b['estado']} em {curto_mes(b['i_meta'])}")
+            es = retrato["estado"] == "ES"
+            meta_fat = _reais(it.get("meta_fat"), f"a meta de {nome}")
+            if meta_fat <= 0:
+                raise ValueError(f"a meta de {nome} precisa ser maior que zero")
+            meta_mus = _reais(it.get("meta_mus"), f"a mussarela de {nome}") if es else 0.0
+            if meta_mus > meta_fat:
+                raise ValueError(f"a mussarela de {nome} passa da meta total")
+            meta_cli = _clientes(it.get("meta_cli"), nome)
+            produtos, _ = distribuir(retrato["produtos"], meta_fat, meta_mus, es)
+            registros.append({**retrato, **base, "aprovada": True, "meta_fat": meta_fat, "meta_mus": meta_mus,
+                              "meta_out": round(meta_fat - meta_mus, 2) if es else 0.0, "meta_cli": meta_cli,
+                              "produtos": produtos})
+        if registros:
+            self.aprovadas.gravar(b["dia1"], registros, autor)
+        return self.aprovacao(b["estado"], texto_mes(b["i_meta"]))
+
+
+def _reais(valor, nome: str) -> float:
+    try:
+        x = float(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"{nome}: use um valor em reais") from None
+    if not 0 <= x <= 1e11:  # também NaN
+        raise ValueError(f"{nome}: use um valor em reais a partir de zero")
+    return round(x, 2)
+
+
+def _clientes(valor, nome: str) -> int:
+    if valor is None or valor == "":
+        raise ValueError(f"preencha os clientes de {nome}")
+    try:
+        n = float(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"os clientes de {nome}: use um número inteiro") from None
+    if not 0 <= n <= 100_000 or n != int(n):
+        raise ValueError(f"os clientes de {nome}: use um número inteiro a partir de zero")
+    return int(n)

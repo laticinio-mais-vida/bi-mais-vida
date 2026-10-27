@@ -44,6 +44,7 @@ from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, es
                        escopo_gestao, escopo_projecoes, escopo_sugestao, paginas_permitidas, vendedores_permitidos,
                        visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
+from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
@@ -88,7 +89,7 @@ ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", 
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
-               "/api/assistente/config",
+               "/api/sugestao/aprovacao", "/api/assistente/config",
                "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
@@ -126,7 +127,12 @@ class Aplicacao:
             self.cache.carteira = Carteira(self.banco)
         self.usuarios = Usuarios(self.banco)
         self.configuracao = Configuracao(self.banco)
-        self.calc = Calculadora(self.cache, self.metas, self.metas_produtos, self.configuracao)
+        # As metas aprovadas na Sugestão de Metas valem por cima das planilhas (do mesmo vendedor e mês) para tudo que
+        # lê as metas pela Calculadora; o envio e o recebimento das planilhas continuam com os arquivos.
+        self.metas_aprovadas = MetasAprovadas(self.banco)
+        self.calc = Calculadora(self.cache, MetasComAprovadas(self.metas, self.metas_aprovadas, "metas"),
+                                MetasComAprovadas(self.metas_produtos, self.metas_aprovadas, "produtos"),
+                                self.configuracao)
         self.config_projecoes = ConfigProjecoes(self.banco)
         self.projetor = Projetor(self.calc, self.config_projecoes)
         self.credito = Credito(self.cache, self.projetor._nomes_vendedores)
@@ -136,7 +142,8 @@ class Aplicacao:
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
         self.config_sugestao = ConfigSugestao(self.banco)
         # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
-        self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores)
+        self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores,
+                                 self.metas_aprovadas)
         self.agenda = Agenda(self.banco, self.configuracao)
         self.tarefas = Tarefas(self.banco)
         self.tentativas = LimiteTentativas()
@@ -704,6 +711,8 @@ class Manipulador(BaseHTTPRequestHandler):
                                                              q.get("area"), *escopo_sugestao(usuario)))
             if url.path == "/api/sugestao/config":
                 return self._json(self.app.sugestao.config_dados(q.get("mes")))
+            if url.path == "/api/sugestao/aprovacao":  # estado=BA&mes=2026-11
+                return self._json(self.app.sugestao.aprovacao(q.get("estado"), q.get("mes")))
             if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise"):
                 if "credito" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
@@ -801,6 +810,13 @@ class Manipulador(BaseHTTPRequestHandler):
                 self.app.config_sugestao.salvar(corpo.get("config") or {}, usuario)
                 log.info("%s salvou as regras da Sugestão de Metas", usuario["login"])
                 return self._json({"ok": True, **self.app.sugestao.config_dados(corpo.get("mes"))})
+            if url.path == "/api/sugestao/aprovacao":
+                corpo = self._corpo_json()
+                itens = corpo.get("itens")
+                r = self.app.sugestao.aprovar(corpo.get("estado"), corpo.get("mes"), itens, usuario)
+                log.info("%s gravou a aprovação de metas do %s em %s (%s vendedor(es))", usuario["login"], r["estado"],
+                         r["mes"]["meta"], len(itens))
+                return self._json({"ok": True, **r})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):
