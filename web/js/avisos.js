@@ -6,19 +6,25 @@
 //   Chromium fecha no segundo Esc), ela abre de novo. Cada item tem Enviar justificativa e Enviar e concluir (para quem
 //   já terminou), e o aviso de pedir a prorrogação a quem criou a tarefa. O que estava sendo escrito na página de trás
 //   fica como estava.
-import { atualizarTarefaAberta, recarregarAgenda } from "./agenda.js";
+// - O sino (no topo, à esquerda do nome): o número de notificações não lidas (bi/notificacoes.py) e, clicando, o painel
+//   com as mais recentes. Clicar numa abre a tarefa na Gestão (#/gestao?tarefa=…) e marca como lida.
+import { abrirTarefaNaAgenda, atualizarTarefaAberta, recarregarAgenda } from "./agenda.js";
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const INTERVALO = 60000; // um minuto
+// O ícone de cada tipo de notificação.
+const ICONE_AVISO = { incluido: "pessoas", subtarefa_nova: "tarefa", prazo_mudou: "calendario", vence_em_breve: "relogio",
+                      venceu: "alerta", concluida: "certo", justificativa: "conversa" };
 // pendencias: o que falta justificar, como a última conferência trouxe; pedindo: uma conferência de cada vez; parado:
 // sem a página Gestão (403), não confere mais.
 const avisos = { pendencias: [], pedindo: false, parado: false };
-let dlg = null;
+let dlg = null, sino = null, painel = null;
 
 const chave = (p) => `${p.tarefa}:${p.subtarefa || ""}`;
 const dataCurta = (iso) => (iso.slice(0, 4) === String(new Date().getFullYear()) ? fmt.dataCurta(iso) : fmt.data(iso));
 
 export function ligarAvisos() {
+  ligarSino();
   conferir();
   setInterval(conferir, INTERVALO);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) conferir(); });
@@ -30,12 +36,118 @@ async function conferir() {
   avisos.pedindo = true;
   try {
     const r = await api("/api/avisos");
+    contarNaoLidas(r.nao_lidas);
     mostrarPendencias(r.pendencias);
   } catch (e) {
     if (e.status === 403) avisos.parado = true;
   } finally {
     avisos.pedindo = false;
   }
+}
+
+// ---------- o sino ----------
+function ligarSino() {
+  sino = document.getElementById("btn-sino");
+  painel = document.getElementById("painel-avisos");
+  sino.hidden = false;
+  sino.addEventListener("click", () => (painel.hidden ? abrirPainel() : fecharPainel()));
+  painel.addEventListener("click", aoClicarPainel);
+  // fecha ao clicar fora (na captura: o botão do usuário para a propagação do clique), no Esc, ao rolar e ao redimensionar
+  document.addEventListener("click", (e) => {
+    if (!painel.hidden && !painel.contains(e.target) && !sino.contains(e.target)) fecharPainel();
+  }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !painel.hidden) { fecharPainel(); sino.focus(); } });
+  window.addEventListener("resize", fecharPainel);
+  window.addEventListener("scroll", fecharPainel, { passive: true });
+}
+
+function contarNaoLidas(n) {
+  const el = document.getElementById("sino-n");
+  el.hidden = !n;
+  el.textContent = n > 9 ? "9+" : String(n);
+  const rotulo = n ? `Notificações: ${n} não lida${n > 1 ? "s" : ""}` : "Notificações";
+  sino.setAttribute("aria-label", rotulo);
+  sino.title = rotulo;
+}
+
+// O painel abre embaixo do sino, como o menu do usuário, e pede a lista na hora.
+async function abrirPainel() {
+  const r = sino.getBoundingClientRect();
+  painel.hidden = false;
+  painel.style.top = `${r.bottom + 8}px`;
+  painel.style.left = `${Math.max(8, Math.min(r.right - painel.offsetWidth, window.innerWidth - painel.offsetWidth - 8))}px`;
+  sino.setAttribute("aria-expanded", "true");
+  painel.innerHTML = `<div class="pa-cab"><b>Notificações</b></div><div class="esqueleto" style="height:120px;margin:10px"></div>`;
+  try {
+    desenharPainel(await api("/api/notificacoes"));
+  } catch (e) {
+    painel.innerHTML = `<div class="pa-cab"><b>Notificações</b></div><p class="pa-vazio">${icone("alerta")}${esc(e.message)}</p>`;
+  }
+}
+
+function fecharPainel() {
+  if (!painel || painel.hidden) return;
+  painel.hidden = true;
+  sino.setAttribute("aria-expanded", "false");
+}
+
+function desenharPainel(d) {
+  if (painel.hidden) return; // fechou enquanto a lista chegava
+  contarNaoLidas(d.nao_lidas);
+  painel.innerHTML = `<div class="pa-cab"><b>Notificações</b>
+      ${d.nao_lidas ? `<button type="button" class="ge-link" data-ler-todas>Marcar todas como lidas</button>` : ""}</div>
+    ${d.itens.length ? `<ul class="pa-lista">${d.itens.map(itemAviso).join("")}</ul>`
+      : `<p class="pa-vazio">${icone("sino")}Nenhuma notificação por enquanto.</p>`}`;
+}
+
+function itemAviso(n) {
+  return `<li><button type="button" class="pa-item ${n.lida ? "" : "nova"}" data-aviso="${n.id}" data-tarefa="${n.tarefa || ""}">
+    <span class="pa-ic pa-${n.tipo}">${icone(ICONE_AVISO[n.tipo] || "info")}</span>
+    <span class="pa-txt"><span>${esc(n.texto)}</span><small>${quandoFoi(n.criada_em)}</small></span>
+  </button></li>`;
+}
+
+// "agora", "há 5 min", "há 3 h" (hoje), "ontem às 14:03" ou "26/10 às 14:03".
+function quandoFoi(iso) {
+  const d = new Date(iso), min = Math.floor((Date.now() - d.getTime()) / 60000);
+  const ontem = new Date();
+  ontem.setDate(ontem.getDate() - 1);
+  if (min < 1) return "agora";
+  if (min < 60) return `há ${min} min`;
+  if (d.toDateString() === new Date().toDateString()) return `há ${Math.floor(min / 60)} h`;
+  if (d.toDateString() === ontem.toDateString()) return `ontem às ${iso.slice(11, 16)}`;
+  return `${dataCurta(iso.slice(0, 10))} às ${iso.slice(11, 16)}`;
+}
+
+async function aoClicarPainel(e) {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if ("lerTodas" in b.dataset) {
+    if (await marcarLidas({ todas: true })) desenharPainel(await api("/api/notificacoes").catch(() => ({ nao_lidas: 0, itens: [] })));
+    return;
+  }
+  if (!b.dataset.aviso) return;
+  fecharPainel();
+  if (b.classList.contains("nova")) marcarLidas({ ids: [Number(b.dataset.aviso)] });
+  if (b.dataset.tarefa) irParaTarefa(Number(b.dataset.tarefa));
+}
+
+async function marcarLidas(json) {
+  try {
+    const r = await api("/api/notificacoes/lidas", { json });
+    contarNaoLidas(r.nao_lidas);
+    return true;
+  } catch (e) {
+    toast(e.message, "erro");
+    return false;
+  }
+}
+
+// A tarefa abre na Gestão (o link muda e ela abre a janela da tarefa); se o link já é esse, abre direto.
+function irParaTarefa(id) {
+  const destino = `#/gestao?tarefa=${id}`;
+  if (location.hash === destino) abrirTarefaNaAgenda(id);
+  else location.hash = destino;
 }
 
 // ---------- justificar o atraso ----------

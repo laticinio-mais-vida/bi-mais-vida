@@ -113,8 +113,9 @@ export function agendaTemAlteracoes() {
   return (!!raiz?.isConnected && (formMudou() || feedbackEscrito())) || janelaMudou();
 }
 
-// dia: o dia a abrir (#/gestao?dia=…, sempre na vista da agenda); sem ele, hoje.
-export function montarAgenda(el, { dia } = {}) {
+// dia: o dia a abrir (#/gestao?dia=…, sempre na vista da agenda); sem ele, hoje. tarefa: a tarefa a abrir na janela
+// dela (#/gestao?tarefa=…, o link de uma notificação do sino).
+export function montarAgenda(el, { dia, tarefa } = {}) {
   el.innerHTML = `<section class="cartao ag-cal entra" style="--i:0" id="ag-raiz">
       <div class="cartao-cab">
         <div><h2>${icone("calendario")}Minha agenda<span class="ag-mes" id="ag-titulo"></span></h2>
@@ -158,6 +159,13 @@ export function montarAgenda(el, { dia } = {}) {
   recolher(ler(CHAVE_RECOLHIDA, false));
   escolherVista(estado.vista);
   carregar(valido ? mesDe(dia) : undefined, { aberto: valido ? dia : undefined });
+  if (Number(tarefa) > 0) abrirTarefa(Number(tarefa));
+}
+
+// O link de uma notificação do sino (#/gestao?tarefa=…) com a Gestão já montada: abre a janela da tarefa.
+export function abrirTarefaNaAgenda(id) {
+  if (!raiz?.isConnected || !(Number(id) > 0) || (janelaMudou() && !confirm(DESCARTAR_JANELA))) return;
+  abrirTarefa(Number(id));
 }
 
 // O link de uma proposta do Assistente (#/gestao?dia=…) com a Gestão já montada: abre a agenda nesse dia.

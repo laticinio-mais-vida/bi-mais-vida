@@ -54,6 +54,7 @@ from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
+from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
@@ -146,6 +147,7 @@ class Aplicacao:
                                  self.metas_aprovadas)
         self.agenda = Agenda(self.banco, self.configuracao)
         self.tarefas = Tarefas(self.banco, self.configuracao)  # as regras: o calendário do horário ocupado
+        self.notificacoes = Notificacoes(self.banco)
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
@@ -597,12 +599,25 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(self.app.tarefas.quadro(eu))
         return self._json(self.app.agenda.historico(eu, q.get("id")))
 
-    def _avisos(self, usuario: dict):
-        """O que o painel de quem tem a Gestão confere a cada minuto (web/js/avisos.js): as tarefas e subtarefas
-        vencidas que a pessoa precisa justificar agora (o painel fica bloqueado até ela justificar)."""
+    def _avisos(self, usuario: dict, caminho: str):
+        """O que o painel de quem tem a Gestão confere a cada minuto (web/js/avisos.js): os avisos de prazo que
+        faltam gerar, as tarefas e subtarefas vencidas que a pessoa precisa justificar agora (o painel fica
+        bloqueado até ela justificar) e quantas notificações ela não leu. /api/notificacoes: a lista do sino."""
         if not self._pode_gestao(usuario):
             return
-        return self._json({"pendencias": self.app.tarefas.pendencias(usuario["id"])})
+        eu = usuario["id"]
+        if caminho == "/api/notificacoes":
+            return self._json(self.app.notificacoes.listar(eu))
+        self.app.tarefas.gerar_avisos(eu)
+        return self._json({"pendencias": self.app.tarefas.pendencias(eu),
+                           "nao_lidas": self.app.notificacoes.contar(eu)})
+
+    def _marcar_lidas(self, usuario: dict, corpo: dict):
+        """As notificações que a pessoa abriu no sino (ids) ou todas (todas); a resposta traz quantas faltam ler."""
+        if not self._pode_gestao(usuario):
+            return
+        n = self.app.notificacoes.marcar_lidas(usuario["id"], corpo.get("ids"), bool(corpo.get("todas")))
+        return self._json({"ok": True, "nao_lidas": n})
 
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
         if not self._pode_gestao(usuario):
@@ -751,8 +766,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self._config_gestao())
             if url.path in ROTAS_AGENDA_LER:
                 return self._ler_agenda(usuario, url.path, q)
-            if url.path == "/api/avisos":  # o que o painel confere a cada minuto: as justificativas que faltam
-                return self._avisos(usuario)
+            if url.path in ("/api/avisos", "/api/notificacoes"):  # o que o painel confere a cada minuto; o sino
+                return self._avisos(usuario, url.path)
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
                                    **self._visualizadores()})
@@ -838,6 +853,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":
                 return self._salvar_config_gestao(usuario, self._corpo_json())
+            if url.path == "/api/notificacoes/lidas":  # ids: as que a pessoa abriu; todas: marcar todas
+                return self._marcar_lidas(usuario, self._corpo_json())
             if url.path in ROTAS_AGENDA_MUDAR:
                 return self._mudar_agenda(usuario, url.path, self._corpo_json())
             if url.path == "/api/config/padrao":

@@ -12,7 +12,7 @@
 // por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js):
 // as atividades dela e as tarefas de que participa, com os próprios eventos: os daqui ignoram o que acontece dentro
 // dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD> abre a agenda nesse dia.
-import { abrirNaAgenda, agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
+import { abrirNaAgenda, abrirTarefaNaAgenda, agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
 import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
          duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
@@ -168,7 +168,8 @@ export function montarGestao(container, contexto) {
   raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
   criarJanela();
-  montarAgenda(raiz.querySelector("#g-agenda"), { dia: parametros().get("dia") });
+  montarAgenda(raiz.querySelector("#g-agenda"), { dia: parametros().get("dia"), tarefa: parametros().get("tarefa") });
+  if (parametros().get("tarefa")) atualizarUrl(); // a janela da tarefa já abriu: o link volta a ser o da página
   if (!ligado) {
     ligado = true;
     window.addEventListener("hashchange", aoMudarHash);
@@ -209,6 +210,10 @@ function aoMudarHash() {
   }
   const q = parametros();
   if (!estado.naPagina) { estado.naPagina = true; carregar(true); recarregarAgenda(); }
+  if (q.get("tarefa")) { // uma notificação do sino: abre a tarefa sem mudar o resto da página
+    abrirTarefaNaAgenda(q.get("tarefa"));
+    return atualizarUrl();
+  }
   if (q.get("dia")) abrirNaAgenda(q.get("dia")); // o link de uma proposta do Assistente
   if (q.get("rascunho")) return abrirRascunho(q.get("rascunho"));
   const antes = [estado.regiao, estado.vista, estado.vendedor, estado.acao].join();

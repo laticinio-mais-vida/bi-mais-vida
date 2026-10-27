@@ -27,6 +27,10 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
 - Horário ocupado (migração 026, bi/agenda.py): o horário da tarefa vale para todas as pessoas dela; o da subtarefa,
   para o responsável. Um horário que entra ou muda (tarefa nova, prazo mudado, pessoa nova numa tarefa com horário,
   subtarefa nova ou passada para outro) não pode cair no horário ocupado da pessoa.
+- Avisos (o sino, bi/notificacoes.py, migração 028): cada gravação avisa, na mesma transação, quem precisa saber:
+  quem entrou na tarefa, o responsável pela subtarefa nova, passada para ele ou com o prazo mudado, os participantes
+  quando o prazo da tarefa muda, quem criou a tarefa quando uma subtarefa é concluída ou justificada e todos da
+  tarefa quando ela é concluída. Os avisos de prazo (vence em breve, venceu) nascem em gerar_avisos.
 """
 from __future__ import annotations
 
@@ -35,6 +39,7 @@ import datetime as dt
 from .agenda import _data, _dm, _hhmm, _hora, _id, _texto, _titulo, calendario, conferir_pontos, travar_horarios
 from .banco import Banco, hora
 from .conversas import NaoEncontrada
+from .notificacoes import avisar, limpar
 
 MAX_PESSOAS = 30      # participantes de uma tarefa, sem quem criou
 MAX_SUBTAREFAS = 50
@@ -44,6 +49,7 @@ _NAO_ACHOU_SUB = "subtarefa não encontrada; ela pode ter sido excluída"
 _MUDOU = "a tarefa acabou de mudar; abra de novo e repita"
 _NAO_ATRASOU = "{} não atrasou: a justificativa é para depois do prazo"
 RENOVAR = dt.timedelta(hours=24)  # vencida e aberta, a justificativa do prazo é pedida de novo depois disto
+DIAS_VENCEU = 7  # o aviso "venceu" (para quem criou a tarefa) sai só para os prazos vencidos nestes últimos dias
 # Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
 _COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
 _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "iniciada_em", "concluida_em", "versao",
@@ -410,12 +416,12 @@ class Tarefas:
     def _travar(con, usuario: int, id_: int, nao_achou: str = _NAO_ACHOU) -> dict:
         """A tarefa, travada até o fim da transação, e o papel de quem mexe (eu_criador, autonomia)."""
         linha = con.execute(
-            "SELECT t.id, t.criador, t.prazo, t.hora, t.versao, t.concluida_em, p.autonomia FROM agenda_tarefas t "
-            "JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %s WHERE t.id = %s FOR UPDATE OF t",
-            [usuario, id_]).fetchone()
+            "SELECT t.id, t.criador, t.titulo, t.prazo, t.hora, t.versao, t.concluida_em, p.autonomia "
+            "FROM agenda_tarefas t JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %s "
+            "WHERE t.id = %s FOR UPDATE OF t", [usuario, id_]).fetchone()
         if not linha:
             raise NaoEncontrada(nao_achou)
-        t = dict(zip(("id", "criador", "prazo", "hora", "versao", "concluida_em", "autonomia"), linha))
+        t = dict(zip(("id", "criador", "titulo", "prazo", "hora", "versao", "concluida_em", "autonomia"), linha))
         return {**t, "eu_criador": t["criador"] == usuario}
 
     def _travar_sub(self, con, usuario: int, id_) -> tuple[dict, dict]:
@@ -430,6 +436,82 @@ class Tarefas:
         if not linha:  # saiu enquanto esperava a trava
             raise NaoEncontrada(_NAO_ACHOU_SUB)
         return t, dict(zip(("id", "titulo", "descricao", "prazo", "hora", "responsavel", "concluida_em"), linha))
+
+    # --- avisos (o sino, bi/notificacoes.py) ---------------------------------------------------
+    @staticmethod
+    def _nome(con, usuario: int) -> str:
+        linha = con.execute("SELECT nome FROM usuarios WHERE id = %s", [usuario]).fetchone()
+        return linha[0] if linha else "Alguém"
+
+    def _prazo(self, prazo: dt.date, h: dt.time | None) -> str:
+        return _texto_prazo(prazo, h, self.hoje())
+
+    def _avisar_incluido(self, con, pessoa: int, nome: str, eu: int, tarefa: int, t: dict) -> None:
+        """Quem entrou na tarefa: um aviso só, com quantas subtarefas são dele."""
+        n = sum(s["responsavel"] == pessoa for s in t["subtarefas"])
+        subs = f", com {n} subtarefa{'s' if n > 1 else ''} para você" if n else ""
+        avisar(con, [pessoa], "incluido", f"{nome} incluiu você na tarefa “{t['titulo']}” (prazo "
+               f"{self._prazo(t['prazo'], t['hora'])}){subs}", eu, tarefa)
+
+    def _avisar_sub(self, con, s: dict, antes: tuple | None, nome: str, eu: int, tarefa: int) -> None:
+        """A subtarefa nova ou mudada, para o responsável: criada ou passada para ele, ou com o prazo mudado. antes:
+        (responsavel, prazo, hora) de antes da mudança (None: nova)."""
+        prazo = self._prazo(s["prazo"], s["hora"])
+        if antes is None:
+            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} criou a subtarefa “{s['titulo']}” para você "
+                   f"(até {prazo})", eu, tarefa)
+        elif s["responsavel"] != antes[0]:
+            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} passou a subtarefa “{s['titulo']}” para você "
+                   f"(até {prazo})", eu, tarefa, s["id"])
+        elif (s["prazo"], s["hora"]) != tuple(antes[1:]):
+            avisar(con, [s["responsavel"]], "prazo_mudou", f"{nome} mudou o prazo de “{s['titulo']}” para {prazo}", eu,
+                   tarefa, s["id"])
+
+    def _avisar_conclusao(self, con, t: dict, s: dict | None, eu: int) -> None:
+        """Concluída agora: a subtarefa, para quem criou a tarefa; a tarefa, para todos dela (menos quem concluiu)."""
+        nome = self._nome(con, eu)
+        if s:
+            avisar(con, [t["criador"]], "concluida", f"{nome} concluiu a subtarefa “{s['titulo']}” (tarefa "
+                   f"“{t['titulo']}”)", eu, t["id"], s["id"])
+        else:
+            avisar(con, self._pessoas_da(con, t["id"]), "concluida", f"{nome} concluiu a tarefa “{t['titulo']}”", eu,
+                   t["id"])
+
+    def gerar_avisos(self, usuario: int) -> None:
+        """Os avisos de prazo de quem pergunta (o painel pergunta a cada minuto), cada um uma vez só por item e por
+        prazo, e a limpeza dos antigos. Vence em breve: no dia de antes e no do prazo, até vencer (a subtarefa para o
+        responsável, a tarefa para todos dela). Venceu: para quem criou, a subtarefa de outra pessoa que venceu nos
+        últimos DIAS_VENCEU dias (a de antes disso não avisa, para não chegar uma enxurrada de atrasos antigos)."""
+        agora = self.agora()
+        hoje = agora.date()
+        with self.banco.conexao() as con:
+            limpar(con, usuario)
+            perto = con.execute(
+                "SELECT t.id, NULL::bigint, t.titulo, t.prazo, t.hora FROM agenda_tarefas t "
+                "JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %(eu)s "
+                "WHERE t.concluida_em IS NULL AND t.prazo BETWEEN %(hoje)s AND %(amanha)s "
+                "UNION ALL SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora FROM agenda_subtarefas s "
+                "JOIN agenda_tarefas t ON t.id = s.tarefa WHERE s.responsavel = %(eu)s AND s.concluida_em IS NULL "
+                "AND t.concluida_em IS NULL AND s.prazo BETWEEN %(hoje)s AND %(amanha)s",
+                {"eu": usuario, "hoje": hoje, "amanha": hoje + dt.timedelta(days=1)}).fetchall()
+            for tarefa, sub, titulo, prazo, h in perto:
+                if agora > _vence_em(prazo, h):
+                    continue  # venceu: aí é a justificativa
+                quando = (f"hoje{f' às {_hhmm(h)}' if h else ''}" if prazo == hoje
+                          else f"amanhã ({self._prazo(prazo, h)})")
+                avisar(con, [usuario], "vence_em_breve", f"“{titulo}” vence {quando}", None, tarefa, sub,
+                       chave=f"vence:{'s' if sub else 't'}{sub or tarefa}:{prazo}:{_hhmm(h) or ''}")
+            vencidas = con.execute(
+                "SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora, u.nome FROM agenda_subtarefas s "
+                "JOIN agenda_tarefas t ON t.id = s.tarefa JOIN usuarios u ON u.id = s.responsavel "
+                "WHERE t.criador = %(eu)s AND s.responsavel <> %(eu)s AND s.concluida_em IS NULL "
+                "AND t.concluida_em IS NULL AND s.prazo BETWEEN %(desde)s AND %(hoje)s",
+                {"eu": usuario, "desde": hoje - dt.timedelta(days=DIAS_VENCEU), "hoje": hoje}).fetchall()
+            for tarefa, sub, titulo, prazo, h, nome in vencidas:
+                if agora - dt.timedelta(days=DIAS_VENCEU) < _vence_em(prazo, h) < agora:
+                    avisar(con, [usuario], "venceu", f"A subtarefa “{titulo}”, de {nome}, venceu sem ser concluída "
+                           f"({self._prazo(prazo, h)})", None, tarefa, sub,
+                           chave=f"venceu:s{sub}:{prazo}:{_hhmm(h) or ''}")
 
     @staticmethod
     def _so_quem_criou(t: dict, o_que: str) -> None:
@@ -493,6 +575,9 @@ class Tarefas:
                 raise NaoEncontrada("seu usuário não existe mais")
             self._gravar_pessoas(con, linha[0], {usuario: False, **t["participantes"]})
             self._inserir_subs(con, linha[0], t["subtarefas"], usuario)
+            nome = self._nome(con, usuario)
+            for p in t["participantes"]:  # um aviso por pessoa, com as subtarefas dela
+                self._avisar_incluido(con, p, nome, usuario, linha[0], t)
         return self.obter(usuario, linha[0])
 
     def editar(self, usuario: int, id_, dados: dict, versao) -> dict:
@@ -538,6 +623,19 @@ class Tarefas:
             self._inserir_subs(con, t["id"], [s for s in novo["subtarefas"] if not s["id"]], usuario)
             con.execute("DELETE FROM agenda_tarefa_pessoas WHERE tarefa = %s AND usuario <> %s "
                         "AND NOT (usuario = ANY(%s::bigint[]))", [t["id"], usuario, list(novo["participantes"])])
+            # os avisos: quem entrou (um só, com as subtarefas dele); para quem já estava, o prazo da tarefa mudado e
+            # as subtarefas novas, passadas para ele ou com o prazo mudado
+            nome = self._nome(con, usuario)
+            entraram = [p for p in novo["participantes"] if p not in antes]
+            for p in entraram:
+                self._avisar_incluido(con, p, nome, usuario, t["id"], novo)
+            if mudou:
+                prazo = self._prazo(novo["prazo"], novo["hora"])
+                avisar(con, [p for p in novo["participantes"] if p in antes], "prazo_mudou",
+                       f"{nome} mudou o prazo da tarefa “{novo['titulo']}” para {prazo}", usuario, t["id"])
+            for s in novo["subtarefas"]:
+                if s["responsavel"] not in entraram:
+                    self._avisar_sub(con, s, subs_antes[s["id"]] if s["id"] else None, nome, usuario, t["id"])
         return self.obter(usuario, t["id"])
 
     def excluir(self, usuario: int, id_) -> None:
@@ -555,6 +653,8 @@ class Tarefas:
                 raise ValueError("a tarefa não estava concluída")
             con.execute(f"UPDATE agenda_tarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
                         self._parametros(usuario, t["id"]))
+            if situacao == "concluida" and not t["concluida_em"]:
+                self._avisar_conclusao(con, t, None, usuario)
         return self.obter(usuario, t["id"])
 
     def concluir(self, usuario: int, id_) -> dict:
@@ -594,9 +694,10 @@ class Tarefas:
             if not _venceu(t["prazo"], t["hora"], t["concluida_em"], self.agora()):
                 raise ValueError(_NAO_ATRASOU.format("a tarefa ainda"))
             self._justificar(con, t["id"], None, usuario, t["prazo"], t["hora"], texto)
-            if concluir:
+            if concluir and not t["concluida_em"]:
                 con.execute(f"UPDATE agenda_tarefas SET {_mudar_situacao('concluida')} WHERE id = %(id)s",
                             self._parametros(usuario, t["id"]))
+                self._avisar_conclusao(con, t, None, usuario)
         return self.obter(usuario, t["id"])
 
     # --- subtarefas ------------------------------------------------------------------------
@@ -619,6 +720,7 @@ class Tarefas:
             self._conferir_horarios(con, cal, self._ponto_sub(s), usuario)
             self._inserir_subs(con, t["id"], [s], usuario)
             self._nova_versao(con, t["id"])
+            self._avisar_sub(con, s, None, self._nome(con, usuario), usuario, t["id"])
         return self.obter(usuario, t["id"])
 
     def editar_subtarefa(self, usuario: int, id_, dados: dict) -> dict:
@@ -643,6 +745,8 @@ class Tarefas:
                         "responsavel = %(responsavel)s, prazo = %(prazo)s, hora = %(hora)s, atualizada_em = now() "
                         "WHERE id = %(id)s", {**novo, "id": s["id"]})
             self._nova_versao(con, t["id"])
+            self._avisar_sub(con, {**novo, "id": s["id"]}, (s["responsavel"], s["prazo"], s["hora"]),
+                             self._nome(con, usuario), usuario, t["id"])
         return self.obter(usuario, t["id"])
 
     def _situar(self, usuario: int, id_, situacao: str | None) -> dict:
@@ -656,6 +760,8 @@ class Tarefas:
                 raise ValueError("a subtarefa não estava concluída")
             con.execute(f"UPDATE agenda_subtarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
                         self._parametros(usuario, s["id"]))
+            if situacao == "concluida" and not s["concluida_em"]:
+                self._avisar_conclusao(con, t, s, usuario)
         return self.obter(usuario, t["id"])
 
     def mover_subtarefa(self, usuario: int, id_, situacao) -> dict:
@@ -673,10 +779,14 @@ class Tarefas:
             if not _venceu(s["prazo"], s["hora"], s["concluida_em"] or t["concluida_em"], self.agora()):
                 raise ValueError(_NAO_ATRASOU.format("a subtarefa ainda"))
             self._justificar(con, t["id"], s["id"], usuario, s["prazo"], s["hora"], texto)
-            if concluir:
+            resumo = texto if len(texto) <= 140 else texto[:139].rstrip() + "…"
+            avisar(con, [t["criador"]], "justificativa", f"{self._nome(con, usuario)} justificou o atraso de "
+                   f"“{s['titulo']}”: “{resumo}”", usuario, t["id"], s["id"])
+            if concluir and not s["concluida_em"]:
                 self._aberta(t)
                 con.execute(f"UPDATE agenda_subtarefas SET {_mudar_situacao('concluida')} WHERE id = %(id)s",
                             self._parametros(usuario, s["id"]))
+                self._avisar_conclusao(con, t, s, usuario)
         return self.obter(usuario, t["id"])
 
     def concluir_subtarefa(self, usuario: int, id_) -> dict:

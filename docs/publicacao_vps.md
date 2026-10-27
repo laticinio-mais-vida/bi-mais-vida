@@ -530,6 +530,18 @@ continuar atrasada, pede de novo a cada 24 horas. As justificativas viram um his
 - **Voltar atrás:** o código anterior lê as colunas que a 027 tirou: é preciso restaurar o dump de antes da
   publicação (as justificativas escritas depois dela se perdem).
 
+#### Notificações, o sino (migração 028)
+
+Quem tem a página Gestão ganha o **sino** no topo, com o que acontece nas tarefas da agenda (incluído numa tarefa,
+subtarefa nova, prazo mudado, vence em breve, venceu, concluída, justificativa enviada).
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 028** só cria a tabela `notificacoes` e o índice; nada existente muda. Ensaie em BEGIN/ROLLBACK, como
+  as outras.
+- **Depois de publicar:** o sino começa vazio. Os avisos de ação aparecem a partir das ações seguintes; os de prazo
+  nascem no primeiro acesso de cada pessoa ("venceu" só para os prazos dos últimos 7 dias).
+- **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e o sino some.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

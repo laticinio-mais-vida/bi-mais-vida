@@ -999,6 +999,44 @@ body.sem-rolagem { overflow: hidden; }
   background: #fff; color: var(--marinho);
 }
 .avatar.grande { width: 40px; height: 40px; font-size: 15px; background: var(--marinho); color: #fff; }
+/* o sino (avisos.js): o número de não lidas e o painel com as notificações, como o menu do usuário */
+.btn-sino { position: relative; justify-content: center; width: 42px; height: 42px; padding: 0; }
+.btn-sino .ic { width: 19px; height: 19px; }
+.sino-n {
+  position: absolute; top: -5px; right: -5px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px;
+  background: var(--vermelho); color: #fff; font: 800 11px/20px var(--f-texto); text-align: center;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .9);
+}
+.painel-avisos {
+  position: fixed; z-index: 150; width: min(380px, calc(100vw - 16px)); max-height: min(70vh, 560px); overflow: auto;
+  border-radius: 18px; background: var(--surface); border: 1px solid var(--linha); box-shadow: var(--sombra-2);
+  animation: menu-abre .25s var(--mola);
+}
+.pa-cab {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px 10px; background: var(--surface); border-bottom: 1px solid var(--linha);
+}
+.pa-cab b { font-size: 15px; }
+.pa-cab .ge-link { font-size: 12.5px; }
+.pa-lista { display: grid; gap: 2px; margin: 0; padding: 6px; list-style: none; }
+.pa-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 12px;
+  background: none; color: var(--tinta); text-align: left; cursor: pointer; font: 500 13px/1.4 var(--f-texto);
+  transition: background .2s;
+}
+.pa-item:hover, .pa-item:focus-visible { background: var(--surface-2); outline: none; }
+.pa-item.nova { background: var(--acento-suave); }
+.pa-item.nova .pa-txt > span { font-weight: 700; }
+.pa-ic { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: var(--surface-3); color: var(--tinta-2); }
+.pa-ic .ic { width: 15px; height: 15px; }
+.pa-venceu { color: var(--ruim); }
+.pa-concluida { color: var(--ok); }
+.pa-justificativa { color: var(--atencao); }
+.pa-vence_em_breve, .pa-prazo_mudou { color: var(--acento-tinta); }
+.pa-txt { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.pa-txt small { color: var(--tinta-3); font-size: 11.5px; }
+.pa-vazio { display: flex; align-items: center; gap: 8px; margin: 0; padding: 22px 16px; color: var(--tinta-3); font-size: 13px; }
+.pa-vazio .ic { width: 16px; height: 16px; }
 .menu-usuario {
   position: fixed; z-index: 150; min-width: 240px; padding: 6px;
   border-radius: 16px; background: var(--surface); border: 1px solid var(--linha); box-shadow: var(--sombra-2);

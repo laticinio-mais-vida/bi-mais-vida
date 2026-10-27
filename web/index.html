@@ -102,6 +102,9 @@
       <button class="btn-vidro" id="btn-atualizar" type="button" title="Ler de novo a cópia do banco" data-admin data-so-local hidden>
         <span data-icone="atualizar"></span><span class="rotulo">Atualizar dados</span>
       </button>
+      <button class="btn-vidro btn-sino" id="btn-sino" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="painel-avisos" aria-label="Notificações" title="Notificações" hidden>
+        <span data-icone="sino"></span><span class="sino-n" id="sino-n" hidden></span>
+      </button>
       <button class="btn-vidro btn-usuario" id="btn-usuario" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-usuario">
         <span class="avatar" id="avatar-usuario"></span><span class="rotulo" id="nome-usuario"></span>
       </button>
@@ -128,6 +131,8 @@
 </main>
 
 <footer class="rodape" id="rodape"></footer>
+
+<div class="painel-avisos" id="painel-avisos" role="region" aria-label="Notificações" hidden></div>
 
 <div class="menu-usuario" id="menu-usuario" role="menu" hidden>
   <div class="menu-cab"><span class="avatar grande" id="menu-avatar"></span><div><b id="menu-nome"></b><small id="menu-papel"></small></div></div>

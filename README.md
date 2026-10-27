@@ -8,7 +8,8 @@ faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere
 produto (as páginas de sugestão do Power BI). A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
-que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban.
+que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
+uma tarefa precisa ser justificado, e o **sino** no topo avisa o que acontece nas tarefas.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
@@ -724,6 +725,28 @@ subtarefas não aparecem no kanban.
   No celular, onde não dá para arrastar, a situação se muda por ali.
 - **Nova**, no kanban, já abre o formulário em **Tarefa**.
 
+#### Notificações (o sino)
+
+Quem tem a página Gestão vê, no topo de qualquer página, um **sino** à esquerda do nome, com o número de notificações
+não lidas. Clicar abre a lista com as 50 mais recentes; clicar numa abre a tarefa na Gestão e marca como lida, e
+**Marcar todas como lidas** zera o número. O painel confere a cada minuto e ao voltar para a aba. Ninguém recebe aviso
+do que ele mesmo fez, e as notificações ficam guardadas por 90 dias.
+
+| Aviso | Quem recebe | Exemplo |
+|---|---|---|
+| Incluído numa tarefa | quem entrou (um aviso só, com as subtarefas dele) | "Ana incluiu você na tarefa “Feira de novembro” (prazo 30/10 às 14:00), com 2 subtarefas para você" |
+| Subtarefa nova para você | o responsável, se outra pessoa criou ou passou a subtarefa para ele | "Ana criou a subtarefa “Levantar preços” para você (até 28/10)" |
+| Prazo mudou | o responsável (subtarefa) ou os participantes (tarefa) | "Ana mudou o prazo de “Levantar preços” para 31/10" |
+| Vence em breve | subtarefa: o responsável; tarefa: todos dela | "“Levantar preços” vence amanhã (28/10)" |
+| Venceu | quem criou a tarefa, nas subtarefas dos outros | "A subtarefa “Levantar preços”, de Beto, venceu sem ser concluída (28/10)" |
+| Concluída | subtarefa: quem criou a tarefa; tarefa: todos dela | "Beto concluiu a subtarefa “Levantar preços” (tarefa “Feira de novembro”)" |
+| Justificativa enviada | quem criou a tarefa | "Beto justificou o atraso de “Levantar preços”: “o fornecedor não respondeu”" |
+
+Os avisos de prazo nascem quando o painel de quem recebe pergunta (o servidor não tem nada rodando de tempos em
+tempos), uma vez só por item e por prazo: prorrogado, o prazo novo avisa de novo. "Vence em breve" sai no dia de
+antes e no do prazo, até vencer; "venceu" sai só para os prazos dos últimos 7 dias, para não chegar uma enxurrada de
+atrasos antigos. A tarefa excluída leva as notificações dela.
+
 ### Pelo Assistente
 
 - **Lançar (só o administrador):** o Assistente traduz o pedido em texto para a região, o indicador, o prazo e o
@@ -813,6 +836,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
+| `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -962,6 +986,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
+| `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
