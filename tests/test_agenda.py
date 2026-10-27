@@ -15,6 +15,7 @@ from bi.assistente import Ferramentas
 from bi.calendario import Calendario
 from bi.configuracao import padrao
 from bi.conversas import Conversas, NaoEncontrada
+from bi.tarefas import Tarefas
 from tests.apoio import (BaseBanco, ClienteFalso, ConfiguracaoFixa, bloco_ferramenta, bloco_texto, criar_assistente,
                          criar_calc, resposta)
 
@@ -34,6 +35,13 @@ class TestOcorre(unittest.TestCase):
     def test_unica(self):
         a = atividade(inicio="2026-10-15")
         self.assertEqual(dias_de(a, D(2026, 10, 1), D(2026, 11, 30)), [D(2026, 10, 15)])
+
+    def test_unica_de_varios_dias(self):
+        a = atividade(inicio="2026-11-10", fim="2026-11-14")  # a feira: todos os dias do início ao fim
+        self.assertEqual(dias_de(a, D(2026, 11, 1), D(2026, 11, 30)),
+                         [D(2026, 11, 10), D(2026, 11, 11), D(2026, 11, 12), D(2026, 11, 13), D(2026, 11, 14)])
+        semanal = atividade(repeticao="semanal", dias_semana=[1], inicio="2026-10-26", fim="2026-10-30")
+        self.assertEqual(dias_de(semanal, D(2026, 10, 1), D(2026, 11, 30)), [D(2026, 10, 26)])  # a repetida não muda
 
     def test_diaria_com_fim(self):
         a = atividade(repeticao="diaria", inicio="2026-10-28", fim="2026-11-02")
@@ -77,7 +85,11 @@ class TestValida(unittest.TestCase):
         self.assertEqual((a["titulo"], a["descricao"], a["dias_semana"], a["dia_mes"], a["intervalo"]),
                          ("Ligar para o Rubens", "pedido da semana", [2], None, None))
         self.assertEqual((a["so_dias_uteis"], a["regiao"], a["exige_feedback"]), (False, None, True))
-        self.assertIsNone(_valida({"titulo": "x", "inicio": "2026-10-26", "fim": "2026-12-01"})["fim"])  # única
+        # a única com o último dia dura vários dias; com o mesmo dia, é de um dia só
+        self.assertEqual(_valida({"titulo": "x", "inicio": "2026-10-26", "fim": "2026-12-01"})["fim"], D(2026, 12, 1))
+        self.assertIsNone(_valida({"titulo": "x", "inicio": "2026-10-26", "fim": "2026-10-26"})["fim"])
+        h = _valida({"titulo": "x", "inicio": "2026-10-26", "hora": "14h", "hora_fim": "15:30", "ocupado": True})
+        self.assertEqual((h["hora"], h["hora_fim"], h["ocupado"]), (dt.time(14), dt.time(15, 30), True))
 
     def test_recusa(self):
         casos = {
@@ -91,6 +103,9 @@ class TestValida(unittest.TestCase):
             "ES ou BA": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "diaria", "so_dias_uteis": True},
             "antes do início": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "diaria", "fim": "2026-10-01"},
             "120 caracteres": {"titulo": "x" * 121, "inicio": "2026-10-26"},
+            "a que horas a atividade começa": {"titulo": "x", "inicio": "2026-10-26", "hora_fim": "15:00"},
+            "depois do começo": {"titulo": "x", "inicio": "2026-10-26", "hora": "15:00", "hora_fim": "15:00"},
+            "como ocupado": {"titulo": "x", "inicio": "2026-10-26", "hora": "15:00", "ocupado": True},
         }
         for trecho, dados in casos.items():
             with self.subTest(trecho), self.assertRaises(ValueError) as e:
@@ -181,9 +196,12 @@ class TestAgendaNoBanco(BaseBanco):
         self.assertEqual(len(self.itens(m, "2026-10-26")), 1)
         self.assertEqual(self.itens(m, "2026-10-27"), [])
         with self.assertRaises(ValueError):
-            self.agenda.encerrar(self.ana, self.criar(inicio="2026-10-26"))  # única
+            self.agenda.encerrar(self.ana, self.criar(inicio="2026-10-26"))  # única de um dia
         with self.assertRaises(ValueError):
             self.agenda.encerrar(self.ana, self.criar(repeticao="diaria", inicio="2026-11-01"))  # não começou
+        feira = self.criar(titulo="Feira", inicio="2026-10-24", fim="2026-10-30")  # a de vários dias também encerra
+        self.assertEqual(self.agenda.encerrar(self.ana, feira)["fim"], "2026-10-26")
+        self.assertEqual(self.agenda.historico(self.ana, feira)["atividade"]["quando"], "De 24/10 a 26/10")
         self.agenda.excluir(self.ana, a)
         self.assertEqual(self.contar("agenda_registros"), 0)
 
@@ -216,6 +234,108 @@ class TestAgendaNoBanco(BaseBanco):
                         "VALUES (%s, 'x', '2026-10-26', 'semanal')", [self.ana])  # semanal sem os dias
 
 
+class TestHorarioOcupado(BaseBanco):
+    """Horário ocupado (migração 026). Hoje é segunda, 26/10/2026; a Ana tem "Reunião com fornecedor" em 30/10,
+    14:00–15:00, ocupado. Beto cria as tarefas."""
+
+    def setUp(self):
+        super().setUp()
+        cfg = padrao()
+        self.agenda = Agenda(self.banco, ConfiguracaoFixa(cfg), hoje=lambda: HOJE)
+        self.tarefas = Tarefas(self.banco, ConfiguracaoFixa(cfg), hoje=lambda: HOJE)
+        self.ana, self.beto = (self.criar_usuario(n, paginas=["metas", "gestao"]) for n in ("ana", "beto"))
+        self.reuniao = self.atividade(self.ana, titulo="Reunião com fornecedor", hora="14:00", hora_fim="15:00",
+                                      ocupado=True)
+
+    def atividade(self, dono, **campos) -> int:
+        return self.agenda.criar(dono, {"titulo": "Ligar para o João", "inicio": "2026-10-30", **campos})["id"]
+
+    def tarefa(self, **campos) -> dict:
+        return self.tarefas.criar(self.beto, {"titulo": "Feira", "prazo": "2026-10-31",
+                                              "participantes": [{"id": self.ana}], **campos})
+
+    def recusa(self, trecho: str, chamada) -> str:
+        with self.assertRaises(ValueError) as e:
+            chamada()
+        self.assertIn(trecho, str(e.exception))
+        return str(e.exception)
+
+    def test_a_tabela_do_plano(self):
+        self.recusa("esse horário está ocupado por “Reunião com fornecedor” (30/10, 14:00–15:00)",
+                    lambda: self.atividade(self.ana, hora="14:30"))
+        self.atividade(self.ana, hora="15:00", hora_fim="16:00")  # começa quando a outra termina
+        self.atividade(self.ana)  # sem horário
+        msg = self.recusa("Ana está com o horário ocupado em 30/10, das 14:00 às 15:00: mude o horário da tarefa "
+                          "“Feira”", lambda: self.tarefa(prazo="2026-10-30", hora="14:30"))
+        self.assertNotIn("Reunião", msg)  # a agenda da Ana é só dela
+        self.recusa("mude o horário da subtarefa “Estande”", lambda: self.tarefa(subtarefas=[
+            {"titulo": "Estande", "responsavel": self.ana, "prazo": "2026-10-30", "hora": "14:00"}]))
+        self.tarefa(subtarefas=[{"titulo": "Estande", "responsavel": self.ana, "prazo": "2026-10-30", "hora": "15:00"}])
+        self.atividade(self.beto, hora="14:00", hora_fim="15:00", ocupado=True)  # é outra pessoa
+        # marcar como ocupado com algo já no horário: recusa; concluída, a subtarefa não conta mais
+        t = self.tarefa(prazo="2026-11-06", subtarefas=[{"titulo": "Enviar relatório", "responsavel": self.ana,
+                                                         "prazo": "2026-11-02", "hora": "08:30"}])
+        equipe = {"titulo": "Reunião de equipe", "inicio": "2026-10-26", "repeticao": "semanal", "dias_semana": [1],
+                  "hora": "08:00", "hora_fim": "09:00", "ocupado": True}
+        self.recusa("já há algo nesse horário em 02/11: a subtarefa “Enviar relatório” (até 08:30). Peça a Beto, "
+                    "que criou a tarefa, para mudar o prazo, ou escolha outro horário",
+                    lambda: self.agenda.criar(self.ana, equipe))
+        self.tarefas.concluir_subtarefa(self.ana, t["subtarefas"][0]["id"])
+        self.agenda.criar(self.ana, equipe)
+
+    def test_repetidas_e_dias_uteis(self):
+        self.atividade(self.ana, titulo="Reunião de equipe", inicio="2026-10-26", repeticao="semanal",
+                       dias_semana=[1], hora="08:00", hora_fim="09:00", ocupado=True)
+        # a diária das 08:30 cruza na primeira segunda depois de começar
+        self.recusa("ocupado por “Reunião de equipe” (02/11, 08:00–09:00)",
+                    lambda: self.atividade(self.ana, inicio="2026-10-27", repeticao="diaria", hora="08:30"))
+        self.atividade(self.ana, inicio="2026-10-27", fim="2026-10-31", repeticao="diaria", hora="08:30")  # sem segunda
+        # ocupado só nos dias úteis do ES: Finados (02/11) fica livre
+        self.atividade(self.ana, titulo="Rota", inicio="2026-10-27", repeticao="diaria", so_dias_uteis=True,
+                       regiao="ES", hora="10:00", hora_fim="11:00", ocupado=True)
+        self.tarefa(prazo="2026-11-02", hora="10:30")
+        self.recusa("Ana está com o horário ocupado em 03/11, das 10:00 às 11:00",
+                    lambda: self.tarefa(prazo="2026-11-03", hora="10:30"))
+        # o que já passou não conta
+        self.atividade(self.ana, titulo="Antiga", inicio="2026-10-20", hora="14:00", hora_fim="15:00", ocupado=True)
+        self.tarefa(prazo="2026-10-20", hora="14:30")
+
+    def test_editar_so_confere_o_que_mudou(self):
+        # um conflito antigo: a tarefa entrou antes de a reunião ficar ocupada
+        with self.banco.conexao() as con:
+            con.execute("UPDATE agenda_atividades SET ocupado = false WHERE id = %s", [self.reuniao])
+        t = self.tarefa(prazo="2026-10-30", hora="14:30")
+        with self.banco.conexao() as con:
+            con.execute("UPDATE agenda_atividades SET ocupado = true WHERE id = %s", [self.reuniao])
+        dados = {"titulo": "Feira de novembro", "prazo": t["prazo"], "hora": t["hora"],
+                 "participantes": [{"id": self.ana}], "subtarefas": []}
+        t = self.tarefas.editar(self.beto, t["id"], dados, t["versao"])  # só o título: passa
+        self.recusa("mude o horário da tarefa “Feira de novembro”",
+                    lambda: self.tarefas.editar(self.beto, t["id"], {**dados, "hora": "14:45"}, t["versao"]))
+        t = self.tarefas.nova_subtarefa(self.beto, t["id"], {"titulo": "Estande", "responsavel": self.ana,
+                                                             "prazo": "2026-10-30", "hora": "13:00"})
+        sub = t["subtarefas"][0]["id"]
+        self.recusa("ocupado em 30/10", lambda: self.tarefas.editar_subtarefa(self.beto, sub, {"hora": "14:10"}))
+        self.tarefas.editar_subtarefa(self.beto, sub, {"titulo": "Montar o estande"})
+        # a atividade: o título passa; aumentar o horário esbarra na tarefa das 14:30
+        reuniao = {"titulo": "Reunião com o fornecedor", "inicio": "2026-10-30", "hora": "14:00", "hora_fim": "15:00",
+                   "ocupado": True}
+        self.agenda.editar(self.ana, self.reuniao, reuniao)
+        self.recusa("já há algo nesse horário em 30/10: a tarefa “Feira de novembro” (até 14:30). Peça a Beto",
+                    lambda: self.agenda.editar(self.ana, self.reuniao, {**reuniao, "hora": "14:20"}))
+
+    def test_propostas_do_assistente(self):
+        self.recusa("ocupado por “Reunião com fornecedor”", lambda: self.agenda.propor(
+            self.ana, "criar", dados={"titulo": "Ligar", "inicio": "2026-10-30", "hora": "14:30"}))
+        p = self.agenda.propor(self.ana, "editar", atividade=self.reuniao, dados={"titulo": "Reunião com o fornecedor"})
+        for chave in ("hora_fim", "ocupado"):  # como uma proposta guardada antes da migração 026
+            del p["dados"][chave]
+        self.agenda.aplicar(self.ana, p)
+        a = self.agenda.mes(self.ana, "2026-10")["atividades"][0]
+        self.assertEqual((a["titulo"], a["hora"], a["hora_fim"], a["ocupado"]),
+                         ("Reunião com o fornecedor", "14:00", "15:00", True))
+
+
 class TestHorarioETexto(unittest.TestCase):
     def test_horario(self):
         self.assertEqual([_hora(h) for h in ("09:00", "9:30", "14h", "14h15", "07:05:00", "", None)],
@@ -236,6 +356,8 @@ class TestHorarioETexto(unittest.TestCase):
             ({"repeticao": "mensal", "dia_mes": 31}, "Todo dia 31 (ou o último do mês)"),
             ({"repeticao": "intervalo", "intervalo": 15, "fim": "2026-11-30"}, "A cada 15 dias, até 30/11"),
             ({"repeticao": "diaria", "fim": "2027-01-05"}, "Todo dia, até 05/01/2027"),
+            ({"inicio": "2026-11-10", "fim": "2026-11-14"}, "De 10/11 a 14/11"),
+            ({"inicio": "2026-12-30", "fim": "2027-01-02"}, "De 30/12 a 02/01/2027"),
         ]
         for campos, esperado in casos:
             with self.subTest(esperado):
@@ -386,6 +508,14 @@ class TestAgendaNoAssistente(BaseBanco):
         self.assertEqual(self.contar("agenda_registros"), 1)  # nada gravado
         r, passo = f.executar("propor_agenda", {"acao": "criar", "titulo": "", "inicio": "2026-10-27"})
         self.assertIn("título", passo["erro"])  # o erro volta para a IA corrigir
+        r, passo = f.executar("propor_agenda", {"acao": "criar", "titulo": "Reunião", "inicio": "2026-10-27",
+                                                "hora": "9h", "hora_fim": "10:00", "ocupado": True})
+        self.assertIsNone(passo["erro"])
+        self.assertEqual({k: r["proposta"]["dados"][k] for k in ("hora", "hora_fim", "ocupado", "quando")},
+                         {"hora": "09:00", "hora_fim": "10:00", "ocupado": True, "quando": "Só neste dia"})
+        r, passo = f.executar("propor_agenda", {"acao": "criar", "titulo": "Ligar", "inicio": "2026-10-27",
+                                                "hora": "09:30"})
+        self.assertIsNone(passo["erro"])  # a reunião ainda é só proposta: não ocupa nada
         r, passo = self.ferramentas(agenda=False).executar("ver_agenda", {"de": "2026-10-19", "ate": "2026-10-26"})
         self.assertIn("Gestão", passo["erro"])
 

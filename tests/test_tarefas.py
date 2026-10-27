@@ -262,6 +262,15 @@ class TestTarefasNoBanco(BaseBanco):
         self.assertEqual(self.sub(r, "Estande")["situacao"], "fazendo")
         self.assertEqual(r["versao"], t["versao"])  # mudar de coluna não é edição
 
+    def test_relogio(self):
+        """O começo e a conclusão gravam a hora do relógio da classe, que os testes fixam, e não a hora do banco."""
+        tarefas = Tarefas(self.banco, agora=lambda: dt.datetime(2026, 10, 26, 9, 15))
+        self.assertEqual(tarefas.hoje(), HOJE)
+        t = tarefas.criar(self.ana, {"titulo": "Feira", "prazo": "2026-10-30"})
+        self.assertEqual(tarefas.mover(self.ana, t["id"], "fazendo")["iniciada_em"], "2026-10-26T09:15:00")
+        self.assertEqual(tarefas.concluir(self.ana, t["id"])["concluida_em"], "2026-10-26T09:15:00")
+        self.assertEqual(self.tarefas.agora(), dt.datetime(2026, 10, 26))  # só com hoje: a meia-noite dele
+
     def test_quadro(self):
         t = self.criar()
         recente = self.tarefas.criar(self.ana, {"titulo": "Recente", "prazo": "2026-10-20"})

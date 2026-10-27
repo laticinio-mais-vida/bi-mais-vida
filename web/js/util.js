@@ -210,12 +210,27 @@ export function linhaTT(rotulo, valor, cor) {
 }
 
 // ---------- avisos ----------
+// O aviso no canto da tela. A caixa dos avisos é um popover: a cada aviso ela volta para o topo da pilha, por cima das
+// janelas abertas (o formulário em tela cheia, a janela da tarefa), que senão a cobririam; os avisos que já estavam
+// nela param de animar, para não entrarem de novo.
 export function toast(msg, tipo = "ok") {
+  const caixa = document.getElementById("toasts");
   const el = document.createElement("div");
   el.className = "toast " + tipo;
   el.innerHTML = icone(tipo === "erro" ? "alerta" : "certo") + `<span>${esc(msg)}</span>`;
-  document.getElementById("toasts").appendChild(el);
-  setTimeout(() => { el.classList.add("sai"); setTimeout(() => el.remove(), 320); }, tipo === "erro" ? 6000 : 3200);
+  el.addEventListener("animationend", () => el.classList.add("parado"), { once: true });
+  caixa.appendChild(el);
+  if (caixa.popover) {
+    if (caixa.matches(":popover-open")) caixa.hidePopover();
+    caixa.showPopover();
+  }
+  setTimeout(() => {
+    el.classList.add("sai");
+    setTimeout(() => {
+      el.remove();
+      if (caixa.popover && !caixa.children.length && caixa.matches(":popover-open")) caixa.hidePopover();
+    }, 320);
+  }, tipo === "erro" ? 6000 : 3200);
 }
 
 // ---------- API ----------

@@ -764,6 +764,9 @@ body.sem-rolagem { overflow: hidden; }
 .tooltip .tt-l .k { display: inline-flex; align-items: center; gap: 6px; }
 .tooltip .tt-l .k i { width: 10px; height: 3px; border-radius: 2px; background: var(--c); }
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 120; display: grid; gap: 10px; }
+/* a caixa é um popover (util.js), para ficar por cima das janelas abertas: sem o estilo padrão dele */
+.toasts[popover] { inset: auto 20px 20px auto; margin: 0; padding: 0; border: 0; background: none; color: inherit; overflow: visible; }
+.toasts[popover]:not(:popover-open) { display: none; }
 .toast {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 16px; border-radius: 14px; min-width: 260px;
@@ -773,6 +776,7 @@ body.sem-rolagem { overflow: hidden; }
 }
 .toast .ic { color: var(--ok); }
 .toast.erro .ic { color: var(--ruim); }
+.toast.parado { animation: none; }
 .toast.sai { animation: toast-out .3s ease forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(.95); } to { opacity: 1; transform: none; } }
 @keyframes toast-out { to { opacity: 0; transform: translateX(30px); } }
@@ -2110,6 +2114,9 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-tela .ag-pessoa-card { background: var(--surface-2); }
 .ag-tela .ag-sub-linha { background: var(--surface); }
 .ag-hora-campo input { max-width: 180px; }
+/* o horário da atividade: começo e fim lado a lado e, embaixo, a caixa do horário ocupado */
+.ag-horario-campos { display: flex; flex-wrap: wrap; gap: 10px; }
+.ag-horario-campos label { display: grid; gap: 4px; flex: 1 1 140px; max-width: 180px; }
 .ag-rep { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ag-rep button:last-child { grid-column: span 2; }
 .ag-form input[type="time"] { font-family: var(--f-texto); color: var(--tinta); }
@@ -2247,6 +2254,7 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-item.ag-tarefa { box-shadow: inset 4px 0 0 var(--azul); }
 .ag-item.ag-subtarefa { box-shadow: inset 4px 0 0 color-mix(in srgb, var(--azul) 45%, transparent); }
 .chip.ag-c-tarefa { background: color-mix(in srgb, var(--azul) 14%, transparent); color: color-mix(in srgb, var(--azul) 45%, var(--tinta)); }
+.chip.ag-c-ocupado { background: color-mix(in srgb, var(--tinta) 10%, transparent); color: var(--tinta); }
 .chip.ag-c-atrasada { background: var(--ruim-bg); color: var(--ruim); }
 .chip.ag-c-feita { background: var(--ok-bg); color: var(--ok); }
 .ag-atrasadas {

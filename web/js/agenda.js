@@ -89,15 +89,20 @@ function quando(iso, dia) {
 }
 // O prazo de uma tarefa ou subtarefa: "30/10" ou "30/10 às 14:00".
 const prazoTxt = (x) => `${dataCurta(x.prazo)}${x.hora ? ` às ${x.hora}` : ""}`;
+// O horário de uma atividade: "14:00–15:00" ou, sem o fim, "14:00".
+const horario = (a) => (a.hora_fim ? `${a.hora}–${a.hora_fim}` : a.hora);
+// A atividade que se repete ou que dura vários dias (a única com o último dia): tem histórico e pode ser encerrada.
+const variosDias = (a) => a.repeticao !== "nenhuma" || !!a.fim;
 // A tarefa ou a subtarefa de uma referência da agenda ({tarefa, subtarefa}).
 function daRef(r) {
   const t = tarefa(r.tarefa);
   return { t, s: r.subtarefa ? subDe(t, r.subtarefa) : null };
 }
-// O que o dia tem, na ordem do painel: com horário primeiro (no mesmo horário, as atividades antes).
+// O que o dia tem, na ordem do painel: com horário primeiro (no mesmo horário, as atividades antes). faixa: o horário
+// como aparece (o da atividade, com o fim).
 function doDia(x) {
-  const lista = [...x.itens.map((i) => ({ i, hora: atividade(i.atividade).hora })),
-    ...(x.tarefas || []).map((r) => { const { t, s } = daRef(r); return { r, hora: (s || t).hora }; })];
+  const lista = [...x.itens.map((i) => { const a = atividade(i.atividade); return { i, hora: a.hora, faixa: a.hora && horario(a) }; }),
+    ...(x.tarefas || []).map((r) => { const { t, s } = daRef(r); return { r, hora: (s || t).hora, faixa: (s || t).hora }; })];
   return lista.sort((a, b) => (a.hora == null) - (b.hora == null) || (a.hora || "").localeCompare(b.hora || ""));
 }
 
@@ -322,7 +327,7 @@ function linhaDoDia(e) {
     const { t, s } = daRef(e.r);
     nome = s ? `${s.titulo} (${s.minha ? "subtarefa" : `de ${s.responsavel.nome}`})` : `Tarefa: ${t.titulo}`;
   }
-  return `<div class='tt-l'><span>${e.hora ? `${e.hora} ` : ""}${esc(nome)}</span><b>${(e.i || e.r).feita ? "feita" : "falta"}</b></div>`;
+  return `<div class='tt-l'><span>${e.faixa ? `${e.faixa} ` : ""}${esc(nome)}</span><b>${(e.i || e.r).feita ? "feita" : "falta"}</b></div>`;
 }
 
 function abrirDia(dia) {
@@ -370,10 +375,10 @@ function desenharDia(animar) {
 
 function itemHtml(i, dia, futuro, n) {
   const a = atividade(i.atividade);
-  const repete = a.repeticao !== "nenhuma";
+  const repete = a.repeticao !== "nenhuma", varios = variosDias(a);
   const escrevendo = estado.concluindo?.atividade === a.id && estado.concluindo?.dia === dia;
   const dica = futuro ? "Este dia ainda não chegou" : i.feita ? "Desfazer a conclusão" : "Marcar como concluída";
-  const encerravel = repete && a.inicio <= estado.dados.hoje && (!a.fim || a.fim > estado.dados.hoje);
+  const encerravel = varios && a.inicio <= estado.dados.hoje && (!a.fim || a.fim > estado.dados.hoje);
   let rodape = "";
   if (escrevendo) {
     rodape = `<div class="ag-fb">
@@ -394,16 +399,17 @@ function itemHtml(i, dia, futuro, n) {
     <button type="button" class="ag-check ${i.feita ? "feita" : ""}" data-check ${futuro ? "disabled" : ""}
       aria-pressed="${i.feita}" title="${dica}" aria-label="${dica}: ${esc(a.titulo)}">${icone("visto")}</button>
     <div class="ag-item-t">
-      <b>${a.hora ? `<span class="ag-hora">${icone("relogio")}${a.hora}</span>` : ""}${esc(a.titulo)}</b>
+      <b>${a.hora ? `<span class="ag-hora">${icone("relogio")}${horario(a)}</span>` : ""}${esc(a.titulo)}</b>
       ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ""}
       <div class="ag-chips"><span class="chip">${icone(repete ? "atualizar" : "calendario")}${esc(a.quando)}</span>
+        ${a.ocupado ? `<span class="chip ag-c-ocupado" title="Ninguém marca outra coisa para você nesse horário">${icone("cadeado")}Horário ocupado</span>` : ""}
         ${a.exige_feedback ? `<span class="chip laranja">${icone("conversa")}Pede feedback</span>` : ""}</div>
       ${rodape}
     </div>
     <div class="ag-item-acoes">
-      ${repete ? `<button type="button" data-historico title="Histórico de feedbacks" aria-label="Histórico de feedbacks de ${esc(a.titulo)}">${icone("caderneta")}</button>` : ""}
+      ${varios ? `<button type="button" data-historico title="Histórico de feedbacks" aria-label="Histórico de feedbacks de ${esc(a.titulo)}">${icone("caderneta")}</button>` : ""}
       <button type="button" data-editar title="Editar a atividade" aria-label="Editar ${esc(a.titulo)}">${icone("lapis")}</button>
-      ${encerravel ? `<button type="button" data-encerrar title="Parar de repetir depois de hoje" aria-label="Encerrar ${esc(a.titulo)}">${icone("bandeira")}</button>` : ""}
+      ${encerravel ? `<button type="button" data-encerrar title="${repete ? "Parar de repetir depois de hoje" : "Terminar hoje"}" aria-label="Encerrar ${esc(a.titulo)}">${icone("bandeira")}</button>` : ""}
       <button type="button" class="perigo" data-excluir title="Excluir a atividade" aria-label="Excluir ${esc(a.titulo)}">${icone("lixeira")}</button>
     </div>
   </li>`;
@@ -608,7 +614,8 @@ async function desfazer(a, dia, item) {
 }
 
 async function encerrar(a) {
-  if (!confirm(`Encerrar "${a.titulo}"? Ela para de se repetir depois de hoje; o histórico fica guardado.`)) return;
+  const como = a.repeticao === "nenhuma" ? "Ela termina hoje" : "Ela para de se repetir depois de hoje";
+  if (!confirm(`Encerrar "${a.titulo}"? ${como}; o histórico fica guardado.`)) return;
   try {
     await api("/api/agenda/atividade/encerrar", { json: { id: a.id } });
     toast("Atividade encerrada");
@@ -617,7 +624,7 @@ async function encerrar(a) {
 }
 
 async function excluir(a) {
-  const aviso = a.repeticao === "nenhuma" ? "" : " Todo o histórico de feedbacks dela também é apagado; para só parar de repetir, use Encerrar.";
+  const aviso = !variosDias(a) ? "" : " Todo o histórico de feedbacks dela também é apagado; para só parar antes, use Encerrar.";
   if (!confirm(`Excluir "${a.titulo}"?${aviso}`)) return;
   try {
     await api("/api/agenda/atividade/excluir", { json: { id: a.id } });
@@ -736,7 +743,7 @@ async function abrirHistorico(a) {
   dlg.innerHTML = `<div class="ag-hist">
     <div class="ag-hist-cab">
       <div><h2 id="ag-hist-titulo">${icone("caderneta")}${esc(at.titulo)}</h2>
-        <p class="sub">${esc(at.quando)}${at.hora ? ` · ${at.hora}` : ""} · desde ${dataCurta(at.inicio)}</p></div>
+        <p class="sub">${esc(at.quando)}${at.hora ? ` · ${horario(at)}` : ""} · desde ${dataCurta(at.inicio)}</p></div>
       <button class="btn icone" type="button" data-fechar title="Fechar" aria-label="Fechar">${icone("x")}</button>
     </div>
     <div class="ag-hist-resumo">
@@ -1006,7 +1013,7 @@ function fecharForm(salvo = false) {
 }
 
 function desenharForm(item, tipo, dia) {
-  Object.assign(estado, { tipo, editando: item, formDia: dia });
+  Object.assign(estado, { tipo, editando: item, formDia: dia, tf: null }); // formTarefa monta o tf da tarefa
   const ehTarefa = tipo === "tarefa";
   const nome = ehTarefa ? "tarefa" : "atividade";
   const dica = ehTarefa
@@ -1033,10 +1040,12 @@ function desenharForm(item, tipo, dia) {
   estado.formInicial = JSON.stringify(coletar());
 }
 
-// Duas partes, uma embaixo da outra: o que é (e se pede feedback) e quando (a repetição e os dias).
+// Duas partes, uma embaixo da outra: o que é (e se pede feedback) e quando (a repetição, os dias e o horário, que
+// pode ficar ocupado).
 function formAtividade(a, dia) {
-  const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, repeticao: "nenhuma", dias_semana: null, dia_mes: null,
-                   intervalo: null, so_dias_uteis: false, regiao: null, fim: null, exige_feedback: false };
+  const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, hora_fim: null, ocupado: false, repeticao: "nenhuma",
+                   dias_semana: null, dia_mes: null, intervalo: null, so_dias_uteis: false, regiao: null, fim: null,
+                   exige_feedback: false };
   estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES" };
   return `<div class="ag-tela-col">
       <label class="campo-form"><span>Título</span>
@@ -1068,10 +1077,16 @@ function formAtividade(a, dia) {
         <small>Contando do primeiro dia. Quinzenal: 15.</small></label></div>
       <div class="campo-form"><span data-rotulo-inicio>${v.repeticao === "nenhuma" ? "Dia" : "Começa em"}</span>
         ${campoDia({ nome: "inicio", valor: v.inicio, rotulo: "Dia da atividade" })}</div>
-      <label class="campo-form ag-hora-campo"><span>Horário <small>(opcional)</small></span>
-        <input type="time" name="hora" value="${v.hora || ""}"></label>
-      <div class="campo-form" data-para="diaria semanal mensal intervalo"><span>Termina em <small>(opcional)</small></span>
-        ${campoDia({ nome: "fim", valor: v.fim, min: v.inicio, vazio: "Sem data para terminar", rotulo: "Último dia da atividade" })}</div>
+      <div class="campo-form"><span data-rotulo-fim></span>
+        ${campoDia({ nome: "fim", valor: v.fim, min: v.inicio, vazio: "Só neste dia", rotulo: "Último dia da atividade" })}</div>
+      <div class="campo-form ag-horario"><span>Horário <small>(opcional)</small></span>
+        <div class="ag-horario-campos">
+          <label><small>Começa às</small><input type="time" name="hora" value="${v.hora || ""}"></label>
+          <label><small>Termina às</small><input type="time" name="hora_fim" value="${v.hora_fim || ""}"></label>
+        </div>
+        <label class="vend-op" data-ocupado ${v.hora ? "" : "hidden"}><input type="checkbox" name="ocupado" ${v.ocupado ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
+          <span class="n">Horário ocupado<small>Ninguém marca outra coisa para você nesse horário: nem você, nem quem cria tarefas. Precisa do fim do horário.</small></span></label>
+      </div>
     </div>`;
 }
 
@@ -1281,12 +1296,16 @@ async function escolherTipo(tipo) {
   tela.querySelector('[name="titulo"]').focus();
 }
 
-// Os campos da repetição escolhida (e o rótulo da data).
+// Os campos da repetição escolhida e os rótulos dos dias: na única, o último dia faz dela uma atividade de vários dias;
+// na que se repete, é quando ela para.
 function mostrarCampos() {
   const f = raiz.querySelector("#ag-form");
-  const rep = estado.form.repeticao;
+  const rep = estado.form.repeticao, unica = rep === "nenhuma";
   f.querySelectorAll("[data-para]").forEach((el) => { el.hidden = !el.dataset.para.split(" ").includes(rep); });
-  f.querySelector("[data-rotulo-inicio]").textContent = rep === "nenhuma" ? "Dia" : "Começa em";
+  f.querySelector("[data-rotulo-inicio]").textContent = unica ? "Dia" : "Começa em";
+  f.querySelector("[data-rotulo-fim]").innerHTML = unica ? "Até <small>(opcional, para vários dias)</small>" : "Termina em <small>(opcional)</small>";
+  f.elements.fim.closest(".ed").dataset.vazio = unica ? "Só neste dia" : "Sem data para terminar";
+  limitesDoDia(f.elements.fim); // redesenha com o texto de quando não há o último dia
 }
 
 function escolherRepeticao(rep) {
@@ -1311,6 +1330,8 @@ function escolherRepeticao(rep) {
 function aoMudar(e) {
   const t = e.target;
   if (t.name === "so_dias_uteis") raiz.querySelector("[data-regioes]").hidden = !t.checked;
+  // o horário ocupado aparece quando a atividade tem o começo do horário
+  if (t.name === "hora" && !estado.tf) t.form.querySelector("[data-ocupado]").hidden = !t.value;
   // o prazo da tarefa limita o das subtarefas (e as recolhidas avisam se passam dele); o começo da atividade, o fim
   if ((t.name === "prazo" || t.name === "hora") && estado.tf) {
     lerSubs();
@@ -1341,12 +1362,14 @@ function coletarAtividade() {
   const rep = estado.form.repeticao;
   const uteis = rep === "diaria" && f.elements.so_dias_uteis.checked;
   const num = (n) => (f.elements[n].value === "" ? null : Number(f.elements[n].value));
+  const hora = f.elements.hora.value || null;
   return {
     titulo: f.elements.titulo.value.trim(), descricao: f.elements.descricao.value.trim(), inicio: f.elements.inicio.value,
-    hora: f.elements.hora.value || null, repeticao: rep, dias_semana: rep === "semanal" ? [...estado.form.dias].sort() : null,
+    hora, hora_fim: (hora && f.elements.hora_fim.value) || null, ocupado: !!hora && f.elements.ocupado.checked,
+    repeticao: rep, dias_semana: rep === "semanal" ? [...estado.form.dias].sort() : null,
     dia_mes: rep === "mensal" ? num("dia_mes") : null, intervalo: rep === "intervalo" ? num("intervalo") : null,
     so_dias_uteis: uteis, regiao: uteis ? estado.form.regiao : null,
-    fim: rep !== "nenhuma" && f.elements.fim.value ? f.elements.fim.value : null,
+    fim: f.elements.fim.value || null, // na única, o último dia de uma atividade de vários dias
     exige_feedback: f.elements.exige_feedback.checked,
   };
 }
@@ -1379,6 +1402,15 @@ async function aoEnviar(e) {
   if (!dados.titulo) { toast("Escreva o título da atividade", "erro"); return f.elements.titulo.focus(); }
   if (!dados.inicio) { toast("Escolha o dia da atividade", "erro"); return focarDia(f.elements.inicio); }
   if (dados.repeticao === "semanal" && !dados.dias_semana.length) return toast("Escolha ao menos um dia da semana", "erro");
+  if (f.elements.hora_fim.value && !dados.hora) { toast("Diga a que horas a atividade começa", "erro"); return f.elements.hora.focus(); }
+  if (dados.hora_fim && dados.hora_fim <= dados.hora) {
+    toast("O fim do horário tem de ser depois do começo", "erro");
+    return f.elements.hora_fim.focus();
+  }
+  if (dados.ocupado && !dados.hora_fim) {
+    toast("Para marcar o horário como ocupado, diga a que horas ele termina", "erro");
+    return f.elements.hora_fim.focus();
+  }
   const botao = f.querySelector('[type="submit"]');
   botao.disabled = true;
   const editando = estado.editando;

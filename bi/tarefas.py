@@ -20,12 +20,15 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   (mover_subtarefa), o responsável ou quem criou. As concluídas ficam no quadro por DIAS_NO_QUADRO dias.
 - versao: sobe a cada mudança na tarefa, nas pessoas ou nas subtarefas (concluir não conta). Editar confere, para o
   Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
+- Horário ocupado (migração 026, bi/agenda.py): o horário da tarefa vale para todas as pessoas dela; o da subtarefa,
+  para o responsável. Um horário que entra ou muda (tarefa nova, prazo mudado, pessoa nova numa tarefa com horário,
+  subtarefa nova ou passada para outro) não pode cair no horário ocupado da pessoa.
 """
 from __future__ import annotations
 
 import datetime as dt
 
-from .agenda import _data, _dm, _hora, _id, _texto, _titulo
+from .agenda import _data, _dm, _hhmm, _hora, _id, _texto, _titulo, calendario, conferir_pontos, travar_horarios
 from .banco import Banco, hora
 from .conversas import NaoEncontrada
 
@@ -43,15 +46,17 @@ _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "
 _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
       "concluida_por", "concluida_por_nome", "justificativa", "justificada_em", "justificada_por",
       "justificada_por_nome")
-# A situação (a coluna do quadro) e o que ela grava; o começo fica de quando começou, mesmo indo e voltando.
+# A situação (a coluna do quadro) e o que ela grava; o começo fica de quando começou, mesmo indo e voltando. A hora
+# vem do relógio da classe (%(agora)s), que os testes fixam.
 _SITUACOES = {"a_fazer": "iniciada_em = NULL, concluida_em = NULL",
-              "fazendo": "iniciada_em = coalesce(iniciada_em, now()), concluida_em = NULL",
-              "concluida": "concluida_em = coalesce(concluida_em, now())"}
+              "fazendo": "iniciada_em = coalesce(iniciada_em, %(agora)s), concluida_em = NULL",
+              "concluida": "concluida_em = coalesce(concluida_em, %(agora)s)"}
 
 
 def _mudar_situacao(situacao: str | None) -> str:
     """O SET de uma mudança de situação da tarefa ou da subtarefa (None: desfaz a conclusão, e ela volta para onde
-    estava). concluida_por fica com quem concluiu primeiro (%(eu)s); concluir de novo não muda nada."""
+    estava). concluida_por fica com quem concluiu primeiro (%(eu)s); concluir de novo não muda nada. Os parâmetros:
+    eu, agora e o id."""
     if situacao is None:
         return "concluida_em = NULL, concluida_por = NULL"
     if situacao == "concluida":
@@ -68,10 +73,6 @@ WHERE t.prazo BETWEEN %(de)s AND %(ate)s
               AND (t.criador = %(eu)s OR s.responsavel = %(eu)s)
               AND (s.prazo BETWEEN %(de)s AND %(ate)s
                    OR (%(atrasadas)s AND t.concluida_em IS NULL AND s.concluida_em IS NULL AND s.prazo < %(hoje)s)))"""
-
-
-def _hhmm(h: dt.time | None) -> str | None:
-    return h.strftime("%H:%M") if h else None
 
 
 def _situacao(valor) -> str:
@@ -160,10 +161,36 @@ def _proibido_mudar(dados: dict, s: dict) -> str | None:
 
 
 class Tarefas:
-    def __init__(self, banco: Banco, hoje=dt.date.today):
-        """hoje: função que dá o dia de hoje (os testes fixam um dia)."""
+    def __init__(self, banco: Banco, configuracao=None, *, hoje=None, agora=None):
+        """configuracao: as regras, de onde vem o calendário dos dias úteis (o horário ocupado que pula feriados).
+        hoje e agora: o relógio (os testes fixam; só com hoje, agora é a meia-noite dele)."""
         self.banco = banco
-        self.hoje = hoje
+        self.configuracao = configuracao
+        if agora is None:
+            agora = (lambda: dt.datetime.combine(hoje(), dt.time())) if hoje else dt.datetime.now
+        self.agora = agora
+        self.hoje = hoje or (lambda: self.agora().date())
+
+    def _parametros(self, usuario: int, id_: int) -> dict:
+        """Os parâmetros de _mudar_situacao (agora com o fuso, para o timestamptz)."""
+        return {"eu": usuario, "id": id_, "agora": self.agora().astimezone()}
+
+    @staticmethod
+    def _ponto_tarefa(t: dict, pessoas) -> list[tuple]:
+        """O horário da tarefa, para cada pessoa (o que conferir_pontos recebe)."""
+        return [(p, t["prazo"], t["hora"], f"a tarefa “{t['titulo']}”") for p in sorted(pessoas)] if t["hora"] else []
+
+    @staticmethod
+    def _ponto_sub(s: dict) -> list[tuple]:
+        return [(s["responsavel"], s["prazo"], s["hora"], f"a subtarefa “{s['titulo']}”")] if s["hora"] else []
+
+    def _conferir_horarios(self, con, cal, pontos: list[tuple], eu: int) -> None:
+        """Os horários que entram ou mudam contra o horário ocupado de cada pessoa (bi/agenda.py), com a trava delas
+        (depois da trava da tarefa)."""
+        pontos = [p for p in pontos if p[1] >= self.hoje()]
+        if pontos:
+            travar_horarios(con, {p[0] for p in pontos})
+            conferir_pontos(con, cal, self.hoje(), pontos, eu)
 
     # --- leitura ---------------------------------------------------------------------------
     def pessoas(self, usuario: int) -> dict:
@@ -381,8 +408,12 @@ class Tarefas:
     def criar(self, usuario: int, dados: dict) -> dict:
         """A tarefa, as pessoas e as subtarefas, numa transação só."""
         t = _valida_tarefa(dados, usuario)
+        cal = calendario(self.configuracao)
+        pontos = self._ponto_tarefa(t, {usuario, *t["participantes"]})
+        pontos += [p for s in t["subtarefas"] for p in self._ponto_sub(s)]
         with self.banco.conexao() as con:
             self._conferir_pessoas(con, t["participantes"])
+            self._conferir_horarios(con, cal, pontos, usuario)
             linha = con.execute("INSERT INTO agenda_tarefas (criador, titulo, descricao, prazo, hora) "
                                 "SELECT id, %(titulo)s, %(descricao)s, %(prazo)s, %(hora)s FROM usuarios "
                                 "WHERE id = %(usuario)s RETURNING id", {**t, "usuario": usuario}).fetchone()
@@ -395,7 +426,9 @@ class Tarefas:
     def editar(self, usuario: int, id_, dados: dict, versao) -> dict:
         """Troca tudo: os campos, as pessoas e as subtarefas (as com id mudam, as sem id entram, as que faltam saem; a
         conclusão de cada uma fica). versao: a da tarefa que o formulário abriu (mudou desde então: recusa).
-        Só quem entra agora precisa ter a página Gestão; quem já participava fica mesmo sem ela."""
+        Só quem entra agora precisa ter a página Gestão; quem já participava fica mesmo sem ela. O horário ocupado é
+        conferido só no que entra ou muda: o prazo, as pessoas novas e as subtarefas novas ou mudadas."""
+        cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
             self._so_quem_criou(t, "editá-la")
@@ -404,10 +437,18 @@ class Tarefas:
             novo = _valida_tarefa(dados, usuario)
             antes = self._pessoas_da(con, t["id"])
             self._conferir_pessoas(con, [p for p in novo["participantes"] if p not in antes])
-            subs_antes = {r[0] for r in con.execute("SELECT id FROM agenda_subtarefas WHERE tarefa = %s", [t["id"]])}
+            subs_antes = {r[0]: tuple(r[1:]) for r in con.execute(
+                "SELECT id, responsavel, prazo, hora FROM agenda_subtarefas WHERE tarefa = %s", [t["id"]])}
             ficam = [s["id"] for s in novo["subtarefas"] if s["id"]]
             if len(set(ficam)) != len(ficam) or any(i not in subs_antes for i in ficam):
                 raise ValueError("subtarefa não encontrada nesta tarefa; abra de novo e repita")
+            pessoas = {usuario, *novo["participantes"]}
+            mudou = (novo["prazo"], novo["hora"]) != (t["prazo"], t["hora"])
+            pontos = self._ponto_tarefa(novo, pessoas if mudou else pessoas - set(antes))
+            pontos += [p for s in novo["subtarefas"]
+                       if not s["id"] or subs_antes[s["id"]] != (s["responsavel"], s["prazo"], s["hora"])
+                       for p in self._ponto_sub(s)]
+            self._conferir_horarios(con, cal, pontos, usuario)
             # A ordem importa (o responsável precisa estar na tarefa): primeiro quem entra, depois as subtarefas e só
             # no fim quem sai.
             con.execute("UPDATE agenda_tarefas SET titulo = %(titulo)s, descricao = %(descricao)s, prazo = %(prazo)s, "
@@ -441,7 +482,7 @@ class Tarefas:
             if situacao is None and not t["concluida_em"]:
                 raise ValueError("a tarefa não estava concluída")
             con.execute(f"UPDATE agenda_tarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
-                        {"eu": usuario, "id": t["id"]})
+                        self._parametros(usuario, t["id"]))
         return self.obter(usuario, t["id"])
 
     def concluir(self, usuario: int, id_) -> dict:
@@ -474,6 +515,7 @@ class Tarefas:
     def nova_subtarefa(self, usuario: int, tarefa, dados: dict) -> dict:
         """Quem criou acrescenta uma subtarefa para qualquer pessoa da tarefa, com o prazo que quiser (até o da tarefa);
         o participante com autonomia, só para si e com o prazo da tarefa."""
+        cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t = self._travar(con, usuario, _id(tarefa, _NAO_ACHOU))
             if not t["eu_criador"]:
@@ -486,12 +528,14 @@ class Tarefas:
                 dados = {"titulo": dados.get("titulo"), "descricao": dados.get("descricao")}
             self._aberta(t)
             s = _valida_sub(dados, t, set(self._pessoas_da(con, t["id"])), usuario)
+            self._conferir_horarios(con, cal, self._ponto_sub(s), usuario)
             self._inserir_subs(con, t["id"], [s], usuario)
             self._nova_versao(con, t["id"])
         return self.obter(usuario, t["id"])
 
     def editar_subtarefa(self, usuario: int, id_, dados: dict) -> dict:
         """Muda só os campos enviados. Quem criou muda tudo; o responsável com autonomia, só o título e a descrição."""
+        cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t, s = self._travar_sub(con, usuario, id_)
             if not t["eu_criador"]:
@@ -505,6 +549,8 @@ class Tarefas:
                      "prazo": s["prazo"].isoformat(), "hora": _hhmm(s["hora"])}
             novo = _valida_sub({**atual, **{k: v for k, v in dados.items() if k in atual}}, t,
                                set(self._pessoas_da(con, t["id"])), usuario)
+            if (novo["responsavel"], novo["prazo"], novo["hora"]) != (s["responsavel"], s["prazo"], s["hora"]):
+                self._conferir_horarios(con, cal, self._ponto_sub(novo), usuario)
             con.execute("UPDATE agenda_subtarefas SET titulo = %(titulo)s, descricao = %(descricao)s, "
                         "responsavel = %(responsavel)s, prazo = %(prazo)s, hora = %(hora)s, atualizada_em = now() "
                         "WHERE id = %(id)s", {**novo, "id": s["id"]})
@@ -521,7 +567,7 @@ class Tarefas:
             if situacao is None and not s["concluida_em"]:
                 raise ValueError("a subtarefa não estava concluída")
             con.execute(f"UPDATE agenda_subtarefas SET {_mudar_situacao(situacao)} WHERE id = %(id)s",
-                        {"eu": usuario, "id": s["id"]})
+                        self._parametros(usuario, s["id"]))
         return self.obter(usuario, t["id"])
 
     def mover_subtarefa(self, usuario: int, id_, situacao) -> dict:

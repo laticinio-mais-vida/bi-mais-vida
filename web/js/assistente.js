@@ -694,8 +694,13 @@ const ACAO_AGENDA = {
   excluir: { titulo: "Excluir a atividade", botao: "Excluir", feito: "Atividade excluída", icone: "lixeira", perigo: true },
   concluir: { titulo: "Marcar como feita", botao: "Marcar como feita", feito: "Marcada como feita", icone: "certo" },
 };
-const valorMudanca = (v) => (v === null || v === "" ? "—" : typeof v === "boolean" ? (v ? "exigido" : "opcional")
+// O valor de uma mudança proposta (campo: o rótulo, para os sim/não: "Horário ocupado" ou "Feedback ao concluir").
+const valorMudanca = (v, campo) => (v === null || v === "" ? "—"
+  : typeof v === "boolean" ? (campo === "Horário ocupado" ? (v ? "sim" : "não") : v ? "exigido" : "opcional")
   : /^\d{4}-\d{2}-\d{2}$/.test(v) ? fmt.data(v) : String(v));
+// "Segunda, 26/10/2026", "De 10/11 a 14/11, a partir de 10/11/2026" ou "Toda quarta, a partir de 28/10/2026".
+const quandoAgenda = (d) => (d.repeticao === "nenhuma" && !d.fim ? `${fmt.semana(d.inicio)}, ${fmt.data(d.inicio)}`
+  : d.repeticao === "nenhuma" ? d.quando : `${d.quando}, a partir de ${fmt.data(d.inicio)}`);
 
 function cartaoAgenda(p, i, j) {
   const t = ACAO_AGENDA[p.acao] || ACAO_AGENDA.criar;
@@ -703,13 +708,13 @@ function cartaoAgenda(p, i, j) {
   let linhas;
   if (p.acao === "criar") {
     linhas = [
-      ["calendario", "Quando", d.repeticao === "nenhuma" ? `${fmt.semana(d.inicio)}, ${fmt.data(d.inicio)}` : `${d.quando}, a partir de ${fmt.data(d.inicio)}`],
-      ...(d.hora ? [["relogio", "Horário", d.hora]] : []),
+      ["calendario", "Quando", quandoAgenda(d)],
+      ...(d.hora ? [["relogio", "Horário", d.hora_fim ? `${d.hora} às ${d.hora_fim}${d.ocupado ? " (ocupado)" : ""}` : d.hora]] : []),
       ["conversa", "Feedback", d.exige_feedback ? "exigido ao concluir" : "opcional"],
       ...(d.descricao ? [["info", "Detalhes", d.descricao]] : []),
     ];
   } else if (p.acao === "editar") {
-    linhas = (p.mudancas || []).map((m) => ["lapis", m.campo, `${valorMudanca(m.de)} → ${valorMudanca(m.para)}`]);
+    linhas = (p.mudancas || []).map((m) => ["lapis", m.campo, `${valorMudanca(m.de, m.campo)} → ${valorMudanca(m.para, m.campo)}`]);
   } else if (p.acao === "encerrar") {
     linhas = [["calendario", "Repetição", p.quando], ["bandeira", "Último dia", fmt.data(p.fim)],
       ["caderneta", "Histórico", "continua guardado"]];

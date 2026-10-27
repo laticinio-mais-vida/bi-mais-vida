@@ -543,7 +543,8 @@ FERRAMENTAS = [
     {
         "name": "ver_agenda",
         "description": ("A agenda de quem pergunta (cada pessoa tem a sua, no topo da página Gestão): as atividades "
-                        f"entre de e ate (até {MAX_PERIODO_AGENDA} dias), dia a dia, com o horário, a situação (feita; "
+                        f"entre de e ate (até {MAX_PERIODO_AGENDA} dias), dia a dia, com o horário (começo e fim), a "
+                        "situação (feita; "
                         "atrasada = o dia passou sem concluir; hoje; prevista) e o feedback das feitas, os totais e a "
                         "repetição de cada atividade (quando). texto filtra pelo título e pela descrição. Use para os "
                         "resumos e para achar o código de uma atividade antes de propor uma mudança."),
@@ -578,10 +579,18 @@ FERRAMENTAS = [
             "titulo": {"type": "string", "description": "curto, até 120 letras"},
             "descricao": {"type": "string", "description": "detalhes (pode ser vazio)"},
             "inicio": {"type": "string", "format": "date",
-                       "description": "o dia da atividade única, ou o primeiro dia da que se repete (AAAA-MM-DD)"},
-            "hora": {"type": "string", "description": "horário HH:MM (opcional); no editar, vazio tira o horário"},
+                       "description": ("o dia da atividade única (o primeiro, se ela dura vários dias), ou o primeiro "
+                                       "dia da que se repete (AAAA-MM-DD)")},
+            "hora": {"type": "string",
+                     "description": "começo do horário HH:MM (opcional); no editar, vazio tira o horário"},
+            "hora_fim": {"type": "string",
+                         "description": "fim do horário HH:MM (opcional, depois de hora); no editar, vazio tira o fim"},
+            "ocupado": {"type": "boolean",
+                        "description": ("horário ocupado: ninguém marca outra coisa para a pessoa entre hora e "
+                                        "hora_fim (exige os dois)")},
             "repeticao": {"type": "string", "enum": list(REPETICOES_AGENDA),
-                          "description": "nenhuma = só no dia do início (padrão); intervalo = a cada N dias"},
+                          "description": ("nenhuma = só no dia do início ou, com fim, todos os dias do início ao fim "
+                                          "(padrão); intervalo = a cada N dias")},
             "dias_semana": {**_INTEIROS, "description": "semanal: 1 = segunda ... 7 = domingo"},
             "dia_mes": {"type": "integer", "description": "mensal: o dia, de 1 a 31 (o mês sem esse dia usa o último)"},
             "intervalo": {"type": "integer",
@@ -589,7 +598,9 @@ FERRAMENTAS = [
             "so_dias_uteis": {"type": "boolean",
                               "description": "diária: pula domingos, feriados e sábados sem expediente"},
             "regiao": {"type": "string", "enum": ["ES", "BA"], "description": "o calendário dos dias úteis"},
-            "fim": {"type": "string", "description": "a que se repete: o último dia (AAAA-MM-DD; vazio tira o fim)"},
+            "fim": {"type": "string",
+                    "description": ("o último dia (AAAA-MM-DD; vazio tira o fim): na que se repete, quando ela para; "
+                                    "na única, ela vale todos os dias do início ao fim (vários dias)")},
             "exige_feedback": {"type": "boolean", "description": "para concluir, é preciso escrever um feedback"},
             "dia": {"type": "string", "format": "date", "description": "concluir: o dia feito (padrão hoje; até hoje)"},
             "feedback": {"type": "string",
@@ -1145,8 +1156,9 @@ class Ferramentas:
     def f_ver_agenda(self, passo: dict, de: str, ate: str, texto: str = "") -> dict:
         r = self._agenda().periodo(de, ate, texto)
         itens = [(d["data"], i) for d in r["dias"] for i in d["itens"]]
+        faixa = lambda i: f"{i['hora']}–{i['hora_fim']}" if i.get("hora_fim") else i["hora"] or ""  # noqa: E731
         passo.update(colunas=["dia", "hora", "atividade", "situação"],
-                     amostra=[[dia, i["hora"] or "", i["titulo"], i["situacao"]] for dia, i in itens[:10]],
+                     amostra=[[dia, faixa(i), i["titulo"], i["situacao"]] for dia, i in itens[:10]],
                      linhas=len(itens), resumo=", ".join(f"#{a['id']} {a['titulo']}" for a in r["atividades"][:12]))
         if not itens:
             r["aviso"] = "nenhuma atividade no período" + (" com esse texto" if texto else "")
@@ -1162,12 +1174,14 @@ class Ferramentas:
         return r
 
     def f_propor_agenda(self, passo: dict, acao: str, atividade=None, titulo=None, descricao=None, inicio=None,
-                        hora=None, repeticao=None, dias_semana=None, dia_mes=None, intervalo=None, so_dias_uteis=None,
-                        regiao=None, fim=None, exige_feedback=None, dia=None, feedback=None) -> dict:
+                        hora=None, hora_fim=None, ocupado=None, repeticao=None, dias_semana=None, dia_mes=None,
+                        intervalo=None, so_dias_uteis=None, regiao=None, fim=None, exige_feedback=None, dia=None,
+                        feedback=None) -> dict:
         campos = {k: v for k, v in {"titulo": titulo, "descricao": descricao, "inicio": inicio, "hora": hora,
-                                    "repeticao": repeticao, "dias_semana": dias_semana, "dia_mes": dia_mes,
-                                    "intervalo": intervalo, "so_dias_uteis": so_dias_uteis, "regiao": regiao,
-                                    "fim": fim, "exige_feedback": exige_feedback}.items() if v is not None}
+                                    "hora_fim": hora_fim, "ocupado": ocupado, "repeticao": repeticao,
+                                    "dias_semana": dias_semana, "dia_mes": dia_mes, "intervalo": intervalo,
+                                    "so_dias_uteis": so_dias_uteis, "regiao": regiao, "fim": fim,
+                                    "exige_feedback": exige_feedback}.items() if v is not None}
         agenda = self._agenda()
         if acao in ("criar", "editar"):
             p = agenda.propor(acao, atividade=atividade, dados=campos)
@@ -1181,7 +1195,8 @@ class Ferramentas:
         detalhes = {k: p[k] for k in ("dados", "mudancas", "dia", "feedback", "fim", "quando", "registros") if k in p}
         if "dados" in detalhes:
             detalhes["dados"] = {k: v for k, v in detalhes["dados"].items()
-                                 if k in ("titulo", "descricao", "inicio", "hora", "quando", "exige_feedback")}
+                                 if k in ("titulo", "descricao", "inicio", "fim", "hora", "hora_fim", "ocupado",
+                                          "quando", "exige_feedback")}
         return {"situacao": ("PROPOSTA, AINDA NÃO APLICADA. A pessoa confirma no botão que aparece abaixo da sua "
                              "resposta."),
                 "proposta": {"acao": p["acao"], "atividade": p["atividade"], "titulo": p["titulo"], **detalhes}}
@@ -1385,9 +1400,11 @@ Gestão). Se \
 houver mais de uma candidata, use a mais recente e diga qual.
 
 # Agenda (de quem pergunta)
-- Cada pessoa tem a própria agenda, no topo da página Gestão: atividades únicas ou que se repetem (diária, só em \
-dias úteis, semanal, mensal ou a cada N dias), com horário opcional, e o que foi feito em cada dia, com o feedback. \
-Você só vê a agenda de quem pergunta; a de outra pessoa não existe para você.
+- Cada pessoa tem a própria agenda, no topo da página Gestão: atividades únicas (de um dia ou de vários dias, com o \
+último dia) ou que se repetem (diária, só em dias úteis, semanal, mensal ou a cada N dias), com horário opcional \
+(começo e, se quiser, fim; com os dois, o horário pode ficar ocupado: ninguém marca outra coisa para a pessoa nele), \
+e o que foi feito em cada dia, com o feedback. Você só vê a agenda de quem pergunta; a de outra pessoa não existe \
+para você.
 - Para resumos ("o que fiz esta semana", "o que ficou atrasado", "como foram as visitas"), use ver_agenda no \
 período (até {MAX_PERIODO_AGENDA} dias por vez) e, para tudo o que foi feito numa atividade que se repete, \
 historico_atividade. Atrasada = o dia passou sem concluir; hoje ainda dá tempo. Diga o período e cite os feedbacks \
@@ -1399,9 +1416,13 @@ ficou. Para mudar, encerrar, excluir ou concluir, ache antes o código com ver_a
 candidata, pergunte qual. Encerrar mantém o histórico; excluir apaga tudo: na dúvida, proponha encerrar.
 - Como traduzir: "toda segunda e quinta às 9h" = semanal, dias_semana [1, 4], hora 09:00; "todo dia útil" = diaria \
 com so_dias_uteis e a regiao (ES ou BA; na dúvida, pergunte); "todo dia 5" = mensal, dia_mes 5; "de 15 em 15 dias" \
-ou "quinzenal" = intervalo 15; "amanhã às 14h" = nenhuma, inicio amanhã, hora 14:00; "precisa de retorno" ou "com \
-feedback" = exige_feedback. Sem o dia, pergunte (ou use hoje, se o pedido for para hoje). Para concluir uma \
-atividade que exige feedback, peça o feedback antes.
+ou "quinzenal" = intervalo 15; "amanhã às 14h" = nenhuma, inicio amanhã, hora 14:00; "das 14h às 15h" = hora 14:00 \
+e hora_fim 15:00; "de 10 a 14/11" = nenhuma, inicio 10/11 e fim 14/11; "bloqueie esse horário" ou "marque como \
+ocupado" = ocupado (precisa de hora e hora_fim); "precisa de retorno" ou "com feedback" = exige_feedback. Sem o dia, \
+pergunte (ou use hoje, se o pedido for para hoje). Para concluir uma atividade que exige feedback, peça o feedback \
+antes.
+- Se a ferramenta recusar porque o horário está ocupado (ou porque já há algo no horário que a pessoa quer marcar \
+como ocupado), conte isso e pergunte outro horário: não troque o horário por conta própria.
 - Se a ferramenta devolver erro, corrija e chame de novo. Sem a página Gestão no acesso, diga que a agenda fica lá e \
 que quem libera é o administrador.
 

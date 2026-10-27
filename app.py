@@ -145,7 +145,7 @@ class Aplicacao:
         self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores,
                                  self.metas_aprovadas)
         self.agenda = Agenda(self.banco, self.configuracao)
-        self.tarefas = Tarefas(self.banco)
+        self.tarefas = Tarefas(self.banco, self.configuracao)  # as regras: o calendário do horário ocupado
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})

@@ -1299,7 +1299,7 @@ class TestMigracao008(BaseBanco):
                                                "019_agenda_horario_propostas", "020_agenda_tarefas",
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
-                                               "025_metas_aprovadas"])
+                                               "025_metas_aprovadas", "026_agenda_atividades_horario"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1343,7 +1343,7 @@ class TestMigracao013(BaseBanco):
                                                "019_agenda_horario_propostas", "020_agenda_tarefas",
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
-                                               "025_metas_aprovadas"])
+                                               "025_metas_aprovadas", "026_agenda_atividades_horario"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1374,7 +1374,7 @@ class TestMigracao009(BaseBanco):
                                                "019_agenda_horario_propostas", "020_agenda_tarefas",
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
-                                               "025_metas_aprovadas"])
+                                               "025_metas_aprovadas", "026_agenda_atividades_horario"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

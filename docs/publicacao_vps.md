@@ -502,6 +502,18 @@ painel de Metas passa a usar a aprovada no lugar das linhas das planilhas daquel
   painel do PC, que tem o próprio banco.
 - **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e volta a mostrar só as planilhas.
 
+#### Horário com fim, horário ocupado e atividade de vários dias (migração 026)
+
+Na agenda, a atividade ganha o fim do horário e pode ficar com o **horário ocupado** (ninguém marca outra coisa para a
+pessoa nele: nem ela, nem quem cria tarefas), e a **Única** aceita o último dia (aparece em todos os dias do início ao
+fim).
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 026** acrescenta `hora_fim` (vazia) e `ocupado` (falso) em `agenda_atividades`, com os CHECKs, e troca
+  o CHECK do `fim` para aceitar a Única com o último dia. As atividades existentes ficam como estavam.
+- **Voltar atrás:** nada muda no banco. O código anterior ignora `hora_fim` e `ocupado` (o horário deixa de ser
+  conferido) e mostra a Única de vários dias só no primeiro dia.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

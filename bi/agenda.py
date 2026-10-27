@@ -3,10 +3,16 @@ As tarefas com prazo, divididas com outras pessoas, ficam em bi/tarefas.py (a me
 
 - Cada pessoa vê só a própria agenda, como as conversas do Assistente (bi/conversas.py): todo método recebe o id do
   usuário e filtra por ele, e a atividade de outra pessoa é tratada como se não existisse.
-- Repetição (ocorre): única (só no dia do início), diária (todo dia, ou só os dias úteis de uma região, com os
-  feriados e os extras de Configurações, bi/calendario.py), semanal (dias da semana escolhidos), mensal (um dia fixo;
-  o mês sem esse dia usa o último) ou a cada N dias desde o início. A repetida pode ter um último dia (fim). O horário
-  é opcional (migração 019): no dia, as com horário vêm primeiro, em ordem.
+- Repetição (ocorre): única (só no dia do início ou, com o último dia, todos os dias do início ao fim: a de vários
+  dias, migração 026), diária (todo dia, ou só os dias úteis de uma região, com os feriados e os extras de
+  Configurações, bi/calendario.py), semanal (dias da semana escolhidos), mensal (um dia fixo; o mês sem esse dia usa o
+  último) ou a cada N dias desde o início. A repetida pode ter um último dia (fim). O horário é opcional (migração
+  019), com o fim também opcional (migração 026): no dia, as com horário vêm primeiro, em ordem.
+- Horário ocupado (migração 026): a atividade com começo e fim marcada como ocupada trava o horário da pessoa nos dias
+  em que acontece, de hoje em diante. Nem a pessoa marca outra atividade que cruze esse horário, nem quem cria tarefas
+  põe a pessoa numa tarefa ou subtarefa com horário dentro dele (conferir_atividade e conferir_pontos, que
+  bi/tarefas.py também usa); marcar como ocupado é recusado se a pessoa já tem algo com horário ali. A mensagem sobre
+  o horário de outra pessoa não diz o título, que só ela vê.
 - Concluir grava o registro do dia (agenda_registros, migração 018) com o feedback, obrigatório quando a atividade
   exige feedback. Só até hoje; concluir de novo troca o feedback. A repetida junta um registro por dia: o histórico.
 - Editar a atividade não apaga o que já foi feito: o registro de um dia que deixou de ocorrer continua aparecendo.
@@ -32,9 +38,14 @@ MAX_TITULO = 120
 MAX_TEXTO = 2000
 MAX_FALTAS = 30   # dias sem conclusão que o histórico lista (os mais recentes)
 MAX_PERIODO = 93  # dias que o Assistente lê de uma vez
+HORIZONTE = 366   # dias à frente que o horário ocupado confere entre duas atividades que se repetem sem fim
+TRAVA_HORARIOS = 7_240_102  # pg_advisory_xact_lock(TRAVA_HORARIOS, pessoa): uma gravação com horário por pessoa por vez
 NOME_DIA = ["", "segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]  # date.isoweekday()
-_GRAVAR = ("titulo", "descricao", "inicio", "hora", "repeticao", "dias_semana", "dia_mes", "intervalo",
-           "so_dias_uteis", "regiao", "fim", "exige_feedback")
+_GRAVAR = ("titulo", "descricao", "inicio", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes",
+           "intervalo", "so_dias_uteis", "regiao", "fim", "exige_feedback")
+# O que decide os dias e os horários da atividade: editar só confere o horário ocupado se algo disso mudou.
+_QUANDO = ("inicio", "fim", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes", "intervalo",
+           "so_dias_uteis", "regiao")
 _CAMPOS = ("id", *_GRAVAR)
 _COLUNAS = ", ".join(_CAMPOS)
 _VALORES = ", ".join(f"%({c})s::smallint[]" if c == "dias_semana" else f"%({c})s" for c in _GRAVAR)
@@ -67,6 +78,15 @@ def _hora(valor) -> dt.time | None:
     if not m or int(m[1]) > 23 or int(m[2] or 0) > 59:
         raise ValueError(f"o horário deve ser HH:MM (veio {valor!r})")
     return dt.time(int(m[1]), int(m[2] or 0))
+
+
+def _hhmm(h: dt.time | None) -> str | None:
+    return h.strftime("%H:%M") if h else None
+
+
+def _faixa(h: dt.time, fim: dt.time | None) -> str:
+    """'14:00–15:00' ou, sem o fim, '14:00'."""
+    return f"{_hhmm(h)}–{_hhmm(fim)}" if fim else _hhmm(h)
 
 
 def _inteiro(valor, campo: str, minimo: int, maximo: int) -> int:
@@ -125,8 +145,15 @@ def _valida(dados: dict) -> dict:
         raise ValueError(f"repetição desconhecida: {repeticao!r}")
     a = {"titulo": titulo, "descricao": _texto(dados.get("descricao"), "a descrição"),
          "inicio": _data(dados.get("inicio"), "da atividade"), "hora": _hora(dados.get("hora")),
+         "hora_fim": _hora(dados.get("hora_fim")), "ocupado": bool(dados.get("ocupado")),
          "repeticao": repeticao, "dias_semana": None, "dia_mes": None, "intervalo": None, "so_dias_uteis": False,
          "regiao": None, "fim": None, "exige_feedback": bool(dados.get("exige_feedback"))}
+    if a["hora_fim"] and not a["hora"]:
+        raise ValueError("diga a que horas a atividade começa, antes do fim do horário")
+    if a["hora_fim"] and a["hora_fim"] <= a["hora"]:
+        raise ValueError("o fim do horário tem de ser depois do começo (a atividade não passa da meia-noite)")
+    if a["ocupado"] and not a["hora_fim"]:
+        raise ValueError("para marcar o horário como ocupado, diga a que horas ele começa e termina")
     if repeticao == "semanal":
         try:
             dias = sorted({int(d) for d in dados.get("dias_semana") or []})
@@ -145,10 +172,12 @@ def _valida(dados: dict) -> dict:
         if dados.get("regiao") not in REGIOES:
             raise ValueError("escolha o calendário dos dias úteis: ES ou BA")
         a["so_dias_uteis"], a["regiao"] = True, dados["regiao"]
-    if repeticao != "nenhuma" and dados.get("fim"):
+    if dados.get("fim"):  # na única, o último dia de uma atividade de vários dias
         a["fim"] = _data(dados["fim"], "do último dia")
         if a["fim"] < a["inicio"]:
             raise ValueError("o último dia não pode ser antes do início")
+        if repeticao == "nenhuma" and a["fim"] == a["inicio"]:
+            a["fim"] = None
     return a
 
 
@@ -157,8 +186,8 @@ def ocorre(a: dict, dia: dt.date, cal: Calendario | None = None) -> bool:
     if dia < a["inicio"] or (a["fim"] and dia > a["fim"]):
         return False
     repeticao = a["repeticao"]
-    if repeticao == "nenhuma":
-        return dia == a["inicio"]
+    if repeticao == "nenhuma":  # com o último dia, todos os dias do início ao fim
+        return a["fim"] is not None or dia == a["inicio"]
     if repeticao == "diaria":
         return not a["so_dias_uteis"] or cal.dia(dia, a["regiao"])["peso"] > 0
     if repeticao == "semanal":
@@ -177,9 +206,12 @@ def _lista_e(itens: list[str]) -> str:
 
 
 def texto_repeticao(a: dict, hoje: dt.date) -> str:
-    """'Só neste dia', 'Todo dia útil (ES)', 'Toda segunda e quinta', 'Todo dia 5', 'A cada 15 dias' (e 'até 30/11')."""
+    """'Só neste dia', 'De 10/11 a 14/11', 'Todo dia útil (ES)', 'Toda segunda e quinta', 'Todo dia 5', 'A cada 15
+    dias' (e 'até 30/11')."""
     repeticao = a["repeticao"]
     if repeticao == "nenhuma":
+        if a["fim"] and a["fim"] > a["inicio"]:
+            return f"De {_dm(a['inicio'], hoje)} a {_dm(a['fim'], hoje)}"
         t = "Só neste dia"
     elif repeticao == "diaria":
         t = f"Todo dia útil ({a['regiao']})" if a["so_dias_uteis"] else "Todo dia"
@@ -196,12 +228,129 @@ def texto_repeticao(a: dict, hoje: dt.date) -> str:
 
 def _publica(a: dict, hoje: dt.date) -> dict:
     return {**a, "inicio": a["inicio"].isoformat(), "fim": a["fim"].isoformat() if a["fim"] else None,
-            "hora": a["hora"].strftime("%H:%M") if a["hora"] else None, "quando": texto_repeticao(a, hoje)}
+            "hora": _hhmm(a["hora"]), "hora_fim": _hhmm(a["hora_fim"]), "quando": texto_repeticao(a, hoje)}
 
 
 def _ordem(a: dict):
     """No dia: as com horário primeiro, pela hora; depois as sem horário, na ordem em que foram criadas."""
     return (a["hora"] is None, a["hora"] or dt.time(), a.get("id") or 0)
+
+
+def calendario(configuracao) -> Calendario:
+    """O calendário dos dias úteis com os feriados extras e os sábados das regras (sem regras, só os automáticos).
+    Monte antes de abrir a transação: a primeira leitura das regras usa outra conexão."""
+    if configuracao is None:
+        return Calendario()
+    cal = configuracao.atual()["calendario"]
+    return Calendario(cal["extras"], cal["sabado"])
+
+
+# --- horário ocupado --------------------------------------------------------------------------------------------------
+_HORARIOS = ("id", "usuario", "nome", "titulo", "inicio", "fim", "hora", "hora_fim", "ocupado", "repeticao",
+             "dias_semana", "dia_mes", "intervalo", "so_dias_uteis", "regiao")
+
+
+def travar_horarios(con, pessoas) -> None:
+    """Uma gravação com horário por pessoa de cada vez, até o fim da transação (em ordem: duas gravações não ficam
+    esperando uma pela outra em cruz)."""
+    for p in sorted(set(pessoas)):
+        con.execute("SELECT pg_advisory_xact_lock(%s::int, %s::int)", [TRAVA_HORARIOS, p])
+
+
+def _cruzam(h1: dt.time, f1: dt.time | None, h2: dt.time, f2: dt.time | None) -> bool:
+    """Os dois horários se cruzam? Sem o fim, o horário é um ponto, que cruza o outro se cai dentro dele (no fim, já
+    não). Dois pontos não se cruzam."""
+    if f1 and f2:
+        return h1 < f2 and h2 < f1
+    if f1:
+        return h1 <= h2 < f1
+    return bool(f2) and h2 <= h1 < f2
+
+
+def _ultimo_dia(a: dict) -> dt.date | None:
+    """O último dia em que a atividade acontece (None: a repetida sem fim)."""
+    return a["fim"] or (a["inicio"] if a["repeticao"] == "nenhuma" else None)
+
+
+def _dia_em_comum(a: dict, b: dict, cal: Calendario, desde: dt.date) -> dt.date | None:
+    """O primeiro dia, de desde em diante, em que as duas atividades acontecem (sem fim, até HORIZONTE dias)."""
+    dia = max(desde, a["inicio"], b["inicio"])
+    ate = min([f for f in (_ultimo_dia(a), _ultimo_dia(b)) if f] + [dia + dt.timedelta(HORIZONTE)])
+    while dia <= ate:
+        if ocorre(a, dia, cal) and ocorre(b, dia, cal):
+            return dia
+        dia += UM_DIA
+    return None
+
+
+def _com_horario(con, pessoas, desde: dt.date, so_ocupadas: bool, ignorar: int | None = None) -> list[dict]:
+    """As atividades com horário das pessoas que ainda acontecem de desde em diante (só as ocupadas, se pedido)."""
+    return [dict(zip(_HORARIOS, r)) for r in con.execute(
+        "SELECT a.id, a.usuario, u.nome, a.titulo, a.inicio, a.fim, a.hora, a.hora_fim, a.ocupado, a.repeticao, "
+        "a.dias_semana, a.dia_mes, a.intervalo, a.so_dias_uteis, a.regiao FROM agenda_atividades a "
+        "JOIN usuarios u ON u.id = a.usuario WHERE a.usuario = ANY(%(p)s::bigint[]) AND a.hora IS NOT NULL "
+        "AND coalesce(a.fim, CASE a.repeticao WHEN 'nenhuma' THEN a.inicio ELSE 'infinity' END) >= %(desde)s "
+        "AND a.id <> %(ignorar)s" + (" AND a.ocupado" if so_ocupadas else "") + " ORDER BY a.inicio, a.hora, a.id",
+        {"p": sorted(set(pessoas)), "desde": desde, "ignorar": ignorar or 0})]
+
+
+def _ocupado_por(b: dict, dia: dt.date, eu: int, hoje: dt.date) -> str:
+    """O horário ocupado b em dia: com o título, se é de quem grava; de outra pessoa, sem (só ela vê a agenda dela)."""
+    if b["usuario"] == eu:
+        return f"esse horário está ocupado por “{b['titulo']}” ({_dm(dia, hoje)}, {_faixa(b['hora'], b['hora_fim'])})"
+    return (f"{b['nome']} está com o horário ocupado em {_dm(dia, hoje)}, das {_hhmm(b['hora'])} às "
+            f"{_hhmm(b['hora_fim'])}")
+
+
+def conferir_pontos(con, cal: Calendario, hoje: dt.date, pontos: list[tuple], eu: int) -> None:
+    """Os horários de tarefa e subtarefa que entram ou mudam, [(pessoa, dia, hora, o_que)], com o_que como "a
+    subtarefa “Estande”": recusa o que cai no horário ocupado da pessoa (de hoje em diante). eu: quem grava."""
+    pontos = [p for p in pontos if p[2] is not None and p[1] >= hoje]
+    if not pontos:
+        return
+    ocupadas = _com_horario(con, {p[0] for p in pontos}, hoje, so_ocupadas=True)
+    for pessoa, dia, h, o_que in pontos:
+        for b in ocupadas:
+            if b["usuario"] == pessoa and b["hora"] <= h < b["hora_fim"] and ocorre(b, dia, cal):
+                raise ValueError(f"{_ocupado_por(b, dia, eu, hoje)}: mude o horário d{o_que}")
+
+
+def _tarefas_com_horario(con, pessoa: int, desde: dt.date) -> list[tuple]:
+    """As tarefas abertas de que a pessoa participa e as subtarefas abertas dela, com horário, de desde em diante:
+    [(o_que, dia, hora, quem criou a tarefa, o nome de quem criou)]."""
+    linhas = con.execute(
+        "SELECT 'a tarefa “' || t.titulo || '”', t.prazo, t.hora, t.criador, c.nome FROM agenda_tarefas t "
+        "JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %(u)s JOIN usuarios c ON c.id = t.criador "
+        "WHERE t.concluida_em IS NULL AND t.hora IS NOT NULL AND t.prazo >= %(desde)s "
+        "UNION ALL SELECT 'a subtarefa “' || s.titulo || '”', s.prazo, s.hora, t.criador, c.nome "
+        "FROM agenda_subtarefas s JOIN agenda_tarefas t ON t.id = s.tarefa JOIN usuarios c ON c.id = t.criador "
+        "WHERE s.responsavel = %(u)s AND s.concluida_em IS NULL AND t.concluida_em IS NULL AND s.hora IS NOT NULL "
+        "AND s.prazo >= %(desde)s ORDER BY 2, 3", {"u": pessoa, "desde": desde}).fetchall()
+    return [tuple(r) for r in linhas]
+
+
+def conferir_atividade(con, cal: Calendario, hoje: dt.date, a: dict, pessoa: int) -> None:
+    """A atividade a da pessoa como vai ficar (com o id, se já existe): recusa se ela cruza um horário ocupado da
+    pessoa ou, marcada como ocupada, se a pessoa já tem algo com horário nela (de hoje em diante)."""
+    if a["hora"] is None:
+        return
+    for b in _com_horario(con, [pessoa], hoje, so_ocupadas=not a["ocupado"], ignorar=a.get("id")):
+        if not _cruzam(a["hora"], a["hora_fim"], b["hora"], b["hora_fim"]):
+            continue
+        dia = _dia_em_comum(a, b, cal, hoje)
+        if dia and b["ocupado"]:
+            raise ValueError(_ocupado_por(b, dia, pessoa, hoje))
+        if dia:
+            raise ValueError(f"já há algo nesse horário em {_dm(dia, hoje)}: “{b['titulo']}” "
+                             f"({_faixa(b['hora'], b['hora_fim'])}). Mude o horário dela ou desmarque o ocupado")
+    if not a["ocupado"]:
+        return
+    for o_que, dia, h, criador, nome in _tarefas_com_horario(con, pessoa, hoje):
+        if a["hora"] <= h < a["hora_fim"] and ocorre(a, dia, cal):
+            pedir = ("Mude o prazo dela" if criador == pessoa
+                     else f"Peça a {nome}, que criou a tarefa, para mudar o prazo")
+            raise ValueError(f"já há algo nesse horário em {_dm(dia, hoje)}: {o_que} (até {_hhmm(h)}). {pedir}, ou "
+                             "escolha outro horário")
 
 
 class Agenda:
@@ -216,10 +365,15 @@ class Agenda:
         return ContextoAgenda(self, usuario)
 
     def _calendario(self, atividades: list[dict]) -> Calendario | None:
-        if not any(a["so_dias_uteis"] for a in atividades):
-            return None
-        cal = self.configuracao.atual()["calendario"]
-        return Calendario(cal["extras"], cal["sabado"])
+        return calendario(self.configuracao) if any(a["so_dias_uteis"] for a in atividades) else None
+
+    def _conferir_horario(self, usuario: int, a: dict) -> None:
+        """Para a proposta do Assistente: a mesma conferência do horário ocupado da gravação, sem gravar."""
+        if a["hora"] is None:
+            return
+        cal = calendario(self.configuracao)
+        with self.banco.conexao() as con:
+            conferir_atividade(con, cal, self.hoje(), a, usuario)
 
     def _obter(self, usuario: int, id_: int) -> dict:
         with self.banco.conexao() as con:
@@ -300,9 +454,9 @@ class Agenda:
                             else "prevista")
                 totais["ocorrencias"] += 1
                 totais[_TOTAL[situacao]] += 1
-                linhas.append({"atividade": i["a"]["id"], "titulo": i["a"]["titulo"],
-                               "hora": i["a"]["hora"].strftime("%H:%M") if i["a"]["hora"] else None,
-                               "situacao": situacao, **({"feedback": i["feito"][0]} if i["feito"] else {})})
+                linhas.append({"atividade": i["a"]["id"], "titulo": i["a"]["titulo"], "hora": _hhmm(i["a"]["hora"]),
+                               "hora_fim": _hhmm(i["a"]["hora_fim"]), "situacao": situacao,
+                               **({"feedback": i["feito"][0]} if i["feito"] else {})})
             if linhas:
                 saida.append({"data": dia.isoformat(), "dia_semana": NOME_DIA[dia.isoweekday()], "itens": linhas})
         return {"hoje": hoje.isoformat(), "de": de.isoformat(), "ate": ate.isoformat(), "totais": totais,
@@ -336,7 +490,11 @@ class Agenda:
     # --- atividades ------------------------------------------------------------------------
     def criar(self, usuario: int, dados: dict) -> dict:
         a = _valida(dados)
+        cal = calendario(self.configuracao) if a["hora"] else None
         with self.banco.conexao() as con:
+            if a["hora"]:
+                travar_horarios(con, [usuario])
+                conferir_atividade(con, cal, self.hoje(), a, usuario)
             linha = con.execute(f"INSERT INTO agenda_atividades (usuario, {', '.join(_GRAVAR)}) SELECT id, {_VALORES} "
                                 "FROM usuarios WHERE id = %(usuario)s RETURNING id",
                                 {**a, "usuario": usuario}).fetchone()
@@ -345,25 +503,32 @@ class Agenda:
         return {"id": linha[0], **_publica(a, self.hoje())}
 
     def editar(self, usuario: int, id_, dados: dict) -> dict:
+        """Troca a atividade; o horário ocupado só é conferido se os dias ou os horários mudaram."""
         id_, a = _id(id_), _valida(dados)
+        cal = calendario(self.configuracao) if a["hora"] else None
         sets = ", ".join(f"{c} = {v}" for c, v in zip(_GRAVAR, _VALORES.split(", ")))
         with self.banco.conexao() as con:
-            linha = con.execute(f"UPDATE agenda_atividades SET {sets}, atualizada_em = now() "
-                                "WHERE id = %(id)s AND usuario = %(usuario)s RETURNING id",
-                                {**a, "id": id_, "usuario": usuario}).fetchone()
-        if not linha:
-            raise NaoEncontrada(_NAO_ACHOU)
+            linha = con.execute(f"SELECT {_COLUNAS} FROM agenda_atividades WHERE id = %s AND usuario = %s FOR UPDATE",
+                                [id_, usuario]).fetchone()
+            if not linha:
+                raise NaoEncontrada(_NAO_ACHOU)
+            antes = dict(zip(_CAMPOS, linha))
+            if a["hora"] and any(antes[c] != a[c] for c in _QUANDO):
+                travar_horarios(con, [usuario])
+                conferir_atividade(con, cal, self.hoje(), {**a, "id": id_}, usuario)
+            con.execute(f"UPDATE agenda_atividades SET {sets}, atualizada_em = now() WHERE id = %(id)s",
+                        {**a, "id": id_})
         return {"id": id_, **_publica(a, self.hoje())}
 
     @staticmethod
     def _pode_encerrar(a: dict, hoje: dt.date) -> None:
-        if a["repeticao"] == "nenhuma":
-            raise ValueError("só a atividade que se repete pode ser encerrada")
+        if a["repeticao"] == "nenhuma" and not a["fim"]:
+            raise ValueError("só a atividade que se repete (ou que dura vários dias) pode ser encerrada")
         if a["inicio"] > hoje:
             raise ValueError("a atividade ainda não começou; exclua se ela não vai mais acontecer")
 
     def encerrar(self, usuario: int, id_) -> dict:
-        """A repetida para de acontecer depois de hoje; o que já foi feito fica."""
+        """A repetida (ou a de vários dias) para de acontecer depois de hoje; o que já foi feito fica."""
         id_, hoje = _id(id_), self.hoje()
         with self.banco.conexao() as con:
             linha = con.execute("SELECT repeticao, inicio, fim FROM agenda_atividades WHERE id = %s AND usuario = %s "
@@ -371,7 +536,7 @@ class Agenda:
             if not linha:
                 raise NaoEncontrada(_NAO_ACHOU)
             repeticao, inicio, fim = linha
-            self._pode_encerrar({"repeticao": repeticao, "inicio": inicio}, hoje)
+            self._pode_encerrar({"repeticao": repeticao, "inicio": inicio, "fim": fim}, hoje)
             if fim is None or fim > hoje:
                 con.execute("UPDATE agenda_atividades SET fim = %s, atualizada_em = now() WHERE id = %s", [hoje, id_])
                 fim = hoje
@@ -434,6 +599,7 @@ class Agenda:
         p = {"id": str(uuid.uuid4()), "acao": acao, "atividade": None}
         if acao == "criar":
             a = _valida(dados or {})
+            self._conferir_horario(usuario, a)
             return {**p, "titulo": a["titulo"], "dados": _publica(a, hoje), "dia": self._proximo(a, hoje).isoformat()}
         atual = self._obter(usuario, _id(atividade))
         p.update(atividade=atual["id"], titulo=atual["titulo"])
@@ -445,11 +611,14 @@ class Agenda:
             a = _valida({**antes, **mudados})
             depois = _publica(a, hoje)
             rotulos = {"titulo": "Título", "descricao": "Descrição", "inicio": "Início", "hora": "Horário",
-                       "quando": "Repetição", "exige_feedback": "Feedback ao concluir"}
+                       "hora_fim": "Fim do horário", "ocupado": "Horário ocupado", "quando": "Repetição",
+                       "exige_feedback": "Feedback ao concluir"}
             mudancas = [{"campo": r, "de": antes[k], "para": depois[k]} for k, r in rotulos.items()
                         if antes[k] != depois[k]]
             if not mudancas:
                 raise ValueError("a atividade já está assim; nada muda")
+            if any(atual[c] != a[c] for c in _QUANDO):
+                self._conferir_horario(usuario, {**a, "id": atual["id"]})
             return {**p, "dados": depois, "mudancas": mudancas, "dia": self._proximo(a, hoje).isoformat()}
         if acao == "encerrar":
             self._pode_encerrar(atual, hoje)
@@ -486,8 +655,9 @@ class Agenda:
             atividade = p.get("atividade")
             if acao == "criar":
                 atividade = self.criar(usuario, p["dados"])["id"]
-            elif acao == "editar":
-                self.editar(usuario, atividade, p["dados"])
+            elif acao == "editar":  # a proposta de antes da migração 026 não traz hora_fim e ocupado: ficam os de agora
+                atual = _publica(self._obter(usuario, _id(atividade)), self.hoje())
+                self.editar(usuario, atividade, {**atual, **p["dados"]})
             elif acao == "encerrar":
                 self.encerrar(usuario, atividade)
             elif acao == "excluir":

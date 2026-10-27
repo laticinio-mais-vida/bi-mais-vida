@@ -577,26 +577,46 @@ guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca
   mostram o mês anterior e o seguinte, inteiros; o dia escolhido aparece à direita, e clicar nele volta para o mês
   dele. Com o foco num dia, as setas do teclado andam um dia (para cima e para baixo, uma semana). Os dias depois do
   prazo da tarefa ficam bloqueados nas subtarefas, e os antes do começo, no fim da atividade.
-- **Atividade nova:** título, descrição, o dia (ou o primeiro dia, se repete), o horário (opcional), a repetição, um
-  último dia opcional e se exige feedback ao concluir. As repetições:
+- **Atividade nova:** título, descrição, o dia (ou o primeiro dia, se repete), o horário (opcional: **Começa às** e,
+  se quiser, **Termina às**), a repetição, um último dia opcional e se exige feedback ao concluir. Na agenda, o horário
+  aparece como "14:00–15:00". As repetições:
 
   | Repetição | Acontece |
   |---|---|
-  | Única | só no dia escolhido |
+  | Única | só no dia escolhido; com o último dia (**Até**), em todos os dias do início ao fim, cada um com o seu check (uma feira de 10 a 14/11: "De 10/11 a 14/11") |
   | Diária | todo dia; com "Só dias úteis", pula domingos, feriados e sábados sem expediente do calendário ES ou BA (o mesmo das metas, com os feriados extras de Configurações) |
   | Semanal | nos dias da semana marcados |
   | Mensal | num dia fixo do mês; o mês que não tem esse dia usa o último |
   | A cada N dias | contando do primeiro dia (quinzenal: 15) |
 
-- **Histórico de feedbacks** (o ícone de caderneta, nas atividades que se repetem): cada dia concluído com o
-  feedback, quantas vezes ela aconteceu até hoje, quantas foram concluídas e os dias que ficaram sem concluir.
+- **Horário ocupado:** com o começo do horário escrito, aparece a caixa **Horário ocupado**, que precisa do fim. Ela
+  trava o horário da pessoa nos dias em que a atividade acontece, de hoje em diante: ninguém marca outra coisa para ela
+  nesse horário. Exemplo, com a Ana ocupada em 30/10, das 14:00 às 15:00:
+
+  | Tentativa | Resultado |
+  |---|---|
+  | A Ana cria uma atividade em 30/10 às 14:30 | recusa: "esse horário está ocupado por “Reunião com fornecedor” (30/10, 14:00–15:00)" |
+  | A Ana cria uma atividade em 30/10, das 15:00 às 16:00, ou sem horário | pode |
+  | O Beto cria uma tarefa com a Ana, prazo 30/10 às 14:30, ou uma subtarefa para ela até 14:00 | recusa: "Ana está com o horário ocupado em 30/10, das 14:00 às 15:00" (sem o título, que só a Ana vê) |
+  | O Beto marca o mesmo horário como ocupado na agenda dele | pode: é outra pessoa |
+  | A Ana marca como ocupado um horário em que já tem algo (uma atividade, ou uma tarefa ou subtarefa aberta) | recusa, dizendo o quê; numa tarefa de outra pessoa, ela pede a quem criou para mudar o prazo |
+
+  A ocupada que se repete trava todos os dias em que acontece (entre duas que se repetem sem fim, o painel confere o
+  próximo ano); os dias que já passaram e as tarefas e subtarefas concluídas não contam. Editar só confere o que
+  mudou: trocar só o título não esbarra num conflito antigo. Dois itens sem "ocupado" continuam podendo ficar no mesmo
+  horário.
+- **Histórico de feedbacks** (o ícone de caderneta, nas atividades que se repetem ou duram vários dias): cada dia
+  concluído com o feedback, quantas vezes ela aconteceu até hoje, quantas foram concluídas e os dias que ficaram sem
+  concluir.
 - **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
-  de hoje e mantém o histórico. **Excluir** apaga a atividade e todo o histórico dela.
+  de hoje (a de vários dias, terminar hoje) e mantém o histórico. **Excluir** apaga a atividade e todo o histórico
+  dela.
 - **Pelo Assistente** (para quem tem a Gestão), com a agenda de quem pergunta:
   - **resumos**, como "o que fiz esta semana?", "o que ficou atrasado?" ou "como foram as visitas ao Mercado do
     João?", com os feedbacks;
-  - **mudanças**: criar ("visitar o Mercado do João toda segunda e quinta às 9h"), mudar, encerrar, excluir ou
-    concluir com feedback.
+  - **mudanças**: criar ("visitar o Mercado do João toda segunda e quinta às 9h", "reunião amanhã das 14h às 15h,
+    ocupado", "feira de 10 a 14/11"), mudar, encerrar, excluir ou concluir com feedback. Se o horário estiver ocupado,
+    o Assistente conta e pergunta outro.
 
   O Assistente nunca grava sozinho: a resposta traz a proposta com um botão (**Adicionar à agenda**, **Salvar a
   mudança**, **Encerrar**, **Excluir** ou **Marcar como feita**), e só o clique aplica, uma vez só. Depois, o cartão
@@ -630,6 +650,10 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
   do título recolhe sem mudar o dia (e volta a subtarefa nova). Salvar com uma subtarefa sem título abre ela com o
   cursor no título.
 
+- **Horário ocupado** (veja [Minha agenda](#minha-agenda)): o horário do prazo da tarefa vale para todas as pessoas
+  dela, e o da subtarefa, para o responsável. Ele não pode cair no horário ocupado de ninguém: a mensagem diz quem e
+  quando (sem o título da atividade, que só a pessoa vê). Ao editar, só o que entra ou muda é conferido: o prazo, as
+  pessoas novas e as subtarefas novas ou mudadas.
 - **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. Na janela
   da tarefa, o **+ Subtarefa** no card de cada um cria uma subtarefa para a pessoa (quem criou, para qualquer uma;
   quem tem autonomia, para si).
@@ -765,7 +789,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
-| `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019) |
+| `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019); o fim do horário, o horário ocupado e a única de vários dias (migração 026) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `parametros` | o segredo que assina os cookies de sessão |
