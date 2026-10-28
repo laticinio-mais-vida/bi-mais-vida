@@ -18,11 +18,11 @@
 // subtarefas dela; clicar no nome abre o card já com uma subtarefa nova: escolhe-se o dia, escreve-se o nome, e o dia
 // escolhido depois já é o da próxima, que abre com a anterior guardada), que também edita uma atividade ou uma
 // tarefa. Os dias se escolhem numa faixa de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia
-// já tem.
-// Recolhida, fica só a faixa de dias (a escolha, e a vista, ficam guardadas neste navegador). #/gestao?dia=AAAA-MM-DD
-// abre a agenda nesse dia (o link das propostas do Assistente). Em que dias cada atividade acontece, o texto da
-// repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer numa tarefa vêm do servidor (bi/agenda.py e
-// bi/tarefas.py).
+// já tem. O título da subtarefa aceita um texto longo: a caixa dele cresce com o texto.
+// Minimizada (o − do cabeçalho, ou o Minimizar tudo da Gestão), fica só o título (a escolha, e a vista, ficam
+// guardadas neste navegador). #/gestao?dia=AAAA-MM-DD abre a agenda nesse dia (o link das propostas do Assistente).
+// Em que dias cada atividade acontece, o texto da repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer
+// numa tarefa vêm do servidor (bi/agenda.py e bi/tarefas.py).
 import { campoDia, contarDias, focarDia, limitesDoDia, prepararDias, redesenharDias } from "./escolherdia.js";
 import { MESES, api, esc, fmt, guardar, icone, ler, ligarTooltips, linhaTT, toast } from "./util.js";
 
@@ -30,6 +30,8 @@ const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
 const DIAS = [[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [7, "Dom"]]; // date.isoweekday()
 const MAX_SEGMENTOS = 6; // até aqui, a barrinha do dia tem um pedaço por item; acima, só as duas partes
 const MAX_TOOLTIP = 6;   // itens listados no tooltip do dia
+const MAX_DICA = 80;     // caracteres do título de uma subtarefa (que pode ser longo) no tooltip do dia e nos avisos
+const MAX_ALTURA_TITULO = 220; // px: a caixa do título da subtarefa cresce com o texto até aqui; depois, rola
 const REPETICOES = [["nenhuma", "Única"], ["diaria", "Diária"], ["semanal", "Semanal"], ["mensal", "Mensal"], ["intervalo", "A cada N dias"]];
 const TIPOS = [["atividade", "Atividade"], ["tarefa", "Tarefa"]];
 const VISTAS = [["agenda", "Agenda", "calendario"], ["quadro", "Kanban", "quadro"]];
@@ -69,6 +71,7 @@ const tarefa = (id) => estado.dados.tarefas.find((t) => t.id === id);
 const subDe = (t, id) => t.subtarefas.find((s) => s.id === id);
 const ehDia = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t || "");
 const plural = (n, um, varios) => `${fmt.num(n)} ${n === 1 ? um : varios}`;
+const curto = (t, n) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
 // Tudo o que o dia tem (atividades e tarefas), para as contas: os dois carregam o feita.
 const todos = (x) => [...x.itens, ...(x.tarefas || [])];
 
@@ -129,7 +132,7 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
             <button class="btn" type="button" data-hoje>Hoje</button>
             <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
           </span>
-          <button class="btn icone" type="button" data-recolher aria-controls="ag-baixo"></button>
+          <button class="btn icone" type="button" data-recolher aria-controls="ag-faixa ag-baixo ag-quadro"></button>
         </div>
       </div>
       <div id="ag-faixa"><div class="esqueleto" style="height:96px"></div></div>
@@ -141,6 +144,7 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
   tela = raiz.querySelector("#ag-tela");
   raiz.addEventListener("click", aoClicar);
   raiz.addEventListener("change", aoMudar);
+  raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
   raiz.addEventListener("dia-escolhido", aoEscolherDia);
   raiz.addEventListener("dragstart", aoArrastar);
@@ -156,7 +160,7 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
   Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null, tipo: "atividade", tf: null,
                           pessoas: null, quadro: null, meses: new Map(), vista: valido ? "agenda" : ler(CHAVE_VISTA, "agenda") });
   contarDias(contagem);
-  recolher(ler(CHAVE_RECOLHIDA, false));
+  recolher(!valido && ler(CHAVE_RECOLHIDA, false)); // o link de um dia mostra a agenda, como abrirNaAgenda
   escolherVista(estado.vista);
   carregar(valido ? mesDe(dia) : undefined, { aberto: valido ? dia : undefined });
   if (Number(tarefa) > 0) abrirTarefa(Number(tarefa));
@@ -183,6 +187,12 @@ export function recarregarAgenda() {
   if (raiz?.isConnected && estado.dados) recarregarTudo();
 }
 
+// O Minimizar tudo da Gestão: minimiza ou mostra a agenda, e pergunta se ela está minimizada.
+export function minimizarAgenda(sim) {
+  if (raiz?.isConnected && agendaMinimizada() !== sim) recolher(sim);
+}
+export const agendaMinimizada = () => !!raiz?.isConnected && raiz.classList.contains("recolhida");
+
 // Depois de uma mudança feita fora da agenda (a janela do bloqueio, avisos.js): a janela da tarefa, se é ela que está
 // aberta e nada está sendo escrito nela, mostra como ficou.
 export async function atualizarTarefaAberta(id) {
@@ -197,16 +207,18 @@ function recarregarTudo() {
   return Promise.all([carregar(), estado.vista === "quadro" ? carregarQuadro() : null]);
 }
 
-// Recolhida: só a faixa de dias (no kanban, só o cabeçalho) até abrir de novo (ou clicar num dia).
+// Minimizada: só o título (sem os botões, a faixa de dias e o kanban) até abrir de novo (o +, ou o link de um dia). A
+// Gestão fica sabendo (agenda-minimizada), para o botão Minimizar tudo.
 function recolher(sim) {
   raiz.classList.toggle("recolhida", sim);
   const b = raiz.querySelector("[data-recolher]");
-  const dica = sim ? "Mostrar a agenda" : "Recolher a agenda";
+  const dica = sim ? "Mostrar a agenda" : "Minimizar a agenda";
   b.innerHTML = icone(sim ? "mais" : "minimizar");
   b.title = dica;
   b.setAttribute("aria-label", dica);
   b.setAttribute("aria-expanded", String(!sim));
   guardar(CHAVE_RECOLHIDA, sim);
+  raiz.dispatchEvent(new Event("agenda-minimizada", { bubbles: true }));
 }
 
 async function carregar(mes = estado.mes, { aberto } = {}) {
@@ -344,13 +356,12 @@ function linhaDoDia(e) {
   if (e.i) nome = atividade(e.i.atividade).titulo;
   else {
     const { t, s } = daRef(e.r);
-    nome = s ? `${s.titulo} (${s.minha ? "subtarefa" : `de ${s.responsavel.nome}`})` : `Tarefa: ${t.titulo}`;
+    nome = s ? `${curto(s.titulo, MAX_DICA)} (${s.minha ? "subtarefa" : `de ${s.responsavel.nome}`})` : `Tarefa: ${t.titulo}`;
   }
   return `<div class='tt-l'><span>${e.faixa ? `${e.faixa} ` : ""}${esc(nome)}</span><b>${(e.i || e.r).feita ? "feita" : "falta"}</b></div>`;
 }
 
 function abrirDia(dia) {
-  if (raiz.classList.contains("recolhida")) recolher(false);
   if (dia === estado.aberto) return;
   if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
   estado.aberto = dia;
@@ -505,10 +516,7 @@ async function aoClicar(e) {
   if (!b || b.disabled) return;
   if (b.dataset.dia && b.closest(".ag-faixa")) return abrirDia(b.dataset.dia);
   if ("recolher" in b.dataset) return recolher(!raiz.classList.contains("recolhida"));
-  if (b.dataset.vista) {
-    if (raiz.classList.contains("recolhida")) recolher(false);
-    return escolherVista(b.dataset.vista);
-  }
+  if (b.dataset.vista) return escolherVista(b.dataset.vista);
   if (b.dataset.mes || "hoje" in b.dataset) {
     if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
     estado.concluindo = null;
@@ -599,6 +607,24 @@ function aoTeclar(e) {
   if (!t.matches(".ag-fb textarea")) return;
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); t.closest(".ag-item").querySelector("[data-confirmar]").click(); }
   if (e.key === "Escape") { estado.concluindo = null; desenharDia(false); }
+}
+
+// O título da subtarefa (no formulário e na janela da tarefa) é uma caixa de texto que cresce com ele.
+function aoDigitar(e) {
+  if (e.target.matches('textarea[data-campo="titulo"]')) ajustarTitulo(e.target);
+}
+
+// A altura da caixa do título da subtarefa: a do texto, até MAX_ALTURA_TITULO (depois, rola). O título não tem quebras
+// de linha (Enter vai para os dias, ou cria a subtarefa na janela): as de um texto colado viram espaço. Escondida, a
+// caixa fica como está. A conta vai duas vezes: a caixa mais alta pode dar à janela da tarefa a barra de rolagem, que
+// estreita a caixa e pede mais uma linha.
+function ajustarTitulo(t) {
+  if (/[\r\n]/.test(t.value)) t.value = t.value.replace(/\s*[\r\n]+\s*/g, " ");
+  if (!t.offsetHeight) return;
+  const bordas = t.offsetHeight - t.clientHeight;
+  t.style.height = "auto";
+  for (let i = 0; i < 2; i++) t.style.height = `${Math.min(t.scrollHeight + bordas, MAX_ALTURA_TITULO)}px`;
+  t.style.overflowY = t.scrollHeight > t.clientHeight ? "auto" : "hidden";
 }
 
 function escreverFeedback(id, dia) {
@@ -730,8 +756,12 @@ function criarJanela() {
   // fica fora de #ag-raiz: os eventos dela são estes, não os da agenda
   dlg.addEventListener("click", aoClicarJanela);
   dlg.addEventListener("submit", aoEnviarSub);
+  dlg.addEventListener("input", aoDigitar);
   dlg.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest("[data-sub-form], [data-just-form]")) {
+    // Ctrl+Enter envia; no título da subtarefa, que não tem quebras de linha, o Enter também (como num campo de uma
+    // linha)
+    const titulo = e.target.matches('[data-sub-form] [data-campo="titulo"]');
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey || titulo) && e.target.closest("[data-sub-form], [data-just-form]")) {
       e.preventDefault();
       e.target.closest("form").requestSubmit();
     }
@@ -849,6 +879,7 @@ function desenharTarefa(t) {
     <div class="ag-pessoas">${pessoasDaTarefa(t).map((p) => cartaoTarefa(t, p)).join("")}</div>
   </div>`;
   prepararDias(dlg);
+  dlg.querySelectorAll('textarea[data-campo="titulo"]').forEach(ajustarTitulo);
   janela.inicial = janela.editando != null || janela.justificando != null ? JSON.stringify(lerEdicaoJanela()) : null;
 }
 
@@ -920,7 +951,7 @@ function formSubHtml(t, s) {
     : `<small class="ag-sub-prazo">${icone("cadeado")}Prazo: ${s ? prazoTxt(s) : `o da tarefa (${prazoTxt(t)})`}. Só ${esc(t.criador.nome)}, que criou a tarefa, muda.</small>`;
   return `<form class="ag-sub-edit" data-sub-form="${s ? s.id : "nova"}" novalidate>
     <label class="campo-form"><span>${s ? "Subtarefa" : "Nova subtarefa"}</span>
-      <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(v.titulo)}" placeholder="O que fazer"></label>
+      <textarea data-campo="titulo" rows="1" maxlength="2000" autocomplete="off" placeholder="O que fazer">${esc(v.titulo)}</textarea></label>
     <label class="campo-form"><span>Descrição <small>(opcional)</small></span>
       <textarea data-campo="descricao" rows="2" maxlength="2000">${esc(v.descricao)}</textarea></label>
     ${prazo}
@@ -1170,6 +1201,7 @@ function desenharPessoas() {
     </div>`;
   }).join("");
   prepararDias(lista);
+  lista.querySelectorAll('textarea[data-campo="titulo"]').forEach(ajustarTitulo);
   const livres = estado.pessoas.pessoas.filter((p) => !participantes.some((q) => q.id === p.id));
   const sel = f.querySelector("[data-add-pessoa]");
   sel.innerHTML = `<option value="">${livres.length ? "Adicionar pessoa…" : "Ninguém mais com acesso à Gestão"}</option>` +
@@ -1219,8 +1251,8 @@ function linhaSub(s, n, p, prazoTarefa, horaTarefa) {
       <div class="ag-sub-topo">
         ${nova ? "" : `<button type="button" class="ag-sub-recolher" data-fechar-sub title="Recolher a subtarefa" aria-expanded="true"
           aria-label="Recolher a subtarefa">${icone("setaBaixo")}</button>`}
-        <input data-campo="titulo" maxlength="120" autocomplete="off" value="${esc(s.titulo)}"
-          placeholder="${nova ? "Nova subtarefa: o que fazer" : "O que fazer"}" aria-label="Subtarefa de ${esc(de)}">
+        <textarea data-campo="titulo" rows="1" maxlength="2000" autocomplete="off"
+          placeholder="${nova ? "Nova subtarefa: o que fazer" : "O que fazer"}" aria-label="Subtarefa de ${esc(de)}">${esc(s.titulo)}</textarea>
         ${hora}
         ${nova ? "" : tirar}
       </div>
@@ -1459,7 +1491,7 @@ async function enviarTarefa(f) {
     if (emBranco(s)) continue;
     if (!s.titulo.trim()) { toast("Escreva o título da subtarefa", "erro"); return focarSub(n, "titulo"); }
     if (depoisDoPrazo(s, dados)) {
-      toast(`A subtarefa "${s.titulo}" vence depois da tarefa: o prazo dela vai até o da tarefa`, "erro");
+      toast(`A subtarefa "${curto(s.titulo, MAX_DICA)}" vence depois da tarefa: o prazo dela vai até o da tarefa`, "erro");
       return focarSub(n, "prazo");
     }
   }

@@ -421,6 +421,11 @@ meta (base aguardando os dados) fica de fora.
 A equipe é quem tem meta no mês na planilha METAS, como na página Metas: contas da casa (venda interna, funcionário,
 produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
 
+Cada parte da página (a agenda, os objetivos, as campanhas e a equipe) tem o botão **−** no cabeçalho, que a minimiza:
+fica só o título, até o **+**. **Minimizar tudo**, na barra de cima, minimiza todas de uma vez; com todas minimizadas,
+ele vira **Mostrar tudo**. A escolha vale para ES e BA e fica guardada no navegador. Com o formulário de uma campanha
+aberto, a equipe aparece mesmo minimizada, porque é nela que se marcam os vendedores.
+
 ### Campanhas
 
 - **Lançar:** **Nova campanha** liga a seleção no quadro: marque os vendedores e preencha o formulário que aparece
@@ -554,8 +559,8 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 
 No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
 administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)). Quem tem a
-página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** recolhe a agenda e deixa só a faixa de dias; o **+** mostra de novo (a escolha fica
-guardada no navegador), e clicar num dia também abre. **Agenda | Kanban** troca a faixa de dias pelo
+página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** minimiza a agenda e deixa só o título; o **+** mostra de novo (a escolha fica
+guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** troca a faixa de dias pelo
 [kanban das tarefas](#kanban-das-tarefas) (a escolha também fica guardada; o link de um dia sempre abre a agenda).
 
 - **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, na largura toda do cartão, com hoje num
@@ -648,6 +653,10 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
   | Clica em 28, escreve "Levantar preços" | a subtarefa nova em 28/10, com o nome |
   | Clica em 29 | "Levantar preços · até 28/10" guardada; abre outra em 29/10 |
   | Escreve "Montar planilha" e clica em 29 de novo | "Montar planilha · até 29/10" guardada; abre outra em 29/10 |
+
+- **Nome longo:** o nome da subtarefa aceita até 2000 caracteres (o título da tarefa e o da atividade, até 120), e a
+  caixa cresce com o texto. O Enter continua indo para os dias (na janela da tarefa, cria a subtarefa). No dia e na
+  janela da tarefa, o nome aparece inteiro; na subtarefa recolhida, na dica dos dias, nas mensagens e no sino, cortado.
 
 - **As subtarefas no card** ficam recolhidas, só com o texto e o prazo (em vermelho, se passa do da tarefa). Uma de
   cada vez fica aberta para corrigir o prazo, o título e o horário: clicar numa recolhida abre ela, do mesmo jeito,
@@ -879,7 +888,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019); o fim do horário, o horário ocupado e a única de vários dias (migração 026) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
-| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |

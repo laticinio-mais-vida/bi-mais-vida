@@ -127,14 +127,20 @@ def _chave(texto) -> str:
     return " ".join("".join(c if c.isalnum() else " " for c in t).split())
 
 
-def _titulo(valor, de: str = "da atividade") -> str:
+def _titulo(valor, de: str = "da atividade", maximo: int = MAX_TITULO) -> str:
     """O título sem espaços sobrando; obrigatório."""
     titulo = " ".join(str(valor or "").split())
     if not titulo:
         raise ValueError(f"escreva o título {de}")
-    if len(titulo) > MAX_TITULO:
-        raise ValueError(f"o título pode ter até {MAX_TITULO} caracteres")
+    if len(titulo) > maximo:
+        raise ValueError(f"o título pode ter até {maximo} caracteres")
     return titulo
+
+
+def _curto(texto: str, maximo: int = MAX_TITULO) -> str:
+    """O texto numa mensagem ou num aviso do sino: o que passa de maximo (o título longo de uma subtarefa) é cortado,
+    com “…”."""
+    return texto if len(texto) <= maximo else texto[:maximo - 1].rstrip() + "…"
 
 
 def _valida(dados: dict) -> dict:
@@ -319,14 +325,14 @@ def _tarefas_com_horario(con, pessoa: int, desde: dt.date) -> list[tuple]:
     """As tarefas abertas de que a pessoa participa e as subtarefas abertas dela, com horário, de desde em diante:
     [(o_que, dia, hora, quem criou a tarefa, o nome de quem criou)]."""
     linhas = con.execute(
-        "SELECT 'a tarefa “' || t.titulo || '”', t.prazo, t.hora, t.criador, c.nome FROM agenda_tarefas t "
+        "SELECT 'a tarefa', t.titulo, t.prazo, t.hora, t.criador, c.nome FROM agenda_tarefas t "
         "JOIN agenda_tarefa_pessoas p ON p.tarefa = t.id AND p.usuario = %(u)s JOIN usuarios c ON c.id = t.criador "
         "WHERE t.concluida_em IS NULL AND t.hora IS NOT NULL AND t.prazo >= %(desde)s "
-        "UNION ALL SELECT 'a subtarefa “' || s.titulo || '”', s.prazo, s.hora, t.criador, c.nome "
+        "UNION ALL SELECT 'a subtarefa', s.titulo, s.prazo, s.hora, t.criador, c.nome "
         "FROM agenda_subtarefas s JOIN agenda_tarefas t ON t.id = s.tarefa JOIN usuarios c ON c.id = t.criador "
         "WHERE s.responsavel = %(u)s AND s.concluida_em IS NULL AND t.concluida_em IS NULL AND s.hora IS NOT NULL "
-        "AND s.prazo >= %(desde)s ORDER BY 2, 3", {"u": pessoa, "desde": desde}).fetchall()
-    return [tuple(r) for r in linhas]
+        "AND s.prazo >= %(desde)s ORDER BY 3, 4", {"u": pessoa, "desde": desde}).fetchall()
+    return [(f"{tipo} “{_curto(titulo)}”", *resto) for tipo, titulo, *resto in linhas]
 
 
 def conferir_atividade(con, cal: Calendario, hoje: dt.date, a: dict, pessoa: int) -> None:

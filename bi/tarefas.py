@@ -36,13 +36,17 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .agenda import _data, _dm, _hhmm, _hora, _id, _texto, _titulo, calendario, conferir_pontos, travar_horarios
+from .agenda import (MAX_TEXTO, _curto, _data, _dm, _hhmm, _hora, _id, _texto, _titulo, calendario, conferir_pontos,
+                     travar_horarios)
 from .banco import Banco, hora
 from .conversas import NaoEncontrada
 from .notificacoes import avisar, limpar
 
 MAX_PESSOAS = 30      # participantes de uma tarefa, sem quem criou
 MAX_SUBTAREFAS = 50
+# O título da subtarefa aceita um texto longo (migração 030): no formulário da tarefa, é o único texto dela. Nas
+# mensagens e nos avisos do sino, vai cortado (_curto).
+MAX_TITULO_SUB = MAX_TEXTO
 DIAS_NO_QUADRO = 30   # a tarefa concluída fica na coluna Concluída do quadro por estes dias
 _NAO_ACHOU = "tarefa não encontrada; ela pode ter sido excluída ou você não participa mais dela"
 _NAO_ACHOU_SUB = "subtarefa não encontrada; ela pode ter sido excluída"
@@ -133,18 +137,19 @@ def _texto_prazo(prazo: dt.date, h: dt.time | None, hoje: dt.date) -> str:
 def _valida_sub(s: dict, t: dict, pessoas: set[int], responsavel: int) -> dict:
     """Uma subtarefa da tarefa t (prazo e hora já conferidos). Sem prazo, vence com a tarefa (e no horário dela); sem
     responsável, fica com `responsavel`. pessoas: quem participa da tarefa (com quem criou)."""
-    titulo = _titulo(s.get("titulo"), "da subtarefa")
+    titulo = _titulo(s.get("titulo"), "da subtarefa", MAX_TITULO_SUB)
     resp = responsavel if s.get("responsavel") in (None, "") else _pessoa(s["responsavel"])
     if resp not in pessoas:
-        raise ValueError(f"o responsável pela subtarefa “{titulo}” não participa da tarefa: escolha outra pessoa "
-                         "ou tire a subtarefa")
+        raise ValueError(f"o responsável pela subtarefa “{_curto(titulo)}” não participa da tarefa: escolha outra "
+                         "pessoa ou tire a subtarefa")
     if s.get("prazo"):
-        prazo, h = _data(s["prazo"], f"da subtarefa “{titulo}”"), _hora(s.get("hora"))
+        prazo, h = _data(s["prazo"], f"da subtarefa “{_curto(titulo)}”"), _hora(s.get("hora"))
     else:
         prazo, h = t["prazo"], _hora(s["hora"]) if s.get("hora") else t["hora"]
     if not _ate_o_prazo(prazo, h, t["prazo"], t["hora"]):
         limite = _texto_prazo(t["prazo"], t["hora"], t["prazo"])
-        raise ValueError(f"a subtarefa “{titulo}” vence depois da tarefa ({limite}): o prazo dela vai até o da tarefa")
+        raise ValueError(f"a subtarefa “{_curto(titulo)}” vence depois da tarefa ({limite}): o prazo dela vai até o "
+                         "da tarefa")
     return {"id": _id(s["id"], _NAO_ACHOU_SUB) if s.get("id") else None, "titulo": titulo,
             "descricao": _texto(s.get("descricao"), "a descrição"), "responsavel": resp, "prazo": prazo, "hora": h}
 
@@ -203,7 +208,7 @@ class Tarefas:
 
     @staticmethod
     def _ponto_sub(s: dict) -> list[tuple]:
-        return [(s["responsavel"], s["prazo"], s["hora"], f"a subtarefa “{s['titulo']}”")] if s["hora"] else []
+        return [(s["responsavel"], s["prazo"], s["hora"], f"a subtarefa “{_curto(s['titulo'])}”")] if s["hora"] else []
 
     def _conferir_horarios(self, con, cal, pontos: list[tuple], eu: int) -> None:
         """Os horários que entram ou mudam contra o horário ocupado de cada pessoa (bi/agenda.py), com a trava delas
@@ -456,22 +461,22 @@ class Tarefas:
     def _avisar_sub(self, con, s: dict, antes: tuple | None, nome: str, eu: int, tarefa: int) -> None:
         """A subtarefa nova ou mudada, para o responsável: criada ou passada para ele, ou com o prazo mudado. antes:
         (responsavel, prazo, hora) de antes da mudança (None: nova)."""
-        prazo = self._prazo(s["prazo"], s["hora"])
+        prazo, titulo = self._prazo(s["prazo"], s["hora"]), _curto(s["titulo"])
         if antes is None:
-            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} criou a subtarefa “{s['titulo']}” para você "
+            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} criou a subtarefa “{titulo}” para você "
                    f"(até {prazo})", eu, tarefa)
         elif s["responsavel"] != antes[0]:
-            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} passou a subtarefa “{s['titulo']}” para você "
+            avisar(con, [s["responsavel"]], "subtarefa_nova", f"{nome} passou a subtarefa “{titulo}” para você "
                    f"(até {prazo})", eu, tarefa, s["id"])
         elif (s["prazo"], s["hora"]) != tuple(antes[1:]):
-            avisar(con, [s["responsavel"]], "prazo_mudou", f"{nome} mudou o prazo de “{s['titulo']}” para {prazo}", eu,
+            avisar(con, [s["responsavel"]], "prazo_mudou", f"{nome} mudou o prazo de “{titulo}” para {prazo}", eu,
                    tarefa, s["id"])
 
     def _avisar_conclusao(self, con, t: dict, s: dict | None, eu: int) -> None:
         """Concluída agora: a subtarefa, para quem criou a tarefa; a tarefa, para todos dela (menos quem concluiu)."""
         nome = self._nome(con, eu)
         if s:
-            avisar(con, [t["criador"]], "concluida", f"{nome} concluiu a subtarefa “{s['titulo']}” (tarefa "
+            avisar(con, [t["criador"]], "concluida", f"{nome} concluiu a subtarefa “{_curto(s['titulo'])}” (tarefa "
                    f"“{t['titulo']}”)", eu, t["id"], s["id"])
         else:
             avisar(con, self._pessoas_da(con, t["id"]), "concluida", f"{nome} concluiu a tarefa “{t['titulo']}”", eu,
@@ -499,7 +504,7 @@ class Tarefas:
                     continue  # venceu: aí é a justificativa
                 quando = (f"hoje{f' às {_hhmm(h)}' if h else ''}" if prazo == hoje
                           else f"amanhã ({self._prazo(prazo, h)})")
-                avisar(con, [usuario], "vence_em_breve", f"“{titulo}” vence {quando}", None, tarefa, sub,
+                avisar(con, [usuario], "vence_em_breve", f"“{_curto(titulo)}” vence {quando}", None, tarefa, sub,
                        chave=f"vence:{'s' if sub else 't'}{sub or tarefa}:{prazo}:{_hhmm(h) or ''}")
             vencidas = con.execute(
                 "SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora, u.nome FROM agenda_subtarefas s "
@@ -509,8 +514,8 @@ class Tarefas:
                 {"eu": usuario, "desde": hoje - dt.timedelta(days=DIAS_VENCEU), "hoje": hoje}).fetchall()
             for tarefa, sub, titulo, prazo, h, nome in vencidas:
                 if agora - dt.timedelta(days=DIAS_VENCEU) < _vence_em(prazo, h) < agora:
-                    avisar(con, [usuario], "venceu", f"A subtarefa “{titulo}”, de {nome}, venceu sem ser concluída "
-                           f"({self._prazo(prazo, h)})", None, tarefa, sub,
+                    avisar(con, [usuario], "venceu", f"A subtarefa “{_curto(titulo)}”, de {nome}, venceu sem ser "
+                           f"concluída ({self._prazo(prazo, h)})", None, tarefa, sub,
                            chave=f"venceu:s{sub}:{prazo}:{_hhmm(h) or ''}")
 
     @staticmethod
@@ -779,9 +784,8 @@ class Tarefas:
             if not _venceu(s["prazo"], s["hora"], s["concluida_em"] or t["concluida_em"], self.agora()):
                 raise ValueError(_NAO_ATRASOU.format("a subtarefa ainda"))
             self._justificar(con, t["id"], s["id"], usuario, s["prazo"], s["hora"], texto)
-            resumo = texto if len(texto) <= 140 else texto[:139].rstrip() + "…"
             avisar(con, [t["criador"]], "justificativa", f"{self._nome(con, usuario)} justificou o atraso de "
-                   f"“{s['titulo']}”: “{resumo}”", usuario, t["id"], s["id"])
+                   f"“{_curto(s['titulo'])}”: “{_curto(texto, 140)}”", usuario, t["id"], s["id"])
             if concluir and not s["concluida_em"]:
                 self._aberta(t)
                 con.execute(f"UPDATE agenda_subtarefas SET {_mudar_situacao('concluida')} WHERE id = %(id)s",

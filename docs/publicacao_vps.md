@@ -557,6 +557,19 @@ tem a página lê as reanálises (ferramenta `reanalises_credito`).
   strict, a gramática passava do limite da API, que recusava todo pedido.
 - **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e o registro some da página.
 
+#### Título longo da subtarefa e partes minimizadas na Gestão (migração 030)
+
+Na agenda, o título da subtarefa aceita até 2000 caracteres (antes, 120). Na Gestão, cada parte (agenda, objetivos,
+campanhas, equipe) ganha o − que a deixa só com o título, e a barra de cima ganha o Minimizar tudo.
+
+- **Ordem:** pode atualizar o PC antes ou depois do site: os dados que o PC manda não mudaram.
+- **A migração 030** só troca o CHECK do título em `agenda_subtarefas` (de 120 para 2000 caracteres); nada existente
+  muda. Ensaie em BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** quem tinha a agenda recolhida (só a faixa de dias) passa a vê-la só com o título; o + mostra
+  de novo.
+- **Voltar atrás:** o CHECK novo não atrapalha o código anterior, que mostra as subtarefas de título longo mas recusa
+  salvar a tarefa enquanto alguma passar de 120 caracteres (é preciso encurtar).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

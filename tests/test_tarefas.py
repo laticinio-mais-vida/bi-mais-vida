@@ -10,7 +10,7 @@ import unittest
 
 from bi.agenda import Agenda
 from bi.conversas import NaoEncontrada
-from bi.tarefas import MAX_SUBTAREFAS, Tarefas, _ate_o_prazo, _valida_tarefa
+from bi.tarefas import MAX_SUBTAREFAS, MAX_TITULO_SUB, Tarefas, _ate_o_prazo, _valida_tarefa
 from tests.apoio import BaseBanco, ConfiguracaoFixa
 
 D = dt.date
@@ -48,6 +48,7 @@ class TestValidaTarefa(unittest.TestCase):
             "vence depois": {**base, "subtarefas": [{"titulo": "A", "prazo": "2026-10-30", "hora": "10:00"}]},
             "não participa": {**base, "subtarefas": [{"titulo": "A", "responsavel": 9}]},
             "título da subtarefa": {**base, "subtarefas": [{"titulo": ""}]},
+            f"{MAX_TITULO_SUB} caracteres": {**base, "subtarefas": [{"titulo": "x" * (MAX_TITULO_SUB + 1)}]},
             "pessoa inválida": {**base, "participantes": ["ana"]},
             f"até {MAX_SUBTAREFAS} subtarefas": {**base, "subtarefas": [{"titulo": "A"}] * (MAX_SUBTAREFAS + 1)},
         }
@@ -55,6 +56,18 @@ class TestValidaTarefa(unittest.TestCase):
             with self.subTest(trecho), self.assertRaises(ValueError) as e:
                 _valida_tarefa(dados, criador=1)
             self.assertIn(trecho, str(e.exception))
+
+    def test_subtarefa_com_titulo_longo(self):
+        """O título da subtarefa aceita um texto longo (o da tarefa, não); nas mensagens, ele vai cortado."""
+        longo = "Ligar para o Mercado do João e combinar a entrega " * 40  # 2000 caracteres, com o espaço do fim
+        t = _valida_tarefa({"titulo": "Feira", "prazo": "2026-10-30", "subtarefas": [{"titulo": longo}]}, criador=1)
+        self.assertEqual(t["subtarefas"][0]["titulo"], longo.strip())
+        with self.assertRaises(ValueError) as e:
+            _valida_tarefa({"titulo": "Feira", "prazo": "2026-10-30",
+                            "subtarefas": [{"titulo": longo, "prazo": "2026-10-31"}]}, criador=1)
+        msg = str(e.exception)
+        self.assertTrue(msg.startswith("a subtarefa “Ligar para o Mercado do João") and
+                        "…” vence depois da tarefa (30/10)" in msg and len(msg) < 200, msg)
 
 
 class TestTarefasNoBanco(BaseBanco):
@@ -521,6 +534,12 @@ class TestTarefasNoBanco(BaseBanco):
             con.execute("UPDATE agenda_tarefas SET titulo = '  ' WHERE id = %s", [t["id"]])
         with self.assertRaises(CheckViolation), self.banco.conexao() as con:  # quem concluiu, sem estar concluída
             con.execute("UPDATE agenda_tarefas SET concluida_por = %s WHERE id = %s", [self.ana, t["id"]])
+        with self.banco.conexao() as con:  # o título da subtarefa vai até 2000 caracteres (migração 030)
+            con.execute("UPDATE agenda_subtarefas SET titulo = repeat('x', 2000) WHERE tarefa = %s", [t["id"]])
+        with self.assertRaises(CheckViolation), self.banco.conexao() as con:
+            con.execute("UPDATE agenda_subtarefas SET titulo = repeat('x', 2001) WHERE tarefa = %s", [t["id"]])
+        with self.assertRaises(CheckViolation), self.banco.conexao() as con:  # o da tarefa, até 120
+            con.execute("UPDATE agenda_tarefas SET titulo = repeat('x', 121) WHERE id = %s", [t["id"]])
 
 
 class TestMigracao027(BaseBanco):

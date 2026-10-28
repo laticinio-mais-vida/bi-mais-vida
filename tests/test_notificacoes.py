@@ -124,6 +124,18 @@ class TestNotificacoes(BaseBanco):
         self.assertTrue(texto2.startswith("Beto justificou o atraso de “Estande”: “Choveu muito.") and
                         texto2.endswith("…”") and len(texto2) < 200)
 
+    def test_subtarefa_com_titulo_longo(self):
+        """O título longo de uma subtarefa (até 2000 caracteres) chega cortado no aviso."""
+        t = self.criar()
+        self.limpar()
+        longo = "Ligar para o Mercado do João e combinar a entrega " * 20
+        self.tarefas.nova_subtarefa(self.ana, t["id"], {"titulo": longo, "responsavel": self.beto})
+        ((tipo, texto),) = self.textos(self.beto)
+        titulo = texto.split("“")[1].split("”")[0]
+        self.assertEqual(tipo, "subtarefa_nova")
+        self.assertTrue(texto.startswith("Ana criou a subtarefa “Ligar para o Mercado do João") and
+                        texto.endswith("…” para você (até 30/10 às 14:00)") and len(titulo) <= 120, texto)
+
     def test_avisos_de_prazo(self):
         t = self.criar()
         self.limpar()

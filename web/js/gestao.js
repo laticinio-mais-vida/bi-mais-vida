@@ -12,7 +12,11 @@
 // por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js):
 // as atividades dela e as tarefas de que participa, com os próprios eventos: os daqui ignoram o que acontece dentro
 // dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD> abre a agenda nesse dia.
-import { abrirNaAgenda, abrirTarefaNaAgenda, agendaTemAlteracoes, montarAgenda, recarregarAgenda } from "./agenda.js";
+// Cada parte da página (a agenda, os objetivos, as campanhas e a equipe) minimiza no − do cabeçalho: fica só o título,
+// até o +. O Minimizar tudo, na barra de cima, minimiza (ou mostra) todas de uma vez. A escolha vale para ES e BA e
+// fica guardada neste navegador (a da agenda, agenda.js guarda).
+import { abrirNaAgenda, abrirTarefaNaAgenda, agendaMinimizada, agendaTemAlteracoes, minimizarAgenda, montarAgenda,
+         recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
 import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
          duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
@@ -25,10 +29,13 @@ const CLASSE = { ok: "Meta batida", mid: "Melhorou sobre a base", bad: "Abaixo d
 const SITUACAO = { planejada: "Planejada", em_vigor: "Em vigor", encerrada: "Encerrada" };
 const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
 const DESCARTAR = "Descartar o que foi preenchido nesta campanha?";
+const SECOES = { objetivos: "os objetivos", campanhas: "as campanhas", equipe: "a equipe" }; // as que minimizam aqui
+const CHAVE_MINIMIZADAS = "mv-gestao-minimizadas";
 
 let ctx = null, raiz = null, ligado = false;
 const estado = {
   regiao: ler("mv-gestao-regiao", null), quadro: null, catalogo: null, erroCatalogo: null,
+  minimizadas: new Set(ler(CHAVE_MINIMIZADAS, [])),
   vista: "grade", vendedor: null, historico: null, acao: null, detalhe: null, abrir: null, // o que o corpo mostra
   selecao: null, form: null, // lançando (ou editando) uma campanha: os vendedores marcados e o formulário em linha
   recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
@@ -152,21 +159,23 @@ export function montarGestao(container, contexto) {
         <div><b>Gestão da equipe</b><small id="g-hoje">&nbsp;</small></div></div>
       <div class="filtros">
         <div class="seg-mini ge-regioes" role="group" aria-label="Região" id="g-regioes"></div>
+        <button class="btn ge-tudo" type="button" data-minimizar-tudo></button>
         ${ctx.admin ? `<button class="btn primario" type="button" data-nova>${icone("mais")}Nova campanha</button>
           <a class="btn btn-config" href="#/config-gestao" title="Quem acompanha quais vendedores e os dias de atendimento das áreas">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="g-avisos"></div>
     <section class="ge-secao" id="g-agenda" aria-label="Minha agenda"></section>
-    <section class="ge-secao" id="g-objetivos"><div class="esqueleto" style="height:96px"></div></section>
-    <section class="ge-secao" id="g-acoes"><div class="esqueleto" style="height:118px"></div></section>
-    <section class="ge-secao" id="g-corpo"><div class="esqueleto" style="height:320px"></div></section>
+    <section class="ge-secao ${classeMinimizada("objetivos")}" id="g-objetivos"><div class="esqueleto" style="height:96px"></div></section>
+    <section class="ge-secao ${classeMinimizada("campanhas")}" id="g-acoes"><div class="esqueleto" style="height:118px"></div></section>
+    <section class="ge-secao" id="g-corpo">${esqueletoEquipe()}</section>
   </div>`;
   raiz = container.querySelector("#g-raiz");
   raiz.addEventListener("click", aoClicar);
   raiz.addEventListener("change", aoMudarCampo);
   raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
+  raiz.addEventListener("agenda-minimizada", atualizarMinimizarTudo);
   criarJanela();
   montarAgenda(raiz.querySelector("#g-agenda"), { dia: parametros().get("dia"), tarefa: parametros().get("tarefa") });
   if (parametros().get("tarefa")) atualizarUrl(); // a janela da tarefa já abriu: o link volta a ser o da página
@@ -317,9 +326,10 @@ function desenharObjetivos() {
   const lista = d.objetivos || [];
   if (!d.regiao || (!lista.length && !ctx.admin)) { el.innerHTML = ""; el.hidden = true; return; }
   el.hidden = false;
+  el.classList.toggle("ge-minimizada", minimizada("objetivos"));
   const novo = ctx.admin ? `<button type="button" class="ge-obj ge-obj-novo entra" style="--i:${lista.length + 1}" data-objetivo="novo">${icone("mais")}<span>Objetivo do período</span></button>` : "";
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("alvo")}Objetivos do período</h3>
-      ${lista.length ? `<span>${plural(lista.length, "objetivo", "objetivos")} da equipe ${d.regiao}</span>` : ""}</div>
+  el.innerHTML = `${cabecalho("objetivos", `${icone("alvo")}Objetivos do período`,
+      lista.length ? `<span>${plural(lista.length, "objetivo", "objetivos")} da equipe ${d.regiao}</span>` : "")}
     <div class="ge-objetivos">${lista.map(cartaoObjetivo).join("")}${novo}</div>`;
   animarEntradas(el);
 }
@@ -349,7 +359,8 @@ function desenharAcoes() {
   if (!d?.regiao) { el.innerHTML = ""; return; }
   const acoes = d.acoes || [];
   const vigor = acoes.filter((a) => a.situacao === "em_vigor").length;
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("bandeira")}Campanhas da região ${d.regiao}</h3><span class="ge-contagem">${fmt.num(vigor)} em vigor</span></div>
+  el.classList.toggle("ge-minimizada", minimizada("campanhas"));
+  el.innerHTML = `${cabecalho("campanhas", `${icone("bandeira")}Campanhas da região ${d.regiao}`, `<span class="ge-contagem">${fmt.num(vigor)} em vigor</span>`)}
     ${acoes.length ? `<div class="ge-acoes">${acoes.map(cartaoAcao).join("")}</div>`
       : `<p class="ge-vazio">${icone("info")}<span>Nenhuma campanha lançada nesta região${ctx.admin ? ". Use Nova campanha para marcar os vendedores e lançar." : "."}</span></p>`}`;
   animarEntradas(el);
@@ -390,11 +401,14 @@ function barraMeta(a) {
 
 function desenharCorpo() {
   const el = raiz.querySelector("#g-corpo");
-  if (estado.vista === "vendedor") { desenharHistorico(); return; }
-  if (estado.vista === "acao") { desenharDetalhe(); return; }
-  if (!estado.quadro?.regiao) { el.innerHTML = ""; return; }
-  if (!el.querySelector("#g-grade")) el.innerHTML = `<div id="g-form"></div><div id="g-grade"></div>`;
-  desenharGrade();
+  if (estado.vista === "vendedor") desenharHistorico();
+  else if (estado.vista === "acao") desenharDetalhe();
+  else if (!estado.quadro?.regiao) el.innerHTML = "";
+  else {
+    if (!el.querySelector("#g-grade")) el.innerHTML = `<div id="g-form"></div><div id="g-grade"></div>`;
+    desenharGrade();
+  }
+  atualizarMinimizarTudo(); // a equipe só está à vista no quadro
 }
 
 function desenharGrade() {
@@ -402,9 +416,13 @@ function desenharGrade() {
   if (!el) return;
   const d = estado.quadro, vend = d.vendedores || [];
   const todos = estado.selecao && vend.length ? ` · <button type="button" class="ge-link" data-marcar-todos>${textoMarcarTodos()}</button>` : "";
-  el.innerHTML = `<div class="ge-secao-cab"><h3>${icone("pessoas")}Equipe ${d.regiao}</h3><span>${plural(vend.length, "vendedor", "vendedores")}${estado.form ? " · a base de cada um no período escolhido" : ""}${todos}</span></div>
+  // com o formulário da campanha aberto, a equipe aparece mesmo minimizada: é nela que se marcam os vendedores
+  const minimizavel = !estado.selecao;
+  el.classList.toggle("ge-minimizada", minimizavel && minimizada("equipe"));
+  el.innerHTML = `${cabecalho("equipe", `${icone("pessoas")}Equipe ${d.regiao}`, `<span>${plural(vend.length, "vendedor", "vendedores")}${estado.form ? " · a base de cada um no período escolhido" : ""}${todos}</span>`, minimizavel)}
     ${vend.length ? `<div class="ge-grade ${estado.selecao ? "selecionando" : ""}">${vend.map(quadrado).join("")}</div>`
       : `<p class="ge-vazio">${icone("info")}<span>Nenhum vendedor da região no seu acesso.</span></p>`}`;
+  atualizarMinimizarTudo();
 }
 
 // O quadrado do vendedor. Com o formulário da campanha aberto: a base dele e, se marcado, a meta (com a meta própria);
@@ -1475,6 +1493,62 @@ async function abrirObjetivo(id) {
   formObj.orig = JSON.stringify(coletarObjetivo());
 }
 
+// ---------- minimizar ----------
+const minimizada = (secao) => estado.minimizadas.has(secao);
+const classeMinimizada = (secao) => (minimizada(secao) ? "ge-minimizada" : "");
+// O esqueleto do quadro enquanto ele carrega; com a equipe minimizada, nenhum (ela vai mostrar só o cabeçalho).
+const esqueletoEquipe = () => (minimizada("equipe") ? "" : `<div class="esqueleto" style="height:320px"></div>`);
+
+// O cabeçalho de uma parte da página: o título, o resumo (à direita) e o botão de minimizar (minimizavel: false, sem
+// ele).
+function cabecalho(secao, titulo, resumo, minimizavel = true) {
+  return `<div class="ge-secao-cab"><div class="ge-secao-tit"><h3>${titulo}</h3>${resumo}</div>${minimizavel ? botaoMinimizar(secao) : ""}</div>`;
+}
+
+// O −, que minimiza a parte (fica só o cabeçalho), ou o +, que mostra de novo: os mesmos da agenda.
+function botaoMinimizar(secao) {
+  const sim = minimizada(secao), dica = `${sim ? "Mostrar" : "Minimizar"} ${SECOES[secao]}`;
+  return `<button class="btn icone ge-minimizar" type="button" data-minimizar="${secao}" aria-expanded="${!sim}"
+    title="${dica}" aria-label="${dica}">${icone(sim ? "mais" : "minimizar")}</button>`;
+}
+
+function minimizar(secao, sim = !minimizada(secao)) {
+  if (sim) estado.minimizadas.add(secao); else estado.minimizadas.delete(secao);
+  guardar(CHAVE_MINIMIZADAS, [...estado.minimizadas]);
+  const b = raiz.querySelector(`[data-minimizar="${secao}"]`);
+  if (b) { // a parte à vista: troca sem redesenhar (o foco continua no botão)
+    const foco = document.activeElement === b;
+    b.closest(".ge-secao-cab").parentElement.classList.toggle("ge-minimizada", sim);
+    b.outerHTML = botaoMinimizar(secao);
+    if (foco) raiz.querySelector(`[data-minimizar="${secao}"]`).focus();
+  }
+  atualizarMinimizarTudo();
+}
+
+// Todas as partes à vista estão minimizadas? (os objetivos só aparecem com o que mostrar; a equipe, no quadro e fora
+// do formulário da campanha)
+const tudoMinimizado = () => agendaMinimizada()
+  && [...raiz.querySelectorAll("[data-minimizar]")].every((b) => minimizada(b.dataset.minimizar));
+
+// Minimizar tudo: minimiza todas as partes (também as que não estão à vista agora) ou, se as à vista já estão
+// minimizadas, mostra todas.
+function minimizarTudo() {
+  const sim = !tudoMinimizado();
+  Object.keys(SECOES).forEach((s) => minimizar(s, sim));
+  minimizarAgenda(sim);
+  atualizarMinimizarTudo();
+}
+
+function atualizarMinimizarTudo() {
+  const b = raiz?.querySelector("[data-minimizar-tudo]");
+  if (!b) return;
+  const sim = tudoMinimizado(), texto = sim ? "Mostrar tudo" : "Minimizar tudo";
+  b.innerHTML = `${icone(sim ? "expandir" : "recolher")}<span>${texto}</span>`;
+  b.title = sim ? "Mostrar a agenda, os objetivos, as campanhas e a equipe"
+    : "Minimizar a agenda, os objetivos, as campanhas e a equipe: fica só o título de cada um";
+  b.setAttribute("aria-label", texto);
+}
+
 // ---------- eventos ----------
 function trocarRegiao(r) {
   if (r === estado.regiao) return;
@@ -1483,7 +1557,7 @@ function trocarRegiao(r) {
   estado.regiao = r;
   estado.vista = "grade";
   estado.historico = estado.detalhe = null;
-  raiz.querySelector("#g-corpo").innerHTML = `<div class="esqueleto" style="height:320px"></div>`;
+  raiz.querySelector("#g-corpo").innerHTML = esqueletoEquipe();
   atualizarUrl();
   carregar();
 }
@@ -1496,9 +1570,11 @@ function aoClicar(e) {
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
-    "[data-marcar-todos],[data-como]");
+    "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.minimizar) return minimizar(ds.minimizar);
+  if ("minimizarTudo" in ds) return minimizarTudo();
   if ("marcarTodos" in ds) return marcarTodos();
   if (ds.como) return abrirComoCalcula(ds.como);
   if (ds.metaPropria) return abrirMetaPropria(Number(ds.metaPropria));

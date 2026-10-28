@@ -1677,10 +1677,19 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .ge-regioes button { min-width: 44px; }
 .ge-secao { margin-top: 18px; scroll-margin-top: 90px; }
 .ge-secao[hidden] { display: none; }
-.ge-secao-cab { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin: 0 4px 10px; }
+/* o cabeçalho de cada parte da página: o título e o resumo e, à direita, o − que minimiza a parte (fica só o
+   cabeçalho) */
+.ge-secao-cab { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; }
+.ge-secao-tit { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .ge-secao-cab h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; font-weight: 700; color: var(--tinta-2); }
 .ge-secao-cab h3 .ic { width: 17px; height: 17px; color: var(--acento); }
-.ge-secao-cab > span { font-size: 12.5px; color: var(--tinta-3); }
+.ge-secao-tit > span { font-size: 12.5px; color: var(--tinta-3); }
+.ge-minimizar { flex: none; width: 32px; height: 32px; border-radius: 10px; }
+.ge-minimizar .ic { width: 16px; height: 16px; }
+.ge-minimizada > :not(.ge-secao-cab) { display: none; }
+.ge-minimizada > .ge-secao-cab { margin-bottom: 0; }
+.ge-tudo { height: 42px; border-radius: 14px; color: var(--tinta-2); }
+.ge-tudo .ic { color: var(--acento); }
 .ge-contagem { font-weight: 700; }
 .ge-vazio { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 16px; border: 1.5px dashed var(--linha-forte); border-radius: 14px; font-size: 13.5px; color: var(--tinta-3); }
 .ge-vazio .ic { width: 16px; height: 16px; flex: none; }
@@ -2038,6 +2047,8 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
   .camp-rascunho dd { grid-column: 2; }
   .ge-grade { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .ge-acoes, .ge-objetivos { grid-template-columns: 1fr; }
+  .ge-tudo span { display: none; } /* como o Configurar: só o ícone */
+  .ge-tudo { width: 42px; padding: 0; justify-content: center; }
   .ge-bolha, .ge-resultado { max-width: 100%; }
   .ge-hist-rodape { flex-wrap: wrap; }
   .ge-hist-rodape textarea { flex-basis: 100%; }
@@ -2059,7 +2070,11 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-vista button { display: inline-flex; align-items: center; gap: 5px; height: 32px; }
 .ag-vista .ic { width: 14px; height: 14px; }
 .ag-baixo { margin-top: 18px; }
-.ag-cal.recolhida .ag-baixo, .ag-cal.recolhida .ag-legenda, .ag-cal.recolhida .ag-quadro { display: none; }
+/* minimizada: só o título e o + (o formulário em tela cheia, #ag-tela, continua podendo abrir) */
+.ag-cal.recolhida #ag-faixa, .ag-cal.recolhida .ag-baixo, .ag-cal.recolhida .ag-quadro, .ag-cal.recolhida #ag-resumo,
+.ag-cal.recolhida .ag-nav > :not([data-recolher]) { display: none; }
+.ag-cal.recolhida .cartao-cab { flex-wrap: nowrap; margin-bottom: 0; }
+.ag-cal.recolhida .cartao-cab > div:first-child { min-width: 0; }
 .ag-cal.vista-quadro #ag-faixa, .ag-cal.vista-quadro .ag-baixo, .ag-cal.vista-quadro .ag-meses,
 .ag-cal:not(.vista-quadro) .ag-quadro { display: none; }
 .ag-faixa { padding-top: 14px; }
@@ -2303,13 +2318,19 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-sub-linha { display: grid; gap: 6px; padding: 8px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--linha); }
 /* a subtarefa sendo escrita: os dias em cima e, escolhido outro dia com o nome escrito, ela fica guardada */
 .ag-sub-linha.compondo { border-style: dashed; border-color: color-mix(in srgb, var(--acento) 40%, var(--linha)); }
-.ag-sub-topo { display: flex; align-items: center; gap: 4px; }
+.ag-sub-topo { display: flex; align-items: flex-start; gap: 4px; }
+.ag-sub-topo > button { margin-top: 3px; } /* no meio da primeira linha do título, que cresce para baixo */
 .ag-sub-topo input[type="time"] { flex: none; width: 112px; }
-.ag-sub-linha input {
+.ag-sub-linha input, .ag-sub-linha textarea {
   width: 100%; min-width: 0; height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--linha);
   background: var(--surface); font: 500 13.5px var(--f-texto); color: var(--tinta); transition: border-color .2s, box-shadow .2s;
 }
-.ag-sub-linha input:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+.ag-sub-linha input:focus, .ag-sub-linha textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+/* o título da subtarefa: uma caixa de texto que cresce com ele (agenda.js ajustarTitulo), com a altura de um campo
+   de uma linha enquanto cabe */
+.ag-sub-linha textarea, .ag-sub-edit textarea[data-campo="titulo"] { display: block; resize: none; overflow: hidden; }
+.ag-sub-linha textarea { height: 36px; padding: 8px 10px; line-height: 18px; }
+.ag-sub-edit textarea[data-campo="titulo"] { line-height: 20px; }
 .ag-sub-tirar, .ag-sub-recolher {
   flex: none; width: 30px; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--tinta-3);
   display: grid; place-items: center; cursor: pointer; transition: background .2s, color .2s;
