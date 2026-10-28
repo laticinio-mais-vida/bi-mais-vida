@@ -8,6 +8,7 @@ Rodar na raiz do projeto: python -m unittest discover -s tests
 from __future__ import annotations
 
 import datetime as dt
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -307,6 +308,114 @@ class TestParecer(Base):
 
     def test_a_pagina_leva_a_regra(self):
         self.assertEqual(self.credito.calcular([1])["regra_parecer"], modulo.REGRA)
+
+
+class TestPrazos(Base):
+    def test_dias_do_prazo(self):
+        casos = {"A VISTA": [0], "01 DIA": [1], "7 DIAS": [7], "07 DIAS": [7], "28,35 DIAS": [28, 35],
+                 "14, 21 E 28 DIAS": [14, 21, 28], "01, 30, 60 DIAS": [1, 30, 60], "": None, None: None, "BOLETO": None}
+        self.assertEqual({k: modulo.dias_prazo(k) for k in casos}, casos)
+
+    def test_lista_na_ordem_dos_dias(self):
+        self.assertEqual(self.credito.prazos(), ["A VISTA", "07 DIAS", "28 DIAS"])  # sem os clientes sem prazo
+        self.assertEqual(self.credito.cadastro(1), {"id": 1, "nome": "MERCADO DO JOAO", "limite": 5000.0,
+                                                    "prazo": "28 DIAS"})
+        self.assertEqual(self.credito.cadastro(4)["prazo"], None)
+        with self.assertRaises(ValueError):
+            self.credito.cadastro(999)
+
+
+class TestRetrato(Base):
+    """O retrato que a reanálise grava (Credito.retrato). Hoje = 01/10/2026; os 12 meses vão de 02/10/2025 até hoje e os
+    3 meses, de 04/07/2026."""
+
+    def test_cliente_com_historico(self):
+        r = self.credito.retrato(1, 6000, 5000)
+        self.assertEqual((r["versao"], r["cliente"], r["dados_ate"], r["hoje"], r["sem_parcelas"]),
+                         (1, {"id": 1, "nome": "MERCADO DO JOAO"}, "2026-10-01T08:00:00", "2026-10-01", False))
+        self.assertEqual(r["cadastro"], {
+            "limite": 5000.0, "prazo": "28 DIAS", "prazo_dias": [28], "id_vendedor_carteira": ES, "carteira": "Rubens",
+            "cidade": "VILA VELHA", "uf": "ES", "area": "ROTA 1", "segmento": "MERCADO", "rede": "SEMANAL",
+            "inativo": False, "data_cadastro": "2020-01-01", "meses_cadastro": 81})
+        # os cartões da página: os 6 títulos, o 106 de 2025 também
+        self.assertEqual(r["historico"], {
+            "compras_valor": 4000.0, "compras_qtd": 6, "ticket_medio": 666.67, "quitados": 3, "quitados_com_atraso": 1,
+            "pontualidade": 0.6667, "inadimplencia": 1300.0, "primeiro_titulo": "2025-09-05",
+            "ultimo_titulo": "2026-09-28", "meses_cliente": 12, "dias_sem_compra": 3})
+        # em aberto: 103 (inadimplente, 8 dias), 104 (vencido há 7) e 105 (a vencer), menos as parcelas pagas
+        self.assertEqual(r["aberto_hoje"], {
+            "titulos": 3, "valor_dos_titulos": 1900.0, "pago_em_parcelas": 750.0, "em_aberto": 1150.0,
+            "limite_restante": 3850.0, "uso_do_limite": 0.23, "a_vencer": 400.0, "vencidos_ate_7_dias": 1,
+            "vencidos_ate_7_dias_valor": 200.0, "inadimplentes": 1, "inadimplencia": 1300.0, "maior_atraso_dias": 8})
+        # 12 meses: 101 a 105; quitados 101 (1 dia) e 102 (8 dias); atraso ponderado (1.000×1 + 500×8) ÷ 1.500
+        self.assertEqual(r["ultimos_12_meses"], {
+            "titulos": 5, "compras_valor": 3400.0, "compras_mes": 283.33, "ticket_medio": 680.0, "meses_com_compra": 2,
+            "quitados": 2, "quitados_pontuais": 1, "pontualidade": 0.5, "atraso_medio_dos_atrasados": 8.0,
+            "atraso_ponderado_dias": 3.3, "maior_atraso_dias": 8, "atraso_grave_dias": 30,
+            "quitados_com_atraso_grave": 0, "prazo_real_dias": 28.0, "maior_saldo": 1900.0,
+            "maior_saldo_em": "2026-09-28"})
+        self.assertEqual(r["ultimos_3_meses"], {"dias": 90, "compras_valor": 3400.0, "quitados": 2,
+                                                "quitados_pontuais": 1, "pontualidade": 0.5})
+        # os 12 meses completos antes de outubro: só agosto e setembro têm títulos
+        self.assertEqual([m["mes"] for m in r["mes_a_mes"]][::11], ["2025-10", "2026-09"])
+        meses = {m["mes"]: m for m in r["mes_a_mes"] if m["titulos"]}
+        self.assertEqual(meses, {
+            "2026-08": {"mes": "2026-08", "compras_valor": 1500.0, "titulos": 2, "quitados": 2, "quitados_com_atraso": 1},
+            "2026-09": {"mes": "2026-09", "compras_valor": 1900.0, "titulos": 3, "quitados": 0, "quitados_com_atraso": 0}})
+        # vendas do cadastro de clientes (as duas de 02/09) e as devoluções não canceladas (100 + 50)
+        self.assertEqual(r["vendas_12_meses"], {"venda_bruta": 1300.0, "devolucoes": 150.0, "taxa_devolucao": 0.1154,
+                                                "dias_com_venda": 1, "produtos": 2})
+        p = r["parecer"]
+        self.assertEqual(p["regra"], modulo.REGRA)
+        pagina = self.credito.analisar(1, 6000)
+        self.assertEqual((p["pedido"]["valor"], p["pedido"]["parecer"], p["pedido"]["limite_sugerido"]),
+                         (6000.0, pagina["parecer"], None))
+        self.assertEqual([c["detalhe"] for c in p["pedido"]["criterios"]], [c["detalhe"] for c in pagina["criterios"]])
+        self.assertEqual(p["pedido"]["vezes_maior_saldo"], 3.158)
+        # o liberado é o limite de hoje: não é aumento, mas a inadimplência continua bloqueando
+        self.assertEqual((p["liberado"]["parecer"], p["liberado"]["criterios"][3]["status"]), ("nao_indicado", "ok"))
+        self.assertEqual(json.loads(json.dumps(r)), r)  # vai para o banco como JSON
+
+    def test_liberado_zero_e_cliente_sem_titulos(self):
+        r = self.credito.retrato(7, 1000, 0)  # código 7: só uma venda de funcionário com o mesmo código
+        self.assertIsNone(r["parecer"]["liberado"])
+        self.assertEqual((r["historico"]["compras_qtd"], r["historico"]["primeiro_titulo"], r["historico"]["dias_sem_compra"]),
+                         (0, None, None))
+        self.assertEqual((r["vendas_12_meses"]["venda_bruta"], r["vendas_12_meses"]["taxa_devolucao"]), (0.0, None))
+        self.assertEqual((r["ultimos_12_meses"]["pontualidade"], r["ultimos_12_meses"]["maior_saldo_em"]), (None, None))
+        self.assertEqual(r["cadastro"]["prazo_dias"], None)
+        self.assertEqual(r["parecer"]["pedido"]["parecer"], "nao_indicado")  # sem nada em aberto em 12 meses
+        with self.assertRaises(ValueError):
+            self.credito.retrato(999, 1000, 1000)
+
+    def test_data_digitada_errada_fica_fora_do_mes_a_mes(self):
+        r = self.credito.retrato(4, 1000, 1000)
+        self.assertEqual({m["mes"]: m["compras_valor"] for m in r["mes_a_mes"] if m["titulos"]}, {"2026-09": 700.0})
+        self.assertEqual(r["ultimos_12_meses"]["maior_atraso_dias"], -5)  # pago antes do vencimento
+
+    def test_perfil_igual_ao_do_retrato(self):
+        r = self.credito.retrato(1, 6000, 6000)
+        hoje = self.credito.perfil(1, 6000)
+        self.assertEqual(hoje["cliente"], {"id": 1, "nome": "MERCADO DO JOAO"})
+        gravado = modulo.perfil_do_retrato(r)
+        self.assertEqual(set(gravado), set(hoje) - {"cliente"})
+        for k, v in gravado.items():
+            self.assertAlmostEqual(v, hoje[k], places=2, msg=k)
+        self.assertIsNone(self.credito.perfil(3)["pedido_vezes_maior_saldo"])  # sem saldo nenhum
+
+    def test_depois_de_uma_reanalise(self):
+        d = self.credito.depois([(1, D(2026, 8, 15), 5000.0), (1, D(2026, 10, 1), 5000.0), (3, D(2026, 9, 1), 0.0)])
+        # depois de 15/08: 103, 104 e 105; venceu há mais de 7 dias só o 103, que não foi pago
+        self.assertEqual(d[0], {
+            "dias_desde": 47, "titulos_emitidos": 3, "valor_emitido": 1900.0, "vencidos_ha_mais_de_7_dias": 1,
+            "pagos_em_dia": 0, "pontualidade": 0.0, "titulos_inadimplentes_hoje": 1, "inadimplencia_hoje": 1300.0,
+            "maior_saldo": 1900.0, "maior_saldo_em": "2026-09-28", "uso_maximo_do_liberado": 0.38,
+            "limite_no_cadastro_hoje": 5000.0, "prazo_no_cadastro_hoje": "28 DIAS"})
+        self.assertEqual((d[1]["dias_desde"], d[1]["titulos_emitidos"], d[1]["maior_saldo_em"],
+                          d[1]["uso_maximo_do_liberado"]), (0, 0, None, None))  # registrada no dia dos dados
+        self.assertEqual((d[2]["titulos_emitidos"], d[2]["pontualidade"], d[2]["uso_maximo_do_liberado"],
+                          d[2]["limite_no_cadastro_hoje"]), (0, None, None, 1000.0))
+        self.assertEqual(self.credito.depois([]), [])
 
 
 class TestBusca(Base):

@@ -15,7 +15,8 @@ Como funciona:
   mostra o botão que a aplica.
 - Crédito: os títulos a receber e o limite de crédito só entram no recorte de quem tem a página Reavaliação de
   Crédito (para os outros, as tabelas e colunas nem existem); a ferramenta credito_cliente usa bi/credito.py, com
-  os títulos dos vendedores do acesso, para dar os números da página.
+  os títulos dos vendedores do acesso, para dar os números da página. A ferramenta reanalises_credito lê as
+  reanálises registradas na página (bi/reanalise.py, no PostgreSQL do site), também só para quem tem a página.
 - Ferramentas: a IA pede as consultas (buscar cliente/produto/vendedor, resumo de vendas, metas e realizado, SQL
   somente leitura), o servidor executa no recorte e devolve o resultado; a resposta final vem em texto.
 - Arquivos (Excel e PDF): com gerar_arquivo a IA prepara uma consulta; a resposta leva o botão de baixar e a conversa
@@ -643,6 +644,28 @@ FERRAMENTAS = [
         "strict": True,
     },
     {
+        "name": "reanalises_credito",
+        "description": ("Reanálises de crédito registradas na página Reavaliação de Crédito: o limite e o prazo de "
+                        "antes, o limite pedido, o que foi liberado (limite e prazo), quem decidiu, quando e por quê, o "
+                        "parecer da regra e os números do cliente no dia, e o que aconteceu depois (títulos emitidos "
+                        "depois, pagos em dia, inadimplência de hoje, maior saldo contra o liberado e se o cadastro do "
+                        "ERP já está com o liberado). Com parecidos=true, as reanálises de OUTROS clientes com os "
+                        "números mais parecidos com os de hoje do cliente. Traz até 15 e um resumo. Só para quem tem a "
+                        "página."),
+        "input_schema": _objeto({
+            "id_cliente": {"type": "integer", "description": ("código do cliente (use buscar_cliente antes); 0 = todas "
+                                                              "as reanálises, das mais novas para as mais antigas")},
+            "parecidos": {"type": "boolean", "description": ("false = as reanálises desse cliente; true = as de outros "
+                                                             "clientes parecidos com ele hoje (precisa do cliente)")},
+            "novo_limite": {"type": "number", "description": ("com parecidos: o limite total pedido agora, em R$ "
+                                                              "(opcional; entra na comparação)")},
+            "mes": {"type": "string", "description": "AAAA-MM: só as registradas nesse mês (opcional)"},
+        }, ["id_cliente", "parecidos"]),
+        # Sem strict: com ela, a gramática das ferramentas strict passou do limite da API ("compiled grammar is too
+        # large", recusando todo pedido); a conferência dos argumentos é do servidor (f_reanalises_credito).
+        "strict": False,
+    },
+    {
         "name": "consultar_sql",
         "description": ("Executa UMA consulta SELECT (DuckDB) nas tabelas descritas nas instruções, para o que as "
                         "outras ferramentas não resolvem. Somente leitura; devolve até 200 linhas."),
@@ -732,9 +755,10 @@ class Ferramentas:
     """Executa as ferramentas de uma pergunta no recorte do acesso. Cada chamada devolve (resultado, passo)."""
 
     def __init__(self, recorte: Recorte, calc: Calculadora, cfg: ConfigIA, equipes: set[str] | None, gestao=None,
-                 credito: Credito | None = None, agenda=None, sugestao=None):
+                 credito: Credito | None = None, agenda=None, sugestao=None, reanalises=None):
         """gestao: bi/gestao.py ContextoGestao de quem pergunta (None = o acesso não inclui a página Gestão).
         credito: bi/credito.py (None = o acesso não inclui a página Reavaliação de Crédito).
+        reanalises: bi/reanalise.py, as reanálises registradas na página (None = sem a página).
         agenda: bi/agenda.py ContextoAgenda de quem pergunta (None = sem a página Gestão, onde fica a agenda).
         sugestao: (bi/sugestao.py Sugestao, vendedores, equipes) da página Sugestão de Metas (None = sem a página)."""
         self.cur = recorte.cursor()
@@ -744,6 +768,7 @@ class Ferramentas:
         self.equipes = equipes
         self.gestao = gestao
         self.credito = credito
+        self.reanalises = reanalises
         self.rascunhos: list[dict] = []  # campanhas propostas nesta pergunta (a página mostra o botão de lançar)
         self.arquivos: list[dict] = []   # arquivos preparados nesta pergunta (a página mostra o botão de baixar)
         self.agenda = agenda
@@ -765,8 +790,8 @@ class Ferramentas:
         except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada) as e:
             passo["erro"] = str(e).split("\n")[0][:500] if isinstance(e, duckdb.Error) else str(e)
             resultado = {"erro": passo["erro"]}
-        except BancoForaDoAr as e:  # as campanhas e a agenda ficam no PostgreSQL
-            passo["erro"] = f"as campanhas e a agenda não puderam ser lidas: {e.aviso}"
+        except BancoForaDoAr as e:  # as campanhas, a agenda e as reanálises de crédito ficam no PostgreSQL
+            passo["erro"] = f"as campanhas, a agenda e as reanálises de crédito não puderam ser lidas: {e.aviso}"
             resultado = {"erro": passo["erro"]}
         except Exception as e:  # argumento que a ferramenta não tem, ou defeito: a IA fica sabendo e segue
             log.exception("falha na ferramenta %s %s", nome, args)
@@ -1057,6 +1082,30 @@ class Ferramentas:
                      linhas=len(abertos))
         return resultado
 
+    def f_reanalises_credito(self, passo: dict, id_cliente: int, parecidos: bool, novo_limite: float | None = None,
+                             mes: str | None = None) -> dict:
+        if self.credito is None or self.reanalises is None:
+            raise ValueError("o acesso de quem pergunta não inclui a página Reavaliação de Crédito")
+        # Sem strict, os argumentos podem vir como texto ("1071", "true").
+        try:
+            id_cliente = int(id_cliente or 0)
+            novo_limite = float(novo_limite) if novo_limite not in (None, "") else None
+        except (TypeError, ValueError):
+            raise ValueError("id_cliente deve ser um código de cliente e novo_limite, um valor em R$") from None
+        parecidos = parecidos is True or str(parecidos).strip().lower() in ("true", "1", "sim")
+        r = self.reanalises.para_ia(id_cliente, parecidos, novo_limite, str(mes) if mes else None)
+        # O texto da IA tem limite: tira as últimas até caber (o resumo continua contando todas).
+        while len(r["reanalises"]) > 1 and len(json.dumps(r, ensure_ascii=False, default=str)) > MAX_RESULTADO:
+            r["reanalises"] = r["reanalises"][:-1]
+        if len(r["reanalises"]) < r["mostrando"]:
+            r["mostrando"] = len(r["reanalises"])
+            r["aviso"] = f"mostrando {r['mostrando']} de {r['total']}: o resultado tem limite de tamanho"
+        passo.update(sql=None, colunas=["quando", "cliente", "antes", "liberado", "parecer da regra"],
+                     amostra=[[x["quando"], x["cliente"]["nome"], x["limite"]["antes"], x["limite"]["liberado"],
+                               x["parecer_da_regra"]["para_o_pedido"]] for x in r["reanalises"][:10]],
+                     linhas=len(r["reanalises"]))
+        return r
+
     # --- campanhas e objetivos (página Gestão) -----------------------------------------
     def _acoes(self):
         if self.gestao is None:
@@ -1309,8 +1358,9 @@ o código dos outros é de outro cadastro e pode coincidir com o de um cliente, 
 - Quantidade só soma com sentido dentro do mesmo produto (unidades diferentes).
 
 # Crédito (página Reavaliação de Crédito)
-- Só quem tem a página vê os dados de crédito (a tabela titulos_receber, limite_credito e prazo em clientes, e a \
-ferramenta credito_cliente); para os outros eles não existem: diga que o acesso não inclui crédito.
+- Só quem tem a página vê os dados de crédito (a tabela titulos_receber, limite_credito e prazo em clientes, e as \
+ferramentas credito_cliente e reanalises_credito); para os outros eles não existem: diga que o acesso não inclui \
+crédito.
 - Para um cliente, use credito_cliente: dá os números da página. Compras = títulos a receber de venda (valor, \
 quantidade, ticket médio = valor ÷ quantidade), pela emissão. Pontualidade = títulos quitados até 7 dias depois do \
 vencimento ÷ títulos quitados. Inadimplência = títulos em aberto vencidos há mais de 7 dias (pelo valor do título). \
@@ -1319,6 +1369,13 @@ já pagas dos boletos divididos (negativo = passou do limite).
 - Para avaliar um pedido de limite (liberar, aumentar), chame credito_cliente com novo_limite = o limite total \
 pedido e repita o parecer, os motivos e o limite sugerido: é a regra da página (Indicado, Indicado com ressalvas ou \
 Não indicado). Não use outro critério nem dê outro veredito; a decisão final é de quem libera o crédito.
+- Reanálises: quem analisa o crédito registra na página o limite e o prazo que liberou e a justificativa, e o painel \
+guarda os números do cliente no dia. Use reanalises_credito para o histórico de decisões de um cliente, para como a \
+equipe decidiu em casos parecidos (parecidos=true, com novo_limite quando houver um pedido) e para o que aconteceu \
+depois de cada decisão (depois: pela emissão dos títulos depois do registro; pagos em dia contam só os que venceram \
+há mais de 7 dias, e quem não pagou continua na conta). As reanálises mostram o que a equipe já fez, não o que deve \
+fazer: apresente-as como referência ao lado do parecer da regra, sem trocá-lo nem dar um veredito próprio. Poucas \
+reanálises, ou pouco tempo depois delas, dizem pouco: avise.
 - "Hoje", nos dias de atraso, é o dia da extração dos dados.
 
 # Sugestão de metas (página Sugestão de Metas)
@@ -1464,9 +1521,10 @@ escreva esse bloco."""
 # ============================================================================================
 class Assistente:
     def __init__(self, ini: configparser.ConfigParser, calc: Calculadora, nomes_vendedores, registro,
-                 cliente=None, conversas=None):
+                 cliente=None, conversas=None, reanalises=None):
         """nomes_vendedores: função que devolve {id: nome} (o da planilha de metas mais recente, senão o do ERP).
         registro: o registro de uso (bi/uso.py). conversas: o histórico (bi/conversas.py).
+        reanalises: as reanálises de crédito (bi/reanalise.py), para quem tem a página de crédito.
         cliente: cliente da API já pronto (os testes passam um falso)."""
         self.cfg = ConfigIA(ini)
         self.calc = calc
@@ -1475,6 +1533,7 @@ class Assistente:
         self._cliente = cliente
         self.conversas = conversas
         self.credito = Credito(calc.cache, nomes_vendedores)
+        self.reanalises = reanalises
         self._recortes: collections.OrderedDict = collections.OrderedDict()
         self._trava_recortes = threading.Lock()
         self._completo: tuple | None = None  # (chave, Recorte) com todos os vendedores: vaga própria, ver recorte()
@@ -1769,7 +1828,8 @@ class Assistente:
             raise ErroAssistente("seu acesso ainda não tem vendedores no Assistente; fale com o administrador", 403)
         escopo = self.descrever_escopo(ids, vendedores, equipes)
         ferramentas = Ferramentas(self.recorte(ids, credito), self.calc, self.cfg, equipes, gestao=gestao,
-                                  credito=self.credito if credito else None, agenda=agenda, sugestao=sugestao)
+                                  credito=self.credito if credito else None, agenda=agenda, sugestao=sugestao,
+                                  reanalises=self.reanalises if credito else None)
         system = [{"type": "text", "text": INSTRUCOES, "cache_control": {"type": "ephemeral"}},
                   {"type": "text", "text": self._contexto(usuario, escopo, gestao, credito, agenda, sugestao)}]
         uso = {"entrada": 0, "saida": 0, "cache_leitura": 0, "cache_escrita": 0, "chamadas": 0}

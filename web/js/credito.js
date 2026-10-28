@@ -1,8 +1,9 @@
 // Página Reavaliação de Crédito: a página "Reavaliação Credito" do Power BI. Compras, pontualidade e inadimplência
 // pelos títulos a receber de venda (mês e ano pela emissão, vendedor do título); limite, prazo e restante de um ou
 // mais clientes (os limites somam), com as parcelas já pagas dos boletos divididos. Com um cliente, o parecer de um
-// limite total novo (Indicado, com ressalvas ou Não indicado). A conta, a regra do parecer e a ordem da tabela ficam
-// no servidor (bi/credito.py); aqui é a apresentação.
+// limite total novo (Indicado, com ressalvas ou Não indicado), o registro da reanálise (o limite e o prazo liberados e
+// a justificativa) e as reanálises anteriores dele. A conta, a regra do parecer, a ordem da tabela e o retrato que a
+// reanálise grava ficam no servidor (bi/credito.py e bi/reanalise.py); aqui é a apresentação.
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { anel } from "./graficos.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
@@ -32,8 +33,11 @@ const maiuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 let ctx = null;
 // limite: o limite total pedido no parecer (some ao trocar de cliente); analise: o pedido do parecer em andamento.
+// parecer: o último parecer mostrado (o registro grava o pedido dele); reanalises: o que /api/credito/reanalises
+// trouxe do cliente (historico: o pedido em andamento); rascunho: o que foi digitado no registro, que fica quando a
+// página é refeita por um filtro e some ao trocar de cliente ou depois de registrar.
 const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordem: null, limite: null, dados: null, pedido: 0,
-  busca: 0, analise: 0 };
+  busca: 0, analise: 0, parecer: null, reanalises: null, historico: 0, rascunho: null };
 
 export function montarCredito(container, contexto) {
   ctx = contexto;
@@ -95,7 +99,7 @@ export function montarCredito(container, contexto) {
   sel("#cr-ano", "ano");
   sel("#cr-vendedor", "vendedor");
   container.querySelector("#cr-limpar").addEventListener("click", () => {
-    Object.assign(estado, { clientes: [], mes: null, ano: null, vendedor: null, limite: null });
+    Object.assign(estado, { clientes: [], mes: null, ano: null, vendedor: null, limite: null, rascunho: null });
     container.querySelector("#cr-cliente").value = "";
     desenharEscolhidos();
     carregar();
@@ -182,11 +186,12 @@ async function carregar(silencioso = false, soTabela = false) {
     posRender(conteudo);
     ligarOrdem(document.getElementById("cr-tabela"));
     ligarAnalise();
+    ligarReanalises();
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || estado.ordem)) {
       // filtro guardado neste navegador que não vale mais (cliente apagado, ano fora dos dados): volta a todos
-      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordem: null, limite: null });
+      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordem: null, limite: null, rascunho: null });
       desenharEscolhidos();
       toast(e.message, "erro");
       return carregar(silencioso);
@@ -226,7 +231,8 @@ function desenharEscolhidos() {
 
 let esperaCarregar = null;
 function mudouClientes() {
-  estado.limite = null; // o limite pedido era de outro cliente
+  estado.limite = null; // o limite pedido e o registro começado eram de outro cliente
+  estado.rascunho = null;
   desenharEscolhidos();
   clearTimeout(esperaCarregar); // marcando vários seguidos na lista, carrega uma vez só
   esperaCarregar = setTimeout(() => carregar(), 350);
@@ -367,7 +373,7 @@ function render(d) {
   const k = d.cartoes, cr = d.credito, n = d.clientes.length;
   const periodo = descricaoFiltro(d);
   let h = n ? cabecalhoClientes(d) : "";
-  if (n === 1) h += cartaoAnalise(d, 2);
+  if (n === 1) h += cartaoAnalise(d, 2) + cartaoReanalises(3);
   h += `<section class="kpis secao n4">
     ${kpiValor(1, "var(--s-fat)", "Valor total das compras", "moeda", k.valor, "moeda", periodo)}
     ${kpiValor(2, "var(--s-out)", "Quantidade de compras", "recibo", k.quantidade, "num", "títulos a receber de venda")}
@@ -559,14 +565,15 @@ const PARECER = {
 };
 const ICONE_CRITERIO = { ok: "certo", atencao: "alerta", bloqueio: "x" };
 const vezes = (v) => `${fmt.num(v, 1)}×`;
+const numero = (rotulo, valor, sub = "") => `<div><span>${rotulo}</span><b>${valor}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
 
-// "80.000", "80.000,50", "R$ 80000" ou "80000.5" -> número; null quando não é um valor positivo.
-function lerValor(texto) {
+// "80.000", "80.000,50", "R$ 80000" ou "80000.5" -> número; null quando não é um valor positivo (zero: aceita 0).
+function lerValor(texto, zero = false) {
   let s = String(texto || "").replace(/[^\d.,]/g, "");
   if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
   else if (!/^\d+\.\d{1,2}$/.test(s)) s = s.replace(/\./g, ""); // ponto de milhar, não de centavos
   const v = Number(s);
-  return s && Number.isFinite(v) && v > 0 ? v : null;
+  return s && Number.isFinite(v) && (v > 0 || (zero && v === 0)) ? v : null;
 }
 
 function cartaoAnalise(d, i) {
@@ -576,7 +583,7 @@ function cartaoAnalise(d, i) {
   <section class="cartao secao entra cr-analise" style="--i:${i}">
     <div class="cartao-cab">
       <div><h3>${icone("escudo")}Analisar novo limite</h3>
-        <p class="sub">Digite o limite total que o cliente vai ter. A análise usa todo o histórico dele, de qualquer vendedor, sem os filtros de mês, ano e vendedor.</p></div>
+        <p class="sub">Digite o limite total que o cliente vai ter. A análise usa todo o histórico dele, de qualquer vendedor, sem os filtros de mês, ano e vendedor. Depois do parecer, registre o que foi liberado.</p></div>
     </div>
     <form class="cr-analise-form" id="cr-analise-form" novalidate>
       <label class="campo sem-seta"><span class="ic-campo">${icone("moeda")}</span>
@@ -609,10 +616,25 @@ function ligarAnalise() {
     }
     pedir(v);
   });
+  const resultado = document.getElementById("cr-analise-resultado");
   // "Analisar R$ X": o limite sugerido vira o pedido
-  document.getElementById("cr-analise-resultado").addEventListener("click", (e) => {
+  resultado.addEventListener("click", (e) => {
     const b = e.target.closest("[data-usar]");
     if (b) pedir(Number(b.dataset.usar));
+  });
+  // O registro da reanálise, que fica dentro do parecer (e é refeito com ele).
+  resultado.addEventListener("input", (e) => {
+    const f = e.target.closest("#cr-registro-form");
+    if (!f) return;
+    const digitou = e.target.name === "liberado" || estado.rascunho?.digitou;
+    estado.rascunho = { cliente: estado.parecer?.cliente.id, liberado: f.liberado.value, prazo: f.prazo.value,
+      justificativa: f.justificativa.value, digitou };
+    resumoRegistro();
+  });
+  resultado.addEventListener("submit", (e) => {
+    if (e.target.id !== "cr-registro-form") return;
+    e.preventDefault();
+    registrar(e.target);
   });
   if (estado.limite) analisar(); // veio do link ou deste navegador
 }
@@ -626,7 +648,9 @@ async function analisar() {
   try {
     const a = await api(`/api/credito/analise?cliente=${estado.clientes[0].id}&limite=${estado.limite}`);
     if (pedido !== estado.analise) return;
+    estado.parecer = a;
     alvo.innerHTML = parecer(a);
+    desenharRegistro();
   } catch (e) {
     if (pedido !== estado.analise) return;
     alvo.innerHTML = `<div class="aviso">${icone("alerta")}<span>Não foi possível analisar: ${esc(e.message)}</span></div>`;
@@ -655,7 +679,6 @@ function parecer(a) {
   const comparado = variacao == null ? "hoje sem limite no cadastro"
     : Math.abs(variacao) < 0.0005 ? "o mesmo de hoje"
     : `${variacao > 0 ? "+" : "−"}${fmt.pct(Math.abs(variacao), 0)} sobre o de hoje (${fmt.moeda(n.limite_atual)})`;
-  const numero = (rotulo, valor, sub = "") => `<div><span>${rotulo}</span><b>${valor}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
   return `
   <div class="cr-parecer ${p.cor} entra" style="--i:0">
     <div class="cr-parecer-cab">
@@ -680,7 +703,207 @@ function parecer(a) {
     ${(a.avisos || []).map((x) => `<div class="aviso">${icone("alerta")}<span>${esc(x)}</span></div>`).join("")}
     <p class="cr-parecer-nota">Regra fixa da página, sem IA: os mesmos dados dão sempre a mesma resposta. Dados até
       ${fmt.data(a.hoje)}. A decisão final é de quem libera o crédito.</p>
+    <div class="cr-registro" id="cr-registro"></div>
   </div>`;
+}
+
+// ---------- reanálise: registrar a decisão e as anteriores (bi/reanalise.py) ----------
+const DECISAO = { primeiro_limite: "Primeiro limite", aumentou: "Aumento", manteve: "Manteve o limite", reduziu: "Redução",
+  cortou: "Cortou o crédito" };
+
+function cartaoReanalises(i) {
+  return `
+  <section class="cartao secao entra cr-historico" id="cr-reanalises" style="--i:${i}">
+    <div class="cartao-cab"><div><h3>${icone("caderneta")}Reanálises deste cliente</h3>
+      <p class="sub">o limite e o prazo liberados em cada reanálise, com a justificativa</p></div></div>
+    <div class="esqueleto" style="height:72px"></div>
+  </section>`;
+}
+
+function ligarReanalises() {
+  const card = document.getElementById("cr-reanalises");
+  if (!card) return;
+  card.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-excluir]");
+    if (b) excluirReanalise(Number(b.dataset.excluir), b);
+  });
+  desenharHistorico(); // a página refeita por um filtro já mostra as do mesmo cliente enquanto lê de novo
+  carregarReanalises();
+}
+
+async function carregarReanalises() {
+  if (!document.getElementById("cr-reanalises") || estado.clientes.length !== 1) return;
+  const cliente = estado.clientes[0].id, pedido = ++estado.historico;
+  try {
+    const r = await api(`/api/credito/reanalises?cliente=${cliente}`);
+    if (pedido !== estado.historico) return;
+    estado.reanalises = { ...r, cliente };
+  } catch (e) {
+    if (pedido !== estado.historico) return;
+    estado.reanalises = { erro: e.message, cliente };
+  }
+  desenharHistorico();
+  desenharRegistro();
+}
+
+// A última reanálise contra o cadastro de hoje do ERP (o painel não muda o ERP: a pessoa muda lá).
+function situacaoErp(x) {
+  const e = x.erp;
+  if (!e) return "";
+  if (e.situacao === "aplicado") {
+    return `<p class="cr-erp ok">${icone("certo")}<span>O cadastro do ERP já está com o limite e o prazo da última reanálise.</span></p>`;
+  }
+  if (e.situacao === "aguardando") {
+    return `<p class="cr-erp">${icone("relogio")}<span>A última reanálise foi registrada com os dados de agora: o cadastro do ERP aparece na próxima atualização.</span></p>`;
+  }
+  return `<p class="cr-erp atencao">${icone("alerta")}<span>O cadastro do ERP está com <b>${fmt.moeda2(e.limite)} · ${esc(e.prazo || "sem prazo")}</b>,
+    diferente da última reanálise (${fmt.moeda2(x.limite_liberado)} · ${esc(x.prazo_liberado)}).</span></p>`;
+}
+
+function itemReanalise(x) {
+  const p = PARECER[x.parecer], n = x.numeros, v = x.decisao.variacao_limite;
+  const tipo = DECISAO[x.decisao.limite] + (v != null && Math.abs(v) >= 0.0005 ? ` ${v > 0 ? "+" : "−"}${fmt.pct(Math.abs(v), 0)}` : "");
+  const prazo = x.prazo_antes === x.prazo_liberado ? `prazo ${esc(x.prazo_liberado)}`
+    : `prazo ${esc(x.prazo_antes || "não informado")} → <b>${esc(x.prazo_liberado)}</b>`;
+  const liberado = x.parecer_liberado && x.parecer_liberado !== x.parecer
+    ? ` · para o liberado: ${PARECER[x.parecer_liberado].rotulo.toLowerCase()}` : "";
+  return `
+  <li class="cr-hist-item">
+    <div class="cr-hist-cab">
+      <span class="cr-hist-quando"><b>${fmt.dataHora(x.feita_em)}</b> · ${esc(x.feita_por)}</span>
+      <span class="cr-hist-tipo">${tipo}</span>
+      <span class="status ${p.classe}" title="Parecer da regra para o limite pedido">${icone(p.icone)}${p.rotulo}</span>
+      ${x.pode_excluir ? `<button type="button" class="btn perigo cr-hist-excluir" data-excluir="${x.id}"
+        aria-label="Excluir a reanálise de ${fmt.dataHora(x.feita_em)}">${icone("lixeira")}Excluir</button>` : ""}
+    </div>
+    <p class="cr-hist-valores"><span>Limite ${fmt.moeda2(x.limite_antes)} → <b>${fmt.moeda2(x.limite_liberado)}</b></span>
+      <span>${prazo}</span>
+      <small>pedido ${fmt.moeda2(x.limite_pedido)}${x.limite_sugerido != null ? ` · a regra sugeria ${fmt.moeda2(x.limite_sugerido)}` : ""}${liberado}</small></p>
+    <p class="cr-hist-just">${esc(x.justificativa)}</p>
+    <details class="cr-hist-numeros"><summary>Ver os números do dia</summary>
+      <div class="cr-parecer-numeros">
+        ${numero("Compras (todo o histórico)", fmt.moeda(n.compras_valor),
+          `${fmt.num(n.compras_qtd)} títulos${n.meses_cliente == null ? "" : ` · cliente há ${fmt.num(n.meses_cliente)} meses`}`)}
+        ${numero("Pontualidade (12 meses)", fmt.pct(n.pontualidade_12m), `em todo o histórico: ${fmt.pct(n.pontualidade)}`)}
+        ${numero("Compras por mês (12 meses)", fmt.moeda(n.compras_mes_12m))}
+        ${numero("Maior saldo em aberto (12 meses)", fmt.moeda(n.maior_saldo_12m))}
+        ${numero("Em aberto", fmt.moeda(n.em_aberto), n.uso_do_limite == null ? "" : `${fmt.pct(n.uso_do_limite, 0)} do limite de antes`)}
+        ${numero("Inadimplência", fmt.moeda(n.inadimplencia))}
+        ${numero("Prazo real (12 meses)", n.prazo_real_12m == null ? "—" : `${fmt.num(n.prazo_real_12m)} dias`)}
+      </div>
+      <p class="cr-parecer-nota">Dados até ${fmt.dataHora(x.dados_ate)}.</p>
+    </details>
+  </li>`;
+}
+
+function desenharHistorico() {
+  const card = document.getElementById("cr-reanalises"), r = estado.reanalises;
+  if (!card || !r || estado.clientes.length !== 1 || r.cliente !== estado.clientes[0].id) return;
+  const lista = r.reanalises || [];
+  let corpo;
+  if (r.erro) corpo = `<div class="aviso">${icone("alerta")}<span>Não foi possível ler as reanálises: ${esc(r.erro)}</span></div>`;
+  else if (!r.ativo) corpo = `<div class="aviso">${icone("info")}<span>${esc(r.aviso)}</span></div>`;
+  else if (!lista.length) corpo = `<p class="cr-hist-vazio">Nenhuma reanálise registrada para este cliente. Analise um limite e registre a decisão logo abaixo do parecer.</p>`;
+  else corpo = situacaoErp(lista[0]) + `<ol class="cr-hist">${lista.map(itemReanalise).join("")}</ol>`;
+  const sub = lista.length ? `${lista.length} registrada${lista.length === 1 ? "" : "s"}, da mais nova para a mais antiga`
+    : "o limite e o prazo liberados em cada reanálise, com a justificativa";
+  card.innerHTML = `
+    <div class="cartao-cab"><div><h3>${icone("caderneta")}Reanálises deste cliente</h3><p class="sub">${sub}</p></div></div>
+    ${corpo}`;
+}
+
+function desenharRegistro() {
+  const alvo = document.getElementById("cr-registro"), a = estado.parecer, r = estado.reanalises;
+  if (!alvo || !a || !r || r.cliente !== a.cliente.id) return;
+  if (r.erro) { alvo.innerHTML = ""; return; } // o cartão das reanálises já mostra o erro
+  if (!r.ativo) { alvo.innerHTML = `<div class="aviso">${icone("info")}<span>${esc(r.aviso)}</span></div>`; return; }
+  const s = estado.rascunho?.cliente === a.cliente.id ? estado.rascunho : null;
+  const liberado = s?.digitou ? s.liberado : fmt.num(a.pedido, 2);
+  const prazo = s ? s.prazo : (a.cliente.prazo || "");
+  const opcoes = r.prazos.map((x) => `<option value="${esc(x)}"${x === prazo ? " selected" : ""}>${esc(x)}${x === a.cliente.prazo ? " (de hoje)" : ""}</option>`).join("");
+  alvo.innerHTML = `
+    <form class="cr-registro-form" id="cr-registro-form" novalidate>
+      <div class="cr-registro-cab"><h4>${icone("caderneta")}Registrar reanálise</h4>
+        <p>Grava a decisão com os números do cliente de agora (dados até ${fmt.dataHora(r.dados_ate)}). O painel não muda o ERP: depois de registrar, mude o limite e o prazo lá.</p></div>
+      <div class="cr-registro-campos">
+        <label class="campo-form"><span>Limite liberado (R$)</span>
+          <input type="text" name="liberado" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(liberado)}"></label>
+        <label class="campo-form"><span>Prazo liberado</span><span class="campo"><span class="ic-campo">${icone("calendario")}</span>
+          <select name="prazo">${prazo && r.prazos.includes(prazo) ? "" : `<option value="" selected>Escolha o prazo</option>`}${opcoes}</select></span></label>
+      </div>
+      <label class="campo-form"><span>Justificativa</span>
+        <textarea name="justificativa" rows="3" maxlength="2000" placeholder="Por que liberou esse limite e esse prazo?">${esc(s?.justificativa || "")}</textarea>
+        <small>Não escreva CPF, telefone ou endereço: o Assistente lê as justificativas.</small></label>
+      <p class="cr-registro-resumo" id="cr-registro-resumo" aria-live="polite"></p>
+      <div><button class="btn primario" type="submit">${icone("certo")}Registrar reanálise</button></div>
+    </form>`;
+  resumoRegistro();
+}
+
+// O que o registro vai gravar, enquanto a pessoa digita.
+function resumoRegistro() {
+  const f = document.getElementById("cr-registro-form"), a = estado.parecer;
+  if (!f || !a) return;
+  const v = lerValor(f.liberado.value, true), prazo = f.prazo.value;
+  const antes = a.numeros.limite_atual, prazoAntes = a.cliente.prazo;
+  let limite;
+  if (v == null) limite = "Digite o limite liberado (0 corta o crédito)";
+  else if (Math.abs(v - antes) < 0.005) limite = `Mantém o limite de ${fmt.moeda2(antes)}`;
+  else {
+    const varia = antes > 0 ? ` (${v > antes ? "+" : "−"}${fmt.pct(Math.abs(v / antes - 1), 0)})` : "";
+    limite = `Limite ${fmt.moeda2(antes)} → <b>${fmt.moeda2(v)}</b>${varia}`;
+  }
+  const partes = [limite];
+  if (prazo) partes.push(prazo === prazoAntes ? `mantém o prazo ${esc(prazo)}` : `prazo ${esc(prazoAntes || "não informado")} → <b>${esc(prazo)}</b>`);
+  const outro = v != null && Math.abs(v - a.pedido) >= 0.005
+    ? `<small>O parecer acima é do limite pedido (${fmt.moeda2(a.pedido)}); o registro guarda também o da regra para o valor liberado.</small>` : "";
+  f.querySelector("#cr-registro-resumo").innerHTML = partes.join(" · ") + outro;
+}
+
+async function registrar(f) {
+  const a = estado.parecer, r = estado.reanalises;
+  if (!a || !r?.ativo) return;
+  const liberado = lerValor(f.liberado.value, true), justificativa = f.justificativa.value.trim();
+  const faltou = liberado == null ? [f.liberado, "Digite o limite liberado, em reais (0 corta o crédito)."]
+    : !f.prazo.value ? [f.prazo, "Escolha o prazo liberado."]
+    : justificativa.length < 10 ? [f.justificativa, "Escreva a justificativa (pelo menos 10 letras)."] : null;
+  if (faltou) {
+    toast(faltou[1], "erro");
+    faltou[0].focus();
+    return;
+  }
+  const botao = f.querySelector('button[type="submit"]');
+  botao.disabled = true;
+  try {
+    const novo = await api("/api/credito/reanalise", { json: { chave: r.chave, cliente: a.cliente.id, pedido: a.pedido,
+      liberado, prazo: f.prazo.value, justificativa, dados_ate: estado.dados?.extraido_em } });
+    estado.rascunho = null;
+    estado.reanalises = { ...novo, cliente: a.cliente.id };
+    desenharHistorico();
+    desenharRegistro();
+    toast(novo.ja_existia ? "Esta reanálise já estava registrada." : "Reanálise registrada. Agora mude o limite e o prazo no ERP.");
+  } catch (e) {
+    toast(e.message, "erro");
+    if (e.status === 400 && /atualizados/.test(e.message)) carregar(true); // extração nova: refaz a página e o parecer
+  } finally {
+    botao.disabled = false;
+  }
+}
+
+async function excluirReanalise(id, botao) {
+  if (!confirm("Excluir esta reanálise? Ela sai desta página e do Assistente.")) return;
+  const cliente = estado.reanalises?.cliente;
+  botao.disabled = true;
+  try {
+    const r = await api("/api/credito/reanalise/excluir", { json: { id } });
+    estado.reanalises = { ...r, cliente };
+    desenharHistorico();
+    desenharRegistro();
+    toast("Reanálise excluída.");
+  } catch (e) {
+    toast(e.message, "erro");
+    botao.disabled = false;
+  }
 }
 
 function comoParecer(r) {
@@ -728,6 +951,11 @@ function comoCalcula(d, i) {
             escolhidos, os limites e o que está em aberto somam. Limite, utilizado, prazo e restante só aparecem com cliente
             escolhido.</li>
           ${comoParecer(d.regra_parecer)}
+          <li><b>Reanálise</b> (com um cliente escolhido, depois do parecer): quem tem a página registra o limite e o
+            prazo liberados e a justificativa, e o painel guarda junto os números do cliente naquele momento (compras,
+            pontualidade, o que está em aberto, os 12 meses da regra, o mês a mês e o parecer), para comparar decisões
+            depois e para o Assistente. O registro não muda o ERP e fica só no site. Não dá para editar: quem registrou ou
+            um administrador exclui e registra de novo.</li>
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. A ordem vale para todos os

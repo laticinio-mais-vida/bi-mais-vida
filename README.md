@@ -310,6 +310,8 @@ setembro?", "como estão as metas do BA?". A IA é o Claude, pela API da Anthrop
   - resumo de vendas por período, com filtros e agrupamentos;
   - metas e realizado (os mesmos números da página Metas);
   - crédito de um cliente (os mesmos números da Reavaliação de Crédito; só para quem tem essa página);
+  - as reanálises de crédito registradas: as de um cliente, as de clientes parecidos e o que aconteceu depois de
+    cada uma (só para quem tem a página de crédito; veja [Reanálises](#reanálises));
   - a agenda de quem pergunta (só para quem tem a página Gestão; veja [Minha agenda](#minha-agenda));
   - para o resto, uma consulta SQL que só lê os dados;
   - um arquivo Excel ou PDF para baixar (veja [Arquivos](#arquivos-excel-e-pdf)).
@@ -394,7 +396,9 @@ O botão **Configurar** da página (só administradores) tem duas seções:
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
 pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cache e não vão. O limite de crédito, o
 prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
-Crédito; para os outros, esses dados nem existem na cópia que a IA consulta.
+Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. O mesmo vale para as reanálises de
+crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
+vão para a IA só nas perguntas de quem tem a página.
 
 ## Página Gestão
 
@@ -813,6 +817,47 @@ Diferenças em relação ao Power BI, combinadas com o usuário:
 5. **Sem a tabela de preço médio por produto:** no Power BI ela usa uma medida ("Preço Medio Ultimo Trimestre") que
    não existe mais no modelo.
 
+### Reanálises
+
+Com um cliente escolhido, depois do parecer de um limite novo, quem tem a página **registra a reanálise**: o limite
+liberado (vem com o valor analisado; 0 corta o crédito), o prazo liberado (uma caixa com os prazos que os clientes têm
+no ERP, na ordem dos dias) e a justificativa (de 10 a 2.000 letras). O painel grava junto o **retrato** do cliente
+naquele momento, calculado no servidor a partir dos dados (a página não manda números). Depois de algumas centenas de
+registros, isso vira a base para uma IA ajudar nas decisões de crédito.
+
+- **O painel não muda o ERP:** depois de registrar, a pessoa muda o limite e o prazo lá. O cartão **Reanálises deste
+  cliente** mostra as anteriores (da mais nova para a mais antiga, com os números do dia) e compara a última com o
+  cadastro de hoje: já aplicado, aguardando a próxima atualização dos dados ou diferente.
+- **Só no site:** o banco do PC é outro, e as reanálises ficam todas num lugar só. No painel do PC, a página avisa.
+- **Não dá para editar:** quem registrou ou um administrador exclui e registra de novo. A excluída some da página e do
+  Assistente, mas fica guardada no banco (com quem excluiu e quando).
+- **Os dados mudaram no meio:** se chegou uma extração nova entre analisar e registrar, o registro é recusado e a
+  página refaz o parecer, para o retrato ser o que a pessoa viu. O mesmo envio repetido (clique duplo) grava uma vez.
+- **O que vai no retrato** (`retrato`, um JSON com `versao`; datas AAAA-MM-DD, "hoje" = o dia da extração):
+  - `cliente` e `cadastro`: o limite e o prazo de antes (com os dias do prazo: "14, 21 E 28 DIAS" = [14, 21, 28];
+    A VISTA = [0]), o vendedor da carteira, cidade, UF, área, segmento, rede, se está inativo e a data de cadastro;
+  - `historico`: os cartões da página com todos os títulos (compras, quantidade, ticket médio, pontualidade,
+    inadimplência), o primeiro e o último título, os meses de cliente e os dias sem compra;
+  - `aberto_hoje`: os títulos em aberto, o que já foi pago em parcelas, o limite restante e o % usado, o que está a
+    vencer, os vencidos até 7 dias, os inadimplentes e o maior atraso em aberto;
+  - `ultimos_12_meses` (os números da regra do parecer): títulos, compras e compras por mês, meses com compra,
+    pontualidade, atraso médio dos atrasados, atraso ponderado pelo valor (pagamento adiantado conta negativo), maior
+    atraso, quitados com mais de 30 dias de atraso, prazo real e o maior saldo em aberto;
+  - `ultimos_3_meses` (90 dias): compras e pontualidade;
+  - `mes_a_mes`: os 12 meses completos antes do mês de hoje, com compras, títulos e quitados no prazo e com atraso;
+  - `vendas_12_meses`: venda bruta, devoluções não canceladas (de qualquer motivo) e a taxa de devolução, dias com
+    venda e produtos (só do cadastro de clientes);
+  - `parecer`: a regra do dia (`regra`) e o parecer do valor pedido e do liberado (sem o do liberado quando ele é 0),
+    com cada critério, o limite sugerido e o valor ÷ o maior saldo.
+- **O que aconteceu depois** não é gravado: sai dos títulos emitidos depois do registro, que o ERP guarda. O
+  Assistente calcula na hora: títulos emitidos depois, quantos dos que venceram há mais de 7 dias foram pagos em dia
+  (quem não pagou continua na conta), a inadimplência de hoje, o maior saldo em aberto contra o limite liberado e se o
+  cadastro já está com ele.
+- **Assistente:** a ferramenta `reanalises_credito` traz até 15 reanálises (as de um cliente, todas, ou as de outros
+  clientes com os números mais parecidos com os de hoje dele) e um resumo por parecer da regra. A comparação usa
+  pontualidade em 12 meses, compras por mês, maior saldo em aberto, tempo de cliente, inadimplência e, com um pedido,
+  o pedido ÷ o maior saldo. As reanálises entram como referência ao lado do parecer da regra, sem trocá-lo.
+
 ## Banco de dados
 
 O painel usa dois bancos, cada um para uma coisa:
@@ -837,6 +882,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
+| `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -979,7 +1025,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê |
-| `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, e a busca de cliente |
+| `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
+| `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |

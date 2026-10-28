@@ -695,9 +695,11 @@ class TestFerramentasDeAcao(ComCache, unittest.TestCase):
         estritas = [t for t in FERRAMENTAS if t.get("strict")]
         self.assertLessEqual(sum(opcionais(t["input_schema"]) for t in estritas), 24)
         self.assertLessEqual(len(estritas), 20)
-        # o rascunho de ação e a proposta da agenda ficam fora do strict: com eles a gramática passa do limite da API
-        # (a proposta da agenda tem 16 campos opcionais)
-        self.assertEqual([t["name"] for t in FERRAMENTAS if not t.get("strict")], ["propor_acao", "propor_agenda"])
+        # o rascunho de ação, a proposta da agenda e as reanálises de crédito ficam fora do strict: com eles a gramática
+        # passa do limite da API (a proposta da agenda tem 16 campos opcionais; com as reanálises strict, a API real
+        # recusou todo pedido em 28/10/2026, com 22 campos opcionais no total)
+        self.assertEqual([t["name"] for t in FERRAMENTAS if not t.get("strict")],
+                         ["propor_acao", "propor_agenda", "reanalises_credito"])
 
     def test_laco_guarda_os_rascunhos(self):
         api = ClienteFalso([
@@ -1300,7 +1302,8 @@ class TestMigracao008(BaseBanco):
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
-                                               "027_agenda_justificativas", "028_notificacoes"])
+                                               "027_agenda_justificativas", "028_notificacoes",
+                                               "029_credito_reanalises"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1345,7 +1348,8 @@ class TestMigracao013(BaseBanco):
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
-                                               "027_agenda_justificativas", "028_notificacoes"])
+                                               "027_agenda_justificativas", "028_notificacoes",
+                                               "029_credito_reanalises"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1377,7 +1381,8 @@ class TestMigracao009(BaseBanco):
                                                "021_agenda_tarefas_andamento", "022_agenda_tarefas_justificativa",
                                                "023_agenda_tarefas_concluida_por", "024_sugestao",
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
-                                               "027_agenda_justificativas", "028_notificacoes"])
+                                               "027_agenda_justificativas", "028_notificacoes",
+                                               "029_credito_reanalises"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

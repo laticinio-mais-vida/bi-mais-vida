@@ -12,7 +12,7 @@ O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões dest
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
 Usuários, regras, conversas, o uso do Assistente, as campanhas da Gestão e a Agenda ficam no PostgreSQL de [postgres]
-(bi/banco.py), no PC e no VPS.
+(bi/banco.py), no PC e no VPS; as reanálises de crédito, só no do VPS.
 """
 from __future__ import annotations
 
@@ -58,6 +58,7 @@ from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
+from bi.reanalise import Reanalises  # noqa: E402
 from bi.sugestao import ConfigSugestao, Sugestao  # noqa: E402
 from bi.tarefas import Tarefas  # noqa: E402
 from bi.uso import RegistroUso  # noqa: E402
@@ -137,9 +138,11 @@ class Aplicacao:
         self.config_projecoes = ConfigProjecoes(self.banco)
         self.projetor = Projetor(self.calc, self.config_projecoes)
         self.credito = Credito(self.cache, self.projetor._nomes_vendedores)
+        # As reanálises de crédito ficam só no banco do site (no PC, a página avisa e não grava).
+        self.reanalises = Reanalises(self.banco, self.credito, self.vps)
         self.conversas = Conversas(self.banco)
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
-                                     conversas=self.conversas)
+                                     conversas=self.conversas, reanalises=self.reanalises)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
         self.config_sugestao = ConfigSugestao(self.banco)
         # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
@@ -450,6 +453,26 @@ class Manipulador(BaseHTTPRequestHandler):
             log.info("%s excluiu %s %s", usuario["login"], "a campanha" if tipo == "acao" else "o objetivo", id_)
         return self._json({"ok": True})
 
+    def _pode_credito(self, usuario: dict) -> bool:
+        if "credito" in paginas_permitidas(usuario):
+            return True
+        self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
+        return False
+
+    def _mudar_reanalise(self, usuario: dict, caminho: str, corpo: dict):
+        """Registrar uma reanálise de crédito (quem tem a página) ou excluir uma (quem registrou ou um administrador);
+        a resposta traz a lista nova do cliente."""
+        if not self._pode_credito(usuario):
+            return
+        if caminho == "/api/credito/reanalise/excluir":
+            r = self.app.reanalises.excluir(usuario, corpo.get("id"))
+            log.info("%s excluiu a reanálise de crédito %s", usuario["login"], corpo.get("id"))
+            return self._json({"ok": True, **r})
+        r = self.app.reanalises.registrar(usuario, corpo)
+        if not r["ja_existia"]:
+            log.info("%s registrou a reanálise de crédito %s (cliente %s)", usuario["login"], r["id"], corpo.get("cliente"))
+        return self._json({"ok": True, **r})
+
     def _pode_assistente(self, usuario: dict) -> bool:
         if "assistente" in paginas_permitidas(usuario):
             return True
@@ -735,13 +758,15 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.sugestao.config_dados(q.get("mes")))
             if url.path == "/api/sugestao/aprovacao":  # estado=BA&mes=2026-11
                 return self._json(self.app.sugestao.aprovacao(q.get("estado"), q.get("mes")))
-            if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise"):
-                if "credito" not in paginas_permitidas(usuario):
-                    return self._erro("seu acesso não inclui a página Reavaliação de Crédito", HTTPStatus.FORBIDDEN)
+            if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises"):
+                if not self._pode_credito(usuario):
+                    return
                 if url.path == "/api/credito/busca":
                     return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""))})
                 if url.path == "/api/credito/analise":  # cliente=12&limite=80000: o parecer de um limite total novo
                     return self._json(self.app.credito.analisar(q.get("cliente"), q.get("limite")))
+                if url.path == "/api/credito/reanalises":  # cliente=12: as reanálises registradas e o que o form usa
+                    return self._json(self.app.reanalises.listar(q.get("cliente"), usuario))
                 # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
                 return self._json(self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"),
@@ -841,6 +866,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s gravou a aprovação de metas do %s em %s (%s vendedor(es))", usuario["login"], r["estado"],
                          r["mes"]["meta"], len(itens))
                 return self._json({"ok": True, **r})
+            if url.path in ("/api/credito/reanalise", "/api/credito/reanalise/excluir"):
+                return self._mudar_reanalise(usuario, url.path, self._corpo_json())
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):

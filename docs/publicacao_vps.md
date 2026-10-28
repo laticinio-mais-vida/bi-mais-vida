@@ -542,6 +542,21 @@ subtarefa nova, prazo mudado, vence em breve, venceu, concluída, justificativa 
   nascem no primeiro acesso de cada pessoa ("venceu" só para os prazos dos últimos 7 dias).
 - **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e o sino some.
 
+#### Reanálises de crédito (migração 029)
+
+Na Reavaliação de Crédito, depois do parecer de um limite novo, quem tem a página registra o limite e o prazo liberados
+e a justificativa, e o painel grava junto o retrato do cliente (tabela nova `credito_reanalises`). O Assistente de quem
+tem a página lê as reanálises (ferramenta `reanalises_credito`).
+
+- **Ordem:** só o site precisa da versão nova (as reanálises ficam só nele). Os dados que o PC manda não mudaram; o PC
+  pode atualizar antes ou depois e só cria a tabela, vazia.
+- **A migração 029** só cria a tabela `credito_reanalises` e o índice; nada existente muda. Ensaie em BEGIN/ROLLBACK,
+  como as outras.
+- **Depois de publicar:** a página mostra "Nenhuma reanálise registrada" até a primeira. Confira o Assistente com uma
+  chamada curta à API de dentro do container (o modelo do site é outro que o do PC). A ferramenta nova não é strict:
+  strict, a gramática passava do limite da API, que recusava todo pedido.
+- **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e o registro some da página.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na
