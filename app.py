@@ -6,13 +6,13 @@ Uso:
     python app.py --porta 8051
     python app.py --senha LOGIN   # define a senha de um usuário (cria um administrador se não existir); no
                                   # VPS: docker compose exec bi python app.py --senha LOGIN
-    python app.py --gerar-chave   # gera a chave de [publicacao], a mesma no PC e no VPS
+    python app.py --gerar-chave   # gera a chave de [publicacao], a mesma no PC e no VPS (e a de [google], outra)
 
 O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões desta máquina; com
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
 Usuários, regras, conversas, o uso do Assistente, as campanhas da Gestão e a Agenda ficam no PostgreSQL de [postgres]
-(bi/banco.py), no PC e no VPS; as reanálises de crédito, só no do VPS.
+(bi/banco.py), no PC e no VPS; as reanálises de crédito e as agendas do Google, só no do VPS.
 """
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao  # noqa: E402
+from bi.google_agenda import GoogleAgenda  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
@@ -80,14 +81,15 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
 # usuário) e as tarefas de que participa (bi/tarefas.py confere quem pode o quê). Por isso não entra em ROTAS_ADMIN,
 # como as rotas que mudam a Gestão.
 ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico", "/api/agenda/pessoas", "/api/agenda/tarefa",
-                    "/api/agenda/quadro")
+                    "/api/agenda/quadro", "/api/agenda/google")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
                       "/api/agenda/atividade/excluir", "/api/agenda/concluir", "/api/agenda/desfazer",
                       "/api/agenda/proposta", "/api/agenda/tarefas", "/api/agenda/tarefa/editar",
                       "/api/agenda/tarefa/excluir", "/api/agenda/tarefa/concluir", "/api/agenda/tarefa/desfazer",
                       "/api/agenda/tarefa/mover", "/api/agenda/tarefa/justificar", "/api/agenda/subtarefas",
                       "/api/agenda/subtarefa/editar", "/api/agenda/subtarefa/concluir",
-                      "/api/agenda/subtarefa/desfazer", "/api/agenda/subtarefa/mover", "/api/agenda/subtarefa/justificar"}
+                      "/api/agenda/subtarefa/desfazer", "/api/agenda/subtarefa/mover", "/api/agenda/subtarefa/justificar",
+                      "/api/agenda/google", "/api/agenda/google/remover", "/api/agenda/google/atualizar"}
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
@@ -148,8 +150,11 @@ class Aplicacao:
         # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
         self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores,
                                  self.metas_aprovadas)
-        self.agenda = Agenda(self.banco, self.configuracao)
-        self.tarefas = Tarefas(self.banco, self.configuracao)  # as regras: o calendário do horário ocupado
+        # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
+        # horários das tarefas e atividades.
+        self.google = GoogleAgenda(self.banco, ini)
+        self.agenda = Agenda(self.banco, self.configuracao, google=self.google)
+        self.tarefas = Tarefas(self.banco, self.configuracao, google=self.google)  # as regras: o calendário
         self.notificacoes = Notificacoes(self.banco)
         self.tentativas = LimiteTentativas()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
@@ -158,7 +163,9 @@ class Aplicacao:
         self._ultima_verificacao = 0.0
 
     def vigiar_em_segundo_plano(self) -> None:
-        """No PC: percebe a cópia nova do banco e envia ao VPS mesmo sem nenhum navegador aberto."""
+        """Onde a leitura do Google Agenda está ligada (no site), relê as agendas conectadas. No PC: percebe a cópia
+        nova do banco e envia ao VPS mesmo sem nenhum navegador aberto."""
+        self.google.vigiar()
         if self.vps:
             return
 
@@ -612,8 +619,11 @@ class Manipulador(BaseHTTPRequestHandler):
         if not self._pode_gestao(usuario):
             return
         eu = usuario["id"]
-        if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje): as atividades e as tarefas
-            return self._json(self.app.tarefas.no_mes(eu, self.app.agenda.mes(eu, q.get("mes"))))
+        if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje): as atividades, as tarefas e o Google
+            m = self.app.tarefas.no_mes(eu, self.app.agenda.mes(eu, q.get("mes")))
+            return self._json(self.app.google.no_mes(eu, m))
+        if caminho == "/api/agenda/google":  # as agendas do Google conectadas (sem o endereço)
+            return self._json(self.app.google.listar(eu))
         if caminho == "/api/agenda/pessoas":  # quem pode participar de uma tarefa
             return self._json(self.app.tarefas.pessoas(eu))
         if caminho == "/api/agenda/tarefa":  # id=…: a tarefa aberta, com as subtarefas de todos
@@ -647,13 +657,16 @@ class Manipulador(BaseHTTPRequestHandler):
             return
         if caminho.startswith(("/api/agenda/tarefa", "/api/agenda/subtarefa")):
             return self._mudar_tarefa(usuario, caminho, corpo)
+        if caminho.startswith("/api/agenda/google"):
+            return self._mudar_google(usuario, caminho, corpo)
         agenda, eu, id_ = self.app.agenda, usuario["id"], corpo.get("id")
-        if caminho == "/api/agenda/atividades":
+        if caminho == "/api/agenda/atividades":  # avisos: o Google da pessoa ocupado no horário (gravou assim mesmo)
             a = agenda.criar(eu, corpo.get("atividade") or {})
             log.info("%s criou a atividade %s na agenda", usuario["login"], a["id"])
-            return self._json({"ok": True, "atividade": a})
+            return self._json({"ok": True, "atividade": a, "avisos": a.pop("avisos")})
         if caminho == "/api/agenda/atividade/editar":
-            return self._json({"ok": True, "atividade": agenda.editar(eu, id_, corpo.get("atividade") or {})})
+            a = agenda.editar(eu, id_, corpo.get("atividade") or {})
+            return self._json({"ok": True, "atividade": a, "avisos": a.pop("avisos")})
         if caminho == "/api/agenda/atividade/encerrar":
             return self._json({"ok": True, **agenda.encerrar(eu, id_)})
         if caminho == "/api/agenda/atividade/excluir":
@@ -706,7 +719,24 @@ class Manipulador(BaseHTTPRequestHandler):
             t = tarefas.justificar_subtarefa(eu, id_, corpo.get("justificativa"), bool(corpo.get("concluir")))
         else:  # /api/agenda/subtarefa/desfazer
             t = tarefas.desfazer_subtarefa(eu, id_)
-        return self._json({"ok": True, "tarefa": t})
+        # avisos: o Google de quem grava ocupado num horário da tarefa (gravou assim mesmo)
+        return self._json({"ok": True, "tarefa": t, "avisos": t.pop("avisos", [])})
+
+    def _mudar_google(self, usuario: dict, caminho: str, corpo: dict):
+        """As agendas do Google da pessoa (bi/google_agenda.py): conectar pelo endereço secreto, remover e reler agora.
+        A resposta traz a lista como ficou; o endereço não vai para o log nem volta na resposta."""
+        google, eu = self.app.google, usuario["id"]
+        if caminho == "/api/agenda/google":  # endereco: o endereço secreto no formato iCal
+            r = google.conectar(eu, corpo.get("endereco"))
+            log.info("%s %s a agenda do Google %s", usuario["login"], "conectou" if r["nova"] else "reconectou",
+                     r["agenda"]["id"])
+            return self._json({"ok": True, **r, **google.listar(eu)})
+        if caminho == "/api/agenda/google/remover":
+            google.remover(eu, corpo.get("id"))
+            log.info("%s removeu a agenda do Google %s", usuario["login"], corpo.get("id"))
+            return self._json({"ok": True, **google.listar(eu)})
+        google.atualizar(eu, corpo.get("id"))  # /api/agenda/google/atualizar (id vazio: todas as da pessoa)
+        return self._json({"ok": True, **google.listar(eu)})
 
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
@@ -952,7 +982,8 @@ def main() -> None:
     ap.add_argument("--gerar-chave", action="store_true", help="gera uma chave para [publicacao] no config.ini")
     args = ap.parse_args()
     if args.gerar_chave:
-        return print(f"Coloque esta linha em [publicacao] no config.ini do PC e do VPS:\nchave = {gerar_chave()}")
+        return print(f"Coloque esta linha em [publicacao] no config.ini do PC e do VPS:\nchave = {gerar_chave()}\n"
+                     "(para [google], só no VPS, rode de novo e use outra chave)")
 
     # config.exemplo.ini traz os caminhos padrão; o config.ini (opcional, fora do repositório) sobrepõe o que
     # tiver, como a senha do banco. Sem ele o painel abre do mesmo jeito e avisa que falta a senha.

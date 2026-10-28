@@ -71,6 +71,8 @@ const ICONES = {
   cartao: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 10h19M6.5 15h4"/>',
   loja: '<path d="M3.5 9.5 5 4h14l1.5 5.5"/><path d="M3.5 9.5a2.8 2.8 0 0 0 5.6 0 2.8 2.8 0 0 0 5.8 0 2.8 2.8 0 0 0 5.6 0"/><path d="M5 12v8.5h14V12"/><path d="M10 20.5v-5h4v5"/>',
   foguete:'<path d="M12 15c-2-2-3-5-1-9 2-3 6-3.5 9-3.5 0 3-.5 7-3.5 9-4 2-7 1-9-1"/><path d="M9 13 5 14l2-4M11 15l-1 4 4-2"/><circle cx="15.5" cy="8.5" r="1.4"/>',
+  // elo de corrente: a agenda ligada de fora (o Google Agenda, só leitura)
+  elo: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
 };
 
 export function icone(nome, classe = "") {
@@ -211,14 +213,15 @@ export function linhaTT(rotulo, valor, cor) {
 }
 
 // ---------- avisos ----------
-// O aviso no canto da tela. A caixa dos avisos é um popover: a cada aviso ela volta para o topo da pilha, por cima das
-// janelas abertas (o formulário em tela cheia, a janela da tarefa), que senão a cobririam; os avisos que já estavam
-// nela param de animar, para não entrarem de novo.
+// O aviso no canto da tela: tipo ok, erro ou aviso (amarelo: deu certo, mas há algo a saber, como um horário ocupado no
+// Google). A caixa dos avisos é um popover: a cada aviso ela volta para o topo da pilha, por cima das janelas abertas
+// (o formulário em tela cheia, a janela da tarefa), que senão a cobririam; os avisos que já estavam nela param de
+// animar, para não entrarem de novo.
 export function toast(msg, tipo = "ok") {
   const caixa = document.getElementById("toasts");
   const el = document.createElement("div");
   el.className = "toast " + tipo;
-  el.innerHTML = icone(tipo === "erro" ? "alerta" : "certo") + `<span>${esc(msg)}</span>`;
+  el.innerHTML = icone(tipo === "ok" ? "certo" : "alerta") + `<span>${esc(msg)}</span>`;
   el.addEventListener("animationend", () => el.classList.add("parado"), { once: true });
   caixa.appendChild(el);
   if (caixa.popover) {
@@ -231,7 +234,7 @@ export function toast(msg, tipo = "ok") {
       el.remove();
       if (caixa.popover && !caixa.children.length && caixa.matches(":popover-open")) caixa.hidePopover();
     }, 320);
-  }, tipo === "erro" ? 6000 : 3200);
+  }, { erro: 6000, aviso: 8000 }[tipo] || 3200);
 }
 
 // ---------- API ----------

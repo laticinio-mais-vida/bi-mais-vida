@@ -26,7 +26,8 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
 - Horário ocupado (migração 026, bi/agenda.py): o horário da tarefa vale para todas as pessoas dela; o da subtarefa,
   para o responsável. Um horário que entra ou muda (tarefa nova, prazo mudado, pessoa nova numa tarefa com horário,
-  subtarefa nova ou passada para outro) não pode cair no horário ocupado da pessoa.
+  subtarefa nova ou passada para outro) não pode cair no horário ocupado da pessoa, nem num evento ocupado do Google
+  dela (bi/google_agenda.py); o do Google de quem grava só avisa (avisos, na resposta).
 - Avisos (o sino, bi/notificacoes.py, migração 028): cada gravação avisa, na mesma transação, quem precisa saber:
   quem entrou na tarefa, o responsável pela subtarefa nova, passada para ele ou com o prazo mudado, os participantes
   quando o prazo da tarefa muda, quem criou a tarefa quando uma subtarefa é concluída ou justificada e todos da
@@ -187,11 +188,13 @@ def _proibido_mudar(dados: dict, s: dict) -> str | None:
 
 
 class Tarefas:
-    def __init__(self, banco: Banco, configuracao=None, *, hoje=None, agora=None):
+    def __init__(self, banco: Banco, configuracao=None, *, hoje=None, agora=None, google=None):
         """configuracao: as regras, de onde vem o calendário dos dias úteis (o horário ocupado que pula feriados).
-        hoje e agora: o relógio (os testes fixam; só com hoje, agora é a meia-noite dele)."""
+        hoje e agora: o relógio (os testes fixam; só com hoje, agora é a meia-noite dele). google: o Google Agenda de
+        cada pessoa (bi/google_agenda.py), que também ocupa horários."""
         self.banco = banco
         self.configuracao = configuracao
+        self.google = google
         if agora is None:
             agora = (lambda: dt.datetime.combine(hoje(), dt.time())) if hoje else dt.datetime.now
         self.agora = agora
@@ -210,13 +213,14 @@ class Tarefas:
     def _ponto_sub(s: dict) -> list[tuple]:
         return [(s["responsavel"], s["prazo"], s["hora"], f"a subtarefa “{_curto(s['titulo'])}”")] if s["hora"] else []
 
-    def _conferir_horarios(self, con, cal, pontos: list[tuple], eu: int) -> None:
+    def _conferir_horarios(self, con, cal, pontos: list[tuple], eu: int) -> list[str]:
         """Os horários que entram ou mudam contra o horário ocupado de cada pessoa (bi/agenda.py), com a trava delas
-        (depois da trava da tarefa)."""
+        (depois da trava da tarefa). Devolve os avisos de quem grava (o Google dele: grava assim mesmo)."""
         pontos = [p for p in pontos if p[1] >= self.hoje()]
-        if pontos:
-            travar_horarios(con, {p[0] for p in pontos})
-            conferir_pontos(con, cal, self.hoje(), pontos, eu)
+        if not pontos:
+            return []
+        travar_horarios(con, {p[0] for p in pontos})
+        return conferir_pontos(con, cal, self.hoje(), pontos, eu, self.google)
 
     # --- leitura ---------------------------------------------------------------------------
     def pessoas(self, usuario: int) -> dict:
@@ -565,14 +569,15 @@ class Tarefas:
 
     # --- tarefas (só quem criou) -----------------------------------------------------------
     def criar(self, usuario: int, dados: dict) -> dict:
-        """A tarefa, as pessoas e as subtarefas, numa transação só."""
+        """A tarefa, as pessoas e as subtarefas, numa transação só. A resposta traz os avisos do Google de quem criou
+        (avisos)."""
         t = _valida_tarefa(dados, usuario)
         cal = calendario(self.configuracao)
         pontos = self._ponto_tarefa(t, {usuario, *t["participantes"]})
         pontos += [p for s in t["subtarefas"] for p in self._ponto_sub(s)]
         with self.banco.conexao() as con:
             self._conferir_pessoas(con, t["participantes"])
-            self._conferir_horarios(con, cal, pontos, usuario)
+            avisos = self._conferir_horarios(con, cal, pontos, usuario)
             linha = con.execute("INSERT INTO agenda_tarefas (criador, titulo, descricao, prazo, hora) "
                                 "SELECT id, %(titulo)s, %(descricao)s, %(prazo)s, %(hora)s FROM usuarios "
                                 "WHERE id = %(usuario)s RETURNING id", {**t, "usuario": usuario}).fetchone()
@@ -583,7 +588,7 @@ class Tarefas:
             nome = self._nome(con, usuario)
             for p in t["participantes"]:  # um aviso por pessoa, com as subtarefas dela
                 self._avisar_incluido(con, p, nome, usuario, linha[0], t)
-        return self.obter(usuario, linha[0])
+        return {**self.obter(usuario, linha[0]), "avisos": avisos}
 
     def editar(self, usuario: int, id_, dados: dict, versao) -> dict:
         """Troca tudo: os campos, as pessoas e as subtarefas (as com id mudam, as sem id entram, as que faltam saem; a
@@ -610,7 +615,7 @@ class Tarefas:
             pontos += [p for s in novo["subtarefas"]
                        if not s["id"] or subs_antes[s["id"]] != (s["responsavel"], s["prazo"], s["hora"])
                        for p in self._ponto_sub(s)]
-            self._conferir_horarios(con, cal, pontos, usuario)
+            avisos = self._conferir_horarios(con, cal, pontos, usuario)
             # A ordem importa (o responsável precisa estar na tarefa): primeiro quem entra, depois as subtarefas e só
             # no fim quem sai.
             con.execute("UPDATE agenda_tarefas SET titulo = %(titulo)s, descricao = %(descricao)s, prazo = %(prazo)s, "
@@ -641,7 +646,7 @@ class Tarefas:
             for s in novo["subtarefas"]:
                 if s["responsavel"] not in entraram:
                     self._avisar_sub(con, s, subs_antes[s["id"]] if s["id"] else None, nome, usuario, t["id"])
-        return self.obter(usuario, t["id"])
+        return {**self.obter(usuario, t["id"]), "avisos": avisos}
 
     def excluir(self, usuario: int, id_) -> None:
         """Apaga a tarefa e as subtarefas, para todos."""
@@ -722,11 +727,11 @@ class Tarefas:
                 dados = {"titulo": dados.get("titulo"), "descricao": dados.get("descricao")}
             self._aberta(t)
             s = _valida_sub(dados, t, set(self._pessoas_da(con, t["id"])), usuario)
-            self._conferir_horarios(con, cal, self._ponto_sub(s), usuario)
+            avisos = self._conferir_horarios(con, cal, self._ponto_sub(s), usuario)
             self._inserir_subs(con, t["id"], [s], usuario)
             self._nova_versao(con, t["id"])
             self._avisar_sub(con, s, None, self._nome(con, usuario), usuario, t["id"])
-        return self.obter(usuario, t["id"])
+        return {**self.obter(usuario, t["id"]), "avisos": avisos}
 
     def editar_subtarefa(self, usuario: int, id_, dados: dict) -> dict:
         """Muda só os campos enviados. Quem criou muda tudo; o responsável com autonomia, só o título e a descrição."""
@@ -744,15 +749,16 @@ class Tarefas:
                      "prazo": s["prazo"].isoformat(), "hora": _hhmm(s["hora"])}
             novo = _valida_sub({**atual, **{k: v for k, v in dados.items() if k in atual}}, t,
                                set(self._pessoas_da(con, t["id"])), usuario)
+            avisos = []
             if (novo["responsavel"], novo["prazo"], novo["hora"]) != (s["responsavel"], s["prazo"], s["hora"]):
-                self._conferir_horarios(con, cal, self._ponto_sub(novo), usuario)
+                avisos = self._conferir_horarios(con, cal, self._ponto_sub(novo), usuario)
             con.execute("UPDATE agenda_subtarefas SET titulo = %(titulo)s, descricao = %(descricao)s, "
                         "responsavel = %(responsavel)s, prazo = %(prazo)s, hora = %(hora)s, atualizada_em = now() "
                         "WHERE id = %(id)s", {**novo, "id": s["id"]})
             self._nova_versao(con, t["id"])
             self._avisar_sub(con, {**novo, "id": s["id"]}, (s["responsavel"], s["prazo"], s["hora"]),
                              self._nome(con, usuario), usuario, t["id"])
-        return self.obter(usuario, t["id"])
+        return {**self.obter(usuario, t["id"]), "avisos": avisos}
 
     def _situar(self, usuario: int, id_, situacao: str | None) -> dict:
         """Muda a situação da subtarefa (None: desfaz a conclusão): o responsável ou quem criou a tarefa."""

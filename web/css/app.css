@@ -776,6 +776,8 @@ body.sem-rolagem { overflow: hidden; }
 }
 .toast .ic { color: var(--ok); }
 .toast.erro .ic { color: var(--ruim); }
+.toast.aviso { border-color: color-mix(in srgb, var(--atencao-forte) 45%, var(--linha)); }
+.toast.aviso .ic { color: var(--atencao); }
 .toast.parado { animation: none; }
 .toast.sai { animation: toast-out .3s ease forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(.95); } to { opacity: 1; transform: none; } }
@@ -2356,6 +2358,56 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .chip.ag-c-ocupado { background: color-mix(in srgb, var(--tinta) 10%, transparent); color: var(--tinta); }
 .chip.ag-c-atrasada { background: var(--ruim-bg); color: var(--ruim); }
 .chip.ag-c-feita { background: var(--ok-bg); color: var(--ok); }
+/* Google Agenda (só leitura): o botão (com um ponto quando uma agenda precisa de atenção), o aviso em cima da faixa, o
+   pontinho no quadrado do dia, os eventos no dia aberto (sem o check, tracejados) e a janela de conectar
+   (agendagoogle.js) */
+.ag-google-btn { position: relative; }
+.ag-google-btn .ic { color: var(--azul); }
+.ag-google-btn.atencao::after {
+  content: ""; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ruim-forte); box-shadow: 0 0 0 2px var(--surface);
+}
+.ag-cal.recolhida #ag-google-aviso { display: none; }
+.ag-google-aviso { align-items: center; margin: 12px 0 0; }
+.ag-google-aviso > span { flex: 1; }
+.ag-google-aviso .btn { height: 32px; font-size: 13px; }
+/* o dia com evento do Google: uma faixinha azul na borda de cima (o número do dia fica logo abaixo dela) */
+.ag-gdot { position: absolute; top: 0; left: 50%; translate: -50% 0; width: min(60%, 22px); height: 3px; border-radius: 0 0 3px 3px; background: var(--azul); }
+.ag-faixa .dia.feita .ag-gdot { background: rgba(255, 255, 255, .85); }
+.ag-legenda > span > i.ag-gdot { position: static; translate: none; width: 14px; height: 4px; border-radius: 2px; background: var(--azul); }
+.ag-google-dia { margin-top: 14px; }
+.ag-google-dia h4 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13.5px; color: var(--tinta-2); }
+.ag-google-dia h4 .ic { width: 15px; height: 15px; color: var(--azul); }
+.ag-google-dia h4 small { font-weight: 500; color: var(--tinta-3); }
+.ag-item.ag-google {
+  background: color-mix(in srgb, var(--surface) 70%, var(--surface-2)); border-style: dashed;
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--tinta-3) 40%, transparent);
+}
+.ag-g-marca { width: 30px; height: 30px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; color: var(--tinta-3); background: var(--surface-3); }
+.ag-g-marca .ic { width: 15px; height: 15px; }
+.ag-item.ag-google .ag-hora { background: var(--surface-3); color: var(--tinta-2); }
+.chip.ag-c-google { background: color-mix(in srgb, var(--azul) 12%, transparent); color: color-mix(in srgb, var(--azul) 45%, var(--tinta)); }
+.ag-g-janela { width: min(600px, calc(100vw - 32px)); }
+.ag-g-lista { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.ag-g-lista li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--linha);
+}
+.ag-g-lista li.atencao { border-color: color-mix(in srgb, var(--ruim-forte) 45%, var(--linha)); }
+.ag-g-info { display: grid; gap: 3px; min-width: 0; flex: 1 1 260px; }
+.ag-g-info b { font-size: 14.5px; overflow-wrap: anywhere; }
+.ag-g-info small { display: flex; align-items: flex-start; gap: 5px; font-size: 12.5px; color: var(--tinta-3); overflow-wrap: anywhere; }
+.ag-g-info small .ic { width: 13px; height: 13px; margin-top: 2px; flex: none; color: var(--ok); }
+.ag-g-info small.ruim, .ag-g-info small.ruim .ic { color: var(--ruim); }
+.ag-g-acoes { display: flex; gap: 6px; }
+.ag-g-acoes .btn { height: 34px; font-size: 13px; }
+.ag-g-form { margin-top: 18px; }
+.ag-g-passos { margin-top: 14px; font-size: 13.5px; }
+.ag-g-passos summary { cursor: pointer; font-weight: 700; color: var(--acento-tinta); }
+.ag-g-passos ol { margin: 8px 0 0; padding-left: 22px; display: grid; gap: 4px; color: var(--tinta-2); }
+.ag-g-notas { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; font-size: 12.5px; color: var(--tinta-3); }
+.ag-g-notas li { display: flex; gap: 8px; align-items: flex-start; }
+.ag-g-notas .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
 .ag-atrasadas {
   margin-bottom: 14px; padding: 12px; border-radius: 14px;
   background: color-mix(in srgb, var(--ruim-bg) 70%, transparent); border: 1px solid color-mix(in srgb, var(--ruim-forte) 30%, var(--linha));

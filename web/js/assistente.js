@@ -725,6 +725,8 @@ function cartaoAgenda(p, i, j) {
     linhas = [["calendario", "Dia", `${fmt.semana(p.dia)}, ${fmt.data(p.dia)}`],
       ["conversa", "Feedback", p.feedback || "sem feedback"]];
   }
+  // o horário cai num evento ocupado do Google da pessoa: pode criar assim mesmo, mas fica o aviso
+  for (const a of p.avisos || []) linhas.push(["alerta", "Google", a]);
   let acoes;
   if (p.aplicada) {
     acoes = `<span class="chip camp-criada">${icone("certo")}${t.feito}</span>

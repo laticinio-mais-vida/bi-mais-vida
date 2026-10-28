@@ -570,6 +570,42 @@ campanhas, equipe) ganha o − que a deixa só com o título, e a barra de cima 
 - **Voltar atrás:** o CHECK novo não atrapalha o código anterior, que mostra as subtarefas de título longo mas recusa
   salvar a tarefa enquanto alguma passar de 120 caracteres (é preciso encurtar).
 
+#### Google Agenda, só leitura (migração 031)
+
+Cada pessoa conecta as agendas do Google dela pelo endereço secreto no formato iCal; os eventos aparecem na agenda da
+Gestão e os marcados como Ocupado travam o horário dela para as tarefas dos outros (veja o README, "Google Agenda"). O
+BI só lê: nada é escrito no Google. É o primeiro trabalho que o servidor faz sozinho de tempos em tempos: a thread
+`google` relê cada agenda a cada 10 minutos, baixando de `calendar.google.com`.
+
+- **Ordem:** só o site precisa da versão nova (a leitura liga onde há a chave de `[google]`, e só o site terá). Os dados
+  que o PC manda não mudaram; o PC pode atualizar antes ou depois e só cria as tabelas, vazias.
+- **Pacotes novos:** `icalendar`, `recurring-ical-events`, `x-wr-timezone` e `cryptography`, na linha `RUN pip install`
+  do `deploy/Dockerfile` (e no `requirements.txt`). O `docker compose up -d --build` do passo 3 de
+  [Publicar uma versão nova do código](#publicar-uma-versão-nova-do-código) refaz a imagem com eles (o servidor precisa
+  de internet para baixar). Para conferir que a imagem nova está no ar:
+  `docker exec bi_metas python -c "import icalendar, recurring_ical_events, cryptography"`.
+- **A chave:** gere uma chave nova (no PC, `python app.py --gerar-chave`; não use a de `[publicacao]`) e, no servidor,
+  `nano /opt/bi-mais-vida/config.ini` e acrescente no fim:
+
+  ```ini
+  [google]
+  chave = ...
+  ```
+
+  Ela cifra os endereços secretos que as pessoas colam (cada endereço dá acesso de leitura à agenda inteira). Fica
+  fora do banco e das cópias de segurança dele; trocar a chave obriga cada pessoa a colar o endereço de novo. Dá para
+  publicar primeiro sem a chave (a janela do Google avisa que a leitura está desligada) e acrescentar depois, com um
+  `docker compose restart`.
+- **A migração 031** só cria as tabelas `google_agendas` e `google_eventos` e o índice; nada existente muda. Ensaie em
+  BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** o log mostra `031_google_agenda` e "leitura do Google Agenda ligada". Conecte uma agenda de
+  verdade e confira a primeira leitura, um evento Ocupado recusando a tarefa de outro usuário e o Disponível passando.
+  Acompanhe a memória durante as leituras (`docker stats bi_metas`; o arquivo do Google traz o histórico inteiro da
+  agenda, e o painel corta o que é antigo antes de interpretar) e confira que nenhum endereço foi para o log:
+  `docker compose logs bi | grep -c private-` tem de dar 0.
+- **Voltar atrás:** tirar a chave de `[google]` e `docker compose restart` desliga a leitura (nada do Google aparece
+  nem trava). O código anterior não lê as tabelas (elas ficam guardadas): não precisa restaurar o banco.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

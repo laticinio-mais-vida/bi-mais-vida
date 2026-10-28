@@ -42,7 +42,8 @@ O projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird), `du
 com o pandas), que já estão instalados. Usuários, regras e o histórico do Assistente ficam num PostgreSQL instalado
 no próprio PC (veja [Banco de dados](#banco-de-dados)), que precisa de `pip install "psycopg[binary]" psycopg-pool`.
 O Assistente precisa também de `pip install anthropic`, só onde for usado, e de `pip install XlsxWriter fpdf2` para os
-arquivos Excel e PDF que ele prepara. No VPS, tudo já vem na imagem.
+arquivos Excel e PDF que ele prepara. A leitura do Google Agenda (só no site) usa `icalendar`, `recurring-ical-events`
+e `cryptography`; no PC, eles servem só para os testes. No VPS, tudo já vem na imagem.
 
 ## De onde vêm os dados
 
@@ -398,7 +399,10 @@ pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cac
 prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
 Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. O mesmo vale para as reanálises de
 crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
-vão para a IA só nas perguntas de quem tem a página.
+vão para a IA só nas perguntas de quem tem a página. Do **Google Agenda** de cada pessoa (veja
+[Google Agenda](#google-agenda-só-leitura)), o banco do site guarda só o título, o horário e se o evento está ocupado
+(sem descrição, local nem convidados), e só o dono vê; o título e o horário vão para a IA só quando ele pergunta da
+própria agenda. A IA trata esses títulos como dado, nunca como instrução: qualquer pessoa pode mandar um convite.
 
 ## Página Gestão
 
@@ -558,7 +562,8 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 ### Minha agenda
 
 No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
-administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)). Quem tem a
+administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)) e, se
+conectar, os eventos do Google Agenda dela, só para ver (veja [Google Agenda](#google-agenda-só-leitura)). Quem tem a
 página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** minimiza a agenda e deixa só o título; o **+** mostra de novo (a escolha fica
 guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** troca a faixa de dias pelo
 [kanban das tarefas](#kanban-das-tarefas) (a escolha também fica guardada; o link de um dia sempre abre a agenda).
@@ -630,7 +635,8 @@ guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** tro
 
   O Assistente nunca grava sozinho: a resposta traz a proposta com um botão (**Adicionar à agenda**, **Salvar a
   mudança**, **Encerrar**, **Excluir** ou **Marcar como feita**), e só o clique aplica, uma vez só. Depois, o cartão
-  mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia. O Assistente ainda não vê as tarefas.
+  mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia. O Assistente ainda não vê as tarefas; os
+  eventos do Google Agenda de quem pergunta, ele vê só para ler.
 
 #### Tarefas
 
@@ -755,10 +761,56 @@ do que ele mesmo fez, e as notificações ficam guardadas por 90 dias.
 | Concluída | subtarefa: quem criou a tarefa; tarefa: todos dela | "Beto concluiu a subtarefa “Levantar preços” (tarefa “Feira de novembro”)" |
 | Justificativa enviada | quem criou a tarefa | "Beto justificou o atraso de “Levantar preços”: “o fornecedor não respondeu”" |
 
-Os avisos de prazo nascem quando o painel de quem recebe pergunta (o servidor não tem nada rodando de tempos em
-tempos), uma vez só por item e por prazo: prorrogado, o prazo novo avisa de novo. "Vence em breve" sai no dia de
-antes e no do prazo, até vencer; "venceu" sai só para os prazos dos últimos 7 dias, para não chegar uma enxurrada de
-atrasos antigos. A tarefa excluída leva as notificações dela.
+Os avisos de prazo nascem quando o painel de quem recebe pergunta, uma vez só por item e por prazo: prorrogado, o
+prazo novo avisa de novo. "Vence em breve" sai no dia de antes e no do prazo, até vencer; "venceu" sai só para os
+prazos dos últimos 7 dias, para não chegar uma enxurrada de atrasos antigos. A tarefa excluída leva as notificações
+dela.
+
+#### Google Agenda (só leitura)
+
+Cada pessoa pode trazer para a agenda os compromissos do Google Agenda dela. O BI **só lê**: nada é escrito no Google.
+Funciona no site (bi.maisvida.cloud), onde o `config.ini` tem a chave de `[google]`; no PC, a janela avisa que fica lá.
+
+- **Conectar:** o botão **Google** da agenda abre a janela. A pessoa cola o **endereço secreto no formato iCal** da
+  agenda e clica em **Conectar**. O BI lê na hora (endereço errado não entra) e depois relê a cada 10 minutos. Onde
+  achar o endereço (no computador; o app do celular não mostra):
+  1. em calendar.google.com, a engrenagem › **Configurações**;
+  2. em **Configurações das minhas agendas**, clicar na agenda;
+  3. em **Integrar agenda**, o último campo: **Endereço secreto no formato iCal**.
+
+  Quem tem mais de uma agenda conecta cada uma, até 5. A janela mostra quando cada uma foi lida, **Atualizar agora** e
+  **Remover** (no Google, nada muda).
+- **O endereço é uma senha:** quem tem lê a agenda inteira. O BI guarda cifrado, com a chave de `[google]` (fora do
+  banco e das cópias de segurança dele), não mostra de novo e não grava no log. Para cortar o acesso, a pessoa usa
+  **Redefinir**, ao lado do endereço no Google, e cola o novo: a mesma agenda continua, com o endereço trocado.
+- **Na agenda:** os eventos aparecem no dia, depois dos itens do BI, com o chip "Google · nome da agenda", só para ver
+  (sem o círculo de concluir). Não entram no número do quadrado, na barrinha, nas cores nem nas contagens do escolher
+  o dia, que são do que há para fazer: uma faixinha azul em cima do quadrado e a dica do mouse mostram que o dia tem
+  evento do Google. O evento que passa da meia-noite aparece nos dois dias. Ficam de fora os cancelados e os convites
+  que a pessoa recusou.
+- **Trazer como atividade** (o **+** do evento): abre o formulário de atividade nova já com o título, o dia e o
+  horário do evento; o de dia inteiro de vários dias vira a atividade única de vários dias. É uma cópia: depois, as
+  duas ficam independentes.
+- **Horário ocupado:** o evento marcado como **Ocupado** no Google (o "Mostrar como" do evento; o de dia inteiro vem
+  como Disponível, a não ser que a pessoa mude) ocupa o horário dela, como o horário ocupado da agenda:
+
+  | Tentativa (Ana tem no Google uma consulta em 30/10, das 14:00 às 15:00, Ocupado) | Resultado |
+  |---|---|
+  | Beto cria uma tarefa com Ana em 30/10 às 14:30, ou uma subtarefa para ela nesse horário | recusa: "Ana está com o horário ocupado em 30/10, das 14:00 às 15:00" (sem o título e sem dizer que veio do Google) |
+  | O mesmo em 12/11, com as férias de Ana no Google marcadas como Ocupado (dia inteiro) | recusa: "Ana está com o dia 12/11 ocupado" |
+  | Ana cria uma atividade às 14:30, ou se põe numa tarefa ou subtarefa nesse horário | grava, com o aviso amarelo "Você tem “Consulta médica” no Google em 30/10, das 14:00 às 15:00" |
+  | Ana traz a consulta como atividade (o mesmo horário) | grava sem aviso |
+  | O evento está como Disponível, o prazo não tem horário ou a agenda não é lida há mais de 24 horas | pode |
+
+  O que já estava marcado no BI não muda quando a pessoa marca algo no Google depois. Ao editar, o aviso só aparece
+  se o dia ou o horário mudaram.
+- **Quando a leitura falha:** os eventos da última leitura ficam. Se o Google não aceita mais o endereço (redefinido),
+  a agenda e o botão Google avisam na hora para colar de novo; se é passageiro (o Google fora do ar), o BI tenta de
+  novo sozinho, espaçando as tentativas até 2 horas, e só avisa depois de uma hora sem ler. Com mais de 24 horas sem
+  leitura, os eventos aparecem como "pode estar desatualizado" e não travam ninguém. Quem é desativado ou perde a
+  página Gestão deixa de ser lido.
+- **Assistente:** em "o que tenho amanhã?", ele vê também os eventos do Google de quem pergunta, só para ler (não
+  propõe mudar nenhum). Se a atividade que ele propõe cai num horário ocupado do Google, a proposta traz o aviso.
 
 ### Pelo Assistente
 
@@ -891,6 +943,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
+| `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migração 031): as agendas conectadas (o id da agenda no Google, o endereço secreto cifrado, a assinatura do último arquivo, quando foi lida e o último erro) e os eventos lidos, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Remover a agenda leva os eventos dela; só o site usa |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
 
@@ -1043,6 +1096,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
+| `bi/google_agenda.py` | o Google Agenda, só leitura: o endereço secreto (conferido, remontado e cifrado), baixar e interpretar o arquivo iCal (repetições, exceções, fusos), a leitura de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

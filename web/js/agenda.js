@@ -23,6 +23,12 @@
 // guardadas neste navegador). #/gestao?dia=AAAA-MM-DD abre a agenda nesse dia (o link das propostas do Assistente).
 // Em que dias cada atividade acontece, o texto da repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer
 // numa tarefa vêm do servidor (bi/agenda.py e bi/tarefas.py).
+// Google Agenda (só leitura, bi/google_agenda.py; o botão Google abre agendagoogle.js): os eventos das agendas do
+// Google que a pessoa conectou aparecem no dia (depois dos itens do BI, sem o check) e na dica do quadrado, mas não
+// contam no número, na barrinha nem nas cores, que são do que há para fazer. "Trazer como atividade" abre o formulário
+// de atividade nova preenchido com o evento. Gravar com um horário ocupado no Google da própria pessoa grava e avisa
+// (o toast amarelo).
+import { abrirGoogle } from "./agendagoogle.js";
 import { campoDia, contarDias, focarDia, limitesDoDia, prepararDias, redesenharDias } from "./escolherdia.js";
 import { MESES, api, esc, fmt, guardar, icone, ler, ligarTooltips, linhaTT, toast } from "./util.js";
 
@@ -132,9 +138,11 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
             <button class="btn" type="button" data-hoje>Hoje</button>
             <button class="btn icone" type="button" data-mes="1" title="Próximo mês" aria-label="Próximo mês">${icone("seta")}</button>
           </span>
+          <button class="btn ag-google-btn" type="button" data-google title="As suas agendas do Google (só leitura)">${icone("elo")}Google</button>
           <button class="btn icone" type="button" data-recolher aria-controls="ag-faixa ag-baixo ag-quadro"></button>
         </div>
       </div>
+      <div id="ag-google-aviso"></div>
       <div id="ag-faixa"><div class="esqueleto" style="height:96px"></div></div>
       <div class="ag-baixo" id="ag-baixo"><div id="ag-dia"></div></div>
       <div class="ag-quadro" id="ag-quadro"></div>
@@ -236,6 +244,7 @@ async function carregar(mes = estado.mes, { aberto } = {}) {
     if (estado.concluindo && !d.dias.some((x) => x.data === estado.concluindo.dia)) estado.concluindo = null;
     // a contagem dos outros meses pode ter mudado junto: o que for preciso é pedido de novo
     estado.meses = new Map([[d.mes, contagemDoMes(d)]]);
+    desenharAvisoGoogle();
     desenharFaixa(mesmoMes);
     desenharDia(!mesmoMes);
     if (tela.open) redesenharDias();
@@ -307,6 +316,28 @@ function escreverCabecalho() {
     : "Nada marcado neste mês";
 }
 
+// O botão Google com um ponto e, em cima da faixa, o aviso de cada agenda do Google que precisa de atenção (o endereço
+// morreu, ou ela não é lida há mais de uma hora).
+function desenharAvisoGoogle() {
+  const g = estado.dados.google || { agendas: [] };
+  const atencao = g.agendas.filter((a) => a.atencao);
+  raiz.querySelector("[data-google]").classList.toggle("atencao", atencao.length > 0);
+  raiz.querySelector("#ag-google-aviso").innerHTML = atencao.map((a) => `<div class="aviso ag-google-aviso">${icone("alerta")}
+      <span>${a.trocar ? `A agenda do Google “${esc(a.nome)}” não abre mais: cole o endereço secreto de novo.`
+        : `Não deu para ler a agenda do Google “${esc(a.nome)}”${a.lida_em ? ` desde ${dataCurta(a.lida_em.slice(0, 10))} às ${hora(a.lida_em)}` : ""}: ${esc(a.erro)}`}</span>
+      <button class="btn" type="button" data-google>Abrir</button>
+    </div>`).join("");
+}
+
+// O horário de um evento do Google no dia: "14:00–15:00", "dia todo", "22:00 até a meia-noite" (continua no seguinte)
+// ou "até 02:00" (começou no anterior).
+function faixaGoogle(g) {
+  if (g.dia_todo) return "dia todo";
+  if (!g.hora) return `até ${g.hora_fim}`;
+  if (!g.hora_fim) return `${g.hora} até a meia-noite`;
+  return g.hora === g.hora_fim ? g.hora : `${g.hora}–${g.hora_fim}`;
+}
+
 // ---------- faixa de dias ----------
 function desenharFaixa(quieta) {
   const d = estado.dados;
@@ -324,20 +355,22 @@ function desenharFaixa(quieta) {
         pendentes && x.data < d.hoje ? "atrasada" : "", hoje ? "hoje" : "", x.data === estado.aberto ? "aberto" : "",
         dow === 0 || dow === 6 ? "ag-fds" : ""].filter(Boolean).join(" ");
       const col = n === 0 ? `;--col:${((dow + 6) % 7) + 1}` : "";
+      const g = x.google || []; // os eventos do Google: na dica e no pontinho, fora das contas
       const tt = `<div class='tt-t'>${fmt.dataCurta(x.data)} · ${fmt.semana(x.data)}${hoje ? " · hoje" : ""}</div>` +
         (total ? linhaTT("No dia", fmt.num(total)) + linhaTT("Feitas", fmt.num(feitasDia)) + linhaTT("Faltam", fmt.num(pendentes)) +
           lista.slice(0, MAX_TOOLTIP).map((e) => linhaDoDia(e)).join("") +
           (total > MAX_TOOLTIP ? `<div class='tt-l'><span>e mais ${total - MAX_TOOLTIP}</span></div>` : "")
-          : linhaTT("No dia", "nada marcado"));
-      const rotulo = `${dia} de ${MESES[m - 1]}${hoje ? ", hoje" : ""}: ${total ? `${plural(total, "item", "itens")}, ${plural(feitasDia, "feito", "feitos")}, faltam ${pendentes}` : "nada marcado"}`;
+          : g.length ? "" : linhaTT("No dia", "nada marcado")) + linhasGoogle(g);
+      const rotulo = `${dia} de ${MESES[m - 1]}${hoje ? ", hoje" : ""}: ${total ? `${plural(total, "item", "itens")}, ${plural(feitasDia, "feito", "feitos")}, faltam ${pendentes}` : "nada marcado"}${g.length ? `; ${plural(g.length, "evento", "eventos")} do Google` : ""}`;
       return `<button type="button" class="${classes}" style="--i:${n}${col}" data-dia="${x.data}" data-tt="${esc(tt)}"
-        aria-pressed="${x.data === estado.aberto}" aria-label="${esc(rotulo)}">${total ? `<i class="ag-n">${total}</i>` : ""}${dia}${barra(feitasDia, pendentes)}<span class="sem">${SEMANA[dow]}</span></button>`;
+        aria-pressed="${x.data === estado.aberto}" aria-label="${esc(rotulo)}">${total ? `<i class="ag-n">${total}</i>` : ""}${g.length ? '<i class="ag-gdot" aria-hidden="true"></i>' : ""}${dia}${barra(feitasDia, pendentes)}<span class="sem">${SEMANA[dow]}</span></button>`;
     }).join("")}
   </div>
   <div class="ag-legenda" aria-hidden="true"><span><b class="ag-n">3</b>atividades e tarefas no dia</span>
     <span><span class="ag-barra"><i class="f"></i><i></i><i></i></span>feitas e as que faltam</span>
     <span><i class="tem"></i>Com algo marcado</span><span><i class="feita"></i>Tudo feito</span>
-    <span><i class="atrasada"></i>Ficou sem concluir</span></div>`;
+    <span><i class="atrasada"></i>Ficou sem concluir</span>
+    ${d.google?.agendas.length ? `<span><i class="ag-gdot"></i>Evento do Google (só para ver)</span>` : ""}</div>`;
   ligarTooltips(raiz.querySelector("#ag-faixa"));
 }
 
@@ -348,6 +381,14 @@ function barra(feitas, faltam) {
     ? '<i class="f"></i>'.repeat(feitas) + "<i></i>".repeat(faltam)
     : `<i class="f" style="flex:${feitas}"></i><i style="flex:${faltam}"></i>`;
   return `<span class="ag-barra" aria-hidden="true">${pedacos}</span>`;
+}
+
+// As linhas do Google no tooltip do dia (depois das do BI): quantos e os primeiros, marcados "Google".
+function linhasGoogle(g) {
+  if (!g.length) return "";
+  return linhaTT("Do Google", fmt.num(g.length)) + g.slice(0, MAX_TOOLTIP).map((e) =>
+    `<div class='tt-l'><span>${esc(faixaGoogle(e))} ${esc(e.titulo)}</span><b>Google</b></div>`).join("") +
+    (g.length > MAX_TOOLTIP ? `<div class='tt-l'><span>e mais ${g.length - MAX_TOOLTIP} do Google</span></div>` : "");
 }
 
 // Uma linha do tooltip do dia: a atividade, a tarefa ou a subtarefa (de quem, se não for minha).
@@ -387,6 +428,7 @@ function desenharDia(animar) {
     : futuro ? plural(pendentes, "item", "itens")
     : `${pendentes} ${pendentes === 1 ? "pendente" : "pendentes"} de ${lista.length}`;
   const atrasadas = x.data === d.hoje ? d.atrasadas : [];
+  const google = x.google || [];
   el.innerHTML = `<div class="ag-dia ${animar ? "abre" : ""}">
     <div class="ag-dia-cab">
       <div><h3>${capitalizar(fmt.semana(x.data))}, ${dataCurta(x.data)}${x.data === d.hoje ? ` <span class="chip laranja">hoje</span>` : ""}</h3>
@@ -398,7 +440,11 @@ function desenharDia(animar) {
       <ul class="ag-itens">${atrasadas.map((r, n) => refHtml(r, x.data, n, true)).join("")}</ul>
     </div>` : ""}
     ${lista.length ? `<ul class="ag-itens">${lista.map((e, n) => (e.i ? itemHtml(e.i, x.data, futuro, n) : refHtml(e.r, x.data, n))).join("")}</ul>`
-      : `<p class="ag-vazio">${icone("calendario")}Nada marcado para este dia.</p>`}
+      : google.length ? "" : `<p class="ag-vazio">${icone("calendario")}Nada marcado para este dia.</p>`}
+    ${google.length ? `<div class="ag-google-dia">
+      <h4>${icone("elo")}Do Google <small>só para ver; não conta nas contas do dia</small></h4>
+      <ul class="ag-itens">${google.map((g, k) => googleHtml(g, x.data, lista.length + k, k)).join("")}</ul>
+    </div>` : ""}
   </div>`;
   el.querySelector(".ag-fb textarea")?.focus();
 }
@@ -506,6 +552,37 @@ function refHtml(r, dia, n, vencida = false) {
   </li>`;
 }
 
+// Um evento do Google no dia aberto: só para ver (sem o check), com a agenda de onde vem, se está ocupado e o botão de
+// trazer como atividade. k: a posição dele no dia (data-google).
+function googleHtml(g, dia, n, k) {
+  const continua = [g.antes ? `desde ${dataCurta(g.de)}` : "", g.depois ? `até ${dataCurta(g.ate)}` : ""].filter(Boolean).join(", ");
+  return `<li class="ag-item ag-google" style="--i:${n}" data-google="${k}" data-dia="${dia}">
+    <span class="ag-g-marca" aria-hidden="true">${icone("elo")}</span>
+    <div class="ag-item-t">
+      <b><span class="ag-hora">${icone(g.dia_todo ? "calendario" : "relogio")}${faixaGoogle(g)}</span>${esc(g.titulo)}</b>
+      <div class="ag-chips"><span class="chip ag-c-google">${icone("elo")}Google · ${esc(g.agenda)}</span>
+        ${continua ? `<span class="chip">${icone("calendario")}${capitalizar(continua)}</span>` : ""}
+        ${g.ocupado ? `<span class="chip ag-c-ocupado" title="Ninguém põe você numa tarefa nesse horário">${icone("cadeado")}Ocupado</span>` : ""}
+        ${g.desatualizada ? `<span class="chip ag-c-atrasada" title="A agenda não é lida há mais de um dia">${icone("alerta")}Pode estar desatualizado</span>` : ""}</div>
+    </div>
+    <div class="ag-item-acoes">
+      <button type="button" data-trazer title="Trazer como atividade" aria-label="Trazer ${esc(g.titulo)} como atividade">${icone("mais")}</button>
+    </div>
+  </li>`;
+}
+
+// Trazer como atividade: o formulário de atividade nova, preenchido com o evento (uma cópia só; depois, as duas ficam
+// independentes). O de dia inteiro de vários dias vira a única de vários dias; o de horário, o pedaço deste dia (o que
+// vem da meia-noite começa às 00:00; o que vai até ela fica sem o fim).
+function trazerDoGoogle(li) {
+  const dia = li.dataset.dia;
+  const g = estado.dados.dias.find((x) => x.data === dia).google[Number(li.dataset.google)];
+  const varios = g.dia_inteiro && g.ate > g.de;
+  const modelo = { titulo: curto(g.titulo, 120), inicio: varios ? g.de : dia, fim: varios ? g.ate : null,
+                   hora: g.dia_todo ? null : g.hora || "00:00", hora_fim: g.dia_todo ? null : g.hora_fim };
+  return abrirForm(null, "atividade", modelo.inicio, modelo);
+}
+
 const feedbackEscrito = () => !!raiz?.querySelector(".ag-fb textarea")?.value.trim();
 
 // ---------- ações ----------
@@ -516,6 +593,7 @@ async function aoClicar(e) {
   if (!b || b.disabled) return;
   if (b.dataset.dia && b.closest(".ag-faixa")) return abrirDia(b.dataset.dia);
   if ("recolher" in b.dataset) return recolher(!raiz.classList.contains("recolhida"));
+  if ("google" in b.dataset) return abrirGoogle({ aoMudar: () => carregar() }); // o botão do topo e o do aviso
   if (b.dataset.vista) return escolherVista(b.dataset.vista);
   if (b.dataset.mes || "hoje" in b.dataset) {
     if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
@@ -560,6 +638,7 @@ async function aoClicar(e) {
   const li = b.closest(".ag-item");
   if (!li) return;
   if (li.dataset.tarefa) return aoClicarTarefa(b, li);
+  if ("google" in li.dataset) return "trazer" in b.dataset ? trazerDoGoogle(li) : undefined; // só para ver
   const id = Number(li.dataset.atividade), dia = li.dataset.dia;
   const a = atividade(id);
   const item = estado.dados.dias.find((x) => x.data === dia).itens.find((i) => i.atividade === id);
@@ -680,10 +759,16 @@ async function excluir(a) {
 
 // ---------- tarefas ----------
 // Grava uma mudança numa tarefa; a resposta traz a tarefa como ficou, que redesenha a janela (se for a aberta).
+// O que gravou num horário ocupado do Google da própria pessoa: gravou assim mesmo, com o aviso (toast amarelo).
+function avisar(r) {
+  for (const a of r?.avisos || []) toast(capitalizar(a), "aviso");
+}
+
 async function mexer(url, json, aviso) {
   try {
     const r = await api(url, { json });
     if (aviso) toast(aviso);
+    avisar(r);
     if (r.tarefa && dlg?.open && janela.tarefa?.id === r.tarefa.id) {
       Object.assign(janela, { editando: null, justificando: null });
       desenharTarefa(r.tarefa);
@@ -1053,10 +1138,11 @@ async function enviarJust(f, t, texto) {
 }
 
 // ---------- formulário (em tela cheia) ----------
-// Atividade ou tarefa nova (no dia `dia`) ou a edição de uma (item, com o tipo), numa janela que cobre a tela.
-async function abrirForm(item = null, tipo = item ? item.tipo : estado.tipo, dia = estado.aberto || hojeLocal()) {
+// Atividade ou tarefa nova (no dia `dia`) ou a edição de uma (item, com o tipo), numa janela que cobre a tela. modelo:
+// os campos com que a atividade nova já abre (o evento do Google trazido como atividade).
+async function abrirForm(item = null, tipo = item ? item.tipo : estado.tipo, dia = estado.aberto || hojeLocal(), modelo = null) {
   if (tipo === "tarefa" && !(await garantirPessoas())) return;
-  desenharForm(item, tipo, dia);
+  desenharForm(item, tipo, dia, modelo);
   if (!tela.open) tela.showModal();
   tela.querySelector('[name="titulo"]').focus();
 }
@@ -1067,7 +1153,7 @@ function fecharForm(salvo = false) {
   tela.close();
 }
 
-function desenharForm(item, tipo, dia) {
+function desenharForm(item, tipo, dia, modelo = null) {
   Object.assign(estado, { tipo, editando: item, formDia: dia, tf: null }); // formTarefa monta o tf da tarefa
   const ehTarefa = tipo === "tarefa";
   const nome = ehTarefa ? "tarefa" : "atividade";
@@ -1082,7 +1168,7 @@ function desenharForm(item, tipo, dia) {
         `<button type="button" data-tipo="${k}" class="${k === tipo ? "ativo" : ""}" aria-pressed="${k === tipo}">${n}</button>`).join("")}</div>`}
       <button class="btn icone" type="button" data-fechar-form title="Fechar (Esc)" aria-label="Fechar">${icone("x")}</button>
     </header>
-    <div class="ag-tela-corpo"><div class="ag-tela-grade">${ehTarefa ? formTarefa(item, dia) : formAtividade(item, dia)}</div></div>
+    <div class="ag-tela-corpo"><div class="ag-tela-grade">${ehTarefa ? formTarefa(item, dia) : formAtividade(item, dia, modelo)}</div></div>
     <footer class="ag-tela-rodape">
       <small>Ctrl+Enter salva · Esc fecha</small>
       <button class="btn" type="button" data-fechar-form>Cancelar</button>
@@ -1097,10 +1183,10 @@ function desenharForm(item, tipo, dia) {
 
 // Duas partes, uma embaixo da outra: o que é (e se pede feedback) e quando (a repetição, os dias e o horário, que
 // pode ficar ocupado).
-function formAtividade(a, dia) {
+function formAtividade(a, dia, modelo = null) {
   const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, hora_fim: null, ocupado: false, repeticao: "nenhuma",
                    dias_semana: null, dia_mes: null, intervalo: null, so_dias_uteis: false, regiao: null, fim: null,
-                   exige_feedback: false };
+                   exige_feedback: false, ...modelo };
   estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES" };
   return `<div class="ag-tela-col">
       <label class="campo-form"><span>Título</span>
@@ -1471,9 +1557,10 @@ async function aoEnviar(e) {
   botao.disabled = true;
   const editando = estado.editando;
   try {
-    if (editando) await api("/api/agenda/atividade/editar", { json: { id: editando.id, atividade: dados } });
-    else await api("/api/agenda/atividades", { json: { atividade: dados } });
+    const r = editando ? await api("/api/agenda/atividade/editar", { json: { id: editando.id, atividade: dados } })
+      : await api("/api/agenda/atividades", { json: { atividade: dados } });
     toast(editando ? "Atividade salva" : "Atividade criada");
+    avisar(r);
     fecharForm(true);
     await (editando ? carregar() : carregar(mesDe(dados.inicio), { aberto: dados.inicio }));
   } catch (err) {
@@ -1499,9 +1586,10 @@ async function enviarTarefa(f) {
   botao.disabled = true;
   const editando = estado.editando;
   try {
-    if (editando) await api("/api/agenda/tarefa/editar", { json: { id: editando.id, versao: editando.versao, tarefa: dados } });
-    else await api("/api/agenda/tarefas", { json: { tarefa: dados } });
+    const r = editando ? await api("/api/agenda/tarefa/editar", { json: { id: editando.id, versao: editando.versao, tarefa: dados } })
+      : await api("/api/agenda/tarefas", { json: { tarefa: dados } });
     toast(editando ? "Tarefa salva" : "Tarefa criada");
+    avisar(r);
     fecharForm(true);
     await Promise.all([editando ? carregar() : carregar(mesDe(dados.prazo), { aberto: dados.prazo }),
                        estado.vista === "quadro" ? carregarQuadro() : null]);

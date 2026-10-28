@@ -19,6 +19,9 @@ As tarefas com prazo, divididas com outras pessoas, ficam em bi/tarefas.py (a me
 - Assistente (ContextoAgenda): lê a agenda de quem pergunta (periodo, historico) e monta propostas (propor: criar,
   editar, encerrar, excluir ou concluir), sem gravar. Quem grava é o botão da resposta (aplicar), uma vez só por
   proposta (agenda_propostas, migração 019).
+- Google Agenda (bi/google_agenda.py, migração 031): o evento ocupado no Google da pessoa trava o horário dela para as
+  tarefas e subtarefas dos outros (conferir_pontos) e só avisa a própria pessoa (avisos, nas atividades e nas tarefas
+  dela). O Assistente lê os eventos do Google de quem pergunta junto com a agenda (periodo), só para ver.
 """
 from __future__ import annotations
 
@@ -40,6 +43,8 @@ MAX_FALTAS = 30   # dias sem conclusão que o histórico lista (os mais recentes
 MAX_PERIODO = 93  # dias que o Assistente lê de uma vez
 HORIZONTE = 366   # dias à frente que o horário ocupado confere entre duas atividades que se repetem sem fim
 TRAVA_HORARIOS = 7_240_102  # pg_advisory_xact_lock(TRAVA_HORARIOS, pessoa): uma gravação com horário por pessoa por vez
+MAX_AVISOS = 3  # eventos do Google citados no aviso de uma atividade (os outros, "e mais N")
+MAX_GOOGLE_IA = 200  # eventos do Google que o Assistente lê de uma vez (cada um custa tokens)
 NOME_DIA = ["", "segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]  # date.isoweekday()
 _GRAVAR = ("titulo", "descricao", "inicio", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes",
            "intervalo", "so_dias_uteis", "regiao", "fim", "exige_feedback")
@@ -237,6 +242,13 @@ def _publica(a: dict, hoje: dt.date) -> dict:
             "hora": _hhmm(a["hora"]), "hora_fim": _hhmm(a["hora_fim"]), "quando": texto_repeticao(a, hoje)}
 
 
+def _google_ia(g: dict) -> dict:
+    """Um evento do Google (um pedaço de bi/google_agenda.py) para o Assistente, que só lê: o título, o horário (hora
+    vazia: vem da meia-noite; hora_fim vazia: vai até ela) e se está ocupado."""
+    quando = {"dia_todo": True} if g["dia_todo"] else {"hora": g["hora"], "hora_fim": g["hora_fim"]}
+    return {"titulo": g["titulo"], **quando, "ocupado": g["ocupado"]}
+
+
 def _ordem(a: dict):
     """No dia: as com horário primeiro, pela hora; depois as sem horário, na ordem em que foram criadas."""
     return (a["hora"] is None, a["hora"] or dt.time(), a.get("id") or 0)
@@ -308,17 +320,99 @@ def _ocupado_por(b: dict, dia: dt.date, eu: int, hoje: dt.date) -> str:
             f"{_hhmm(b['hora_fim'])}")
 
 
-def conferir_pontos(con, cal: Calendario, hoje: dt.date, pontos: list[tuple], eu: int) -> None:
+def conferir_pontos(con, cal: Calendario, hoje: dt.date, pontos: list[tuple], eu: int, google=None) -> list[str]:
     """Os horários de tarefa e subtarefa que entram ou mudam, [(pessoa, dia, hora, o_que)], com o_que como "a
-    subtarefa “Estande”": recusa o que cai no horário ocupado da pessoa (de hoje em diante). eu: quem grava."""
+    subtarefa “Estande”": recusa o que cai no horário ocupado da pessoa (de hoje em diante). eu: quem grava.
+    google (bi/google_agenda.py): o evento ocupado no Google da pessoa também recusa, se ela é outra pessoa; o de quem
+    grava só avisa (devolve os avisos)."""
     pontos = [p for p in pontos if p[2] is not None and p[1] >= hoje]
     if not pontos:
-        return
+        return []
     ocupadas = _com_horario(con, {p[0] for p in pontos}, hoje, so_ocupadas=True)
     for pessoa, dia, h, o_que in pontos:
         for b in ocupadas:
             if b["usuario"] == pessoa and b["hora"] <= h < b["hora_fim"] and ocorre(b, dia, cal):
                 raise ValueError(f"{_ocupado_por(b, dia, eu, hoje)}: mude o horário d{o_que}")
+    if google is None:
+        return []
+    eventos = google.ocupados(con, {p[0] for p in pontos}, min(p[1] for p in pontos), max(p[1] for p in pontos))
+    avisos = []
+    for pessoa, dia, h, o_que in pontos:
+        instante = dt.datetime.combine(dia, h)
+        e = next((e for e in eventos if e["usuario"] == pessoa and e["inicio"] <= instante < e["fim"]), None)
+        if e is None:
+            continue
+        p = pedacos(e["inicio"], e["fim"], e["dia_inteiro"], dia, dia)[0]
+        if pessoa != eu:
+            raise ValueError(f"{_ocupado_google(e['nome'], p, hoje)}: mude o horário d{o_que}")
+        aviso = _aviso_google(e["titulo"], p, hoje)
+        if aviso not in avisos:
+            avisos.append(aviso)
+    return avisos
+
+
+# --- o Google Agenda (bi/google_agenda.py) ----------------------------------------------------------------------------
+def pedacos(inicio: dt.datetime, fim: dt.datetime, dia_inteiro: bool, de: dt.date, ate: dt.date) -> list[dict]:
+    """Um evento do Google (início e fim locais, sem fuso) cortado nos dias de de a ate: [{dia, hora, hora_fim,
+    dia_todo, antes, depois}]. hora None: vem da meia-noite (começou antes); hora_fim None: vai até a meia-noite (ou
+    depois). O dia inteiro tem o fim na meia-noite seguinte ao último dia; o de duração zero fica num dia só."""
+    primeiro = inicio.date()
+    ultimo = (fim - dt.timedelta(microseconds=1)).date() if fim > inicio else primeiro
+    saida, dia = [], max(primeiro, de)
+    while dia <= min(ultimo, ate):
+        if dia_inteiro:
+            h = h_fim = None
+        else:
+            h = inicio.time() if inicio.date() == dia else None
+            h_fim = fim.time() if fim < dt.datetime.combine(dia + UM_DIA, dt.time()) else None
+        saida.append({"dia": dia, "hora": h, "hora_fim": h_fim, "dia_todo": h is None and h_fim is None,
+                      "antes": dia > primeiro, "depois": dia < ultimo})
+        dia += UM_DIA
+    return saida
+
+
+def faixa_pedaco(p: dict) -> str:
+    """'das 14:00 às 15:00', 'às 14:00' (sem duração), 'das 22:00 à meia-noite', 'da meia-noite às 02:00' ou 'o dia
+    todo'."""
+    h, f = p["hora"], p["hora_fim"]
+    if h is None and f is None:
+        return "o dia todo"
+    if h == f:
+        return f"às {_hhmm(h)}"
+    return f"{f'das {_hhmm(h)}' if h else 'da meia-noite'} {f'às {_hhmm(f)}' if f else 'à meia-noite'}"
+
+
+def _ocupado_google(nome: str, p: dict, hoje: dt.date) -> str:
+    """O horário ocupado no Google de outra pessoa: sem o título nem dizer de onde vem, como _ocupado_por."""
+    if p["dia_todo"]:
+        return f"{nome} está com o dia {_dm(p['dia'], hoje)} ocupado"
+    return f"{nome} está com o horário ocupado em {_dm(p['dia'], hoje)}, {faixa_pedaco(p)}"
+
+
+def _aviso_google(titulo: str, p: dict, hoje: dt.date) -> str:
+    return f"você tem “{_curto(titulo)}” no Google em {_dm(p['dia'], hoje)}, {faixa_pedaco(p)}"
+
+
+def avisos_google(con, cal: Calendario | None, hoje: dt.date, a: dict, pessoa: int, google) -> list[str]:
+    """A atividade a (com horário) da própria pessoa em cima de um evento ocupado no Google dela: grava, mas avisa (até
+    MAX_AVISOS e 'e mais N'). O pedaço com exatamente o mesmo horário fica de fora: é a atividade trazida do evento."""
+    if google is None or a["hora"] is None:
+        return []
+    desde = max(hoje, a["inicio"])
+    ate = min(_ultimo_dia(a) or desde + dt.timedelta(HORIZONTE), hoje + dt.timedelta(HORIZONTE))
+    if ate < desde:
+        return []
+    achados = []
+    for e in google.ocupados(con, [pessoa], desde, ate):
+        for p in pedacos(e["inicio"], e["fim"], e["dia_inteiro"], desde, ate):
+            if (p["hora"], p["hora_fim"]) == (a["hora"], a["hora_fim"]) or not ocorre(a, p["dia"], cal):
+                continue
+            if _cruzam(a["hora"], a["hora_fim"], p["hora"] or dt.time(), p["hora_fim"] or dt.time.max):
+                achados.append(_aviso_google(e["titulo"], p, hoje))
+                break  # um aviso por evento
+    if len(achados) > MAX_AVISOS:
+        return [*achados[:MAX_AVISOS], f"e mais {len(achados) - MAX_AVISOS} no Google"]
+    return achados
 
 
 def _tarefas_com_horario(con, pessoa: int, desde: dt.date) -> list[tuple]:
@@ -360,12 +454,15 @@ def conferir_atividade(con, cal: Calendario, hoje: dt.date, a: dict, pessoa: int
 
 
 class Agenda:
-    def __init__(self, banco: Banco, configuracao, hoje=dt.date.today):
+    def __init__(self, banco: Banco, configuracao, hoje=dt.date.today, google=None):
         """configuracao: as regras de Metas (bi/configuracao.py), de onde vêm os feriados extras e os sábados.
-        hoje: função que dá o dia de hoje (os testes fixam um dia)."""
+        hoje: função que dá o dia de hoje (os testes fixam um dia). google: o Google Agenda da pessoa
+        (bi/google_agenda.py), que avisa quando a atividade cai num horário ocupado de lá e aparece para o
+        Assistente."""
         self.banco = banco
         self.configuracao = configuracao
         self.hoje = hoje
+        self.google = google
 
     def contexto(self, usuario: int) -> "ContextoAgenda":
         return ContextoAgenda(self, usuario)
@@ -373,13 +470,15 @@ class Agenda:
     def _calendario(self, atividades: list[dict]) -> Calendario | None:
         return calendario(self.configuracao) if any(a["so_dias_uteis"] for a in atividades) else None
 
-    def _conferir_horario(self, usuario: int, a: dict) -> None:
-        """Para a proposta do Assistente: a mesma conferência do horário ocupado da gravação, sem gravar."""
+    def _conferir_horario(self, usuario: int, a: dict) -> list[str]:
+        """Para a proposta do Assistente: a mesma conferência do horário ocupado da gravação, sem gravar, com os avisos
+        do Google."""
         if a["hora"] is None:
-            return
+            return []
         cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             conferir_atividade(con, cal, self.hoje(), a, usuario)
+            return avisos_google(con, cal, self.hoje(), a, usuario, self.google)
 
     def _obter(self, usuario: int, id_: int) -> dict:
         with self.banco.conexao() as con:
@@ -450,6 +549,8 @@ class Agenda:
                           if all(p in _chave(f"{a['titulo']} {a['descricao']}") for p in palavras)]
         ids = {a["id"] for a in atividades}
         totais = {"ocorrencias": 0, "feitas": 0, "atrasadas": 0, "hoje": 0, "previstas": 0}
+        google = self.google.no_periodo(usuario, de, ate) if self.google else {}
+        n_google, desatualizada = 0, False
         saida = []
         for dia, itens in dias:
             linhas = []
@@ -463,12 +564,26 @@ class Agenda:
                 linhas.append({"atividade": i["a"]["id"], "titulo": i["a"]["titulo"], "hora": _hhmm(i["a"]["hora"]),
                                "hora_fim": _hhmm(i["a"]["hora_fim"]), "situacao": situacao,
                                **({"feedback": i["feito"][0]} if i["feito"] else {})})
-            if linhas:
-                saida.append({"data": dia.isoformat(), "dia_semana": NOME_DIA[dia.isoweekday()], "itens": linhas})
-        return {"hoje": hoje.isoformat(), "de": de.isoformat(), "ate": ate.isoformat(), "totais": totais,
-                "atividades": [{k: v for k, v in _publica(a, hoje).items() if k not in ("dias_semana", "dia_mes",
-                                "intervalo", "so_dias_uteis", "regiao")} for a in atividades],
-                "dias": saida}
+            eventos = [g for g in google.get(dia.isoformat(), []) if all(p in _chave(g["titulo"]) for p in palavras)]
+            desatualizada |= any(g["desatualizada"] for g in eventos)
+            vao = eventos[:max(0, MAX_GOOGLE_IA - n_google)]
+            n_google += len(eventos)
+            if linhas or vao:
+                saida.append({"data": dia.isoformat(), "dia_semana": NOME_DIA[dia.isoweekday()], "itens": linhas,
+                              **({"google": [_google_ia(g) for g in vao]} if vao else {})})
+        r = {"hoje": hoje.isoformat(), "de": de.isoformat(), "ate": ate.isoformat(), "totais": totais,
+             "atividades": [{k: v for k, v in _publica(a, hoje).items() if k not in ("dias_semana", "dia_mes",
+                             "intervalo", "so_dias_uteis", "regiao")} for a in atividades],
+             "dias": saida}
+        if n_google:
+            totais["google"] = n_google
+            avisos = ([f"só os primeiros {MAX_GOOGLE_IA} eventos do Google, de {n_google}"]
+                      if n_google > MAX_GOOGLE_IA else [])
+            avisos += ["há agenda do Google sem leitura há mais de um dia: os eventos dela podem estar desatualizados"
+                       ] if desatualizada else []
+            if avisos:
+                r["google_aviso"] = "; ".join(avisos)
+        return r
 
     def historico(self, usuario: int, id_) -> dict:
         """Tudo o que foi feito na atividade (do mais recente para o mais antigo), quantas vezes ela aconteceu até hoje
@@ -495,24 +610,29 @@ class Agenda:
 
     # --- atividades ------------------------------------------------------------------------
     def criar(self, usuario: int, dados: dict) -> dict:
+        """A atividade nova; avisos: os eventos ocupados do Google da pessoa no horário dela (grava assim mesmo)."""
         a = _valida(dados)
         cal = calendario(self.configuracao) if a["hora"] else None
+        avisos = []
         with self.banco.conexao() as con:
             if a["hora"]:
                 travar_horarios(con, [usuario])
                 conferir_atividade(con, cal, self.hoje(), a, usuario)
+                avisos = avisos_google(con, cal, self.hoje(), a, usuario, self.google)
             linha = con.execute(f"INSERT INTO agenda_atividades (usuario, {', '.join(_GRAVAR)}) SELECT id, {_VALORES} "
                                 "FROM usuarios WHERE id = %(usuario)s RETURNING id",
                                 {**a, "usuario": usuario}).fetchone()
         if not linha:
             raise NaoEncontrada("seu usuário não existe mais")
-        return {"id": linha[0], **_publica(a, self.hoje())}
+        return {"id": linha[0], **_publica(a, self.hoje()), "avisos": avisos}
 
     def editar(self, usuario: int, id_, dados: dict) -> dict:
-        """Troca a atividade; o horário ocupado só é conferido se os dias ou os horários mudaram."""
+        """Troca a atividade; o horário ocupado (e o aviso do Google) só é conferido se os dias ou os horários
+        mudaram."""
         id_, a = _id(id_), _valida(dados)
         cal = calendario(self.configuracao) if a["hora"] else None
         sets = ", ".join(f"{c} = {v}" for c, v in zip(_GRAVAR, _VALORES.split(", ")))
+        avisos = []
         with self.banco.conexao() as con:
             linha = con.execute(f"SELECT {_COLUNAS} FROM agenda_atividades WHERE id = %s AND usuario = %s FOR UPDATE",
                                 [id_, usuario]).fetchone()
@@ -522,9 +642,10 @@ class Agenda:
             if a["hora"] and any(antes[c] != a[c] for c in _QUANDO):
                 travar_horarios(con, [usuario])
                 conferir_atividade(con, cal, self.hoje(), {**a, "id": id_}, usuario)
+                avisos = avisos_google(con, cal, self.hoje(), a, usuario, self.google)
             con.execute(f"UPDATE agenda_atividades SET {sets}, atualizada_em = now() WHERE id = %(id)s",
                         {**a, "id": id_})
-        return {"id": id_, **_publica(a, self.hoje())}
+        return {"id": id_, **_publica(a, self.hoje()), "avisos": avisos}
 
     @staticmethod
     def _pode_encerrar(a: dict, hoje: dt.date) -> None:
@@ -605,8 +726,9 @@ class Agenda:
         p = {"id": str(uuid.uuid4()), "acao": acao, "atividade": None}
         if acao == "criar":
             a = _valida(dados or {})
-            self._conferir_horario(usuario, a)
-            return {**p, "titulo": a["titulo"], "dados": _publica(a, hoje), "dia": self._proximo(a, hoje).isoformat()}
+            avisos = self._conferir_horario(usuario, a)
+            return {**p, "titulo": a["titulo"], "dados": _publica(a, hoje), "dia": self._proximo(a, hoje).isoformat(),
+                    **({"avisos": avisos} if avisos else {})}
         atual = self._obter(usuario, _id(atividade))
         p.update(atividade=atual["id"], titulo=atual["titulo"])
         if acao == "editar":
@@ -623,9 +745,10 @@ class Agenda:
                         if antes[k] != depois[k]]
             if not mudancas:
                 raise ValueError("a atividade já está assim; nada muda")
-            if any(atual[c] != a[c] for c in _QUANDO):
-                self._conferir_horario(usuario, {**a, "id": atual["id"]})
-            return {**p, "dados": depois, "mudancas": mudancas, "dia": self._proximo(a, hoje).isoformat()}
+            avisos = (self._conferir_horario(usuario, {**a, "id": atual["id"]})
+                      if any(atual[c] != a[c] for c in _QUANDO) else [])
+            return {**p, "dados": depois, "mudancas": mudancas, "dia": self._proximo(a, hoje).isoformat(),
+                    **({"avisos": avisos} if avisos else {})}
         if acao == "encerrar":
             self._pode_encerrar(atual, hoje)
             if atual["fim"] and atual["fim"] <= hoje:
