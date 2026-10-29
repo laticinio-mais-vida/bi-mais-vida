@@ -109,6 +109,7 @@ export const COMO_META = [
   ["Base", "O mesmo indicador, medido no período fechado escolhido (semana, quinzena, mês…): o último antes do início da campanha."],
   ["Meta", "Número: o valor que cada vendedor precisa atingir. Percentual: a base de cada um + X%. A meta própria troca a de um vendedor."],
   ["% da meta", "O resultado de cada vendedor ÷ a meta dele. Na barra da campanha: a soma dos resultados ÷ a soma das metas nos indicadores de total (positivação, faturamento, volume, produtos) e a média do % de cada um nos de média (mix, efetividade, frequência, por cliente, % da base); no preço médio, os aumentos de todos somados em R$."],
+  ["Premiação", "Um prêmio único ou por faixas, as mesmas para todos: cada vendedor ganha a maior faixa que atingir. Na meta Número, o % da faixa é o resultado ÷ a meta ou, se a campanha escolher, o crescimento; na Percentual e no preço médio, sempre o crescimento: (resultado − base) ÷ (meta − base). Enquanto a campanha corre, é a prevista; no fim, a final."],
 ];
 export function comoCalcula(preset, objetivo = false) {
   const c = COMO_CALCULA[preset?.id] || { conta: "" };
@@ -334,4 +335,33 @@ export function textoBase(ind) {
 export function iniciais(nome) {
   const p = String(nome || "?").replace(/[^\p{L}\s]/gu, " ").split(/\s+/).filter(Boolean);
   return ((p[0]?.[0] || "?") + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase();
+}
+
+// A premiação das campanhas (bi/gestao.py _premiacoes e premio_de): um prêmio único ou por faixas, as mesmas para todos;
+// cada um ganha a maior faixa que atingir. O % da faixa sai do crescimento sobre a base ou do número atingido.
+export const SOBRE_PREMIACAO = { resultado: "o número atingido (resultado ÷ meta)", crescimento: "o crescimento sobre a base" };
+export const pctFaixa = (p) => `${fmt.num(p, 1)}%`;
+// "Vale-compras (R$ 100,00)", "R$ 250,00" ou só a descrição.
+export function textoPremio(f) {
+  if (!f) return "";
+  const valor = f.valor != null ? fmt.moeda2(f.valor) : "";
+  return f.premio && valor ? `${f.premio} (${valor})` : f.premio || valor;
+}
+// "80% → R$ 100,00 · 90% → R$ 150,00 · 100% → Vale-compras (R$ 250,00)".
+export function textoFaixas(premiacoes) {
+  return (premiacoes?.faixas || []).map((f) => `${pctFaixa(f.pct)} → ${textoPremio(f)}`).join(" · ");
+}
+export function textoPremiacao(premiacoes) {
+  if (!premiacoes?.faixas?.length) return "";
+  return `${textoFaixas(premiacoes)} (sobre ${SOBRE_PREMIACAO[premiacoes.sobre] || premiacoes.sobre})`;
+}
+// O prêmio de um vendedor ({pct, faixa, premio, valor, proxima, falta}): "faixa 90%: Vale-compras (R$ 150,00)".
+export function textoGanho(p) {
+  if (!p || p.faixa == null) return "";
+  return `faixa ${pctFaixa(p.faixa)}: ${textoPremio(p)}`;
+}
+// "faltam 6,6 p.p. p/ 100%": quanto falta para a próxima faixa; acabou: "faltaram". Vazio na última.
+export function textoFalta(p, acabou = false) {
+  if (!p || p.pct == null || p.proxima == null) return "";
+  return `falta${acabou ? "ram" : "m"} ${fmt.num(Math.max(p.falta, 0) * 100, 1)} p.p. p/ ${pctFaixa(p.proxima)}`;
 }

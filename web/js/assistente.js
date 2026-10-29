@@ -11,7 +11,7 @@
 // Agenda: quando a IA propõe criar, mudar, encerrar, excluir ou concluir uma atividade da agenda de quem pergunta
 // (propor_agenda), a resposta traz um card com o botão que aplica; nada muda na agenda sem o clique.
 import { MESES, api, esc, fmt, icone, irParaLogin, toast } from "./util.js";
-import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase, visual } from "./indicadores.js";
+import { descritorLegado, metaDigitada, periodoTexto, textoAlvo, textoBase, textoFiltros, textoPeriodoBase, textoPremiacao, visual } from "./indicadores.js";
 
 const ESPERA_MAX = 170000; // ms; o servidor desiste antes (tempo_total do config.ini)
 const CONFERIR_PENDENTE = 3000; // ms entre as conferências de uma pergunta feita em outra aba ou antes de recarregar
@@ -639,6 +639,7 @@ function cartaoRascunho(r, i, j) {
     ...(r.base_periodo ? [["grafico", "Base", textoPeriodoBase(r.base_periodo, r.base_inicio, r.base_fim)]] : []),
     [m.icone, "Mede", ind.nome + (r.unidade && ind.medida === "volume" ? ` (${r.unidade.toLowerCase()})` : "")],
     ["alvo", "Meta", alvo + (ajustes ? ` · ${ajustes} ajustada${ajustes === 1 ? "" : "s"}` : "")],
+    ...(r.premiacoes ? [["trofeu", "Premiação", textoPremiacao(r.premiacoes)]] : []),
     ["pessoas", `${vend.length} vendedor${vend.length === 1 ? "" : "es"}`, vend.length <= 6 ? vend.join(", ") : `${vend.slice(0, 5).join(", ")} e mais ${vend.length - 5}`],
     ["funil", "Conta", filtros.length ? filtros.join(" · ") : "todos os produtos e clientes"],
   ];
@@ -673,7 +674,8 @@ async function aoClicarRascunho(e) {
   try {
     const acao = { nome: r.nome, rotulo: r.rotulo || "", descricao: r.descricao || "", regiao: r.regiao, inicio: r.inicio,
       fim: r.fim, base_periodo: r.base_periodo || "mes", metrica: r.metrica, parametros: r.parametros || {}, filtros: r.filtros,
-      alvo_tipo: r.alvo_tipo || "fixo", meta_padrao: r.meta_padrao, vendedores: r.vendedores, metas_produto: r.metas_produto || [] };
+      alvo_tipo: r.alvo_tipo || "fixo", meta_padrao: r.meta_padrao, vendedores: r.vendedores, metas_produto: r.metas_produto || [],
+      premiacoes: r.premiacoes || null };
     const res = await api("/api/gestao/acoes", { json: { acao, rascunho: r.id } });
     r.acao = { id: res.id, nome: r.nome, regiao: res.regiao };
     toast(res.ja_existia ? "Este rascunho já tinha virado campanha" : `Campanha “${r.nome}” lançada`);

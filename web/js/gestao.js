@@ -9,7 +9,8 @@
 // mostram a base de cada um (no período da base escolhido) e, nos marcados, a meta ("padrão" ou "própria"), com a
 // opção de uma meta própria (no preço médio, o preço-alvo do vendedor em cada produto). A conta é toda no servidor
 // (bi/gestao.py), que manda o descritor do indicador: a página só formata. O rascunho que o Assistente monta chega
-// por #/gestao?rascunho=<id> e abre o formulário já preenchido. No topo fica a agenda de quem está vendo (agenda.js):
+// por #/gestao?rascunho=<id> e abre o formulário já preenchido. A campanha pode ter premiação (um prêmio único ou por
+// faixas, as mesmas para todos): o detalhe mostra a faixa de cada um (a prevista enquanto corre) e o total em R$. No topo fica a agenda de quem está vendo (agenda.js):
 // as atividades dela e as tarefas de que participa, com os próprios eventos: os daqui ignoram o que acontece dentro
 // dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD> abre a agenda nesse dia.
 // Cada parte da página (a agenda, os objetivos, as campanhas e a equipe) minimiza no − do cabeçalho: fica só o título,
@@ -18,9 +19,10 @@
 import { abrirNaAgenda, abrirTarefaNaAgenda, agendaMinimizada, agendaTemAlteracoes, minimizarAgenda, montarAgenda,
          recarregarAgenda } from "./agenda.js";
 import { MESES, STATUS, animarEntradas, api, chipStatus, corStatus, esc, fmt, guardar, icone, ler, ligarTooltips, toast } from "./util.js";
-import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, alvoDe, comoCalcula, corMeta, daBase, definirCatalogo, deltaTexto,
-         duracaoTexto, iniciais, intensidadeMeta, janelaFechada, periodoTexto, presetDe, textoAlvo, textoBase, textoFiltros,
-         textoPeriodoBase, textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
+import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, SOBRE_PREMIACAO, alvoDe, comoCalcula, corMeta, daBase,
+         definirCatalogo, deltaTexto, duracaoTexto, iniciais, intensidadeMeta, janelaFechada, pctFaixa, periodoTexto, presetDe,
+         textoAlvo, textoBase, textoFaixas, textoFalta, textoFiltros, textoGanho, textoPeriodoBase, textoPremiacao, textoPremio,
+         textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
@@ -31,6 +33,8 @@ const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
 const DESCARTAR = "Descartar o que foi preenchido nesta campanha?";
 const SECOES = { objetivos: "os objetivos", campanhas: "as campanhas", equipe: "a equipe" }; // as que minimizam aqui
 const CHAVE_MINIMIZADAS = "mv-gestao-minimizadas";
+const FORMAS_PREMIO = { nenhuma: "Sem premiação", unica: "Prêmio único", faixas: "Por faixas" };
+const MAX_FAIXAS = 10; // bi/gestao.py MAX_FAIXAS
 
 let ctx = null, raiz = null, ligado = false;
 const estado = {
@@ -375,10 +379,14 @@ function cartaoAcao(a, i) {
     : pz.faltam === 0 ? "Termina hoje" : acaba ? `Termina em ${pz.faltam === 1 ? "1 dia" : `${pz.faltam} dias`}` : `Faltam ${pz.faltam} dias`;
   const extras = [a.provisorio ? "provisório" : "", a.base_pendente ? "base aguardando os dados" : ""].filter(Boolean).join(" · ");
   const noAlvo = enc && a.com_resultado ? `<span class="ge-no-alvo ${a.no_alvo ? "ok" : "zero"}">${a.no_alvo} de ${a.vendedores} na meta</span>` : "";
+  const premio = !a.premiacoes ? ""
+    : enc && a.premiados != null ? `<span class="ge-acao-premio" title="${esc(textoPremiacao(a.premiacoes))}">${icone("trofeu")}${a.premiados
+      ? `${plural(a.premiados, "premiado", "premiados")}${a.valor_premios != null ? ` · ${fmt.moeda2(a.valor_premios)}` : ""}` : "nenhum premiado"}${a.provisorio ? " (provisório)" : ""}</span>`
+    : `<span class="ge-acao-premio" title="Premiação: ${esc(textoPremiacao(a.premiacoes))}">${icone("trofeu")}com premiação</span>`;
   const classe = enc ? "encerrada" : plan ? "planejada" : acaba ? "acaba" : "em-vigor";
   return `<button type="button" class="ge-acao ${classe} ${estado.vista === "acao" && estado.acao === a.id ? "atual" : ""} entra" style="--i:${i + 1}" data-acao="${a.id}">
     <span class="ge-acao-cab"><b>${esc(a.nome)}</b>${noAlvo}</span>
-    <span class="ge-acao-info">${plural(a.vendedores, "vendedor", "vendedores")}, até ${fmt.dataCurta(a.fim)}</span>
+    <span class="ge-acao-info">${plural(a.vendedores, "vendedor", "vendedores")}, até ${fmt.dataCurta(a.fim)}</span>${premio}
     <span class="ge-tempo"><i data-largura="${largura}%"></i></span>
     <span class="ge-prazo">${esc(texto)}${extras ? `<small> · ${esc(extras)}</small>` : ""}</span>
     ${barraMeta(a)}
@@ -596,7 +604,7 @@ async function entrarSelecao(ids = [], dados = null, extra = {}) {
                   // preço médio: a meta própria é o preço-alvo do vendedor em cada produto ({"<id>": R$})
                   alvos: new Map((dados?.vendedores || []).filter((v) => v.alvos_precos).map((v) => [v.id, { ...v.alvos_precos }])),
                   abertas: new Set(), previa: null, erroPrevia: null, carregandoPrevia: false, pedidoPrevia: 0,
-                  chavePrevia: null, timerPrevia: null, chaveQuadros: null };
+                  chavePrevia: null, timerPrevia: null, chaveQuadros: null, premio: premioDoForm(d.premiacoes), modoPremio: null };
   if (estado.vista !== "grade") {
     estado.vista = "grade";
     estado.historico = estado.detalhe = null;
@@ -676,6 +684,7 @@ async function montarForm() {
     </div>
     <p class="ge-base-media" id="gf-base" aria-live="polite"></p>
     <div id="gf-precos"></div>
+    <div class="ge-premio" id="gf-premiacao"></div>
     <details class="ge-mais"><summary>${icone("ajustes")}Mais opções: início, etiqueta, descrição, produtos e clientes que contam</summary>
       <div class="ge-campos">
         <label class="campo-form"><span>Início</span><input type="date" name="inicio" value="${esc(d.inicio)}"></label>
@@ -693,6 +702,7 @@ async function montarForm() {
   </section>`;
   desenharPrazos(f.semanas ? String(f.semanas) : "data");
   desenharBases(d.base_periodo);
+  desenharPremiacao();
   contarSelecao();
   desenharMedia();
   animarEntradas(alvo);
@@ -770,6 +780,7 @@ function atualizarAlvo() {
     ? "O % da meta de cada um é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%)."
     : meta !== "" ? `${capitalizar(textoAlvo(desc, tipo, Number(meta), desc.unidade))}.` : "";
   form.querySelector('[name="rotulo"]').placeholder = pr.rotulo;
+  atualizarPremiacao(); // a meta Número escolhe sobre o que é a faixa; a Percentual e o preço médio, sempre o crescimento
   // outro tipo ou outros produtos no preço médio: a meta dos quadrados muda de forma (os campos da meta própria)
   const chave = JSON.stringify([pr.id, preco ? f.construtor.valor().metas_produto.map((x) => x.id) : []]);
   if (f.chaveQuadros != null && chave !== f.chaveQuadros) {
@@ -781,6 +792,115 @@ function atualizarAlvo() {
   }
   f.chaveQuadros = chave;
   agendarPrevia();
+}
+
+// ---------- premiação (as mesmas faixas para todos; o servidor calcula o prêmio de cada um) ----------
+// No formulário: sem premiação, prêmio único (uma faixa) ou por faixas. As linhas guardam o que foi digitado (em
+// texto) e voltam ao trocar a forma; quem lê a tela é lerPremiacao, antes de redesenhar.
+function premioDoForm(p) {
+  const faixas = (p?.faixas || []).map((x) => ({ pct: String(x.pct), premio: x.premio || "", valor: x.valor == null ? "" : String(x.valor) }));
+  return { forma: !faixas.length ? "nenhuma" : faixas.length === 1 ? "unica" : "faixas", sobre: p?.sobre || "resultado", faixas };
+}
+
+// "fixo" (a meta Número escolhe sobre o que é a faixa), "pct" (Percentual: sempre o crescimento) ou "preco".
+function modoPremio() {
+  const f = estado.form, form = raiz.querySelector("#g-form");
+  const metrica = f.construtor ? f.construtor.preset().metrica : f.dados.metrica;
+  if (metrica === "preco_medio") return "preco";
+  return (form?.querySelector('[name="alvo_tipo"]')?.value || "fixo") === "fixo" ? "fixo" : "pct";
+}
+
+function lerPremiacao() {
+  const f = estado.form, el = raiz.querySelector("#gf-premiacao");
+  if (!f || !el) return;
+  const linhas = [...el.querySelectorAll(".ge-faixa")];
+  const val = (l, n) => l.querySelector(`[name="${n}"]`).value;
+  if (linhas.length) f.premio.faixas = linhas.map((l) => ({ pct: val(l, "faixa_pct"), premio: val(l, "faixa_premio"), valor: val(l, "faixa_valor") }));
+  const sobre = el.querySelector('[name="premio_sobre"]:checked');
+  if (sobre) f.premio.sobre = sobre.value;
+}
+
+function desenharPremiacao() {
+  const f = estado.form, el = raiz.querySelector("#gf-premiacao");
+  if (!f || !el) return;
+  const p = f.premio, modo = modoPremio();
+  f.modoPremio = modo;
+  const botoes = Object.entries(FORMAS_PREMIO).map(([k, n]) =>
+    `<button type="button" data-premio-forma="${k}" class="${k === p.forma ? "ativo" : ""}" aria-pressed="${k === p.forma}">${n}</button>`).join("");
+  let corpo = "";
+  if (p.forma !== "nenhuma") {
+    const sobre = modo === "fixo"
+      ? `<div class="ge-premio-sobre" role="radiogroup" aria-label="O % da faixa é sobre"><span>O % da faixa é sobre</span>
+          ${Object.entries(SOBRE_PREMIACAO).map(([k, n]) => `<label><input type="radio" name="premio_sobre" value="${k}" ${k === p.sobre ? "checked" : ""}>${esc(n)}</label>`).join("")}</div>`
+      : `<p class="ci-como">${icone("info")}<span>O % da faixa é sobre o crescimento: (resultado − base) ÷ (meta − base)${modo === "preco" ? ", o mesmo % da meta do preço médio" : ""}.</span></p>`;
+    const varias = p.forma === "faixas";
+    const linhas = p.faixas.map((x, i) => `<div class="ge-faixa" data-faixa="${i}">
+        <label class="campo-form ge-faixa-pct"><span>${varias ? `Faixa ${i + 1}` : "Ao atingir"}</span><span class="ge-com-unidade"><input type="number" name="faixa_pct" min="1" max="500" step="any" inputmode="decimal" value="${esc(x.pct)}" placeholder="%" aria-label="% da faixa ${i + 1}"><i>%</i></span></label>
+        <label class="campo-form ge-faixa-premio"><span>Prêmio</span><input name="faixa_premio" maxlength="120" value="${esc(x.premio)}" placeholder="Ex.: Vale-compras" autocomplete="off" aria-label="Prêmio da faixa ${i + 1}"></label>
+        <label class="campo-form ge-faixa-valor"><span>Valor <small>(opcional)</small></span><span class="ge-com-unidade antes"><i>R$</i><input type="number" name="faixa_valor" min="0" step="0.01" inputmode="decimal" value="${esc(x.valor)}" placeholder="0,00" aria-label="Valor em R$ da faixa ${i + 1}"></span></label>
+        ${varias && p.faixas.length > 1 ? `<button type="button" class="ge-x" data-premio-tirar="${i}" title="Tirar a faixa" aria-label="Tirar a faixa ${i + 1}">${icone("x")}</button>` : ""}
+      </div>`).join("");
+    corpo = `${sobre}<div class="ge-faixas">${linhas}</div>
+      <div class="ge-premio-rodape">${varias && p.faixas.length < MAX_FAIXAS ? `<button type="button" class="ge-link" data-premio-mais>${icone("mais")}Faixa</button>` : ""}
+        <small class="fraco">${varias ? "Cada vendedor ganha o prêmio da maior faixa que atingir (as faixas não se somam)." : "Quem atingir o % ganha o prêmio."} Com o valor em R$, a campanha soma o total a pagar.</small></div>`;
+  }
+  el.innerHTML = `<div class="ge-premio-cab"><span class="ge-premio-tit">${icone("trofeu")}Premiação</span>
+    <div class="seg-mini" role="group" aria-label="Premiação">${botoes}</div></div>${corpo}`;
+}
+
+// O tipo de meta (ou o indicador) mudou: redesenha só se muda sobre o que é a faixa.
+function atualizarPremiacao() {
+  const f = estado.form;
+  if (!f || f.modoPremio === modoPremio()) return;
+  lerPremiacao();
+  desenharPremiacao();
+}
+
+function trocarFormaPremio(forma) {
+  const f = estado.form;
+  if (!f || !FORMAS_PREMIO[forma]) return;
+  lerPremiacao();
+  const p = f.premio, vazia = (pct) => ({ pct, premio: "", valor: "" });
+  if (forma === "unica") { // fica a de 100% (ou a mais alta)
+    p.faixas = p.faixas.length ? [p.faixas.find((x) => Number(x.pct) === 100) || p.faixas[p.faixas.length - 1]] : [vazia("100")];
+  } else if (forma === "faixas" && p.faixas.length < 2) { // sugere 80, 90 e 100%, com o que já foi digitado
+    const ja = p.faixas[0];
+    p.faixas = [...["80", "90", "100"].filter((x) => !ja || Number(x) !== Number(ja.pct)).map(vazia), ...(ja ? [ja] : [])]
+      .sort((a, b) => Number(a.pct) - Number(b.pct));
+  }
+  p.forma = forma;
+  desenharPremiacao();
+  raiz.querySelector('#gf-premiacao [name="faixa_premio"]')?.focus();
+}
+
+function maisFaixa() {
+  const f = estado.form;
+  if (!f) return;
+  lerPremiacao();
+  const ultima = Number(f.premio.faixas[f.premio.faixas.length - 1]?.pct);
+  f.premio.faixas.push({ pct: ultima > 0 ? String(ultima + 10) : "", premio: "", valor: "" });
+  desenharPremiacao();
+  [...raiz.querySelectorAll('#gf-premiacao [name="faixa_premio"]')].pop()?.focus();
+}
+
+function tirarFaixa(i) {
+  const f = estado.form;
+  if (!f) return;
+  lerPremiacao();
+  f.premio.faixas.splice(i, 1);
+  desenharPremiacao();
+}
+
+// O que vai para o servidor: {sobre, faixas: [{pct, premio, valor}]} ou null (sem premiação).
+function premiacoesDoForm() {
+  const f = estado.form;
+  if (!f?.premio) return null;
+  lerPremiacao();
+  const p = f.premio;
+  if (p.forma === "nenhuma") return null;
+  const faixas = (p.forma === "unica" ? p.faixas.slice(0, 1) : p.faixas).map((x) => ({
+    pct: x.pct === "" ? null : Number(x.pct), premio: x.premio.trim(), valor: x.valor === "" ? null : Number(x.valor) }));
+  return { sobre: modoPremio() === "fixo" ? p.sobre : "crescimento", faixas };
 }
 
 // ---------- prévia da base (o servidor mede; nada é gravado) ----------
@@ -876,6 +996,7 @@ function coletarForm() {
     alvo_tipo: preco ? "fixo" : val("alvo_tipo"), meta_padrao: preco ? 100 : (val("meta") === "" ? null : Number(val("meta"))),
     vendedores: [...(estado.selecao || [])].map((id) => (preco ? { id, meta: null, alvos_precos: alvosProprios(id, ind.metas_produto) }
       : { id, meta: f.metas.get(id) ?? null })),
+    premiacoes: premiacoesDoForm(),
   };
 }
 
@@ -900,6 +1021,10 @@ async function lancar() {
   } else if (!(dados.meta_padrao > 0)) {
     return erroForm("dê a meta");
   }
+  const faixas = dados.premiacoes?.faixas || [];
+  if (faixas.some((x) => !(x.pct >= 1 && x.pct <= 500))) return erroForm("dê o % de cada faixa da premiação (de 1 a 500)");
+  if (faixas.some((x) => !x.premio && !(x.valor > 0))) return erroForm("dê o prêmio de cada faixa (a descrição ou o valor em R$)");
+  if (new Set(faixas.map((x) => x.pct)).size < faixas.length) return erroForm("há duas faixas da premiação com o mesmo %");
   const btn = raiz.querySelector("[data-lancar]");
   btn.disabled = true;
   erroForm("");
@@ -994,7 +1119,7 @@ function evento(e, h) {
       const alvo = d.alvo == null ? (d.base_pendente ? "Meta: sai da base, quando ela chegar" : "Meta: sem base para calcular")
         : `Meta: ${valAlvo(d.alvo)} até ${fmt.dataCurta(d.fim)}`;
       return `<div class="ge-bolha esq"><b>${icone("bandeira")}Campanha lançada: ${nome}</b>
-        <p>${base}<br>${alvo}${d.vendedores > 1 ? `<br>Mesma campanha para ${d.vendedores} vendedores` : ""}</p>
+        <p>${base}<br>${alvo}${d.premiacoes ? `<br>Premiação: ${esc(textoFaixas(d.premiacoes))}` : ""}${d.vendedores > 1 ? `<br>Mesma campanha para ${d.vendedores} vendedores` : ""}</p>
         <small>${esc(e.autor)}${a ? ` · <button type="button" class="ge-link" data-acao="${e.acao}">ver a campanha</button>` : ""}</small></div>`;
     }
     case "parcial":
@@ -1011,7 +1136,10 @@ function evento(e, h) {
       return `<p class="ge-linha sistema">${icone("certo")}${nome} encerrada em ${fmt.dataCurta(d.fim)}${d.fim_antes && d.fim_antes !== d.fim ? ` (ia até ${fmt.dataCurta(d.fim_antes)})` : ""} · ${esc(e.autor)}</p>`;
     case "editada": {
       const mudou = (d.mudou || []).map((x) => (x === "alvo" ? "meta" : x)).join(", ");
-      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc(mudou)})${d.alvo != null ? `: meta ${valAlvo(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""} · ${esc(e.autor)}</p>`;
+      const premio = !(d.mudou || []).includes("premiação") ? ""
+        : ` · premiação: ${d.premiacoes ? esc(textoFaixas(d.premiacoes)) : "sem premiação"}${d.premio
+          ? ` · ${d.premio.faixa != null ? `ficou com a ${esc(textoGanho(d.premio))}` : "ficou sem premiação"}` : ""}`;
+      return `<p class="ge-linha sistema">${icone("lapis")}${nome} alterada (${esc(mudou)})${d.alvo != null ? `: meta ${valAlvo(d.alvo)}` : d.base_pendente ? ": a base nova aguarda os dados" : ""}${premio} · ${esc(e.autor)}</p>`;
     }
     case "removido":
       return `<p class="ge-linha sistema">${icone("x")}Saiu da campanha ${nome} · ${esc(e.autor)}</p>`;
@@ -1040,8 +1168,22 @@ function cartaoResultado(e, a, ind, u, h) {
   return `<div class="ge-resultado ${cls}">
     <div class="ge-resultado-cab"><b>${icone("ranking")}Resultado: ${esc(d.nome || a?.nome || "")}</b><span class="ge-pill ${cls}">${esc(rotuloClasse(cls, d.caminho))}</span></div>
     ${corpo}
+    ${premioResultado(d.premio, e.provisorio, ePreco(ind) ? "resultado" : d.premiacoes?.sobre)}
     ${e.provisorio ? `<p class="ge-delta fraco">Provisório: os dados vão até ${fmt.dataCurta(h.data_ref)}; o resultado fecha quando passarem do fim.</p>` : ""}
     ${botoes}</div>`;
+}
+
+// "Premiação: faixa 90%: Vale-compras (R$ 150,00) · chegou a 93,4% do crescimento pedido" ou por que ficou sem.
+// sobre: de onde sai o % (crescimento ou resultado; no preço médio, o % da meta).
+function premioResultado(p, provisorio, sobre) {
+  if (!p) return "";
+  const de = sobre === "crescimento" ? "do crescimento pedido" : "da meta";
+  const pct = p.pct == null ? "" : `${fmt.pct(Math.abs(p.pct), 1)} ${de}`;
+  const texto = p.faixa != null ? `Premiação: <b>${esc(textoGanho(p))}</b> · chegou a ${pct}`
+    : p.pct == null ? "Sem premiação: sem meta para comparar"
+    : p.pct < 0 ? `Sem premiação: ficou abaixo da base (−${pct}); a 1ª faixa é ${pctFaixa(p.proxima)}`
+    : `Sem premiação: chegou a ${pct}; a 1ª faixa é ${pctFaixa(p.proxima)}`;
+  return `<p class="ge-premio-res${p.faixa != null ? " ganhou" : ""}">${icone("trofeu")}<span>${texto}${provisorio ? " (previsto)" : ""}</span></p>`;
 }
 
 // Preço médio: o preço de cada produto da base ao fim, contra o alvo, e o % da meta (o aumento feito ÷ o pedido).
@@ -1127,6 +1269,11 @@ function desenharDetalhe() {
   const resumo = enc ? `${d.total.no_alvo} de ${d.total.vendedores} na meta · ${plural(d.total.acima_da_base, "acima da base", "acima da base")}`
     : it.situacao === "planejada" ? `${plural(d.total.vendedores, "vendedor", "vendedores")} · começa em ${fmt.dataCurta(it.inicio)}`
     : `${plural(d.total.vendedores, "vendedor", "vendedores")} · dados até ${fmt.dataCurta(d.data_ref)}`;
+  const final = enc && it.congelado;
+  const premios = it.premiacoes && it.situacao !== "planejada" && d.total.premiados != null
+    ? ` · ${final ? "" : "previsto até agora: "}${!d.total.premiados ? "nenhum premiado"
+      : `${plural(d.total.premiados, "premiado", "premiados")}${d.total.valor_premios != null
+        ? `, ${final ? "total " : ""}${fmt.moeda2(d.total.valor_premios)}` : ""}`}` : "";
   const pergunta = `Como está a campanha #${it.id} “${it.nome}”, vendedor por vendedor?`;
   const botoes = d.pode_editar ? `
     <button class="btn" type="button" data-editar-acao="${it.id}">${icone("lapis")}<span>Editar</span></button>
@@ -1147,11 +1294,12 @@ function desenharDetalhe() {
         <span class="chip">${icone("calendario")}base: ${esc(it.base_periodo ? `${textoPeriodoBase(it.base_periodo, it.base_inicio, it.base_fim)} (${PERIODOS_BASE[it.base_periodo].toLowerCase()} fechad${it.base_periodo === "semana" || it.base_periodo === "quinzena" ? "a" : "o"})`
           : `${periodoTexto(it.base_inicio, it.base_fim)} (o mesmo tamanho, logo antes)`)}</span>
         ${(filtros.length ? filtros : ["todos os produtos e clientes"]).map((t) => `<span class="chip">${icone("funil")}${esc(t)}</span>`).join("")}
+        ${it.premiacoes ? `<span class="chip ge-chip-premio">${icone("trofeu")}${esc(textoPremiacao(it.premiacoes))}</span>` : ""}
         ${it.arquivada ? `<span class="chip">${icone("arquivo")}arquivada</span>` : ""}
       </div>
       ${it.descricao ? `<p class="camp-descricao">${esc(it.descricao)}</p>` : ""}
       ${comoNoDetalhe(it)}
-      <p class="ge-det-resumo">${esc(resumo)}${d.ocultos ? ` · ${plural(d.ocultos, "vendedor fora do seu acesso", "vendedores fora do seu acesso")}` : ""}</p>
+      <p class="ge-det-resumo">${esc(resumo + premios)}${d.ocultos ? ` · ${plural(d.ocultos, "vendedor fora do seu acesso", "vendedores fora do seu acesso")}` : ""}</p>
     </section>
     ${avisos}${ind.tipo === "preco_medio" && d.produtos?.length ? gradePrecos(d) : tabelaAcao(d)}${aberturaAcao(d)}`;
   animarEntradas(el);
@@ -1177,6 +1325,7 @@ function tabelaAcao(d) {
     const t = daBase(da);
     return t ? `<span title="${esc(t.dica)}">${esc(t.texto)}${t.partes ? `<small>${esc(t.partes)}</small>` : ""}</span>` : "—";
   };
+  const premioCol = celulaPremio(it);
   const linhas = d.linhas.map((x) => `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0" title="Abrir o histórico de ${esc(x.nome)}">
     <td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}</small></td>
     <td>${x.base_pendente ? '<span class="fraco">aguardando os dados</span>' : x.base == null ? '<span class="fraco">sem dados</span>' : v(x.base)}${comDaBase && !x.base_pendente && x.base_da_base
@@ -1185,7 +1334,7 @@ function tabelaAcao(d) {
     <td>${x.resultado == null ? "—" : `<b>${v(x.resultado)}</b>`}${partes && x.numerador != null
       ? `<small>${textoPartes(ind, x)}</small>` : ""}</td>
     ${comDaBase ? `<td>${pctDaBase(x.da_base)}</td>` : ""}
-    <td>${x.pct == null ? "—" : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
+    <td>${x.pct == null ? "—" : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>${premioCol(x)}
     <td>${x.delta == null ? "—" : esc(deltaTexto(ind, x.delta, u))}</td>
     <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
       : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td></tr>`).join("");
@@ -1195,9 +1344,35 @@ function tabelaAcao(d) {
         : "resultado até agora; a situação considera o ritmo dos dias úteis"} · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados">
       <thead><tr><th>Vendedor</th><th>Base</th><th>Meta</th><th${partes ? ` title="${esc(ind.media_diaria ? ind.descricao : `${ind.numerador} ÷ ${ind.denominador}`)}"` : ""}>Resultado</th>${comDaBase
-        ? `<th title="${esc(comoCalcula({ id: "positivacao:pct_base" }).conta)}">% da base</th>` : ""}<th>% da meta</th><th>Sobre a base</th><th>Situação</th></tr></thead>
+        ? `<th title="${esc(comoCalcula({ id: "positivacao:pct_base" }).conta)}">% da base</th>` : ""}<th>% da meta</th>${thPremio(it)}<th>Sobre a base</th><th>Situação</th></tr></thead>
       <tbody>${linhas}</tbody>${comDaBase && d.total.da_base ? `<tfoot><tr class="ge-total"><td class="nome-v">Equipe<small>os vendedores do seu acesso juntos</small></td><td></td><td></td>
-        <td>${d.total.realizado == null ? "—" : `<b>${v(d.total.realizado)}</b>`}</td><td>${pctDaBase(d.total.da_base)}</td><td></td><td></td><td></td></tr></tfoot>` : ""}</table></div></section>`;
+        <td>${d.total.realizado == null ? "—" : `<b>${v(d.total.realizado)}</b>`}</td><td>${pctDaBase(d.total.da_base)}</td><td></td><td></td><td></td>${it.premiacoes ? "<td></td>" : ""}</tr></tfoot>` : ""}</table></div></section>`;
+}
+
+// A coluna "Premiação" do detalhe (na tabela por vendedor e na grade do preço médio): a faixa de cada um e o % que a
+// decide. Enquanto a campanha corre (ou o resultado é provisório), é a prevista, pelo resultado até agora (e, nos
+// indicadores de soma, a do ritmo atual, quando é outra).
+function thPremio(it) {
+  if (!it.premiacoes) return "";
+  const prevista = it.situacao !== "encerrada" || it.provisorio;
+  return `<th class="ge-th-premio" title="${esc(textoPremiacao(it.premiacoes))}">Premiação${prevista && it.situacao !== "planejada" ? "<small>prevista</small>" : ""}</th>`;
+}
+
+function celulaPremio(it) {
+  if (!it.premiacoes) return () => "";
+  const prevista = it.situacao !== "encerrada" || it.provisorio;
+  return (x) => {
+    const p = x.premio;
+    if (it.situacao === "planejada" || !p) return '<td class="fraco">—</td>';
+    if (p.pct == null) return `<td><span class="fraco">${x.base_pendente ? "aguardando a base" : "sem meta para comparar"}</span></td>`;
+    const ganho = p.faixa != null ? `<b>${esc(textoPremio(p))}</b>` : `<span class="fraco">${prevista ? "nenhuma faixa" : "sem premiação"}</span>`;
+    const falta = p.pct < 0 ? "" : textoFalta(p, !prevista);
+    const r = x.premio_ritmo;
+    const ritmo = r && r.pct != null && r.faixa !== p.faixa
+      ? `<small title="${r.faixa != null ? esc(`No ritmo atual: ${textoGanho(r)}`) : ""}">no ritmo: ${r.faixa != null ? `faixa ${pctFaixa(r.faixa)}` : "nenhuma faixa"}</small>` : "";
+    return `<td class="ge-premio-cel${prevista ? " prevista" : ""}" title="${esc(textoPremiacao(it.premiacoes))}">${ganho}
+      <small>${p.pct < 0 ? "abaixo da base" : `${p.faixa != null ? `faixa ${pctFaixa(p.faixa)} · ` : ""}${fmt.pct(p.pct, 1)}`}</small>${falta ? `<small>${esc(falta)}</small>` : ""}${ritmo}</td>`;
+  };
 }
 
 // "3 ÷ 8" embaixo do resultado; na efetividade (média dos dias), os pedidos, as visitas e os dias, que não se dividem.
@@ -1248,11 +1423,12 @@ function gradePrecos(d) {
   };
   const aumento = (x) => (x.delta == null ? "—" : x.aumento_pedido
     ? `${reaisSinal(x.delta)}<small>de ${fmt.moeda2(x.aumento_pedido)}</small>` : `${reaisSinal(x.delta)}<small>já estava no alvo</small>`);
+  const premioCol = celulaPremio(it);
   const linhas = d.linhas.map((x) => {
     const por = Object.fromEntries((x.produtos || []).map((p) => [p.id, p]));
     return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}${x.meta_propria ? " · meta própria" : ""}</small></td>
       <td>${x.pct == null ? (x.base_pendente ? '<span class="fraco">aguardando a base</span>' : "—")
-        : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>
+        : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>${premioCol(x)}
       <td>${aumento(x)}</td>
       <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
         : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td>
@@ -1263,9 +1439,9 @@ function gradePrecos(d) {
     <div class="cartao-cab"><div><h3>${icone("moeda")}Preço médio por produto</h3>
       <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim") : "preço até agora"} (venda líquida ÷ quantidade) e o da base embaixo · o % da meta é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo, somados em R$ nas quantidades vendidas (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%) · clique no vendedor para ver o histórico</p></div></div>
     <div class="tabela-rolagem"><table class="dados camp-grade">
-      <thead><tr><th>Vendedor</th><th>% da meta</th><th title="Aumento de preço feito, em R$ nas quantidades vendidas, e o que a meta pede">Aumento</th><th>Situação</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${fmt.moeda2(p.meta)}${p.unidade ? `/${un(p)}` : ""}</small></th>`).join("")}</tr></thead>
+      <thead><tr><th>Vendedor</th><th>% da meta</th>${thPremio(it)}<th title="Aumento de preço feito, em R$ nas quantidades vendidas, e o que a meta pede">Aumento</th><th>Situação</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${fmt.moeda2(p.meta)}${p.unidade ? `/${un(p)}` : ""}</small></th>`).join("")}</tr></thead>
       <tbody>${linhas}</tbody>
-      <tfoot><tr><td class="nome-v">Equipe<small>aumento de todos ÷ o pedido</small></td><td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado, 0) : "—"}</b></td><td></td><td></td>${prods.map(equipe).join("")}</tr></tfoot>
+      <tfoot><tr><td class="nome-v">Equipe<small>aumento de todos ÷ o pedido</small></td><td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado, 0) : "—"}</b></td><td></td><td></td>${it.premiacoes ? "<td></td>" : ""}${prods.map(equipe).join("")}</tr></tfoot>
     </table></div></section>`;
 }
 
@@ -1570,9 +1746,12 @@ function aoClicar(e) {
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
-    "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo]");
+    "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.premioForma) return trocarFormaPremio(ds.premioForma);
+  if ("premioMais" in ds) return maisFaixa();
+  if (ds.premioTirar) return tirarFaixa(Number(ds.premioTirar));
   if (ds.minimizar) return minimizar(ds.minimizar);
   if ("minimizarTudo" in ds) return minimizarTudo();
   if ("marcarTodos" in ds) return marcarTodos();

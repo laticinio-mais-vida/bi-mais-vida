@@ -13,8 +13,9 @@ from pathlib import Path
 
 from bi.assistente import FERRAMENTAS, Ferramentas
 from bi.conversas import Conversas, NaoEncontrada
-from bi.gestao import (Gestao, alvo_de, andamento, calendario_periodo, classe_resultado, comparar, comparar_preco, prazo,
-                       rotulo_padrao, situacao, texto_alvo, validar)
+from bi.gestao import (Gestao, alvo_de, andamento, calendario_periodo, classe_resultado, comparar, comparar_preco,
+                       pct_premiacao, prazo, premio_de, rotulo_padrao, situacao, texto_alvo, texto_premiacao,
+                       total_premios, validar)
 from bi.indicadores import descritor, progresso_preco, progresso_preco_juntos
 from tests.apoio import (BA, EDIR, ES, USUARIO_ADMIN, USUARIO_VIS, BaseBanco, ClienteFalso, ConversasFalsas,
                          bloco_ferramenta, bloco_texto, criar_assistente, criar_calc, resposta)
@@ -191,6 +192,75 @@ class TestFuncoes(unittest.TestCase):
         self.assertEqual(texto_alvo("mais", 5, self.EFE), "+5 p.p. sobre a base de cada um")
         self.assertEqual(rotulo_padrao("mix_medio", {}), "Mix")
         self.assertEqual(rotulo_padrao("personalizada", {"medida": "faturamento", "forma": "por_cliente"}), "Venda média")
+
+
+class TestPremiacao(unittest.TestCase):
+    """O % que decide a faixa e o prêmio de cada um (sem cache nem banco): os exemplos do plano aprovado."""
+
+    MIX = descritor("mix_medio", {"clientes": "todos"})
+    POS = descritor("positivacao", {"clientes": "todos"})
+    PRECO = descritor("preco_medio", {})
+    FAIXAS = {"sobre": "crescimento", "faixas": [{"pct": 80, "premio": "Vale-compras", "valor": 100.0},
+                                                 {"pct": 90, "premio": "Vale-compras", "valor": 150.0},
+                                                 {"pct": 100, "premio": "Vale-compras + folga", "valor": 250.0}]}
+
+    def premio(self, sobre, desc, res, base, alvo):
+        return premio_de({**self.FAIXAS, "sobre": sobre}, pct_premiacao(sobre, desc, res, base, alvo))
+
+    def test_crescimento_na_meta_percentual(self):
+        # mix +10%: Ana 4,00 → 4,45 (meta 4,40) = 112%; Bruno 4,34 = 85%; Carla parada na base = 0%; Davi sem base
+        ana = self.premio("crescimento", self.MIX, 4.45, 4.0, 4.4)
+        self.assertAlmostEqual(ana["pct"], 1.125)
+        self.assertEqual((ana["faixa"], ana["valor"], ana["premio"], ana["proxima"], ana["falta"]),
+                         (100, 250.0, "Vale-compras + folga", None, None))
+        bruno = self.premio("crescimento", self.MIX, 4.34, 4.0, 4.4)
+        self.assertEqual((bruno["faixa"], bruno["valor"], bruno["proxima"]), (80, 100.0, 90))
+        self.assertAlmostEqual(bruno["falta"], 0.05)
+        carla = self.premio("crescimento", self.MIX, 5.0, 5.0, 5.5)
+        self.assertEqual((carla["pct"], carla["faixa"], carla["premio"], carla["proxima"], carla["falta"]),
+                         (0.0, None, None, 80, 0.8))
+        davi = self.premio("crescimento", self.MIX, 3.9, None, None)  # sem base, a meta Percentual não tem alvo
+        self.assertEqual((davi["pct"], davi["faixa"], davi["falta"]), (None, None, None))
+        juntos = [ana, bruno, carla, davi]
+        self.assertEqual(total_premios(self.FAIXAS, juntos), {"premiados": 2, "valor_premios": 350.0})
+
+    def test_numero_atingido_ou_crescimento_na_meta_numero(self):
+        # positivação, meta de 60 clientes: Eva 50 → 55
+        self.assertEqual(self.premio("resultado", self.POS, 55, 50, 60)["faixa"], 90)  # 92%
+        eva = self.premio("crescimento", self.POS, 55, 50, 60)  # 5 de 10 = 50%
+        self.assertEqual((eva["pct"], eva["faixa"], eva["proxima"]), (0.5, None, 80))
+        # Fábio já estava acima da meta na base: vale o de manter (62 ÷ 60), nos dois
+        for sobre in ("resultado", "crescimento"):
+            self.assertEqual(self.premio(sobre, self.POS, 62, 65, 60)["faixa"], 100)
+        # sem base na meta Número: o crescimento parte do zero
+        self.assertEqual(pct_premiacao("crescimento", self.POS, 30, None, 60), 0.5)
+        # abaixo da base: negativo, sem faixa
+        self.assertEqual(self.premio("crescimento", self.POS, 45, 50, 60)["pct"], -0.5)
+        self.assertIsNone(self.premio("crescimento", self.POS, 45, 50, 60)["faixa"])
+        # sem resultado ou sem meta: sem %
+        self.assertIsNone(pct_premiacao("resultado", self.POS, None, 50, 60))
+        self.assertIsNone(pct_premiacao("resultado", self.POS, 55, 50, 0))
+
+    def test_borda_e_preco_medio(self):
+        self.assertEqual(premio_de(self.FAIXAS, 0.7996)["faixa"], 80)  # a folga da meta batida
+        self.assertIsNone(premio_de(self.FAIXAS, 0.7994)["faixa"])
+        self.assertEqual(premio_de(self.FAIXAS, 0.9)["faixa"], 90)
+        self.assertEqual(premio_de(self.FAIXAS, 5)["faixa"], 100)  # acima da última: a última (não somam)
+        self.assertIsNone(premio_de(None, 0.9))  # a campanha sem premiação
+        # no preço médio, o % da faixa é o % da meta (o aumento feito ÷ o pedido)
+        self.assertEqual(pct_premiacao("crescimento", self.PRECO, 0.6667, None, 1.0), 0.6667)
+        self.assertEqual(total_premios(None, []), {})
+        so_texto = {"sobre": "resultado", "faixas": [{"pct": 100, "premio": "Folga", "valor": None}]}
+        self.assertEqual(total_premios(so_texto, [premio_de(so_texto, 1.0)]), {"premiados": 1, "valor_premios": None})
+
+    def test_texto(self):
+        self.assertEqual(texto_premiacao(self.FAIXAS),
+                         "80% → Vale-compras (R$ 100,00) · 90% → Vale-compras (R$ 150,00) · 100% → Vale-compras + "
+                         "folga (R$ 250,00); o % da faixa é sobre o crescimento sobre a base ((resultado − base) ÷ "
+                         "(meta − base))")
+        self.assertEqual(texto_premiacao({"sobre": "resultado", "faixas": [{"pct": 120.5, "premio": "", "valor": 1250.0}]}),
+                         "120,5% → R$ 1.250,00; o % da faixa é sobre o número atingido (resultado ÷ meta)")
+        self.assertEqual(texto_premiacao(None), "")
 
 
 class TestIndicadores(ComCache, unittest.TestCase):
@@ -497,6 +567,33 @@ class TestValidar(ComCache, unittest.TestCase):
         self.erro("rótulo", rotulo="x" * 21)
         self.assertEqual(self.validar(rotulo="  Mussa  ")["rotulo"], "Mussa")
 
+    def test_premiacoes(self):
+        faixas = [{"pct": 100, "premio": " Vale   compras ", "valor": "250"}, {"pct": 80.0, "valor": 100},
+                  {"pct": 90.04, "premio": "Folga"}]
+        d = self.validar(premiacoes={"sobre": "crescimento", "faixas": faixas})
+        self.assertEqual(d["premiacoes"], {"sobre": "crescimento", "faixas": [
+            {"pct": 80, "premio": "", "valor": 100.0}, {"pct": 90, "premio": "Folga", "valor": None},
+            {"pct": 100, "premio": "Vale compras", "valor": 250.0}]})  # em ordem, sem espaços sobrando
+        unica = {"faixas": [{"pct": 100, "valor": 300}]}
+        self.assertEqual(self.validar(premiacoes=unica)["premiacoes"]["sobre"], "resultado")  # meta Número: o padrão
+        # na meta Percentual e no preço médio, sempre o crescimento
+        self.assertEqual(self.validar(alvo_tipo="pct", premiacoes={**unica, "sobre": "resultado"})["premiacoes"]["sobre"],
+                         "crescimento")
+        preco = self.validar(metrica="preco_medio", metas_produto=[{"id": 32, "meta": 30}], premiacoes=unica)
+        self.assertEqual(preco["premiacoes"]["sobre"], "crescimento")
+        self.assertIsNone(self.validar()["premiacoes"])
+        self.assertIsNone(self.validar(premiacoes={"faixas": []})["premiacoes"])
+        self.erro("duas vezes", premiacoes={"faixas": [{"pct": 80, "valor": 1}, {"pct": 80.0, "valor": 2}]})
+        self.erro("de 1 a 500", premiacoes={"faixas": [{"pct": 0, "valor": 1}]})
+        self.erro("de 1 a 500", premiacoes={"faixas": [{"pct": 600, "valor": 1}]})
+        self.erro("a descrição ou o valor", premiacoes={"faixas": [{"pct": 80, "valor": 0}]})
+        self.erro("até 10 faixas", premiacoes={"faixas": [{"pct": i, "valor": 1} for i in range(1, 12)]})
+        self.erro("120 caracteres", premiacoes={"faixas": [{"pct": 80, "premio": "x" * 121}]})
+        self.erro("10 milhões", premiacoes={"faixas": [{"pct": 80, "valor": 2e7}]})
+        self.erro("número atingido", premiacoes={"sobre": "dobro", "faixas": [{"pct": 80, "valor": 1}]})
+        self.erro("premiacoes: use", premiacoes=[{"pct": 80, "valor": 1}])
+        self.erro("o objetivo não tem premiação", tipo="objetivo", premiacoes=unica)
+
     def test_campanha_de_antes(self):
         """Na edição de uma campanha de antes da 012, a base "logo antes" e a meta "base + N" continuam valendo."""
         antes = {"base_periodo": None, "alvo_tipo": "mais"}
@@ -624,6 +721,21 @@ class TestFerramentasDeAcao(ComCache, unittest.TestCase):
         _, p = f.executar("propor_acao", {**self.ARGS, "produtos": [32, 27]})
         self.assertIn("unidades diferentes", p["erro"])
         self.assertEqual(len(f.rascunhos), 1)
+
+    def test_propor_com_premiacao(self):
+        f = self.ferramentas()
+        r, p = f.executar("propor_acao", {**self.ARGS, "premiacoes": [{"pct": 100, "premio": "Folga", "valor": 300},
+                                                                      {"pct": 80, "valor": 100}]})
+        self.assertIsNone(p["erro"])
+        self.assertEqual(r["rascunho"]["premiacao"], "80% → R$ 100,00 · 100% → Folga (R$ 300,00); o % da faixa é sobre "
+                                                     "o número atingido (resultado ÷ meta)")
+        rascunho, = f.rascunhos  # a página lança com as faixas do rascunho
+        self.assertEqual(rascunho["premiacoes"], {"sobre": "resultado", "faixas": [
+            {"pct": 80, "premio": "", "valor": 100.0}, {"pct": 100, "premio": "Folga", "valor": 300.0}]})
+        r, p = f.executar("propor_acao", {**self.ARGS, "premiacao_sobre": "crescimento",
+                                          "premiacoes": [{"pct": 100, "premio": "Folga"}]})
+        self.assertEqual(f.rascunhos[-1]["premiacoes"]["sobre"], "crescimento")
+        self.assertNotIn("premiacao", self.ferramentas().executar("propor_acao", dict(self.ARGS))[0]["rascunho"])
 
     def test_so_o_administrador_propoe(self):
         f = self.ferramentas(USUARIO_VIS)
@@ -944,6 +1056,55 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
         with self.assertRaises(ValueError):
             self.gestao.atualizar(self.chefe, id_, self.dados(regiao="ES", vendedores=[ES]))
 
+    def test_premiacao(self):
+        # 01 a 28/09, meta +25% (Percentual: a faixa sai do crescimento). Thais: base 4.000, meta 5.000, resultado
+        # 4.750 = 75% do crescimento pedido; o Edir tem base 0 (sem meta para comparar)
+        premiacoes = {"sobre": "resultado", "faixas": [{"pct": 50, "valor": 100}, {"pct": 75, "premio": "Vale", "valor": 200},
+                                                       {"pct": 100, "valor": 300}]}
+        id_ = self.criar(premiacoes=premiacoes)
+        with self.banco.conexao() as con:
+            gravada, = con.execute("SELECT premiacoes FROM campanhas WHERE id = %s", [id_]).fetchone()
+            lancada, = con.execute("SELECT dados FROM gestao_eventos WHERE campanha = %s AND id_vendedor = %s AND "
+                                   "tipo = 'lancada'", [id_, BA]).fetchone()
+        self.assertEqual((gravada["sobre"], [f["pct"] for f in gravada["faixas"]]), ("crescimento", [50, 75, 100]))
+        self.assertEqual(lancada["premiacoes"], gravada)  # o que foi prometido fica no histórico
+        acao, = self.quadro()["acoes"]  # congela
+        self.assertEqual((acao["premiados"], acao["valor_premios"], acao["premiacoes"]), (1, 200.0, gravada))
+        d = self.gestao.detalhe(self.chefe, (None, None), id_)
+        premios = {x["id"]: x["premio"] for x in d["linhas"]}
+        self.assertEqual(premios[BA], {"pct": 0.75, "faixa": 75, "premio": "Vale", "valor": 200.0, "proxima": 100,
+                                       "falta": 0.25})
+        self.assertEqual((premios[EDIR]["pct"], premios[EDIR]["faixa"]), (None, None))
+        self.assertEqual((d["total"]["premiados"], d["total"]["valor_premios"]), (1, 200.0))
+        resultado = next(e for e in self.historico(BA)["eventos"] if e["tipo"] == "resultado")
+        self.assertEqual((resultado["dados"]["premio"]["faixa"], resultado["dados"]["premio"]["valor"]), (75, 200.0))
+        a = self.gestao.contexto(self.chefe, (None, None)).andamento(id_)
+        self.assertIn("75% → Vale (R$ 200,00)", a["premiacao"]["faixas"])
+        self.assertEqual(next(v for v in a["vendedores"] if v["id"] == BA)["premio"]["faixa"], 75)
+        self.assertEqual(a["total"]["valor_premios"], 200.0)
+        # depois do resultado, a premiação ainda muda (o prêmio sai do resultado congelado), com o evento
+        nova = {"faixas": [{"pct": 70, "premio": "Vale", "valor": 250}, {"pct": 100, "valor": 300}]}
+        self.gestao.atualizar(self.chefe, id_, self.dados(premiacoes=nova))
+        self.assertEqual(self.eventos(BA, id_), ["lancada", "resultado", "editada"])
+        editada = next(e for e in self.historico(BA)["eventos"] if e["tipo"] == "editada")
+        self.assertEqual((editada["dados"]["mudou"], editada["dados"]["premio"]["valor"]), (["premiação"], 250.0))
+        d = self.gestao.detalhe(self.chefe, (None, None), id_)
+        self.assertEqual((d["total"]["premiados"], d["total"]["valor_premios"]), (1, 250.0))
+        with self.assertRaises(ValueError) as e:  # a meta continua travada
+            self.gestao.atualizar(self.chefe, id_, self.dados(premiacoes=nova, meta_padrao=30))
+        self.assertIn("a descrição e a premiação mudam", str(e.exception))
+        # prorrogada: volta a correr, e o prêmio é o previsto com o resultado até agora (dados até 30/09)
+        self.gestao.prorrogar(self.chefe, id_)
+        acao, = self.quadro()["acoes"]
+        self.assertEqual((acao["situacao"], "premiados" in acao), ("em_vigor", False))
+        d = self.gestao.detalhe(self.chefe, (None, None), id_)
+        self.assertEqual({x["id"]: x["premio"]["faixa"] for x in d["linhas"]}, {BA: 70, EDIR: None})
+        # sem premiação: nada a mais
+        self.gestao.atualizar(self.chefe, id_, self.dados(fim="2026-10-12", premiacoes=None))
+        d = self.gestao.detalhe(self.chefe, (None, None), id_)
+        self.assertNotIn("premio", d["linhas"][0])
+        self.assertNotIn("premiados", d["total"])
+
     def test_quadro_vendedores_e_etiquetas(self):
         es = self.quadro(regiao="ES")
         self.assertEqual((es["regioes"], es["regiao"], es["pode_editar"]), (["ES", "BA"], "ES", True))
@@ -1183,7 +1344,15 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         a = self.gestao.contexto(self.chefe, (None, None)).andamento(id_)
         self.assertEqual(a["vendedores"][0]["produtos"], [{"produto": "MANTEIGA 200G", "base": 10.0, "preco": 30.0,
                                                            "preco_alvo": 40.0, "quantidade": 10.0}])
+
         self.assertEqual((a["vendedores"][0]["resultado"], a["vendedores"][0]["aumento_feito"]), (0.6667, 200.0))
+        # com premiação, a faixa sai do mesmo % da meta (66,7%)
+        self.gestao.atualizar(self.chefe, id_, {"nome": "Ação", "regiao": "ES", "inicio": "2026-08-01",
+                                                "fim": self.detalhe(id_)["item"]["fim"], "metrica": "preco_medio",
+                                                "metas_produto": precos, "base_periodo": "mes", "vendedores": [ES],
+                                                "premiacoes": {"faixas": [{"pct": 60, "valor": 50}, {"pct": 100, "valor": 90}]}})
+        rubens, = self.detalhe(id_)["linhas"]
+        self.assertEqual((rubens["premio"]["pct"], rubens["premio"]["faixa"], rubens["premio"]["valor"]), (0.6667, 60, 50.0))
 
     def test_preco_medio_meta_propria(self):
         # a manteiga (27) do ES: R$ 10 na base (julho) e R$ 30 em setembro (10 un). O alvo da campanha é R$ 40, mas o
@@ -1304,7 +1473,7 @@ class TestMigracao008(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1351,7 +1520,7 @@ class TestMigracao013(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1385,7 +1554,7 @@ class TestMigracao009(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

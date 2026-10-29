@@ -1864,6 +1864,48 @@ button.ge-obj:hover { transform: translateY(-1px); border-color: var(--linha-for
 .ge-form .form-erro { margin: 12px 0 0; }
 .ge-form-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
+/* premiação da campanha: sem, prêmio único ou por faixas (a maior faixa atingida) */
+.ge-premio { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border-radius: 14px; border: 1px solid var(--linha); background: var(--surface-2); }
+.ge-premio-cab { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.ge-premio-tit { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
+.ge-premio-tit .ic { width: 16px; height: 16px; color: var(--acento); }
+.ge-premio-sobre { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13px; color: var(--tinta-2); }
+.ge-premio-sobre > span { font-weight: 700; }
+.ge-premio-sobre label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ge-premio-sobre input { accent-color: var(--laranja); }
+.ge-faixas { display: grid; gap: 8px; }
+.ge-faixa { display: grid; grid-template-columns: 120px minmax(0, 1fr) 150px 22px; gap: 8px; align-items: end; }
+.ge-faixa .campo-form > span:first-child { font-size: 12px; }
+.ge-faixa .ge-x { margin-bottom: 10px; }
+.ge-com-unidade { position: relative; display: block; }
+.ge-com-unidade i { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); font-style: normal; font-size: 13px; color: var(--tinta-3); pointer-events: none; }
+.ge-com-unidade input { padding-right: 30px; }
+.ge-com-unidade.antes i { right: auto; left: 12px; }
+.ge-com-unidade.antes input { padding-right: 12px; padding-left: 36px; }
+.ge-premio-rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.ge-premio-rodape .ge-link { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.ge-premio-rodape .ge-link .ic { width: 14px; height: 14px; }
+.ge-premio-rodape small { font-size: 12.5px; }
+@media (max-width: 560px) {
+  .ge-faixa { grid-template-columns: 96px minmax(0, 1fr) 22px; }
+  .ge-faixa-premio { grid-column: 2 / 3; }
+  .ge-faixa-valor { grid-column: 1 / 3; grid-row: 2; }
+  .ge-faixa .ge-x { grid-column: 3; grid-row: 1; }
+}
+/* no cartão do quadro, no detalhe e no histórico */
+.ge-acao-premio { display: flex; align-items: center; gap: 4px; margin-top: -2px; font-size: 12.5px; font-weight: 600; color: var(--tinta-2); }
+.ge-acao-premio .ic { width: 13px; height: 13px; color: var(--acento); }
+.ge-chip-premio { white-space: normal; text-align: left; }
+table.dados td.ge-premio-cel { min-width: 120px; max-width: 160px; white-space: normal; }
+table.dados th.ge-th-premio small { display: block; font-size: 11px; font-weight: 500; color: var(--tinta-3); }
+.ge-premio-cel b { display: block; font-weight: 700; color: var(--ok); }
+.ge-premio-cel small { display: block; }
+.ge-premio-cel.prevista b { color: var(--tinta-2); }
+.ge-premio-res { display: flex; align-items: flex-start; gap: 7px; margin: 8px 0 0; font-size: 12.5px; color: var(--tinta-2); }
+.ge-premio-res .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--tinta-3); }
+.ge-premio-res.ganhou .ic { color: var(--acento); }
+.ge-premio-res b { color: var(--tinta); }
+
 /* histórico interno do vendedor, como uma conversa */
 .ge-hist { padding: 0; overflow: hidden; }
 .ge-hist-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--linha); }

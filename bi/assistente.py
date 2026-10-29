@@ -468,7 +468,8 @@ FERRAMENTAS = [
         "name": "listar_acoes",
         "description": ("Campanhas e objetivos da página Gestão que quem pergunta vê (dos vendedores do acesso), dos "
                         "mais novos para os mais antigos: código, tipo (campanha ou objetivo), nome, região, situação, "
-                        "período, indicador, meta e nº de vendedores. Use para achar a campanha citada (pelo nome)."),
+                        "período, indicador, meta, premiação (quando tem) e nº de vendedores. Use para achar a "
+                        "campanha citada (pelo nome)."),
         "input_schema": _objeto({
             "texto": {"type": "string", "description": "parte do nome ou o código; vazio lista todas"},
             "incluir_encerradas": {"type": "boolean", "description": "true para incluir as já encerradas"},
@@ -480,8 +481,9 @@ FERRAMENTAS = [
         "description": ("Andamento de uma campanha por vendedor, exatamente como na página Gestão: a base (o mesmo "
                         "indicador no período fechado escolhido, antes do início), a meta de cada um, o resultado (ao "
                         "vivo enquanto a campanha corre; congelado depois do fim), a classe (ok = meta batida; mid = "
-                        "melhorou sem chegar à meta; bad = não passou da base), a situação pelo ritmo e o total. Num "
-                        "objetivo, o andamento da equipe da região contra a meta da equipe."),
+                        "melhorou sem chegar à meta; bad = não passou da base), a situação pelo ritmo, o prêmio de "
+                        "cada um (quando a campanha tem premiação) e o total. Num objetivo, o andamento da equipe da "
+                        "região contra a meta da equipe."),
         "input_schema": _objeto({
             "acao": {"type": "integer", "description": "código da campanha ou do objetivo (de listar_acoes)"},
         }, ["acao"]),
@@ -527,6 +529,17 @@ FERRAMENTAS = [
             "metas_produto": {"type": "array", "description": "preço médio: o preço-alvo (R$ por unidade) de cada produto",
                               "items": _objeto({"id_produto": {"type": "integer"}, "meta": {"type": "number"}},
                                                ["id_produto", "meta"])},
+            "premiacoes": {"type": "array",
+                           "description": ("premiação (opcional): uma faixa só (prêmio único) ou várias; cada vendedor "
+                                           "ganha a maior faixa que atingir"),
+                           "items": _objeto({"pct": {"type": "number", "description": "% da faixa (80 = 80%)"},
+                                             "premio": {"type": "string", "description": "o prêmio (pode ser vazio com valor)"},
+                                             "valor": {"type": "number", "description": "valor em R$ (opcional)"}},
+                                            ["pct"])},
+            "premiacao_sobre": {"type": "string", "enum": ["resultado", "crescimento"],
+                                "description": ("só na meta fixo: resultado (padrão) = o % da faixa é resultado ÷ meta; "
+                                                "crescimento = (resultado − base) ÷ (meta − base). Na pct e no preço "
+                                                "médio, sempre o crescimento")},
             "vendedores": {**_INTEIROS, "description": "códigos dos vendedores da campanha (de buscar_vendedor)"},
             "equipes": {"type": "array", "items": {"type": "string", "enum": ["ES", "BA", "EDIR"]},
                         "description": "inclui todos os vendedores ativos dessas equipes (da região da campanha)"},
@@ -1144,7 +1157,7 @@ class Ferramentas:
                       base=None, medida=None, forma=None, meta_em=None, clientes_base=None, dias_sem_compra=None,
                       metas=None,
                       metas_produto=None, vendedores=None, equipes=None, produtos=None, linhas=None, categorias=None,
-                      grupos=None, ufs=None, segmentos=None, areas=None) -> dict:
+                      grupos=None, ufs=None, segmentos=None, areas=None, premiacoes=None, premiacao_sobre=None) -> dict:
         individuais = {}
         for m in metas or []:
             try:
@@ -1164,6 +1177,7 @@ class Ferramentas:
                  "semanas": semanas, "fim": fim, "base_periodo": base, "metrica": metrica, "parametros": parametros,
                  "alvo_tipo": alvo_tipo,
                  "meta_padrao": meta, "vendedores": participantes, "metas_produto": precos,
+                 "premiacoes": {"sobre": premiacao_sobre, "faixas": premiacoes} if premiacoes else None,
                  "filtros": {"produtos": produtos, "linhas": linhas, "categorias": categorias, "grupos": grupos,
                              "ufs": ufs, "segmentos": segmentos, "areas": areas}}
         r = self._acoes().propor(dados, equipes or [])
@@ -1191,6 +1205,7 @@ class Ferramentas:
                 "descricao": r["descricao"], "filtros": filtros,
                 **({"precos_alvo": [{"produto": f"{p['id']} {nomes['produtos'].get(str(p['id']), '')}".strip(),
                                      "meta": p["meta"]} for p in r["metas_produto"]]} if r["metas_produto"] else {}),
+                **({"premiacao": r["texto_premiacao"]} if r["texto_premiacao"] else {}),
                 "vendedores": [{"id": v["id"], "nome": nomes["vendedores"].get(str(v["id"])),
                                 "meta": r["meta_padrao"] if v["meta"] is None else v["meta"],
                                 **(r["bases"].get(str(v["id"])) or {"base": "ainda sem dados do período da base"})}
@@ -1450,6 +1465,7 @@ nunca_compraram;
   - "vender 10% a mais" = personalizada, faturamento, total, alvo_tipo pct, meta 10;
   - "atender 60% da carteira" ou "cobertura de 60%" = positivacao, meta_em pct_base, alvo_tipo fixo, meta 60;
   - "300 kg de mussarela" = personalizada, volume, total, alvo_tipo fixo, meta 300, com os produtos.
+- Premiação (opcional, em premiacoes): um prêmio único (uma faixa, ex.: 100% → R$ 300) ou por faixas (80% → R$ 100, 90% → R$ 150, 100% → R$ 250), cada uma com o prêmio em texto e/ou o valor em R$, as mesmas para todos. Cada vendedor ganha a maior faixa que atingir (não se somam). Na meta fixo, o % da faixa é sobre o número atingido (resultado ÷ meta, o padrão) ou o crescimento (premiacao_sobre crescimento: (resultado − base) ÷ (meta − base)); na pct e no preço médio, sempre o crescimento. Sem premiação no pedido, não invente. Ao resumir, diga sobre o que é o % das faixas (o crescimento pedido ou o número atingido). No andamento, o prêmio de cada um vem em premio: enquanto a campanha corre é só o previsto (nada está garantido); vira o final quando o resultado congela.
 - Só o administrador lança campanhas e objetivos. Para ele, use propor_acao: ela confere e monta um RASCUNHO, sem \
 gravar, e ele lança no botão "Lançar campanha" que aparece abaixo da sua resposta. Nunca diga que a campanha foi \
 lançada: diga que o rascunho está pronto para conferir e resuma o que ficou (região, prazo, base, indicador, meta, \

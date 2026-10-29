@@ -16,14 +16,16 @@ vendedor.
   cada produto na base (base_precos, migração 013; indicadores.progresso_preco); a meta própria de um vendedor é o
   preço-alvo dele nos produtos que ela dá (alvos_precos, migração 015). Na positivação de todos os clientes, a base e o
   resultado guardam também a cobertura (% da base, base_cobertura e resultado_cobertura, migração 016); a meta pode
-  ser em % da base (meta_em pct_base).
+  ser em % da base (meta_em pct_base). A premiação (premiacoes, migração 033) é um prêmio único ou por faixas, as
+  mesmas para todos: cada um ganha a maior faixa que atingir, pelo % do crescimento sobre a base ou do número atingido
+  (pct_premiacao). O prêmio não fica gravado por vendedor: sai do resultado (congelado ou o de agora, como previsto).
 - Objetivo: um indicador da equipe da região num período, contra uma meta da equipe (o total, sem repetir clientes
   entre os vendedores).
 - Histórico (tabela gestao_eventos): as observações do administrador e o que aconteceu em cada campanha do vendedor
   (lançada, editada, prorrogada, encerrada, resultado). As parciais e o resultado de uma campanha em vigor entram na hora.
 - Quem mexe: só o administrador. Quem tem a página vê as campanhas, os objetivos e as observações dos vendedores do
   acesso dela (Gestão › Configurar, como em Projeções e no Assistente).
-- Tudo fica no PostgreSQL (migrações 007, 008, 009, 012, 013, 015 e 016). As contas usam o recorte com todos os vendedores do
+- Tudo fica no PostgreSQL (migrações 007, 008, 009, 012, 013, 015, 016 e 033). As contas usam o recorte com todos os vendedores do
   Assistente, filtrando os vendedores no SQL, e ficam guardadas no próprio recorte (refeito quando os dados, as regras
   ou as metas mudam). Base pendente e resultado vencido são gravados na leitura seguinte (cálculo preguiçoso), com a
   coluna versao evitando gravar por cima de uma mudança feita no meio.
@@ -55,7 +57,8 @@ from .projecoes import NOME_EQUIPE
 
 __all__ = ["Gestao", "ContextoGestao", "SemDados", "andamento", "calendario_periodo", "unidades", "validar",
            "situacao", "prazo", "alvo_de", "classe_resultado", "comparar", "comparar_preco", "andamento_preco",
-           "produtos_preco", "valor_vendedor", "rotulo_padrao", "texto_alvo", "publica"]
+           "produtos_preco", "valor_vendedor", "rotulo_padrao", "texto_alvo", "publica", "pct_premiacao", "premio_de",
+           "texto_premiacao"]
 
 TIPOS_ITEM = {"acao": "campanha", "objetivo": "objetivo"}
 REGIOES = ("ES", "BA")
@@ -79,6 +82,12 @@ FOLGA_CONGELAR = 1  # o resultado congela quando os dados passam um dia do fim (
 DIAS_ENCERRADAS = 30  # a campanha encerrada fica no quadro e nas etiquetas por mais 30 dias
 DIAS_OBJETIVO = 7  # o objetivo que terminou fica no topo por mais uma semana
 PRORROGAR = 14
+MAX_FAIXAS = 10  # faixas da premiação
+MAX_PCT_FAIXA = 500
+MAX_PREMIO = 120  # a descrição do prêmio
+MAX_VALOR_PREMIO = 10_000_000
+SOBRE = {"resultado": "o número atingido (resultado ÷ meta)",
+         "crescimento": "o crescimento sobre a base ((resultado − base) ÷ (meta − base))"}  # o % que decide a faixa
 TRAVA_ACOES = 7_240_103  # pg_advisory_xact_lock: o mesmo rascunho do Assistente lançado duas vezes vira uma campanha só
 DIAS_SEMANA = {"SEGUNDA": 1, "TERCA": 2, "QUARTA": 3, "QUINTA": 4, "SEXTA": 5, "SABADO": 6, "DOMINGO": 7}
 ROTULOS = {"positivacao": "Positivação", "mix_medio": "Mix", "efetividade": "Efetividade", "frequencia": "Frequência",
@@ -89,8 +98,8 @@ ROTULOS_MEDIDA = {("faturamento", "total"): "Faturamento", ("faturamento", "por_
 ORDEM_EVENTO = {"lancada": 0, "nota": 1, "parcial": 2, "editada": 3, "prorrogada": 3, "encerrada": 3, "removido": 3,
                 "resultado": 4}
 _COLUNAS = ("id", "tipo", "nome", "rotulo", "descricao", "regiao", "status", "inicio", "fim", "metrica", "parametros",
-            "filtros", "alvo_tipo", "meta_padrao", "base_periodo", "base_inicio", "base_fim", "arquivada", "rascunho",
-            "encerrada_em",
+            "filtros", "alvo_tipo", "meta_padrao", "base_periodo", "base_inicio", "base_fim", "premiacoes", "arquivada",
+            "rascunho", "encerrada_em",
             "encerrada_por_nome", "resultado_em", "versao", "criada_em", "criada_por", "criada_por_nome",
             "atualizada_em", "atualizada_por_nome")
 _CAMPOS = ", ".join(f"c.{x}" for x in _COLUNAS)
@@ -274,6 +283,49 @@ def _alvos_proprios(bruto, metas_produto: list[dict], regras: Regras, vid: int) 
     return saida or None
 
 
+def _premiacoes(bruto, alvo_tipo: str, metrica: str) -> dict | None:
+    """A premiação da campanha: {sobre, faixas: [{pct, premio, valor}]}, as faixas em ordem crescente de pct (em %);
+    valor em R$ (None = só a descrição). sobre: o % que decide a faixa (SOBRE); na meta Percentual (e na base + N das
+    de antes) e no preço médio, sempre o crescimento. None = sem premiação."""
+    if bruto in (None, "", {}, []):
+        return None
+    if not isinstance(bruto, dict):
+        raise ValueError("premiacoes: use {sobre, faixas: [{pct, premio, valor}]}")
+    faixas = _lista(bruto.get("faixas"), "as faixas da premiação")
+    if not faixas:
+        return None
+    if len(faixas) > MAX_FAIXAS:
+        raise ValueError(f"a premiação pode ter até {MAX_FAIXAS} faixas")
+    saida = {}
+    for f in faixas:
+        if not isinstance(f, dict):
+            raise ValueError("cada faixa da premiação: {pct, premio, valor}")
+        pct = round(_numero(f.get("pct"), "o % da faixa"), 1)
+        if not 1 <= pct <= MAX_PCT_FAIXA:
+            raise ValueError(f"o % de cada faixa da premiação vai de 1 a {MAX_PCT_FAIXA} (% da meta)")
+        pct = int(pct) if pct == int(pct) else pct
+        texto = _num(pct, {"formato": "pct"})
+        if pct in saida:
+            raise ValueError(f"a faixa de {texto}% aparece duas vezes na premiação")
+        premio = " ".join(str(f.get("premio") or "").split())
+        if len(premio) > MAX_PREMIO:
+            raise ValueError(f"o prêmio de cada faixa pode ter até {MAX_PREMIO} caracteres")
+        valor = None
+        if f.get("valor") not in (None, ""):
+            valor = round(_numero(f["valor"], f"o valor do prêmio da faixa de {texto}%"), 2)
+            if valor > MAX_VALOR_PREMIO:
+                raise ValueError(f"o valor do prêmio da faixa de {texto}% passa de R$ 10 milhões")
+        if not premio and not valor:
+            raise ValueError(f"dê o prêmio da faixa de {texto}% (a descrição ou o valor em R$)")
+        saida[pct] = {"pct": pct, "premio": premio, "valor": valor}
+    sobre = str(bruto.get("sobre") or "resultado").strip().lower()
+    if sobre not in SOBRE:
+        raise ValueError("a premiação é sobre o crescimento (crescimento) ou sobre o número atingido (resultado)")
+    if alvo_tipo != "fixo" or metrica == "preco_medio":
+        sobre = "crescimento"
+    return {"sobre": sobre, "faixas": [saida[p] for p in sorted(saida)]}
+
+
 def regiao_do_grupo(grupo: str) -> str | None:
     """ES ou BA para a equipe do vendedor (o Edir é da BA); None para quem não é de nenhuma (oculto)."""
     return next((r for r, equipes in EQUIPES_REGIAO.items() if grupo in equipes), None)
@@ -337,6 +389,9 @@ def validar(dados: dict, cur, regras: Regras, permitidos: frozenset[int] | None,
     rotulo = " ".join(str(dados.get("rotulo") or "").split()) or rotulo_padrao(metrica, parametros)
     if len(rotulo) > MAX_ROTULO:
         raise ValueError(f"o rótulo (o nome curto da etiqueta) pode ter até {MAX_ROTULO} caracteres")
+    premiacoes = _premiacoes(dados.get("premiacoes"), alvo_tipo, metrica)
+    if premiacoes and not acao:
+        raise ValueError("o objetivo não tem premiação: ela é das campanhas, por vendedor")
 
     vendedores: dict[int, float | None] = {}
     alvos_v: dict[int, dict | None] = {}  # preço médio: a meta própria é o preço-alvo de cada produto
@@ -367,7 +422,7 @@ def validar(dados: dict, cur, regras: Regras, permitidos: frozenset[int] | None,
                 raise ValueError(f"fora do seu acesso na Gestão: {', '.join(fora)}")
     return {
         "tipo": tipo, "nome": nome, "rotulo": rotulo, "descricao": _texto(dados.get("descricao"), "a descrição"),
-        **m, "alvo_tipo": alvo_tipo, "meta_padrao": meta_padrao,
+        **m, "alvo_tipo": alvo_tipo, "meta_padrao": meta_padrao, "premiacoes": premiacoes,
         "vendedores": [{"id": v, "meta": vendedores[v], "alvos_precos": alvos_v.get(v)} for v in sorted(vendedores)],
     }
 
@@ -545,6 +600,73 @@ def comparar(res, base, alvo) -> dict:
     return {"classe": classe_resultado(res, base, alvo), "delta": _redondo(delta),
             "delta_pct": _redondo(delta / base) if delta is not None and base else None,
             "caminho": _redondo(caminho)}
+
+
+# --- premiação: a maior faixa que cada vendedor atinge -------------------------------------------
+def pct_premiacao(sobre: str, desc: dict, res, base, alvo) -> float | None:
+    """O % que decide a faixa da premiação (em fração). crescimento: (resultado − base) ÷ (meta − base), sem base a
+    partir do zero e, para quem já estava na meta na base, o de manter (resultado ÷ meta); resultado: resultado ÷ meta.
+    No preço médio, res já é o % da meta (o aumento feito ÷ o pedido). None = sem resultado ou sem meta."""
+    if res is None:
+        return None
+    if desc["tipo"] == "preco_medio":
+        return res
+    if not alvo:
+        return None
+    if sobre == "crescimento" and base is not None and base < alvo:
+        return (res - base) / (alvo - base)
+    return res / alvo
+
+
+def premio_de(premiacoes: dict | None, pct) -> dict | None:
+    """O prêmio pelo % da premiação (pct_premiacao): a maior faixa atingida (com a folga da meta batida: 79,96% conta
+    como 80%), a próxima e quanto falta para ela (em fração). None = a campanha não tem premiação."""
+    if not premiacoes:
+        return None
+    faixas = premiacoes["faixas"]
+    feitas = [f for f in faixas if pct is not None and round(pct * 100, 1) >= f["pct"]]
+    faixa = feitas[-1] if feitas else None
+    proxima = faixas[len(feitas)] if len(feitas) < len(faixas) else None
+    return {"pct": _redondo(pct), "faixa": faixa and faixa["pct"], "premio": faixa and faixa["premio"],
+            "valor": faixa and faixa["valor"], "proxima": proxima and proxima["pct"],
+            "falta": _redondo(proxima["pct"] / 100 - pct) if proxima and pct is not None else None}
+
+
+def premio_vendedor(c: dict, desc: dict, res, base, alvo, pendente: bool = False) -> dict | None:
+    """O prêmio de um vendedor da campanha c com o resultado res (no preço médio, o % da meta). pendente: a base dele
+    ainda não foi medida (no crescimento, sem % até ela chegar)."""
+    p = c.get("premiacoes")
+    if not p:
+        return None
+    if pendente and p["sobre"] == "crescimento":
+        res = None
+    return premio_de(p, pct_premiacao(p["sobre"], desc, res, base, alvo))
+
+
+def total_premios(premiacoes: dict | None, premios) -> dict:
+    """Quantos ganharam alguma faixa e a soma dos valores em R$ (None se nenhuma faixa tem valor)."""
+    if not premiacoes:
+        return {}
+    ganhos = [p for p in premios if p and p["faixa"] is not None]
+    com_valor = any(f["valor"] is not None for f in premiacoes["faixas"])
+    return {"premiados": len(ganhos),
+            "valor_premios": round(sum(p["valor"] or 0 for p in ganhos), 2) if com_valor else None}
+
+
+def _reais(v: float) -> str:
+    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def texto_premiacao(premiacoes: dict | None) -> str:
+    """Como a premiação aparece para a IA ("80% → Vale-compras (R$ 100,00) · 100% → R$ 250,00; sobre o crescimento")."""
+    if not premiacoes:
+        return ""
+    faixas = " · ".join(
+        f"{_num(f['pct'], {'formato': 'pct'})}% → "
+        + (f"{f['premio']} ({_reais(f['valor'])})" if f["premio"] and f["valor"] is not None
+           else f["premio"] or _reais(f["valor"]))
+        for f in premiacoes["faixas"])
+    return f"{faixas}; o % da faixa é sobre {SOBRE[premiacoes['sobre']]}"
 
 
 # --- preço médio: o % da meta sai dos preços de cada produto na base e agora ----------------------
@@ -923,6 +1045,8 @@ class Gestao:
              "vendedores": len(c["vendedores"])}
         if c["metrica"] == "preco_medio":
             r.update(base_precos=base_precos, alvos={str(p): m for p, m in alvos_preco(c, v).items()})
+        if c.get("premiacoes"):  # o que foi prometido (as faixas do momento)
+            r["premiacoes"] = c["premiacoes"]
         return r
 
     @staticmethod
@@ -960,8 +1084,20 @@ class Gestao:
                          c["id"], vid])
             fim = (andamento_preco(c, precos_base[vid], precos, v) if c["metrica"] == "preco_medio"
                    else {"resultado": _redondo(res), **comparar(res, base, alvo)})
+            if c.get("premiacoes"):
+                fim["premio"] = premio_vendedor(c, desc, fim["resultado"] if c["metrica"] == "preco_medio" else res,
+                                                base, alvo, vid not in bases and v["base_em"] is None)
             self._evento(con, vid, c["id"], "resultado", {**self._retrato(c, base, alvo, precos_base[vid], v), **fim}, None)
         con.execute("UPDATE campanhas SET resultado_em = now(), status = 'concluida' WHERE id = %s", [c["id"]])
+
+    @staticmethod
+    def _premio_congelado(c: dict, desc: dict, v: dict, base, alvo) -> dict | None:
+        """O prêmio do vendedor v (como lido do banco) com o resultado congelado e as faixas de c."""
+        if c["metrica"] == "preco_medio":
+            res = andamento_preco(c, v["base_precos"] if v["base_em"] else None, v["resultado_precos"], v)["resultado"]
+        else:
+            res = v["resultado"]
+        return premio_vendedor(c, desc, res, base, alvo, v["base_em"] is None)
 
     @staticmethod
     def _travar_versao(con, c: dict) -> bool:
@@ -1037,6 +1173,9 @@ class Gestao:
                 res = v["resultado"] if congelado else vivo.get(v["id"], (None,))[0]
                 item.update(resultado=_redondo(res), **comparar(res, base, alvo),
                             cobertura=v["resultado_cobertura"] if congelado else (vivo.get(v["id"]) or (None,) * 5)[4])
+            if (congelado or vivo) and c.get("premiacoes"):
+                item["premio"] = premio_vendedor(c, desc, item["resultado"] if preco else res, base, alvo,
+                                                 item["base_pendente"])
             vendedores[v["id"]] = item
         return {"situacao": sit, "congelado": congelado, "provisorio": sit == "encerrada" and not congelado,
                 "vendedores": vendedores, "aviso": aviso}
@@ -1196,7 +1335,10 @@ class Gestao:
                     "meta_padrao": c["meta_padrao"], "base_periodo": c["base_periodo"], "provisorio": estado["provisorio"],
                     "encerrada_em": c["encerrada_em"], "aviso": aviso,
                     "base_pendente": any(estado["vendedores"][vid]["base_pendente"] for vid in visiveis),
-                    "criada_por_nome": c["criada_por_nome"],
+                    "criada_por_nome": c["criada_por_nome"], "premiacoes": c["premiacoes"],
+                    # encerrada: quantos ganharam alguma faixa e o total em R$ (o resultado provisório também)
+                    **(total_premios(c["premiacoes"], [estado["vendedores"][vid].get("premio") for vid in visiveis])
+                       if encerrada else {}),
                     **(pct_da_campanha(desc, pares.values(), precos) if estado["situacao"] != "planejada"
                        else {"meta_pct": None, "com_meta": 0}),
                     **({"produtos": produtos} if produtos else {}),
@@ -1298,7 +1440,7 @@ class Gestao:
                     "base_fim": c["base_fim"].isoformat() if c["base_fim"] else None,
                     "vendedores": len(c["vendedores"]), "arquivada": c["arquivada"], "congelado": estado["congelado"],
                     "provisorio": estado["provisorio"], "alvo_tipo": c["alvo_tipo"], "meta_padrao": c["meta_padrao"],
-                    "participa": participa is not None, "aviso": estado["aviso"],
+                    "participa": participa is not None, "aviso": estado["aviso"], "premiacoes": c["premiacoes"],
                     **({"produtos": produtos} if (produtos := k.produtos(c)) else {}),
                 }
                 if participa is None:
@@ -1326,7 +1468,7 @@ class Gestao:
                             "autor": None, "criada_em": None, "provisorio": True,
                             "dados": {**self._retrato(c, e["base"], e["alvo"], e.get("base_precos"), participa),
                                       **{x: e[x] for x in ("resultado", "classe", "delta", "delta_pct", "caminho", "precos",
-                                                           "aumento_pedido") if x in e}}}
+                                                           "aumento_pedido", "premio") if x in e}}}
                     eventos.append(item)
                     ultimo_resultado[c["id"]] = item
             for camp, e in ultimo_resultado.items():
@@ -1413,6 +1555,11 @@ class Gestao:
                          "status": r.get("status"), "projecao": r.get("projecao"),
                          "numerador": r.get("numerador"), "denominador": r.get("denominador"), "dias": r.get("dias"),
                          "meses": r.get("meses"), **extra, **cmp}
+                if c["premiacoes"]:  # a faixa do resultado (o de agora, enquanto corre) e, nas somas, a do ritmo
+                    linha["premio"] = premio_vendedor(c, desc, res, e["base"], e["alvo"], e["base_pendente"])
+                    if estado["situacao"] == "em_vigor" and r.get("projecao") is not None:
+                        linha["premio_ritmo"] = premio_vendedor(c, desc, r["projecao"], e["base"], e["alvo"],
+                                                                e["base_pendente"])
                 linhas.append(linha)
             linhas.sort(key=lambda x: (x["pct"] is None, -(x["pct"] or 0), _chave(x["nome"])))
             encerrada = estado["situacao"] == "encerrada"
@@ -1423,6 +1570,7 @@ class Gestao:
             if preco:  # os aumentos feitos ÷ os pedidos, somados, como a barra da campanha (também no congelado)
                 total["realizado"] = _redondo(progresso_preco_juntos(
                     (x["resultado"], x["delta"], x["aumento_pedido"]) for x in linhas))
+            total.update(total_premios(c["premiacoes"], [x.get("premio") for x in linhas]))
             item = {**publica(c), "situacao": estado["situacao"], "prazo": prazo(c, hoje),
                     "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada,
                     "vendedores": [{"id": v["id"], "meta": v["meta"], "alvos_precos": v["alvos_precos"]}
@@ -1531,14 +1679,14 @@ class Gestao:
                     return {"id": ja[0], "ja_existia": True, "regiao": ja[2]}
             id_ = con.execute(
                 "INSERT INTO campanhas (tipo, nome, rotulo, descricao, regiao, status, inicio, fim, metrica, parametros, "
-                "filtros, alvo_tipo, meta_padrao, base_periodo, base_inicio, base_fim, rascunho, criada_por, "
+                "filtros, alvo_tipo, meta_padrao, base_periodo, base_inicio, base_fim, premiacoes, rascunho, criada_por, "
                 "criada_por_nome, atualizada_por_nome) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
-                "%s, %s, %s, %s, %s, %s, (SELECT id FROM usuarios WHERE id = %s), %s, %s) RETURNING id",
+                "%s, %s, %s, %s, %s, %s::jsonb, %s, (SELECT id FROM usuarios WHERE id = %s), %s, %s) RETURNING id",
                 [tipo, d["nome"], d["rotulo"], d["descricao"], d["regiao"],
                  "planejada" if hoje < d["inicio"] else "andamento", d["inicio"], d["fim"], d["metrica"],
                  json.dumps(d["parametros"], ensure_ascii=False), json.dumps(d["filtros"], ensure_ascii=False),
-                 d["alvo_tipo"], d["meta_padrao"], d["base_periodo"], d["base_inicio"], d["base_fim"], rascunho,
-                 usuario["id"], usuario["nome"], usuario["nome"]]).fetchone()[0]
+                 d["alvo_tipo"], d["meta_padrao"], d["base_periodo"], d["base_inicio"], d["base_fim"],
+                 _json(d["premiacoes"]), rascunho, usuario["id"], usuario["nome"], usuario["nome"]]).fetchone()[0]
             self._gravar_produtos(con, id_, d["metas_produto"])
             if tipo == "acao":
                 c = {**d, "id": id_}
@@ -1573,7 +1721,8 @@ class Gestao:
         """Muda a campanha ou o objetivo. Na campanha: o texto muda sem evento; a meta vira um evento no histórico; a
         janela da base (o início ou o período da base; nas de antes da 012, também o fim) ou o que ela mede refazem a
         base de todos; vendedor que entra ganha a base e o evento de lançamento, e o que sai fica com o evento de
-        saída. Campanha com resultado só muda o texto (o prazo muda pelo Prorrogar)."""
+        saída. A premiação também vira um evento. Campanha com resultado só muda o texto e a premiação (o prazo muda
+        pelo Prorrogar): o prêmio de cada um sai de novo do resultado congelado."""
         self._so_admin(usuario)
         if not isinstance(dados, dict):
             raise ValueError("dados inválidos")
@@ -1588,13 +1737,14 @@ class Gestao:
                     sorted((p["id"], p["meta"]) for p in x["metas_produto"]))
         mudou_medida = medida(c) != medida(d)
         campos = ("nome", "rotulo", "descricao", "inicio", "fim", "metrica", "parametros", "filtros", "alvo_tipo",
-                  "meta_padrao", "base_periodo", "base_inicio", "base_fim")
+                  "meta_padrao", "base_periodo", "base_inicio", "base_fim", "premiacoes")
         sql = ("UPDATE campanhas SET nome = %s, rotulo = %s, descricao = %s, inicio = %s, fim = %s, metrica = %s, "
                "parametros = %s::jsonb, filtros = %s::jsonb, alvo_tipo = %s, meta_padrao = %s, base_periodo = %s, "
-               "base_inicio = %s, base_fim = %s, status = CASE WHEN resultado_em IS NOT NULL THEN status "
-               "WHEN %s < inicio THEN 'planejada' ELSE 'andamento' END, versao = versao + 1, atualizada_em = now(), "
-               "atualizada_por_nome = %s WHERE id = %s")
-        valores = [json.dumps(d[x], ensure_ascii=False) if x in ("parametros", "filtros") else d[x] for x in campos]
+               "base_inicio = %s, base_fim = %s, premiacoes = %s::jsonb, status = CASE WHEN resultado_em IS NOT NULL "
+               "THEN status WHEN %s < inicio THEN 'planejada' ELSE 'andamento' END, versao = versao + 1, "
+               "atualizada_em = now(), atualizada_por_nome = %s WHERE id = %s")
+        valores = [json.dumps(d[x], ensure_ascii=False) if x in ("parametros", "filtros") else
+                   _json(d[x]) if x == "premiacoes" else d[x] for x in campos]
         if tipo == "objetivo":
             with self.banco.conexao() as con:
                 if not self._travar_versao(con, c):
@@ -1610,8 +1760,8 @@ class Gestao:
                       or any((antes[v]["meta"], antes[v]["alvos_precos"]) != (depois[v]["meta"], depois[v]["alvos_precos"])
                              for v in depois if v in antes))
         if c["resultado_em"] and (mudou_medida or mudou_alvo or novos or saem):
-            raise ValueError("a campanha já tem resultado: só o nome, o rótulo e a descrição mudam (para mudar o prazo, "
-                             "use Prorrogar)")
+            raise ValueError("a campanha já tem resultado: só o nome, o rótulo, a descrição e a premiação mudam (para "
+                             "mudar o prazo, use Prorrogar)")
         nova = {**c, **{x: d[x] for x in (*campos, "metas_produto")},
                 "vendedores": [{**antes.get(v, {"id": v, "base": None, "base_em": None}), "meta": depois[v]["meta"],
                                 "alvos_precos": depois[v]["alvos_precos"]} for v in sorted(depois)]}
@@ -1619,7 +1769,8 @@ class Gestao:
         desc = descritor(d["metrica"], d["parametros"])
         mudou = [x for x, sim in (("prazo", (c["inicio"], c["fim"]) != (d["inicio"], d["fim"])),
                                   ("base", medida(c)[:2] != medida(d)[:2]),
-                                  ("indicador", medida(c)[2:] != medida(d)[2:]), ("meta", mudou_alvo)) if sim]
+                                  ("indicador", medida(c)[2:] != medida(d)[2:]), ("meta", mudou_alvo),
+                                  ("premiação", c["premiacoes"] != d["premiacoes"])) if sim]
         with self.banco.conexao() as con:
             if not self._travar_versao(con, c):
                 raise ValueError("a campanha acabou de mudar; abra de novo e repita")
@@ -1649,12 +1800,16 @@ class Gestao:
                 precos = bases[vid][3] if vid in bases else (
                     None if mudou_medida or not antes[vid]["base_em"] else antes[vid]["base_precos"])
                 pendente = mudou_medida and vid not in bases
+                alvo = alvo_de(d["alvo_tipo"], desc, base, self._meta_v(nova, v))
                 self._evento(con, vid, c["id"], "editada", {
-                    **self._retrato(nova, base, alvo_de(d["alvo_tipo"], desc, base, self._meta_v(nova, v)), precos, v),
+                    **self._retrato(nova, base, alvo, precos, v),
                     "mudou": mudou, "base_pendente": pendente, "fim_antes": c["fim"].isoformat(),
                     "base_antes": _redondo(base_antes),
                     "alvo_antes": _redondo(alvo_de(c["alvo_tipo"], descritor(c["metrica"], c["parametros"]), base_antes,
-                                                   self._meta_v(c, antes[vid])))}, usuario)
+                                                   self._meta_v(c, antes[vid]))),
+                    # premiação mudada depois do resultado: o prêmio dele com o resultado congelado
+                    **({"premio": self._premio_congelado(nova, desc, antes[vid], base, alvo)}
+                       if c["resultado_em"] and "premiação" in mudou else {})}, usuario)
             self._gravar_bases(con, {**nova, "vendedores": nova["vendedores"]}, desc,
                                {vid: b for vid, b in bases.items() if vid not in novos})
 
@@ -1929,6 +2084,7 @@ class ContextoGestao:
                           f"{_num(c['meta_padrao'], desc)}{'%' if desc['meta_em_pct'] else ''} para a equipe",
                           **({"vendedores": sum(1 for v in c["vendedores"] if ids is None or v["id"] in ids)}
                              if c["tipo"] == "acao" else {}),
+                          **({"premiacao": texto_premiacao(c["premiacoes"])} if c["premiacoes"] else {}),
                           "lancada_por": c["criada_por_nome"], "lancada_em": (c["criada_em"] or "")[:10],
                           **({"do_rascunho": c["rascunho"]} if c["rascunho"] else {})})
         return saida
@@ -1961,7 +2117,7 @@ class ContextoGestao:
                                                           dt.date.fromisoformat(item["base_fim"]))}
         base["meta"] = texto_alvo(item["alvo_tipo"], item["meta_padrao"], ind)
         campos = ("id", "nome", "equipe", "base", "alvo", "resultado", "pct", "classe", "delta", "delta_pct", "status",
-                  "numerador", "denominador", "dias", "meses", "da_base", "base_da_base")
+                  "numerador", "denominador", "dias", "meses", "da_base", "base_da_base", "premio", "premio_ritmo")
         base["vendedores"] = [{("meta" if k == "alvo" else k): x[k] for k in campos if x.get(k) is not None}
                               for x in r["linhas"]]
         base["leitura_classe"] = "ok = meta batida; mid = melhorou sobre a base sem chegar à meta; bad = não passou da base"
@@ -1980,13 +2136,24 @@ class ContextoGestao:
                                "já estava no alvo só conta se cair abaixo dele); aumento_feito e aumento_pedido em R$; "
                                "em produtos, o preço da base, o de agora e o preço-alvo de cada um, em R$ por unidade")
             base["vendedores"] = [{
-                **{k: x[k] for k in ("id", "nome", "equipe", "resultado", "pct", "classe", "status") if x.get(k) is not None},
+                **{k: x[k] for k in ("id", "nome", "equipe", "resultado", "pct", "classe", "status", "premio")
+                   if x.get(k) is not None},
                 "aumento_feito": x.get("delta"), "aumento_pedido": x.get("aumento_pedido"),
                 "produtos": [{"produto": nomes.get(p["id"], p["id"]), "base": p["base"], "preco": p["preco"],
                               "preco_alvo": p["meta"], "quantidade": p["quantidade"]} for p in x.get("produtos") or []],
             } for x in r["linhas"]]
             base["leitura_classe"] = "ok = chegou ao preço-alvo; mid = subiu sem chegar; bad = não subiu (ou caiu)"
         base["total"] = r["total"]
+        if item.get("premiacoes"):
+            base["premiacao"] = {
+                "faixas": texto_premiacao(item["premiacoes"]),
+                "leitura": ("premio de cada vendedor: faixa = a maior faixa atingida (em %; null = nenhuma), premio e "
+                            "valor (R$) dela; pct = o % que decide a faixa, em fração (" + SOBRE[item["premiacoes"]["sobre"]]
+                            + "); proxima e falta = a próxima faixa e quanto falta (fração). "
+                            + ("Enquanto a campanha corre, é só o previsto com o resultado até agora, nada garantido "
+                               "(premio_ritmo: no ritmo atual); vira o final quando o resultado congela. "
+                               if item["situacao"] != "encerrada" or item.get("provisorio") else "")
+                            + "Em total, premiados e valor_premios (R$) somam os vendedores do acesso")}
         if item.get("provisorio"):
             base["resultado_provisorio"] = "a campanha acabou, mas os dados ainda não passaram do fim: o resultado pode mudar"
         if r.get("ocultos"):
@@ -2040,6 +2207,7 @@ class ContextoGestao:
         return {
             "id": novo_id(), **publica(d), "indicador": ind, "unidade": unidade, "nome_metrica": ind["nome"],
             "texto_alvo": texto_alvo(d["alvo_tipo"], d["meta_padrao"], ind),
+            "texto_premiacao": texto_premiacao(d["premiacoes"]),
             "texto_base": texto_janela(d["base_periodo"], d["base_inicio"], d["base_fim"]),
             "bases": {str(v): ({"precos_na_base": {nomes_p.get(int(p), p): x["preco"] for p, x in b[3].items()} or
                                                   "sem venda dos produtos no período da base"}
