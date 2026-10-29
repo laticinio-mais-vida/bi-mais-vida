@@ -9,13 +9,26 @@ ALTER TABLE campanhas
   ADD COLUMN premiacoes jsonb,
   ADD CONSTRAINT campanhas_premiacoes_check CHECK (premiacoes IS NULL OR tipo = 'acao');
 
--- A coluna premiacao (texto, da 007) nunca foi usada pelo painel: sai, se estiver vazia em todas as campanhas.
+-- A premiação do formulário de antes (premiacao, texto da 007), que a tela não mostrava mais: nas campanhas de
+-- 20/10/2026 do site ficou só um número ("50", "30"). Decisão do usuário: vira um prêmio único, em R$, para quem bater
+-- 100% da meta; o texto continua na coluna velha. Texto que não é um número vira a descrição do prêmio, sem valor.
+UPDATE campanhas
+   SET premiacoes = jsonb_build_object(
+         'sobre', CASE WHEN alvo_tipo = 'fixo' AND metrica <> 'preco_medio' THEN 'resultado' ELSE 'crescimento' END,
+         'faixas', jsonb_build_array(CASE
+           WHEN btrim(premiacao) ~ '^(R\$ ?)?[0-9]{1,7}([.,][0-9]{1,2})?$'
+             THEN jsonb_build_object('pct', 100, 'premio', '', 'valor',
+                                     replace(regexp_replace(btrim(premiacao), '^R\$ ?', ''), ',', '.')::numeric)
+           ELSE jsonb_build_object('pct', 100, 'premio', left(btrim(premiacao), 120), 'valor', NULL) END))
+ WHERE tipo = 'acao' AND btrim(premiacao) <> '';
+
+-- Sem texto em nenhuma campanha (o painel nunca mais gravou nela), a coluna velha sai.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM campanhas WHERE btrim(premiacao) <> '') THEN
     ALTER TABLE campanhas DROP COLUMN premiacao;
   ELSE
-    RAISE NOTICE 'campanhas.premiacao tem texto: a coluna fica';
+    RAISE NOTICE 'campanhas.premiacao tem texto (convertido em premiacoes): a coluna fica';
   END IF;
 END
 $$;

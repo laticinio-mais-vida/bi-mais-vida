@@ -1530,6 +1530,47 @@ class TestMigracao013(BaseBanco):
         self.assertNotIn("base_precos", eventos["editada"])  # outra base
 
 
+class TestMigracao033(BaseBanco):
+    def migrar_ate_032(self):
+        from unittest import mock
+        from bi.banco import Banco
+        todas = Banco._arquivos_migracao()
+        with mock.patch.object(Banco, "_arquivos_migracao", staticmethod(lambda: [a for a in todas if a.stem < "033"])):
+            self.banco.migrar()
+
+    def coluna_velha(self):
+        with self.banco.conexao() as con:
+            return con.execute("SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                               "AND table_name = 'campanhas' AND column_name = 'premiacao'").fetchone()[0]
+
+    def test_premiacao_do_formulario_antigo_vira_premio_unico(self):
+        """As campanhas de 20/10/2026 do site: o número do formulário antigo vira um prêmio único em R$ em 100%."""
+        self.migrar_ate_032()
+        campanha = ("INSERT INTO campanhas (nome, regiao, inicio, fim, metrica, meta_padrao, alvo_tipo, base_inicio, base_fim, "
+                    "criada_por_nome, premiacao) VALUES (%s, 'BA', '2026-10-20', '2026-10-31', %s, 10, %s, '2026-09-01', "
+                    "'2026-09-30', 'Vitor', %s) RETURNING id")
+        with self.banco.conexao() as con:
+            ids = {nome: con.execute(campanha, [nome, metrica, alvo, texto]).fetchone()[0] for nome, metrica, alvo, texto in (
+                ("Cinquenta", "positivacao", "fixo", "50"), ("Trinta", "frequencia", "pct", " 30 "),
+                ("Com real", "mix_medio", "fixo", "R$ 30,50"), ("Texto", "positivacao", "fixo", "Vale-compras"),
+                ("Preço", "preco_medio", "fixo", "40"), ("Sem", "positivacao", "fixo", ""))}
+        self.assertEqual(self.banco.migrar(), ["033_premiacoes"])
+        with self.banco.conexao() as con:
+            premios = dict(con.execute("SELECT nome, premiacoes FROM campanhas"))
+        unico = lambda sobre, premio="", valor=None: {"sobre": sobre, "faixas": [{"pct": 100, "premio": premio, "valor": valor}]}
+        self.assertEqual(premios, {"Cinquenta": unico("resultado", valor=50), "Trinta": unico("crescimento", valor=30),
+                                   "Com real": unico("resultado", valor=30.5), "Texto": unico("resultado", "Vale-compras"),
+                                   "Preço": unico("crescimento", valor=40), "Sem": None})
+        self.assertEqual(self.coluna_velha(), 1)  # com texto, a coluna velha fica
+        self.assertEqual(len(ids), 6)
+
+    def test_sem_texto_a_coluna_velha_sai(self):
+        self.migrar_ate_032()
+        self.assertEqual(self.coluna_velha(), 1)
+        self.banco.migrar()
+        self.assertEqual(self.coluna_velha(), 0)
+
+
 class TestMigracao009(BaseBanco):
     def test_arquiva_as_campanhas_antigas_e_confere(self):
         from unittest import mock
