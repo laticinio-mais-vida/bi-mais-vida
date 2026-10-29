@@ -1,29 +1,32 @@
-"""Google Agenda, só leitura (bi/google_agenda.py): o endereço secreto (conferido, remontado e cifrado), o arquivo iCal
-(repetições, exceções, cancelados, recusados, fusos, dia inteiro), os pedaços de cada dia e, no PostgreSQL, conectar,
-ler, o vigia, o que a agenda mostra, o horário ocupado (trava os outros, avisa a própria pessoa) e o Assistente.
+"""Google Agenda, só leitura (bi/google_agenda.py): os eventos da API do Google (dia inteiro, fusos, cancelados,
+recusados), os pedaços de cada dia e, no PostgreSQL, o login com o Google (state, PKCE, a autorização cifrada), ligar e
+desligar agendas, ler, o vigia, o que a agenda mostra, o horário ocupado (trava os outros, avisa a própria pessoa) e o
+Assistente.
 
-Nada aqui vai à internet: o baixar é trocado por um falso. Os testes do arquivo e da cifra precisam dos pacotes
-(icalendar, recurring-ical-events, cryptography); os com o banco, de BI_TESTE_POSTGRES (veja tests/apoio.py)."""
+Nada aqui vai à internet: o Google é um falso (GoogleFalso), que responde ao login, à lista de agendas e aos eventos.
+Os testes com o banco precisam de BI_TESTE_POSTGRES (veja tests/apoio.py) e do pacote cryptography."""
 from __future__ import annotations
 
+import base64
 import configparser
 import datetime as dt
+import hashlib
 import importlib.util
 import io
 import json
 import tempfile
 import unittest
 import urllib.error
-import urllib.request
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from bi import google_agenda
 from bi.agenda import Agenda, faixa_pedaco, pedacos
 from bi.assistente import Ferramentas
 from bi.conversas import NaoEncontrada
-from bi.google_agenda import (SITE, ErroGoogle, GoogleAgenda, _SoGoogle, assinatura, baixar, cifrar, decifrar,
-                              endereco_valido, espera, interpretar, janela, recortar)
+from bi.google_agenda import (ESCOPO, RETORNO, REVOGAR, SEM_CLIENTE, SITE, TOKEN, ErroGoogle, GoogleAgenda,
+                              assinatura, cifrar, conferir, decifrar, espera, interpretar, janela, pedir)
 from bi.tarefas import Tarefas
 from tests.apoio import BaseBanco, ConfiguracaoFixa, criar_assistente, criar_calc
 
@@ -32,102 +35,217 @@ UTC = dt.timezone.utc
 HOJE = D(2026, 10, 26)  # segunda-feira
 AGORA = DT(2026, 10, 26, 9, 0)
 GESTAO = ["metas", "gestao"]
-TEM_ICAL = all(importlib.util.find_spec(p) for p in ("icalendar", "recurring_ical_events"))
 TEM_CIFRA = importlib.util.find_spec("cryptography") is not None
 CHAVE = "chave-de-teste"
-URL = ("https://calendar.google.com/calendar/ical/ana.silva%40gmail.com/private-0123456789abcdef0123456789abcdef/"
-       "basic.ics")
-URL2 = URL.replace("0123456789abcdef0123", "fedcba98765432100123")  # a mesma agenda, com o endereço redefinido
+CLIENTE = {"chave": CHAVE, "cliente_id": "id-teste.apps.googleusercontent.com", "cliente_segredo": "segredo-teste"}
+ANA, FAMILIA = "ana.silva@gmail.com", "familia123@group.calendar.google.com"
 
 
-def ini_google(chave: str = CHAVE) -> configparser.ConfigParser:
+def ini_google(**campos) -> configparser.ConfigParser:
     ini = configparser.ConfigParser()
-    ini.read_dict({"google": {"chave": chave}})
+    ini.read_dict({"google": {**CLIENTE, **campos}})
     return ini
 
 
-def ics(*eventos: str, nome: str = "Pessoal", tz: str | None = "America/Sao_Paulo") -> bytes:
-    """Um arquivo como o do Google (linhas com CRLF)."""
-    cab = ["BEGIN:VCALENDAR", "PRODID:-//Google Inc//Google Calendar 70.9054//EN", "VERSION:2.0",
-           "CALSCALE:GREGORIAN", "METHOD:PUBLISH", f"X-WR-CALNAME:{nome}", *([f"X-WR-TIMEZONE:{tz}"] if tz else [])]
-    return "\r\n".join([*cab, *eventos, "END:VCALENDAR", ""]).encode()
+def local(*partes) -> str:
+    """A hora como a API devolve, com o fuso desta máquina: "2026-10-30T14:00:00-03:00"."""
+    return DT(*partes).astimezone().isoformat()
 
 
-def ev(*linhas: str, uid: str = "u1", stamp: str = "20261026T120000Z") -> str:
-    return "\r\n".join(["BEGIN:VEVENT", f"DTSTAMP:{stamp}", f"UID:{uid}@google.com", *linhas, "END:VEVENT"])
+def evento(titulo: str | None, inicio: str, fim: str, **campos) -> dict:
+    """Um evento como a API devolve: inicio e fim com hora (local(...)) ou só a data, no dia inteiro."""
+    chave = "date" if len(inicio) == 10 else "dateTime"
+    return {**({"summary": titulo} if titulo is not None else {}), "status": "confirmed",
+            "start": {chave: inicio}, "end": {chave: fim}, **campos}
 
 
-SP = "TZID=America/Sao_Paulo"
-CONSULTA = ev("DTSTART:20261030T170000Z", "DTEND:20261030T180000Z", "SUMMARY:Consulta médica", "TRANSP:OPAQUE",
-              uid="consulta")
-# Segunda, quarta e sexta às 7h; a de sexta (30/10) foi tirada, a de quarta (28/10) passou para quinta e a de 02/11
-# foi cancelada sozinha.
-ACADEMIA = [
-    ev(f"DTSTART;{SP}:20261005T070000", f"DTEND;{SP}:20261005T080000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR",
-       f"EXDATE;{SP}:20261030T070000", "SUMMARY:Academia", uid="academia"),
-    ev(f"DTSTART;{SP}:20261029T070000", f"DTEND;{SP}:20261029T080000", f"RECURRENCE-ID;{SP}:20261028T070000",
-       "SUMMARY:Academia (quinta)", uid="academia"),
-    ev(f"DTSTART;{SP}:20261102T070000", f"DTEND;{SP}:20261102T080000", f"RECURRENCE-ID;{SP}:20261102T070000",
-       "STATUS:CANCELLED", "SUMMARY:Academia", uid="academia"),
-]
-FERIAS = ev("DTSTART;VALUE=DATE:20261110", "DTEND;VALUE=DATE:20261115", "SUMMARY:Férias", "TRANSP:OPAQUE", uid="ferias")
+CONSULTA = evento("Consulta médica", local(2026, 10, 30, 14), local(2026, 10, 30, 15))
+CAFE = evento("Café", local(2026, 10, 30, 16), local(2026, 10, 30, 17), transparency="transparent")
+FERIAS = evento("Férias", "2026-11-10", "2026-11-15")
 
 
-def ler(corpo: bytes, desde=D(2026, 10, 1), ate=D(2026, 12, 1), dono="ana.silva@gmail.com"):
-    return interpretar(corpo, desde, ate, dono)
+class GoogleFalso:
+    """O Google de mentira: as contas (e-mail: [(agenda, nome, principal)]), os eventos de cada agenda e as autorizações
+    valendo. Confere o segredo do cliente, o PKCE e o endereço de retorno; guarda os pedidos e as revogações."""
+
+    def __init__(self):
+        self.contas = {ANA: [(ANA, "Ana Silva", True), (FAMILIA, "Família", False)],
+                       "beto@gmail.com": [("beto@gmail.com", "beto@gmail.com", True)]}
+        self.eventos = {ANA: [CONSULTA, CAFE, FERIAS], FAMILIA: [evento("Almoço", local(2026, 11, 1, 12),
+                                                                        local(2026, 11, 1, 13))]}
+        self.validas: dict[str, str] = {}  # autorização (refresh token): e-mail
+        self.codigos: dict[str, tuple] = {}
+        self.escopo = ESCOPO
+        self.pedidos: list[tuple[str, str]] = []
+        self.revogadas: list[str] = []
+        self.falha: dict[str, tuple] = {}  # agenda: (status, corpo) no lugar dos eventos
+        self.pagina = 2500
+        self.ao_ler = None  # chamado antes de responder os eventos (o que acontece no meio da leitura)
+
+    def login(self, url: str, email: str) -> dict:
+        """A pessoa entra no Google e autoriza: os parâmetros com que o Google volta ao BI."""
+        q = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+        codigo = f"codigo-{len(self.codigos)}"
+        self.codigos[codigo] = (email, q["code_challenge"], q["redirect_uri"])
+        return {"code": codigo, "state": q["state"]}
+
+    def __call__(self, metodo: str, url: str, dados: dict | None = None, token: str | None = None):
+        self.pedidos.append((metodo, url.split("?")[0]))
+        if url == TOKEN:
+            if dados["client_secret"] != "segredo-teste":
+                return 401, {"error": "invalid_client"}
+            if dados["grant_type"] == "authorization_code":
+                email, desafio, retorno = self.codigos.pop(dados["code"], (None, None, None))
+                verificador = base64.urlsafe_b64encode(hashlib.sha256(dados["code_verifier"].encode()).digest())
+                if not email or verificador.rstrip(b"=").decode() != desafio or dados["redirect_uri"] != retorno:
+                    return 400, {"error": "invalid_grant"}
+                renovar = f"renovar-{len(self.validas) + len(self.revogadas)}"
+                self.validas[renovar] = email
+                return 200, {"access_token": f"acesso|{renovar}", "expires_in": 3599, "refresh_token": renovar,
+                             "scope": self.escopo, "token_type": "Bearer"}
+            if dados["refresh_token"] not in self.validas:
+                return 400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."}
+            return 200, {"access_token": f"acesso|{dados['refresh_token']}", "expires_in": 3599}
+        if url == REVOGAR:
+            self.revogadas.append(dados["token"])
+            self.validas.pop(dados["token"].removeprefix("acesso|"), None)
+            return 200, {}
+        email = self.validas.get((token or "").removeprefix("acesso|"))
+        if not email:
+            return 401, {"error": {"code": 401, "errors": [{"reason": "authError"}]}}
+        u = urlsplit(url)
+        if u.path.endswith("/users/me/calendarList"):
+            return 200, {"items": [{"id": c, "summary": n, **({"primary": True} if p else {})}
+                                   for c, n, p in self.contas[email]]}
+        agenda = unquote(u.path.split("/calendars/")[1].removesuffix("/events"))
+        if agenda not in {c for c, _, _ in self.contas[email]}:
+            return 404, {"error": {"code": 404, "errors": [{"reason": "notFound"}]}}
+        if self.ao_ler:
+            self.ao_ler()
+        if agenda in self.falha:
+            return self.falha[agenda]
+        itens, inicio = self.eventos.get(agenda, []), int(parse_qs(u.query).get("pageToken", ["0"])[0])
+        fim = inicio + self.pagina
+        return 200, {"items": itens[inicio:fim], **({"nextPageToken": str(fim)} if fim < len(itens) else {})}
+
+    def contar(self, url: str) -> int:
+        return sum(1 for _, u in self.pedidos if u == url)
 
 
-def titulos(eventos) -> list[str]:
-    return [e[0] for e in eventos]
+class TestEventosDaApi(unittest.TestCase):
+    def test_hora_dia_inteiro_e_ocupado(self):
+        eventos = interpretar([
+            evento("Em UTC", "2026-10-30T17:00:00Z", "2026-10-30T18:00:00Z"),
+            evento("Com fuso", "2026-10-30T14:00:00-03:00", "2026-10-30T15:30:00-03:00", transparency="opaque"),
+            evento("Livre", "2026-10-31T09:00:00-03:00", "2026-10-31T10:00:00-03:00", transparency="transparent"),
+            FERIAS])
+        por = {e[0]: e for e in eventos}
+        self.assertEqual((por["Em UTC"][1], por["Em UTC"][2]),
+                         (DT(2026, 10, 30, 17, tzinfo=UTC), DT(2026, 10, 30, 18, tzinfo=UTC)))
+        self.assertEqual(por["Com fuso"][2], DT(2026, 10, 30, 18, 30, tzinfo=UTC))
+        self.assertEqual([(e[0], e[4]) for e in eventos],  # sem transparency: ocupado
+                         [("Em UTC", True), ("Com fuso", True), ("Livre", False), ("Férias", True)])
+        ferias = por["Férias"]
+        self.assertTrue(ferias[3])
+        self.assertEqual((ferias[1], ferias[2]), (DT(2026, 11, 10).astimezone(), DT(2026, 11, 15).astimezone()))
+        self.assertFalse(por["Em UTC"][3])
+
+    def test_o_que_fica_de_fora(self):
+        eu = {"self": True, "responseStatus": "declined"}
+        eventos = interpretar([
+            evento("Cancelado", local(2026, 11, 3, 9), local(2026, 11, 3, 10), status="cancelled"),
+            evento("Recusei", local(2026, 11, 4, 9), local(2026, 11, 4, 10), attendees=[eu]),
+            evento("Outro recusou", local(2026, 11, 5, 9), local(2026, 11, 5, 10),
+                   attendees=[{"email": "beto@gmail.com", "responseStatus": "declined"},
+                              {"self": True, "responseStatus": "accepted"}]),
+            evento("Escritório", "2026-11-06", "2026-11-07", eventType="workingLocation"),
+            {"summary": "Sem data", "start": {}, "end": {}},
+            {"summary": "Data quebrada", "start": {"date": "2026-13-01"}, "end": {"date": "2026-13-02"}},
+            "não é um evento"])
+        self.assertEqual([e[0] for e in eventos], ["Outro recusou"])
+
+    def test_titulos_e_sem_fim(self):
+        eventos = interpretar([
+            evento(None, local(2026, 11, 3, 9), local(2026, 11, 3, 10)),
+            evento("x" * 300, local(2026, 11, 4, 9), local(2026, 11, 4, 10)),
+            evento("  Duas \n  linhas ", local(2026, 11, 5, 9), local(2026, 11, 5, 10)),
+            {"summary": "Sem fim", "start": {"dateTime": local(2026, 11, 6, 9)}},
+            evento("Fim antes", local(2026, 11, 7, 9), local(2026, 11, 7, 8))])
+        self.assertEqual([e[0] for e in eventos], ["(sem título)", "x" * 120, "Duas linhas", "Sem fim", "Fim antes"])
+        self.assertEqual(eventos[3][1], eventos[3][2])
+        self.assertEqual(eventos[4][1], eventos[4][2])  # o fim nunca fica antes do início
+
+    def test_assinatura(self):
+        a = interpretar([CONSULTA, CAFE])
+        self.assertEqual(assinatura(a), assinatura(interpretar([CAFE, CONSULTA])))
+        self.assertNotEqual(assinatura(a), assinatura(interpretar([CONSULTA])))
+        self.assertNotEqual(assinatura(a), assinatura(interpretar([CONSULTA, {**CAFE, "transparency": "opaque"}])))
+
+    def test_janela_e_espera(self):
+        self.assertEqual(janela(HOJE), (D(2026, 7, 1), D(2027, 10, 28)))
+        self.assertEqual(janela(D(2027, 2, 15))[0], D(2026, 11, 1))
+        self.assertEqual([espera(n, False).seconds // 60 for n in range(6)], [10, 20, 40, 80, 120, 120])
+        self.assertEqual(espera(0, True), google_agenda.ESPERA_MAX)
+
+    def test_conferir(self):
+        conferir(200, {})
+        casos = [(404, [], True), (403, ["forbidden"], True), (403, ["rateLimitExceeded"], False),
+                 (429, [], False), (500, [], False), (401, [], False)]
+        for status, motivos, trocar in casos:
+            with self.subTest(status=status, motivos=motivos), self.assertLogs("bi.google", "WARNING"), \
+                    self.assertRaises(ErroGoogle) as e:
+                conferir(status, {"error": {"code": status, "errors": [{"reason": m} for m in motivos]}})
+            self.assertEqual(e.exception.trocar, trocar)
+            self.assertFalse(e.exception.conta)
 
 
-class TestEndereco(unittest.TestCase):
-    def test_aceita_e_remonta(self):
-        url, calendario = endereco_valido(f"  {URL}\n")
-        self.assertEqual((url, calendario), (URL, "ana.silva@gmail.com"))
-        url, calendario = endereco_valido(URL.replace("https", "HTTPS").replace("calendar.google", "Calendar.Google"))
-        self.assertEqual(url, URL)
-        grupo = URL.replace("ana.silva%40gmail.com", "abc123%40group.calendar.google.com")
-        self.assertEqual(endereco_valido(grupo), (grupo, "abc123@group.calendar.google.com"))
+class RespostaFalsa(io.BytesIO):
+    status = 200
 
-    def test_recusa(self):
-        casos = {
-            "": "cole o endereço",
-            "ana.silva@gmail.com": "ID da agenda",
-            URL.replace("https", "http"): "não é o endereço secreto",
-            URL.replace("https", "webcal"): "não é o endereço secreto",
-            URL.replace("calendar.google.com", "calendar.google.com.evil.com"): "não é o endereço secreto",
-            URL.replace("calendar.google.com", "evil.com/calendar.google.com"): "não é o endereço secreto",
-            URL.replace("calendar.google.com", "calendar.google.com@evil.com"): "não é o endereço secreto",
-            URL.replace("calendar.google.com", "calendar.google.com:8443"): "não é o endereço secreto",
-            URL + "?x=1": "não é o endereço secreto",
-            URL + "#a": "não é o endereço secreto",
-            URL.replace("ana.silva%40gmail.com", "..%2F..%2Fetc"): "não é o endereço secreto",
-            URL.replace("ana.silva%40gmail.com", "ana%2F%40gmail.com"): "não é o endereço secreto",
-            URL.replace("private-0123456789abcdef0123456789abcdef", "public"): "endereço público",
-            "https://calendar.google.com/calendar/embed?src=ana.silva%40gmail.com": "incorporar",
-            "x" * 700: "não é um endereço",
-        }
-        for texto, trecho in casos.items():
-            with self.subTest(texto[:60]), self.assertRaises(ErroGoogle) as e:
-                endereco_valido(texto)
-            self.assertIn(trecho, str(e.exception))
-            self.assertNotIn("private-", str(e.exception))
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+class TestPedir(unittest.TestCase):
+    def pedir_com(self, efeito, **k):
+        with mock.patch.object(google_agenda.urllib.request, "urlopen", side_effect=efeito) as abrir:
+            r = pedir("POST", TOKEN, **k)
+        return r, abrir.call_args[0][0]
+
+    def test_resposta_e_pedido(self):
+        r, pedido = self.pedir_com(lambda *a, **k: RespostaFalsa(b'{"access_token": "a"}'), dados={"x": "1"},
+                                   token="t")
+        self.assertEqual(r, (200, {"access_token": "a"}))
+        self.assertEqual((pedido.data, pedido.get_header("Authorization")), (b"x=1", "Bearer t"))
+
+    def test_erros(self):
+        erro = urllib.error.HTTPError(TOKEN, 400, "erro", {}, io.BytesIO(b'{"error": "invalid_grant"}'))
+        self.assertEqual(self.pedir_com(erro)[0], (400, {"error": "invalid_grant"}))
+        quebrado = urllib.error.HTTPError(TOKEN, 502, "erro", {}, io.BytesIO(b"<html>"))
+        self.assertEqual(self.pedir_com(quebrado)[0], (502, {}))
+        for efeito in (urllib.error.URLError("timed out"), TimeoutError()):
+            with self.assertRaises(ErroGoogle):
+                self.pedir_com(efeito)
+        with mock.patch.object(google_agenda, "MAX_BYTES", 5), self.assertRaises(ErroGoogle):
+            self.pedir_com(lambda *a, **k: RespostaFalsa(b'{"items": []}'))
 
 
 @unittest.skipUnless(TEM_CIFRA, "falta o pacote cryptography")
 class TestCifra(unittest.TestCase):
     def test_ida_e_volta(self):
-        cifrado = cifrar(CHAVE, URL)
-        self.assertNotIn("private-", cifrado)
-        self.assertNotEqual(cifrado, cifrar(CHAVE, URL))  # cada cifra sai diferente
-        self.assertEqual(decifrar(CHAVE, cifrado), URL)
+        cifrado = cifrar(CHAVE, "renovar-0")
+        self.assertNotIn("renovar", cifrado)
+        self.assertNotEqual(cifrado, cifrar(CHAVE, "renovar-0"))  # cada cifra sai diferente
+        self.assertEqual(decifrar(CHAVE, cifrado), "renovar-0")
 
     def test_chave_errada(self):
         with self.assertRaises(ErroGoogle) as e:
-            decifrar("outra", cifrar(CHAVE, URL))
-        self.assertTrue(e.exception.trocar)
-        self.assertIn("cole o endereço secreto de novo", str(e.exception))
+            decifrar("outra", cifrar(CHAVE, "renovar-0"))
+        self.assertTrue(e.exception.conta)
+        self.assertIn("entre com o Google de novo", str(e.exception))
 
 
 class TestPedacos(unittest.TestCase):
@@ -170,188 +288,18 @@ class TestPedacos(unittest.TestCase):
         self.assertEqual([faixa_pedaco(p) for p in meio], ["o dia todo", "da meia-noite às 02:00"])
 
 
-class TestArquivo(unittest.TestCase):
-    def test_assinatura_ignora_o_dtstamp(self):
-        a = ics(ev("DTSTART:20261030T170000Z", "SUMMARY:A", stamp="20261026T120000Z"))
-        b = ics(ev("DTSTART:20261030T170000Z", "SUMMARY:A", stamp="20261026T121000Z"))
-        c = ics(ev("DTSTART:20261030T170000Z", "SUMMARY:B"))
-        self.assertEqual(assinatura(a, HOJE), assinatura(b, HOJE))
-        self.assertNotEqual(assinatura(a, HOJE), assinatura(c, HOJE))
-        self.assertNotEqual(assinatura(a, HOJE), assinatura(a, HOJE + dt.timedelta(1)))  # a janela andou
-
-    def test_janela(self):
-        self.assertEqual(janela(HOJE), (D(2026, 7, 1), D(2027, 10, 28)))
-        self.assertEqual(janela(D(2027, 2, 15))[0], D(2026, 11, 1))
-
-    def test_espera(self):
-        self.assertEqual([espera(n, False).seconds // 60 for n in range(6)], [10, 20, 40, 80, 120, 120])
-        self.assertEqual(espera(0, True), google_agenda.ESPERA_MAX)
-
-    def test_recortar_tira_os_antigos_e_as_series_por_hora(self):
-        antigo = ev("DTSTART;VALUE=DATE:20250110", "DTEND;VALUE=DATE:20250111", "SUMMARY:Antigo", uid="antigo")
-        longo = ev("DTSTART:20250110T120000Z", "DTEND:20250110T130000Z",
-                   "SUMMARY:Um título bem comprido que o Google dobra em várias linhas para caber no limite de "
-                   "setenta e cinco",
-                   uid="longo").replace("setenta e cinco", "setenta\r\n  e cinco")
-        serie_antiga = ev("DTSTART:20250105T120000Z", "DTEND:20250105T130000Z", "RRULE:FREQ=WEEKLY",
-                          "SUMMARY:Semanal desde 2025", uid="serie")
-        por_minuto = ev("DTSTART:20261026T120000Z", "DTEND:20261026T120100Z", "RRULE:FREQ=MINUTELY",
-                        "SUMMARY:Por minuto", uid="minuto")
-        corpo = ics(antigo, longo, serie_antiga, por_minuto, CONSULTA, *ACADEMIA)
-        recortado = recortar(corpo, D(2026, 7, 1))
-        self.assertNotIn(b"Antigo", recortado)
-        self.assertNotIn(b"comprido", recortado)
-        self.assertNotIn(b"Por minuto", recortado)
-        for fica in (b"Semanal desde 2025", b"Consulta", b"RECURRENCE-ID", b"X-WR-CALNAME:Pessoal"):
-            self.assertIn(fica, recortado)
-
-    @unittest.skipUnless(TEM_ICAL, "faltam os pacotes do iCal")
-    def test_recortar_nao_muda_o_que_cai_na_janela(self):
-        corpo = ics(CONSULTA, *ACADEMIA, FERIAS, ev("DTSTART:20261001T020000Z", "DTEND:20261001T040000Z",
-                                                  "SUMMARY:Começo da janela", uid="borda"))
-        desde = D(2026, 10, 1)
-        self.assertEqual(ler(recortar(corpo, desde), desde), ler(corpo, desde))
-
-
-@unittest.skipUnless(TEM_ICAL, "faltam os pacotes do iCal")
-class TestInterpretar(unittest.TestCase):
-    def test_horario_ocupado_e_disponivel(self):
-        livre = ev(f"DTSTART;{SP}:20261030T160000", f"DTEND;{SP}:20261030T170000", "SUMMARY:Café",
-                   "TRANSP:TRANSPARENT", uid="cafe")
-        sem_transp = ev(f"DTSTART;{SP}:20261031T090000", f"DTEND;{SP}:20261031T100000", "SUMMARY:Sem TRANSP",
-                        uid="sem")
-        nome, eventos = ler(ics(CONSULTA, livre, sem_transp))
-        self.assertEqual(nome, "Pessoal")
-        consulta, cafe, sem = eventos
-        self.assertEqual((consulta[1], consulta[2]),
-                         (DT(2026, 10, 30, 17, tzinfo=UTC), DT(2026, 10, 30, 18, tzinfo=UTC)))
-        self.assertEqual([e[4] for e in eventos], [True, False, True])  # sem TRANSP: ocupado
-        self.assertFalse(any(e[3] for e in eventos))
-
-    def test_repeticao_com_excecoes(self):
-        _, eventos = ler(ics(*ACADEMIA), desde=D(2026, 10, 26), ate=D(2026, 11, 7))
-        dias = [(e[0], e[1].astimezone(dt.timezone(dt.timedelta(hours=-3))).strftime("%d/%m %H:%M")) for e in eventos]
-        self.assertEqual(dias, [("Academia", "26/10 07:00"), ("Academia (quinta)", "29/10 07:00"),
-                                ("Academia", "04/11 07:00"), ("Academia", "06/11 07:00")])  # sem 30/10 e 02/11
-
-    def test_dia_inteiro_e_sem_fim(self):
-        sem_fim_dia = ev("DTSTART;VALUE=DATE:20261105", "SUMMARY:Dia sem fim", uid="dia")
-        sem_fim_hora = ev("DTSTART:20261106T120000Z", "SUMMARY:Hora sem fim", uid="hora")
-        duracao = ev("DTSTART:20261107T120000Z", "DURATION:PT90M", "SUMMARY:Duração", uid="dur")
-        _, eventos = ler(ics(FERIAS, sem_fim_dia, sem_fim_hora, duracao))
-        por = {e[0]: e for e in eventos}
-        ferias = por["Férias"]
-        self.assertTrue(ferias[3] and ferias[4])
-        self.assertEqual((ferias[1], ferias[2]), (DT(2026, 11, 10).astimezone(), DT(2026, 11, 15).astimezone()))
-        self.assertEqual(por["Dia sem fim"][2] - por["Dia sem fim"][1], dt.timedelta(days=1))
-        self.assertEqual(por["Hora sem fim"][2], por["Hora sem fim"][1])
-        self.assertEqual(por["Duração"][2] - por["Duração"][1], dt.timedelta(minutes=90))
-
-    def test_cancelados_e_recusados(self):
-        cancelado = ev("DTSTART:20261103T120000Z", "DTEND:20261103T130000Z", "STATUS:CANCELLED", "SUMMARY:Cancelado",
-                       uid="canc")
-        convite = "ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT={};CN=X;X-NUM-GUESTS=0:mailto:{}"
-        recusado = ev("DTSTART:20261104T120000Z", "DTEND:20261104T130000Z", "SUMMARY:Recusado",
-                      convite.format("DECLINED", "Ana.Silva@Gmail.com"), convite.format("ACCEPTED", "beto@gmail.com"),
-                      uid="rec")
-        outro_recusou = ev("DTSTART:20261105T120000Z", "DTEND:20261105T130000Z", "SUMMARY:Outro recusou",
-                           convite.format("ACCEPTED", "ana.silva@gmail.com"),
-                           convite.format("DECLINED", "beto@gmail.com"), uid="out")
-        _, eventos = ler(ics(cancelado, recusado, outro_recusou))
-        self.assertEqual(titulos(eventos), ["Outro recusou"])
-
-    def test_fusos(self):
-        flutuante = ev("DTSTART:20261108T090000", "DTEND:20261108T100000", "SUMMARY:Flutuante", uid="flu")
-        _, com = ler(ics(flutuante))
-        self.assertEqual(com[0][1], DT(2026, 11, 8, 12, tzinfo=UTC))  # o fuso de X-WR-TIMEZONE (São Paulo)
-        _, sem = ler(ics(flutuante, tz=None))
-        self.assertEqual(sem[0][1], DT(2026, 11, 8, 9).astimezone())  # sem ele, a hora local do servidor
-        # Nova York sai do horário de verão em 01/11: 9h passa de 13:00 para 14:00 em UTC
-        ny = ev("DTSTART;TZID=America/New_York:20261030T090000", "DTEND;TZID=America/New_York:20261030T100000",
-                "RRULE:FREQ=DAILY;COUNT=4", "SUMMARY:Nova York", uid="ny")
-        _, eventos = ler(ics(ny, tz="America/New_York"))
-        self.assertEqual([e[1].astimezone(UTC).hour for e in eventos], [13, 13, 14, 14])
-
-    def test_titulos(self):
-        _, eventos = ler(ics(ev("DTSTART:20261103T120000Z", "DTEND:20261103T130000Z", uid="a"),
-                             ev("DTSTART:20261104T120000Z", "DTEND:20261104T130000Z", f"SUMMARY:{'x' * 300}", uid="b"),
-                             ev("DTSTART:20261105T120000Z", "DTEND:20261105T130000Z", "SUMMARY:  Duas   linhas\\n ",
-                                uid="c")))
-        self.assertEqual(titulos(eventos), ["(sem título)", "x" * 120, "Duas linhas"])
-
-    def test_passa_do_teto(self):
-        diario = ev("DTSTART:20261001T120000Z", "DTEND:20261001T130000Z", "RRULE:FREQ=DAILY", "SUMMARY:D", uid="d")
-        with mock.patch.object(google_agenda, "MAX_OCORRENCIAS", 5), self.assertRaises(ErroGoogle) as e:
-            ler(ics(diario))
-        self.assertIn("mais de 5 eventos", str(e.exception))
-
-    def test_serie_quebrada_nao_derruba_as_outras(self):
-        quebrada = ev("DTSTART:20261003T120000Z", "DTEND:20261003T130000Z", "RRULE:FREQ=WEEKLY;BYDAY=XX",
-                      "SUMMARY:Quebrada", uid="q")
-        _, eventos = ler(ics(quebrada, CONSULTA))
-        self.assertIn("Consulta médica", titulos(eventos))
-
-    def test_nao_e_agenda(self):
-        with self.assertRaises(ErroGoogle), self.assertLogs("bi.google", "WARNING") as logs:
-            ler(b"<html>entre na sua conta</html>")
-        self.assertNotIn("entre na sua conta", "".join(logs.output))  # no log, só o tipo do erro
-
-
-class RespostaFalsa(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        self.close()
-
-
-class TestBaixar(unittest.TestCase):
-    def baixar_com(self, efeito):
-        abridor = mock.Mock()
-        abridor.open.side_effect = efeito
-        with mock.patch.object(google_agenda.urllib.request, "build_opener", return_value=abridor):
-            return baixar(URL)
-
-    def erro(self, efeito) -> ErroGoogle:
-        with self.assertRaises(ErroGoogle) as e:
-            self.baixar_com(efeito)
-        self.assertNotIn("private-", str(e.exception))
-        return e.exception
-
-    def test_baixa(self):
-        corpo = ics(CONSULTA)
-        self.assertEqual(self.baixar_com(lambda *a, **k: RespostaFalsa(corpo)), corpo)
-
-    def test_falhas(self):
-        http = lambda codigo: urllib.error.HTTPError(URL, codigo, "erro", {}, None)  # noqa: E731
-        for codigo in (401, 403, 404, 410):
-            self.assertTrue(self.erro(http(codigo)).trocar, codigo)
-        self.assertFalse(self.erro(http(500)).trocar)
-        self.assertFalse(self.erro(urllib.error.URLError(f"timed out {URL}")).trocar)
-        self.assertFalse(self.erro(TimeoutError()).trocar)
-        self.assertTrue(self.erro(lambda *a, **k: RespostaFalsa(b"<html>login</html>")).trocar)
-        with mock.patch.object(google_agenda, "MAX_BYTES", 10):
-            self.assertIn("MB", str(self.erro(lambda *a, **k: RespostaFalsa(ics(CONSULTA)))))
-
-    def test_desvio_so_para_o_google(self):
-        pedido = urllib.request.Request(URL)
-        for destino in ("https://evil.com/x", "http://calendar.google.com/x", "https://google.com.evil.com/x",
-                        "https://calendar.google.com:8443/x", "https://u:p@calendar.google.com/x"):
-            with self.subTest(destino), self.assertRaises(ErroGoogle):
-                _SoGoogle().redirect_request(pedido, None, 302, "Found", {}, destino)
-        novo = _SoGoogle().redirect_request(pedido, None, 302, "Found", {}, "https://calendar.google.com/outro.ics")
-        self.assertEqual(novo.full_url, "https://calendar.google.com/outro.ics")
-
-
-def semear(banco, usuario: int, eventos: list[tuple], lida_em=None, calendario="ana.silva@gmail.com",
-           nome="Pessoal") -> int:
-    """Uma agenda do Google gravada direto no banco, sem baixar: eventos [(titulo, inicio, fim, dia_inteiro, ocupado)]
-    em hora local sem fuso. lida_em: a última leitura (padrão: AGORA)."""
+def semear(banco, usuario: int, eventos: list[tuple], lida_em=None, calendario=ANA, nome="Pessoal") -> int:
+    """Uma agenda do Google ligada, gravada direto no banco (sem o login): eventos [(titulo, inicio, fim, dia_inteiro,
+    ocupado)] em hora local sem fuso. lida_em: a última leitura (padrão: AGORA)."""
+    lida_em = (lida_em or AGORA).astimezone()
     with banco.conexao() as con:
+        conta = con.execute("INSERT INTO google_contas (usuario, email, token) VALUES (%s, %s, 'cifrado') "
+                            "ON CONFLICT (usuario, email) DO UPDATE SET erro = NULL RETURNING id",
+                            [usuario, f"pessoa{usuario}@gmail.com"]).fetchone()[0]
         agenda = con.execute(
-            "INSERT INTO google_agendas (usuario, calendario, nome, endereco, lida_em, tentativa_em) "
-            "VALUES (%s, %s, %s, 'cifrado', %s, %s) RETURNING id",
-            [usuario, calendario, nome, (lida_em or AGORA).astimezone(), (lida_em or AGORA).astimezone()]).fetchone()[0]
+            "INSERT INTO google_agendas (usuario, conta, calendario, nome, ligada, lida_em, tentativa_em) "
+            "VALUES (%s, %s, %s, %s, true, %s, %s) RETURNING id",
+            [usuario, conta, calendario, nome, lida_em, lida_em]).fetchone()[0]
         for titulo, inicio, fim, dia_inteiro, ocupado in eventos:
             con.execute("INSERT INTO google_eventos (agenda, titulo, inicio, fim, dia_inteiro, ocupado) "
                         "VALUES (%s, %s, %s, %s, %s, %s)",
@@ -359,175 +307,299 @@ def semear(banco, usuario: int, eventos: list[tuple], lida_em=None, calendario="
     return agenda
 
 
-@unittest.skipUnless(TEM_ICAL and TEM_CIFRA, "faltam os pacotes da leitura do Google")
+@unittest.skipUnless(TEM_CIFRA, "falta o pacote cryptography")
 class TestGoogleNoBanco(BaseBanco):
-    """Ana conecta a agenda pessoal; o baixar é um falso com os arquivos de self.arquivos."""
+    """Ana entra com a conta Google dela; o Google é o falso de self.falso."""
 
     def setUp(self):
         super().setUp()
         self.ana, self.beto = (self.criar_usuario(n, paginas=GESTAO) for n in ("ana", "beto"))
         self.agora = AGORA
-        self.arquivos = {URL: ics(CONSULTA, *ACADEMIA), URL2: ics(CONSULTA)}
-        self.baixados = []
-        self.google = GoogleAgenda(self.banco, ini_google(), agora=lambda: self.agora, baixador=self.baixar)
+        self.falso = GoogleFalso()
+        self.google = GoogleAgenda(self.banco, ini_google(), agora=lambda: self.agora, pedidor=self.falso)
         self.google.pausa = 0
 
-    def baixar(self, url: str) -> bytes:
-        self.baixados.append(url)
-        r = self.arquivos.get(url, ErroGoogle("o Google não aceitou mais o endereço", trocar=True))
-        if isinstance(r, Exception):
-            raise r
-        return r(url) if callable(r) else r
+    def entrar(self, usuario: int, email: str = ANA, volta: int | None = None) -> dict:
+        """O login inteiro: o endereço do Google, a pessoa autoriza lá e o Google volta ao BI (na sessão de volta)."""
+        q = self.falso.login(self.google.endereco_login(usuario), email)
+        return self.google.retorno(usuario if volta is None else volta, q)
 
     def passar(self, minutos: int) -> None:
         self.agora += dt.timedelta(minutes=minutos)
 
-    def agenda_do_banco(self, id_: int) -> dict:
-        with self.banco.conexao() as con:
-            linha = con.execute("SELECT endereco, lida_em, tentativa_em, erro, trocar, falhas, nome "
-                                "FROM google_agendas WHERE id = %s", [id_]).fetchone()
-        return dict(zip(("endereco", "lida_em", "tentativa_em", "erro", "trocar", "falhas", "nome"), linha))
+    def conta(self, usuario: int | None = None) -> dict:
+        return self.google.listar(usuario or self.ana)["contas"][0]
 
-    def test_conectar_e_listar_sem_o_endereco(self):
-        r = self.google.conectar(self.ana, URL)
-        self.assertTrue(r["nova"])
-        a = r["agenda"]
-        self.assertEqual((a["nome"], a["calendario"], a["erro"], a["desatualizada"], a["atencao"]),
-                         ("Pessoal", "ana.silva@gmail.com", None, False, False))
-        self.assertGreater(a["eventos"], 3)
-        guardado = self.agenda_do_banco(a["id"])["endereco"]
-        self.assertNotIn("private-", guardado)
-        self.assertEqual(decifrar(CHAVE, guardado), URL)
+    def agenda(self, nome: str, usuario: int | None = None) -> dict:
+        return next(a for c in self.google.listar(usuario or self.ana)["contas"] for a in c["agendas"]
+                    if a["nome"] == nome)
+
+    def linha(self, tabela: str, id_: int, colunas: str) -> tuple:
+        with self.banco.conexao() as con:
+            return con.execute(f"SELECT {colunas} FROM {tabela} WHERE id = %s", [id_]).fetchone()
+
+    def test_endereco_do_login(self):
+        u = urlsplit(self.google.endereco_login(self.ana))
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        self.assertEqual((u.scheme, u.netloc, u.path), ("https", "accounts.google.com", "/o/oauth2/v2/auth"))
+        self.assertEqual((q["client_id"], q["redirect_uri"], q["scope"], q["response_type"], q["access_type"]),
+                         (CLIENTE["cliente_id"], RETORNO, ESCOPO, "code", "offline"))
+        self.assertIn("consent", q["prompt"])
+        self.assertEqual(q["code_challenge_method"], "S256")
+        self.assertGreater(len(q["state"]), 30)
+        self.assertNotIn("segredo", u.query)
+        outro = GoogleAgenda(self.banco, ini_google(retorno="https://outro.exemplo/volta"))
+        self.assertIn("outro.exemplo", parse_qs(urlsplit(outro.endereco_login(self.ana)).query)["redirect_uri"][0])
+
+    def test_entrar_guarda_a_conta_e_le_a_principal(self):
+        r = self.entrar(self.ana)
+        self.assertEqual((r["email"], r["nova"]), (ANA, True))
+        c = self.conta()
+        self.assertEqual((c["email"], c["trocar"], c["atencao"]), (ANA, False, False))
+        principal, familia = c["agendas"]
+        self.assertEqual((principal["nome"], principal["principal"], principal["ligada"], principal["eventos"]),
+                         ("Ana Silva", True, True, 3))
+        self.assertEqual((familia["nome"], familia["ligada"], familia["eventos"], familia["lida_em"]),
+                         ("Família", False, 0, None))
+        guardado = self.linha("google_contas", r["id"], "token")[0]
+        self.assertNotIn("renovar", guardado)
+        self.assertEqual(decifrar(CHAVE, guardado), "renovar-0")
         m = Agenda(self.banco, ConfiguracaoFixa(), hoje=lambda: HOJE).mes(self.ana, "2026-10")
         for resposta in (self.google.listar(self.ana), self.google.no_mes(self.ana, m)):
-            self.assertNotIn("private-", json.dumps(resposta, default=str))
-        self.assertEqual(self.google.listar(self.beto)["agendas"], [])
+            texto = json.dumps(resposta, default=str)
+            self.assertNotIn("renovar", texto)
+            self.assertNotIn("acesso|", texto)
+        self.assertEqual(self.google.listar(self.beto)["contas"], [])
+        self.assertEqual(self.falso.contar(TOKEN), 1)  # a leitura usou o acesso que veio no login
 
-    def test_reconectar_a_mesma_agenda_troca_o_endereco(self):
-        id_ = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        with self.banco.conexao() as con:
-            con.execute("UPDATE google_agendas SET erro = 'morreu', trocar = true, falhas = 3 WHERE id = %s", [id_])
-        r = self.google.conectar(self.ana, URL2)  # o endereço novo, depois de Redefinir no Google
-        self.assertEqual((r["nova"], r["agenda"]["id"], r["agenda"]["eventos"]), (False, id_, 1))
-        g = self.agenda_do_banco(id_)
-        self.assertEqual((decifrar(CHAVE, g["endereco"]), g["erro"], g["trocar"], g["falhas"]), (URL2, None, False, 0))
-
-    def test_limite_e_falha_nao_gravam(self):
-        for n in range(5):
-            outra = URL.replace("ana.silva", f"agenda{n}")
-            self.arquivos[outra] = ics(CONSULTA, nome=f"Agenda {n}")
-            self.google.conectar(self.ana, outra)
-        with self.assertRaises(ValueError) as e:
-            self.google.conectar(self.ana, URL)
-        self.assertIn("até 5 agendas", str(e.exception))
+    def test_state_vale_uma_vez_e_so_para_quem_comecou(self):
+        q = self.falso.login(self.google.endereco_login(self.ana), ANA)
+        with self.assertRaises(ErroGoogle) as e:
+            self.google.retorno(self.beto, q)  # o link do login de Ana aberto na sessão de Beto
+        self.assertIn("sessão do BI mudou", str(e.exception))
+        with self.assertRaises(ErroGoogle) as e:
+            self.google.retorno(self.ana, q)  # o state já foi usado
+        self.assertIn("venceu ou já foi usado", str(e.exception))
         with self.assertRaises(ErroGoogle):
-            self.google.conectar(self.beto, URL.replace("ana.silva", "beto"))  # o Google recusa: nada entra
-        self.assertEqual(self.contar("google_agendas"), 5)
+            self.google.retorno(self.ana, {"code": "codigo-0", "state": "inventado"})
+        with mock.patch.object(google_agenda, "PEDIDO_VALE", -1), self.assertRaises(ErroGoogle) as e:
+            self.entrar(self.ana)
+        self.assertIn("venceu", str(e.exception))
+        q = self.falso.login(self.google.endereco_login(self.ana), ANA)
+        with self.assertRaises(ErroGoogle) as e:
+            self.google.retorno(self.ana, {"state": q["state"], "error": "access_denied"})
+        self.assertIn("não autorizou", str(e.exception))
+        self.assertEqual((self.contar("google_contas"), self.falso.contar(TOKEN)), (0, 0))
 
-    def test_sem_a_chave(self):
-        sem = GoogleAgenda(self.banco, ini_google(""), baixador=self.baixar)
-        self.assertEqual(sem.listar(self.ana), {"ativo": False, "aviso": SITE, "agendas": []})
+    def test_sem_a_permissao_da_agenda(self):
+        self.falso.escopo = "openid"  # a pessoa desmarcou a permissão do Google Agenda
+        with self.assertRaises(ErroGoogle) as e:
+            self.entrar(self.ana)
+        self.assertIn("permissão do Google Agenda", str(e.exception))
+        self.assertEqual(self.falso.revogadas, ["renovar-0"])  # o BI larga o que recebeu
+        self.assertEqual(self.contar("google_contas"), 0)
+
+    def test_cliente_errado(self):
+        errado = GoogleAgenda(self.banco, ini_google(cliente_segredo="outro"), pedidor=self.falso)
+        q = self.falso.login(errado.endereco_login(self.ana), ANA)
+        with self.assertLogs("bi.google", "ERROR"), self.assertRaises(ErroGoogle) as e:
+            errado.retorno(self.ana, q)
+        self.assertIn("mal configurado", str(e.exception))
+
+    def test_entrar_de_novo_troca_a_autorizacao(self):
+        id_ = self.entrar(self.ana)["id"]
+        self.google.ligar(self.ana, self.agenda("Família")["id"], True)
+        with self.banco.conexao() as con:
+            con.execute("UPDATE google_contas SET erro = 'caiu', trocar = true WHERE id = %s", [id_])
+        r = self.entrar(self.ana)
+        self.assertEqual((r["id"], r["nova"]), (id_, False))
+        token, erro, trocar = self.linha("google_contas", id_, "token, erro, trocar")
+        self.assertEqual((decifrar(CHAVE, token), erro, trocar), ("renovar-1", None, False))
+        self.assertTrue(self.agenda("Família")["ligada"])  # o que a pessoa ligou continua ligado
+        self.assertEqual(self.contar("google_agendas"), 2)
+
+    def test_limite_de_contas(self):
+        for n in range(google_agenda.MAX_CONTAS):
+            email = f"conta{n}@gmail.com"
+            self.falso.contas[email] = [(email, email, True)]
+            self.entrar(self.ana, email)
         with self.assertRaises(ValueError) as e:
-            sem.conectar(self.ana, URL)
-        self.assertEqual(str(e.exception), SITE)
+            self.entrar(self.ana)
+        self.assertIn("até 3 contas", str(e.exception))
+        self.assertEqual(self.falso.revogadas, ["renovar-3"])
+        self.assertEqual(self.contar("google_contas"), 3)
+
+    def test_ligar_e_desligar(self):
+        self.entrar(self.ana)
+        familia = self.agenda("Família")["id"]
+        with self.assertRaises(NaoEncontrada):
+            self.google.ligar(self.beto, familia, True)
+        self.google.ligar(self.ana, familia, True)  # lê na hora
+        a = self.agenda("Família")
+        self.assertEqual((a["ligada"], a["eventos"], a["lida_em"] is not None), (True, 1, True))
+        m = self.google.no_mes(self.ana, Agenda(self.banco, ConfiguracaoFixa(), hoje=lambda: HOJE).mes(self.ana,
+                                                                                                     "2026-11"))
+        self.assertEqual([g["titulo"] for g in m["dias"][0]["google"]], ["Almoço"])
+        self.google.ligar(self.ana, familia, False)
+        a = self.agenda("Família")
+        self.assertEqual((a["ligada"], a["eventos"], a["lida_em"]), (False, 0, None))
+        with mock.patch.object(google_agenda, "MAX_AGENDAS", 1), self.assertRaises(ValueError) as e:
+            self.google.ligar(self.ana, familia, True)
+        self.assertIn("até 1 agendas", str(e.exception))
+
+    def test_a_mesma_agenda_por_duas_contas(self):
+        self.falso.contas["trabalho@gmail.com"] = [("trabalho@gmail.com", "Trabalho", True), (FAMILIA, "Família", False)]
+        self.entrar(self.ana)
+        self.entrar(self.ana, "trabalho@gmail.com")
+        primeira, segunda = (c["agendas"][1]["id"] for c in self.google.listar(self.ana)["contas"])
+        self.google.ligar(self.ana, primeira, True)
+        with self.assertRaises(ValueError) as e:
+            self.google.ligar(self.ana, segunda, True)
+        self.assertIn(f"pela conta {ANA}", str(e.exception))
+
+    def test_ler_regrava_so_quando_muda(self):
+        self.entrar(self.ana)
+        principal = self.agenda("Ana Silva")["id"]
+        self.assertFalse(self.google.ler(principal))  # acabou de ler: não é a vez
+        self.passar(11)
+        self.falso.eventos[ANA] = [CONSULTA]
+        self.assertTrue(self.google.ler(principal))
+        self.assertEqual(self.contar("google_eventos"), 1)
+        with self.banco.conexao() as con:
+            antes = con.execute("SELECT ctid FROM google_eventos").fetchall()
+        self.passar(11)
+        self.assertTrue(self.google.ler(principal))  # os mesmos eventos: só a leitura é anotada
+        with self.banco.conexao() as con:
+            self.assertEqual(con.execute("SELECT ctid FROM google_eventos").fetchall(), antes)
+        self.assertEqual(self.linha("google_agendas", principal, "lida_em")[0], self.agora.astimezone())
+        self.assertEqual(self.falso.contar(TOKEN), 1)  # o acesso do login ainda valia
+
+    def test_paginas_e_teto(self):
+        self.falso.pagina = 2
+        self.falso.eventos[ANA] = [evento(f"E{n}", local(2026, 11, n, 9), local(2026, 11, n, 10)) for n in range(1, 6)]
+        self.entrar(self.ana)
+        self.assertEqual(self.agenda("Ana Silva")["eventos"], 5)
+        self.passar(11)
+        with mock.patch.object(google_agenda, "MAX_OCORRENCIAS", 3), self.assertLogs("bi.google", "WARNING"):
+            self.google.rodada()
+        a = self.agenda("Ana Silva")
+        self.assertIn("mais de 3 eventos", a["erro"])
+        self.assertEqual(a["eventos"], 5)  # a falha não apaga a última leitura
+
+    def test_autorizacao_caiu(self):
+        """Ana tirou o BI dos apps com acesso, no Google: a conta para de ser lida até ela entrar de novo."""
+        self.entrar(self.ana)
+        self.falso.validas.clear()
+        self.passar(11)
+        with self.assertLogs("bi.google", "WARNING") as logs:
+            self.assertEqual(self.google.rodada(), 1)
+        self.assertFalse(any("renovar" in linha for linha in logs.output))
+        c = self.conta()
+        self.assertEqual((c["trocar"], c["atencao"]), (True, True))
+        self.assertIn("entre com o Google de novo", c["erro"])
+        self.assertEqual(self.agenda("Ana Silva")["eventos"], 3)  # os eventos ficam (e param de travar em 24 h)
+        self.passar(180)
+        self.assertEqual(self.google.rodada(), 0)
+        self.entrar(self.ana)
+        c = self.conta()
+        self.assertEqual((c["trocar"], c["erro"]), (False, None))
+        self.assertEqual(self.agenda("Ana Silva")["lida_em"][:16], self.agora.isoformat()[:16])
+
+    def test_a_chave_do_servidor_mudou(self):
+        self.entrar(self.ana)
+        outra = GoogleAgenda(self.banco, ini_google(chave="nova"), agora=lambda: self.agora, pedidor=self.falso)
+        self.passar(11)
+        with self.assertLogs("bi.google", "WARNING"):
+            outra.rodada()
+        self.assertTrue(outra.listar(self.ana)["contas"][0]["trocar"])
+
+    def test_agenda_saiu_da_conta(self):
+        self.entrar(self.ana)
+        self.google.ligar(self.ana, self.agenda("Família")["id"], True)
+        self.falso.contas[ANA] = self.falso.contas[ANA][:1]  # Ana saiu da agenda da família no Google
+        self.passar(11)
+        with self.assertLogs("bi.google", "WARNING"):
+            self.google.rodada()
+        a = self.agenda("Família")
+        self.assertEqual((a["trocar"], a["atencao"]), (True, True))
+        self.assertIn("não está mais na sua conta Google", a["erro"])
+        self.passar(2)
+        self.google.atualizar(self.ana)  # relê a lista: a agenda some do BI
+        self.assertEqual([a["nome"] for a in self.conta()["agendas"]], ["Ana Silva"])
+
+    def test_erro_passageiro_so_avisa_depois_de_uma_hora(self):
+        self.entrar(self.ana)
+        self.falso.falha[ANA] = (503, {})
+        self.passar(11)
+        with self.assertLogs("bi.google", "WARNING"):
+            self.google.rodada()
+        a = self.agenda("Ana Silva")
+        self.assertEqual((a["atencao"], a["trocar"], a["eventos"]), (False, False, 3))
+        self.passar(60)
+        with self.assertLogs("bi.google", "WARNING"):
+            self.google.rodada()
+        self.assertTrue(self.agenda("Ana Silva")["atencao"])
+
+    def test_leitura_atrasada_nao_grava_por_cima(self):
+        """Ana entrou de novo (ou desligou a agenda) enquanto o vigia lia."""
+        id_ = self.entrar(self.ana)["id"]
+
+        def no_meio():
+            with self.banco.conexao() as con:
+                con.execute("UPDATE google_contas SET token = %s WHERE id = %s", [cifrar(CHAVE, "renovar-0"), id_])
+
+        self.falso.eventos[ANA] = [CONSULTA]
+        self.falso.ao_ler = no_meio
+        self.passar(11)
+        self.assertEqual(self.google.rodada(), 1)
+        self.assertEqual(self.contar("google_eventos"), 3)
+        self.assertEqual(self.agenda("Ana Silva")["lida_em"][:16], AGORA.isoformat()[:16])
+
+    def test_atualizar_agora_e_desconectar(self):
+        id_ = self.entrar(self.ana)["id"]
+        with self.assertRaises(ValueError) as e:
+            self.google.atualizar(self.ana)
+        self.assertIn("acabou de ser lida", str(e.exception))
+        self.falso.contas[ANA].append(("novo@group.calendar.google.com", "Nova", False))
+        self.passar(2)
+        self.assertEqual(self.google.atualizar(self.ana, id_), 1)
+        self.assertIn("Nova", [a["nome"] for a in self.conta()["agendas"]])  # a agenda criada depois no Google
+        with self.assertRaises(NaoEncontrada):
+            self.google.atualizar(self.beto, id_)
+        with self.assertRaises(NaoEncontrada):
+            self.google.desconectar(self.beto, id_)
+        self.google.desconectar(self.ana, id_)
+        self.assertEqual([self.contar(t) for t in ("google_contas", "google_agendas", "google_eventos")], [0, 0, 0])
+        self.assertEqual(self.falso.revogadas, ["renovar-0"])
+
+    def test_rodada(self):
+        self.entrar(self.ana)
+        self.entrar(self.beto, "beto@gmail.com")
+        self.assertEqual(self.google.rodada(), 0)  # as duas acabaram de ser lidas
+        self.passar(10)
+        self.assertEqual(self.google.rodada(), 2)
+        with self.banco.conexao() as con:  # Beto saiu da Gestão; a de Ana falhou duas vezes seguidas
+            con.execute("UPDATE usuarios SET paginas = '{metas}' WHERE id = %s", [self.beto])
+            con.execute("UPDATE google_agendas SET falhas = 2 WHERE usuario = %s", [self.ana])
+        self.passar(10)
+        self.assertEqual(self.google.rodada(), 0)  # Ana espera 40 min; Beto não é mais lido
+        self.passar(30)
+        self.assertEqual(self.google.rodada(), 1)
+
+    def test_sem_a_chave_ou_sem_o_cliente(self):
+        for campos, aviso in (({"chave": ""}, SITE), ({"cliente_segredo": ""}, SEM_CLIENTE)):
+            sem = GoogleAgenda(self.banco, ini_google(**campos), pedidor=self.falso)
+            self.assertEqual(sem.listar(self.ana), {"ativo": False, "aviso": aviso, "contas": []})
+            with self.assertRaises(ValueError) as e:
+                sem.endereco_login(self.ana)
+            self.assertEqual(str(e.exception), aviso)
         semear(self.banco, self.ana, [("Consulta", DT(2026, 10, 30, 14), DT(2026, 10, 30, 15), False, True)])
         m = sem.no_mes(self.ana, Agenda(self.banco, ConfiguracaoFixa(), hoje=lambda: HOJE).mes(self.ana, "2026-10"))
         self.assertFalse(m["google"]["ativo"])
         self.assertTrue(all(d["google"] == [] for d in m["dias"]))
         with self.banco.conexao() as con:
             self.assertEqual(sem.ocupados(con, [self.ana], HOJE, D(2026, 11, 30)), [])
-        self.assertEqual(self.baixados, [])
-
-    def test_ler_troca_os_eventos_e_guarda_o_erro(self):
-        id_ = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        self.assertFalse(self.google.ler(id_))  # acabou de ler: não é a vez
-        self.passar(11)
-        self.arquivos[URL] = ics(CONSULTA, nome="Pessoal (nova)")
-        self.assertTrue(self.google.ler(id_))
-        self.assertEqual(self.contar("google_eventos"), 1)
-        self.assertEqual(self.agenda_do_banco(id_)["nome"], "Pessoal (nova)")
-        # o arquivo igual (só o DTSTAMP mudou): só a leitura é anotada, os eventos ficam como estão
-        self.arquivos[URL] = self.arquivos[URL].replace(b"20261026T120000Z", b"20261026T121500Z")
-        with self.banco.conexao() as con:
-            antes = con.execute("SELECT ctid FROM google_eventos").fetchall()
-        self.passar(11)
-        self.assertTrue(self.google.ler(id_))
-        with self.banco.conexao() as con:
-            self.assertEqual(con.execute("SELECT ctid FROM google_eventos").fetchall(), antes)
-        self.assertEqual(self.agenda_do_banco(id_)["lida_em"], self.agora.astimezone())
-        # falhou: os eventos da última leitura ficam e o erro é guardado
-        del self.arquivos[URL]
-        self.passar(11)
-        with self.assertLogs("bi.google", "WARNING") as logs:
-            self.assertTrue(self.google.ler(id_))
-        self.assertFalse(any("private-" in linha for linha in logs.output))
-        g = self.agenda_do_banco(id_)
-        self.assertEqual((g["erro"], g["trocar"], g["falhas"]), ("o Google não aceitou mais o endereço", True, 1))
-        self.assertEqual(self.contar("google_eventos"), 1)
-        lista = self.google.listar(self.ana)["agendas"][0]
-        self.assertTrue(lista["atencao"])  # o endereço morreu: a página avisa na hora
-        self.assertFalse(lista["desatualizada"])
-
-    def test_erro_passageiro_so_avisa_depois_de_uma_hora(self):
-        id_ = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        self.arquivos[URL] = ErroGoogle("sem resposta do Google agora")
-        self.passar(11)
-        with self.assertLogs("bi.google", "WARNING"):
-            self.google.ler(id_)
-        self.assertFalse(self.google.listar(self.ana)["agendas"][0]["atencao"])
-        self.passar(60)
-        with self.assertLogs("bi.google", "WARNING"):
-            self.google.ler(id_)
-        lista = self.google.listar(self.ana)["agendas"][0]
-        self.assertEqual((lista["atencao"], lista["trocar"]), (True, False))
-
-    def test_leitura_atrasada_nao_grava_por_cima(self):
-        """A pessoa colou o endereço novo (ou removeu a agenda) enquanto o vigia baixava o antigo."""
-        id_ = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        n = self.contar("google_eventos")
-
-        def no_meio(url):
-            with self.banco.conexao() as con:
-                con.execute("UPDATE google_agendas SET endereco = 'novo' WHERE id = %s", [id_])
-            return ics(CONSULTA)
-
-        self.arquivos[URL] = no_meio
-        self.passar(11)
-        self.assertTrue(self.google.ler(id_))
-        self.assertEqual(self.contar("google_eventos"), n)
-        self.assertEqual(self.agenda_do_banco(id_)["lida_em"], AGORA.astimezone())
-
-    def test_atualizar_agora(self):
-        id_ = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        with self.assertRaises(ValueError) as e:
-            self.google.atualizar(self.ana)
-        self.assertIn("acabou de ser lida", str(e.exception))
-        self.passar(2)
-        self.assertEqual(self.google.atualizar(self.ana, id_), 1)
-        with self.assertRaises(NaoEncontrada):
-            self.google.atualizar(self.beto, id_)
-        with self.assertRaises(NaoEncontrada):
-            self.google.remover(self.beto, id_)
-        self.google.remover(self.ana, id_)
-        self.assertEqual((self.contar("google_agendas"), self.contar("google_eventos")), (0, 0))
-
-    def test_rodada(self):
-        ana = self.google.conectar(self.ana, URL)["agenda"]["id"]
-        self.arquivos[URL.replace("ana.silva", "beto")] = ics(CONSULTA)
-        beto = self.google.conectar(self.beto, URL.replace("ana.silva", "beto"))["agenda"]["id"]
-        self.baixados.clear()
-        self.assertEqual(self.google.rodada(), 0)  # as duas acabaram de ser lidas
-        self.passar(10)
-        self.assertEqual(self.google.rodada(), 2)
-        with self.banco.conexao() as con:  # Beto saiu da Gestão; a de Ana falhou duas vezes seguidas
-            con.execute("UPDATE usuarios SET paginas = '{metas}' WHERE id = %s", [self.beto])
-            con.execute("UPDATE google_agendas SET falhas = 2 WHERE id = %s", [ana])
-        self.passar(10)
-        self.assertEqual(self.google.rodada(), 0)  # Ana espera 40 min; Beto não é mais lido
-        self.passar(30)
-        self.assertEqual(self.google.rodada(), 1)
-        self.assertNotIn(URL.replace("ana.silva", "beto"), self.baixados[2:])
-        self.assertTrue(beto)
+        self.assertEqual(self.falso.pedidos, [])
 
     def test_no_mes(self):
         semear(self.banco, self.ana, [
@@ -546,7 +618,7 @@ class TestGoogleNoBanco(BaseBanco):
         self.passar(25 * 60)  # mais de um dia sem leitura: aparece, marcado como desatualizado
         m = self.google.no_mes(self.ana, agenda.mes(self.ana, "2026-10"))
         self.assertTrue(m["dias"][29]["google"][0]["desatualizada"])
-        self.assertTrue(m["google"]["agendas"][0]["desatualizada"])
+        self.assertTrue(m["google"]["contas"][0]["agendas"][0]["desatualizada"])
 
 
 class TestHorarioOcupadoGoogle(BaseBanco):
@@ -557,7 +629,7 @@ class TestHorarioOcupadoGoogle(BaseBanco):
         super().setUp()
         self.ana, self.beto = (self.criar_usuario(n, paginas=GESTAO) for n in ("ana", "beto"))
         self.google = GoogleAgenda(self.banco, ini_google(), agora=lambda: AGORA)
-        self.google.falta = []  # os eventos vêm semeados: não precisa dos pacotes do iCal
+        self.google.falta = []  # os eventos vêm semeados: não precisa do pacote cryptography
         cfg = ConfiguracaoFixa()
         self.agenda = Agenda(self.banco, cfg, hoje=lambda: HOJE, google=self.google)
         self.tarefas = Tarefas(self.banco, cfg, hoje=lambda: HOJE, google=self.google)

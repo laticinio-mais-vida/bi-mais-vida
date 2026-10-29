@@ -606,6 +606,46 @@ BI só lê: nada é escrito no Google. É o primeiro trabalho que o servidor faz
 - **Voltar atrás:** tirar a chave de `[google]` e `docker compose restart` desliga a leitura (nada do Google aparece
   nem trava). O código anterior não lê as tabelas (elas ficam guardadas): não precisa restaurar o banco.
 
+#### Google Agenda pelo login com o Google (migração 032)
+
+A conexão deixa de ser pelo endereço secreto no formato iCal e passa a ser o **login com o Google** (OAuth, só a
+permissão `calendar.readonly`): a pessoa clica em **Entrar com o Google**, escolhe a conta e autoriza; o BI guarda a
+autorização cifrada e lê as agendas que ela ligar pela API do Google Agenda (veja o README, "Google Agenda"). O app
+fica **sem a verificação do Google**: cada pessoa vê uma vez o aviso "O Google não verificou este app" (Avançado ›
+Acessar bi.maisvida.cloud), e o Google limita o app a 100 pessoas, o que sobra para a equipe.
+
+- **O projeto no Google Cloud (uma vez, com uma conta Google da empresa, não de um funcionário):**
+  1. Em console.cloud.google.com, no seletor de projetos, **Novo projeto** › "BI Mais Vida".
+  2. **APIs e serviços › Biblioteca** › "Google Calendar API" › **Ativar**.
+  3. **Google Auth Platform** (ou "Tela de permissão OAuth") › **Começar**: nome do app "BI Mais Vida", o e-mail de
+     suporte, público **Externo**, o e-mail de contato › **Criar**. Depois, em **Branding**: página inicial
+     `https://bi.maisvida.cloud/`, política de privacidade `https://bi.maisvida.cloud/privacidade.html` (a página
+     web/privacidade.html, aberta sem login) e o domínio autorizado `maisvida.cloud`. Sem eles, o **Publicar app** do
+     passo 5 fica bloqueado.
+  4. **Acesso a dados** › **Adicionar ou remover escopos** › `https://www.googleapis.com/auth/calendar.readonly` ›
+     **Atualizar** › **Salvar**.
+  5. **Público** › **Publicar app** › confirmar ("Em produção"). No modo de teste, a autorização vence a cada 7 dias e
+     cada pessoa teria de entrar de novo toda semana.
+  6. **Clientes** › **Criar cliente** › tipo **Aplicativo da Web**; em **URIs de redirecionamento autorizados**,
+     `https://bi.maisvida.cloud/api/agenda/google/retorno` › **Criar**. Baixe o JSON na hora: o segredo do cliente só
+     aparece nesse momento.
+- **No servidor:** em `/opt/bi-mais-vida/config.ini`, na seção `[google]` (que já tem a `chave`), acrescente o
+  `cliente_id` e o `cliente_segredo` do JSON. O endereço de retorno já vem certo no código (`retorno =` só se o site
+  mudar de endereço). Sem os dois, a janela do Google avisa que falta configurar o login, e nada do Google aparece nem
+  trava. Depois de mudar, `docker compose restart`.
+- **Pacotes:** saem `icalendar`, `recurring-ical-events` e `x-wr-timezone`; fica o `cryptography`. A imagem é refeita
+  no `up -d --build` de sempre.
+- **A migração 032** cria `google_contas` e muda `google_agendas` (sai o endereço; entram a conta, se é a principal e se
+  está ligada). As agendas conectadas pelo endereço secreto **saem, com os eventos**: elas não servem para a leitura
+  nova, e cada pessoa entra com o Google de novo. Antes de publicar, `SELECT count(*) FROM google_agendas` mostra
+  quantas são (em 29/10/2026, nenhuma). Ensaie em BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** o log mostra `032_google_login` e "leitura do Google Agenda ligada". Entre com uma conta de
+  verdade e confira a primeira leitura, ligar uma segunda agenda, um evento Ocupado recusando a tarefa de outro
+  usuário e o Disponível passando. Nenhuma autorização vai para o log (as do Google começam com `ya29.` e `1//`):
+  `docker compose logs bi | grep -c 'ya29\.\|1//'` tem de dar 0.
+- **Voltar atrás:** tirar `cliente_id` e `cliente_segredo` (ou a `chave`) e `docker compose restart` desliga a leitura.
+  O código anterior não sabe ler as tabelas novas: para voltar a ele, restaure o banco de antes junto com a pasta.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Google Agenda · Metas Mais Vida</title>
+<link rel="icon" href="/img/logo-maisvida.png">
+<script>
+  // Aplica o tema antes de desenhar a página, para não piscar.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("mv-tema"); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="pagina-google">
+<!-- A volta do login com o Google (web/js/googleretorno.js): sem dados; o resultado vem no fragmento do endereço. -->
+<main class="g-retorno" aria-live="polite">
+  <div class="g-retorno-ic" id="g-ic" aria-hidden="true"></div>
+  <h1 id="g-titulo">Google Agenda</h1>
+  <p id="g-msg">Um instante…</p>
+  <a class="btn primario" href="/#/gestao" id="g-voltar" hidden>Voltar ao BI</a>
+</main>
+<script src="/js/googleretorno.js"></script>
+</body>
+</html>

@@ -35,7 +35,7 @@ from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
@@ -89,7 +89,10 @@ ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", 
                       "/api/agenda/tarefa/mover", "/api/agenda/tarefa/justificar", "/api/agenda/subtarefas",
                       "/api/agenda/subtarefa/editar", "/api/agenda/subtarefa/concluir",
                       "/api/agenda/subtarefa/desfazer", "/api/agenda/subtarefa/mover", "/api/agenda/subtarefa/justificar",
-                      "/api/agenda/google", "/api/agenda/google/remover", "/api/agenda/google/atualizar"}
+                      "/api/agenda/google/ligar", "/api/agenda/google/desconectar", "/api/agenda/google/atualizar"}
+# O login com o Google (bi/google_agenda.py), numa janelinha: a resposta é sempre uma página (web/google.html mostra o
+# resultado e avisa a agenda), nunca JSON.
+ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
@@ -622,7 +625,7 @@ class Manipulador(BaseHTTPRequestHandler):
         if caminho == "/api/agenda":  # mes=2026-10 (vazio = o mês de hoje): as atividades, as tarefas e o Google
             m = self.app.tarefas.no_mes(eu, self.app.agenda.mes(eu, q.get("mes")))
             return self._json(self.app.google.no_mes(eu, m))
-        if caminho == "/api/agenda/google":  # as agendas do Google conectadas (sem o endereço)
+        if caminho == "/api/agenda/google":  # as contas Google conectadas e as agendas delas (sem a autorização)
             return self._json(self.app.google.listar(eu))
         if caminho == "/api/agenda/pessoas":  # quem pode participar de uma tarefa
             return self._json(self.app.tarefas.pessoas(eu))
@@ -723,20 +726,44 @@ class Manipulador(BaseHTTPRequestHandler):
         return self._json({"ok": True, "tarefa": t, "avisos": t.pop("avisos", [])})
 
     def _mudar_google(self, usuario: dict, caminho: str, corpo: dict):
-        """As agendas do Google da pessoa (bi/google_agenda.py): conectar pelo endereço secreto, remover e reler agora.
-        A resposta traz a lista como ficou; o endereço não vai para o log nem volta na resposta."""
+        """As contas Google da pessoa (bi/google_agenda.py): ligar ou desligar uma agenda, desconectar a conta e reler
+        agora. A resposta traz a lista como ficou; a autorização não vai para o log nem volta na resposta."""
         google, eu = self.app.google, usuario["id"]
-        if caminho == "/api/agenda/google":  # endereco: o endereço secreto no formato iCal
-            r = google.conectar(eu, corpo.get("endereco"))
-            log.info("%s %s a agenda do Google %s", usuario["login"], "conectou" if r["nova"] else "reconectou",
-                     r["agenda"]["id"])
-            return self._json({"ok": True, **r, **google.listar(eu)})
-        if caminho == "/api/agenda/google/remover":
-            google.remover(eu, corpo.get("id"))
-            log.info("%s removeu a agenda do Google %s", usuario["login"], corpo.get("id"))
-            return self._json({"ok": True, **google.listar(eu)})
-        google.atualizar(eu, corpo.get("id"))  # /api/agenda/google/atualizar (id vazio: todas as da pessoa)
+        if caminho == "/api/agenda/google/ligar":  # id: a agenda; ligada: true (aparece no BI) ou false
+            google.ligar(eu, corpo.get("id"), bool(corpo.get("ligada")))
+        elif caminho == "/api/agenda/google/desconectar":  # id: a conta
+            google.desconectar(eu, corpo.get("id"))
+            log.info("%s desconectou a conta Google %s", usuario["login"], corpo.get("id"))
+        else:  # /api/agenda/google/atualizar (id: a conta; vazio: todas as da pessoa)
+            google.atualizar(eu, corpo.get("id"))
         return self._json({"ok": True, **google.listar(eu)})
+
+    def _login_google(self, caminho: str, q: dict):
+        """O login com o Google, numa janelinha: entrar manda para o Google (com o state desta pessoa); retorno é a
+        volta de lá, com o código, e só vale na mesma sessão do BI que começou. O resultado vai para web/google.html no
+        fragmento (#ok=… ou #erro=…), que não chega aos logs; o código e a autorização nunca vão para o log."""
+        try:
+            usuario = self._usuario()
+            if usuario is None:
+                raise ValueError("faça login no BI e tente de novo")
+            if "gestao" not in paginas_permitidas(usuario):
+                raise ValueError("seu acesso não inclui a página Gestão")
+            if caminho == "/api/agenda/google/entrar":
+                return self._redireciona(self.app.google.endereco_login(usuario["id"]))
+            r = self.app.google.retorno(usuario["id"], q)
+            log.info("%s %s a conta Google %s", usuario["login"], "conectou" if r["nova"] else "reconectou", r["id"])
+            return self._redireciona("/google.html#" + urlencode({"ok": r["email"]}))
+        except CONEXAO_PERDIDA:
+            return
+        except (ValueError, NaoEncontrada) as e:
+            return self._redireciona("/google.html#" + urlencode({"erro": str(e)}))
+        except BancoForaDoAr as e:
+            log.warning("banco de dados fora do ar no login com o Google: %s", e)
+            return self._redireciona("/google.html#" + urlencode({"erro": e.aviso}))
+        except Exception:
+            log.error("erro no login com o Google (%s)\n%s", caminho, traceback.format_exc())
+            return self._redireciona("/google.html#" + urlencode({"erro": "erro interno no login com o Google; tente "
+                                                                          "de novo"}))
 
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
@@ -747,6 +774,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._arquivo(WEB / url.path.lstrip("/"))  # CSS, JS e imagens: sem dados nem banco
             if url.path in PAGINAS_HTML:
                 return self._pagina(url.path)
+            if url.path in ROTAS_GOOGLE_LOGIN:
+                return self._login_google(url.path, q)
             usuario = self._usuario()
             if url.path == "/api/sessao":
                 return self._json(self._sessao(usuario))

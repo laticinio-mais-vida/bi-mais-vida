@@ -42,8 +42,8 @@ O projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird), `du
 com o pandas), que já estão instalados. Usuários, regras e o histórico do Assistente ficam num PostgreSQL instalado
 no próprio PC (veja [Banco de dados](#banco-de-dados)), que precisa de `pip install "psycopg[binary]" psycopg-pool`.
 O Assistente precisa também de `pip install anthropic`, só onde for usado, e de `pip install XlsxWriter fpdf2` para os
-arquivos Excel e PDF que ele prepara. A leitura do Google Agenda (só no site) usa `icalendar`, `recurring-ical-events`
-e `cryptography`; no PC, eles servem só para os testes. No VPS, tudo já vem na imagem.
+arquivos Excel e PDF que ele prepara. A leitura do Google Agenda (só no site) usa `cryptography`; no PC, ele serve só
+para os testes. No VPS, tudo já vem na imagem.
 
 ## De onde vêm os dados
 
@@ -769,20 +769,29 @@ dela.
 #### Google Agenda (só leitura)
 
 Cada pessoa pode trazer para a agenda os compromissos do Google Agenda dela. O BI **só lê**: nada é escrito no Google.
-Funciona no site (bi.maisvida.cloud), onde o `config.ini` tem a chave de `[google]`; no PC, a janela avisa que fica lá.
+Funciona no site (bi.maisvida.cloud), onde o `config.ini` tem `[google]` preenchido; no PC, a janela avisa que fica
+lá.
 
-- **Conectar:** o botão **Google** da agenda abre a janela. A pessoa cola o **endereço secreto no formato iCal** da
-  agenda e clica em **Conectar**. O BI lê na hora (endereço errado não entra) e depois relê a cada 10 minutos. Onde
-  achar o endereço (no computador; o app do celular não mostra):
-  1. em calendar.google.com, a engrenagem › **Configurações**;
-  2. em **Configurações das minhas agendas**, clicar na agenda;
-  3. em **Integrar agenda**, o último campo: **Endereço secreto no formato iCal**.
+- **Conectar:** o botão **Google** da agenda abre a janela, e **Entrar com o Google** abre o login do Google numa
+  janelinha:
+  1. a pessoa escolhe a conta Google;
+  2. aparece **"O Google não verificou este app"**: ela clica em **Avançado** e em **Acessar bi.maisvida.cloud**. O
+     aviso aparece porque o BI é um app interno, sem a verificação que o Google faz nos apps públicos;
+  3. o Google pergunta se o BI pode **ver as agendas** dela (só ver): **Continuar**;
+  4. a janelinha fecha, e a agenda principal da conta já aparece, lida.
 
-  Quem tem mais de uma agenda conecta cada uma, até 5. A janela mostra quando cada uma foi lida, **Atualizar agora** e
-  **Remover** (no Google, nada muda).
-- **O endereço é uma senha:** quem tem lê a agenda inteira. O BI guarda cifrado, com a chave de `[google]` (fora do
-  banco e das cópias de segurança dele), não mostra de novo e não grava no log. Para cortar o acesso, a pessoa usa
-  **Redefinir**, ao lado do endereço no Google, e cola o novo: a mesma agenda continua, com o endereço trocado.
+  A janela lista as agendas da conta (as dela, as compartilhadas com ela, os feriados), e a pessoa liga as que quer
+  ver no BI, até 5 no total. Ela pode conectar até 3 contas Google. O BI relê as ligadas a cada 10 minutos; a janela
+  mostra quando cada uma foi lida, **Atualizar agora** (que também traz as agendas criadas depois no Google) e a
+  lixeira, que desconecta a conta.
+- **A autorização:** o Google dá ao BI uma autorização de só leitura, guardada cifrada com a chave de `[google]` (fora
+  do banco e das cópias de segurança dele); ela não volta para a página e não vai para o log. Desconectar no BI também
+  avisa o Google, que tira o BI da lista de apps com acesso à conta. Se a pessoa tirar o acesso pelo Google (Conta ›
+  Segurança › Apps de terceiros com acesso), a agenda e o botão Google avisam para entrar com o Google de novo.
+- **Privacidade:** a tela de permissão do Google mostra a política do BI, em `/privacidade.html` (aberta sem login):
+  o que o BI lê do Google, o que guarda, para que usa e como cortar o acesso.
+- **O login é da pessoa que está no BI:** a volta do Google só vale na mesma sessão do BI que começou o login, uma vez
+  e por 10 minutos. Um link de login aberto por outra pessoa não liga a agenda dela à conta de quem mandou.
 - **Na agenda:** os eventos aparecem no dia, depois dos itens do BI, com o chip "Google · nome da agenda", só para ver
   (sem o círculo de concluir). Não entram no número do quadrado, na barrinha, nas cores nem nas contagens do escolher
   o dia, que são do que há para fazer: uma faixinha azul em cima do quadrado e a dica do mouse mostram que o dia tem
@@ -804,11 +813,12 @@ Funciona no site (bi.maisvida.cloud), onde o `config.ini` tem a chave de `[googl
 
   O que já estava marcado no BI não muda quando a pessoa marca algo no Google depois. Ao editar, o aviso só aparece
   se o dia ou o horário mudaram.
-- **Quando a leitura falha:** os eventos da última leitura ficam. Se o Google não aceita mais o endereço (redefinido),
-  a agenda e o botão Google avisam na hora para colar de novo; se é passageiro (o Google fora do ar), o BI tenta de
-  novo sozinho, espaçando as tentativas até 2 horas, e só avisa depois de uma hora sem ler. Com mais de 24 horas sem
-  leitura, os eventos aparecem como "pode estar desatualizado" e não travam ninguém. Quem é desativado ou perde a
-  página Gestão deixa de ser lido.
+- **Quando a leitura falha:** os eventos da última leitura ficam. Se a autorização caiu (a pessoa tirou o acesso no
+  Google, ou a chave do servidor mudou), a agenda e o botão Google avisam na hora para entrar com o Google de novo, e
+  a conta para de ser lida até lá. Se uma agenda saiu da conta no Google, ela é marcada; o **Atualizar agora** a tira
+  da lista. Se é passageiro (o Google fora do ar), o BI tenta de novo sozinho, espaçando as tentativas até 2 horas, e
+  só avisa depois de uma hora sem ler. Com mais de 24 horas sem leitura, os eventos aparecem como "pode estar
+  desatualizado" e não travam ninguém. Quem é desativado ou perde a página Gestão deixa de ser lido.
 - **Assistente:** em "o que tenho amanhã?", ele vê também os eventos do Google de quem pergunta, só para ler (não
   propõe mudar nenhum). Se a atividade que ele propõe cai num horário ocupado do Google, a proposta traz o aviso.
 
@@ -943,7 +953,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
-| `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migração 031): as agendas conectadas (o id da agenda no Google, o endereço secreto cifrado, a assinatura do último arquivo, quando foi lida e o último erro) e os eventos lidos, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Remover a agenda leva os eventos dela; só o site usa |
+| `google_contas`, `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migrações 031 e 032): as contas Google conectadas (o e-mail, a autorização cifrada e se ela caiu), as agendas de cada conta (o id da agenda no Google, se é a principal, se está ligada, a assinatura da última leitura, quando foi lida e o último erro) e os eventos lidos das ligadas, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Desconectar a conta leva as agendas e os eventos dela; só o site usa |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
 
@@ -1096,7 +1106,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
-| `bi/google_agenda.py` | o Google Agenda, só leitura: o endereço secreto (conferido, remontado e cifrado), baixar e interpretar o arquivo iCal (repetições, exceções, fusos), a leitura de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
+| `bi/google_agenda.py` | o Google Agenda, só leitura: o login com o Google (state, PKCE e a autorização cifrada), a lista de agendas de cada conta, a leitura dos eventos pela API do Google Agenda, de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
 | `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |

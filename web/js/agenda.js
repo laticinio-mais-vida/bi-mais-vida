@@ -24,7 +24,7 @@
 // Em que dias cada atividade acontece, o texto da repetição ("Toda segunda e quinta") e o que cada pessoa pode fazer
 // numa tarefa vêm do servidor (bi/agenda.py e bi/tarefas.py).
 // Google Agenda (só leitura, bi/google_agenda.py; o botão Google abre agendagoogle.js): os eventos das agendas do
-// Google que a pessoa conectou aparecem no dia (depois dos itens do BI, sem o check) e na dica do quadrado, mas não
+// Google que a pessoa ligou aparecem no dia (depois dos itens do BI, sem o check) e na dica do quadrado, mas não
 // contam no número, na barrinha nem nas cores, que são do que há para fazer. "Trazer como atividade" abre o formulário
 // de atividade nova preenchido com o evento. Gravar com um horário ocupado no Google da própria pessoa grava e avisa
 // (o toast amarelo).
@@ -316,15 +316,23 @@ function escreverCabecalho() {
     : "Nada marcado neste mês";
 }
 
-// O botão Google com um ponto e, em cima da faixa, o aviso de cada agenda do Google que precisa de atenção (o endereço
-// morreu, ou ela não é lida há mais de uma hora).
+// O botão Google com um ponto e, em cima da faixa, o aviso do que precisa de atenção: a conta cuja autorização caiu
+// (entrar com o Google de novo), a agenda que não abre mais ou a que não é lida há mais de uma hora.
 function desenharAvisoGoogle() {
-  const g = estado.dados.google || { agendas: [] };
-  const atencao = g.agendas.filter((a) => a.atencao);
-  raiz.querySelector("[data-google]").classList.toggle("atencao", atencao.length > 0);
-  raiz.querySelector("#ag-google-aviso").innerHTML = atencao.map((a) => `<div class="aviso ag-google-aviso">${icone("alerta")}
-      <span>${a.trocar ? `A agenda do Google “${esc(a.nome)}” não abre mais: cole o endereço secreto de novo.`
-        : `Não deu para ler a agenda do Google “${esc(a.nome)}”${a.lida_em ? ` desde ${dataCurta(a.lida_em.slice(0, 10))} às ${hora(a.lida_em)}` : ""}: ${esc(a.erro)}`}</span>
+  const avisos = [];
+  for (const c of estado.dados.google?.contas || []) {
+    if (c.trocar) {
+      avisos.push(`A conexão com a conta Google ${esc(c.email)} caiu: entre com o Google de novo.`);
+      continue;
+    }
+    for (const a of c.agendas.filter((x) => x.atencao)) {
+      avisos.push(a.trocar ? `A agenda do Google “${esc(a.nome)}” não abre mais: ${esc(a.erro)}.`
+        : `Não deu para ler a agenda do Google “${esc(a.nome)}”${a.lida_em ? ` desde ${dataCurta(a.lida_em.slice(0, 10))} às ${hora(a.lida_em)}` : ""}: ${esc(a.erro)}`);
+    }
+  }
+  raiz.querySelector("[data-google]").classList.toggle("atencao", avisos.length > 0);
+  raiz.querySelector("#ag-google-aviso").innerHTML = avisos.map((t) => `<div class="aviso ag-google-aviso">${icone("alerta")}
+      <span>${t}</span>
       <button class="btn" type="button" data-google>Abrir</button>
     </div>`).join("");
 }
@@ -370,7 +378,7 @@ function desenharFaixa(quieta) {
     <span><span class="ag-barra"><i class="f"></i><i></i><i></i></span>feitas e as que faltam</span>
     <span><i class="tem"></i>Com algo marcado</span><span><i class="feita"></i>Tudo feito</span>
     <span><i class="atrasada"></i>Ficou sem concluir</span>
-    ${d.google?.agendas.length ? `<span><i class="ag-gdot"></i>Evento do Google (só para ver)</span>` : ""}</div>`;
+    ${d.google?.contas?.some((c) => c.agendas.some((a) => a.ligada)) ? `<span><i class="ag-gdot"></i>Evento do Google (só para ver)</span>` : ""}</div>`;
   ligarTooltips(raiz.querySelector("#ag-faixa"));
 }
 
