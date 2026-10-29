@@ -56,8 +56,8 @@ from .metas import MESES
 from .projecoes import NOME_EQUIPE
 
 __all__ = ["Gestao", "ContextoGestao", "SemDados", "andamento", "calendario_periodo", "unidades", "validar",
-           "situacao", "prazo", "alvo_de", "classe_resultado", "comparar", "comparar_preco", "andamento_preco",
-           "produtos_preco", "valor_vendedor", "rotulo_padrao", "texto_alvo", "publica", "pct_premiacao", "premio_de",
+           "situacao", "prazo", "alvo_de", "classe_resultado", "comparar", "classe_preco", "comparar_preco",
+           "andamento_preco", "ganho_preco", "produtos_preco", "equipe_preco", "valor_vendedor", "rotulo_padrao", "texto_alvo", "publica", "pct_premiacao", "premio_de",
            "texto_premiacao"]
 
 TIPOS_ITEM = {"acao": "campanha", "objetivo": "objetivo"}
@@ -675,13 +675,21 @@ def alvos_preco(c: dict, v: dict | None = None) -> dict[int, float]:
     return alvos_do_vendedor({p["id"]: p["meta"] for p in c.get("metas_produto") or []}, (v or {}).get("alvos_precos"))
 
 
+def classe_preco(pct: float | None, pediu: bool) -> str | None:
+    """A cor do % da meta no preço médio: ok = chegou ao alvo; mid = subiu sem chegar; bad = não subiu (ou caiu). Sem
+    aumento pedido (já estava no alvo na base), o % é o de manter: abaixo de 100% é que caiu abaixo do alvo (bad)."""
+    if pct is None:
+        return None
+    return "ok" if round(pct, 3) >= 1 else "mid" if pediu and pct > 0 else "bad"
+
+
 def comparar_preco(prog: dict | None, com_base: bool) -> dict:
-    """comparar() no preço médio, pelo % da meta (progresso_preco): ok = chegou ao alvo; mid = subiu sem chegar; bad =
-    não subiu (ou caiu). delta: o aumento feito, em R$."""
+    """comparar() no preço médio, pelo % da meta (progresso_preco), com a classe de classe_preco. delta: o aumento
+    feito, em R$."""
     if prog is None:
         return {"classe": "sem_dados" if com_base else "sem_alvo", "delta": None, "delta_pct": None, "caminho": None}
     pct = prog["pct"]
-    return {"classe": "ok" if round(pct, 3) >= 1 else "mid" if pct > 0 else "bad", "delta": _redondo(prog["aumento"]),
+    return {"classe": classe_preco(pct, prog["aumento_pedido"] > 0), "delta": _redondo(prog["aumento"]),
             "delta_pct": None, "caminho": _redondo(pct)}
 
 
@@ -693,17 +701,62 @@ def andamento_preco(c: dict, base_precos, precos, v: dict | None = None) -> dict
             "aumento_pedido": _redondo((prog or {}).get("aumento_pedido")), **comparar_preco(prog, bool(base_precos))}
 
 
+def ganho_preco(base: float | None, preco: float | None, quantidade: float | None) -> float | None:
+    """O ganho (ou a perda) de um produto, pedido do usuário: (o preço de agora − o da base) × a quantidade vendida na
+    campanha. Diferente do aumento do % da meta, conta também o que já estava no alvo."""
+    if base is None or preco is None or not quantidade or quantidade <= 0:
+        return None
+    return (preco - base) * quantidade
+
+
 def produtos_preco(c: dict, base_precos, precos, v: dict | None = None) -> list[dict]:
     """O preço médio de um vendedor produto a produto (a grade da página): o preço da base, o de agora, a quantidade, o
-    preço-alvo dele (meta) e o % até o alvo."""
+    preço-alvo dele (meta), o % até o alvo, a classe (classe_preco) e o ganho em R$ (ganho_preco)."""
     alvos = alvos_preco(c, v)
     pcts = (progresso_preco(base_precos, precos, alvos) or {}).get("produtos", {})
     saida = []
     for p in c["metas_produto"]:
-        chave, agora = str(p["id"]), (precos or {}).get(str(p["id"])) or {}
-        saida.append({"id": p["id"], "meta": alvos[p["id"]], "base": ((base_precos or {}).get(chave) or {}).get("preco"),
-                      "preco": agora.get("preco"), "quantidade": agora.get("quantidade"), "pct": _redondo(pcts.get(chave))})
+        chave, agora, alvo = str(p["id"]), (precos or {}).get(str(p["id"])) or {}, alvos[p["id"]]
+        base, pct = ((base_precos or {}).get(chave) or {}).get("preco"), pcts.get(chave)
+        saida.append({"id": p["id"], "meta": alvo, "base": base, "preco": agora.get("preco"),
+                      "quantidade": agora.get("quantidade"), "pct": _redondo(pct),
+                      "classe": classe_preco(pct, base is not None and base < alvo),
+                      "ganho": _redondo(ganho_preco(base, agora.get("preco"), agora.get("quantidade")))})
     return saida
+
+
+def _soma(valores) -> float | None:
+    valores = [x for x in valores if x is not None]
+    return _redondo(sum(valores)) if valores else None
+
+
+def equipe_preco(c: dict, linhas: list[dict]) -> dict:
+    """A linha "Equipe" da grade do preço médio: os vendedores da tabela juntos, produto a produto. O preço da base e o
+    de agora pesam pela quantidade de cada um (a da base e a de agora); o % até o alvo soma os aumentos em R$, como a
+    barra da campanha (progresso_preco_juntos), cada vendedor no alvo dele; o ganho é a soma. linhas: as do detalhe."""
+    produtos = []
+    for p in c["metas_produto"]:
+        chave, base, agora, progs = str(p["id"]), [0.0, 0.0], [0.0, 0.0], []
+        for x in linhas:
+            b = ((x.get("base_precos") or {}).get(chave) or {})
+            if b.get("preco") is not None and (b.get("quantidade") or 0) > 0:
+                base[0] += b["preco"] * b["quantidade"]
+                base[1] += b["quantidade"]
+            y = next((y for y in x.get("produtos") or [] if y["id"] == p["id"]), None)
+            if not y or y["preco"] is None or not y["quantidade"]:
+                continue
+            agora[0] += y["preco"] * y["quantidade"]
+            agora[1] += y["quantidade"]
+            prog = progresso_preco({chave: {"preco": y["base"]}}, {chave: y}, {p["id"]: y["meta"]})
+            if prog:
+                progs.append((prog["pct"], prog["aumento"], prog["aumento_pedido"]))
+        pct = progresso_preco_juntos(progs)
+        produtos.append({"id": p["id"], "meta": p["meta"], "base": _redondo(base[0] / base[1]) if base[1] else None,
+                         "preco": _redondo(agora[0] / agora[1]) if agora[1] else None,
+                         "quantidade": _redondo(agora[1]) if agora[1] else None, "pct": _redondo(pct),
+                         "classe": classe_preco(pct, any(d > 0 for _, _, d in progs)),
+                         "ganho": _soma(y["ganho"] for x in linhas for y in x.get("produtos") or [] if y["id"] == p["id"])})
+    return {"ganho": _soma(x.get("ganho") for x in linhas), "produtos": produtos}
 
 
 def valor_vendedor(c: dict, medida: tuple | None, base_precos, v: dict | None = None) -> float | None:
@@ -1539,8 +1592,9 @@ class Gestao:
                     precos = e["precos"] if "precos" in e else precos_de(r.get("produtos"))
                     p = andamento_preco(c, e.get("base_precos"), precos, e)
                     res, cmp = p["resultado"], {x: p[x] for x in ("classe", "delta", "delta_pct", "caminho")}
+                    prods = produtos_preco(c, e.get("base_precos"), precos, e)
                     extra = {"base_precos": e.get("base_precos"), "aumento_pedido": p["aumento_pedido"],
-                             "produtos": produtos_preco(c, e.get("base_precos"), precos, e),
+                             "produtos": prods, "ganho": _soma(x["ganho"] for x in prods),
                              "meta_propria": bool(e.get("alvos_precos"))}
                 else:
                     res = e["resultado"] if e["resultado"] is not None or estado["congelado"] else r.get("realizado")
@@ -1570,6 +1624,8 @@ class Gestao:
             if preco:  # os aumentos feitos ÷ os pedidos, somados, como a barra da campanha (também no congelado)
                 total["realizado"] = _redondo(progresso_preco_juntos(
                     (x["resultado"], x["delta"], x["aumento_pedido"]) for x in linhas))
+                total.update(equipe_preco(c, linhas), classe=classe_preco(
+                    total["realizado"], any((x["aumento_pedido"] or 0) > 0 for x in linhas if x["resultado"] is not None)))
             total.update(total_premios(c["premiacoes"], [x.get("premio") for x in linhas]))
             item = {**publica(c), "situacao": estado["situacao"], "prazo": prazo(c, hoje),
                     "congelado": estado["congelado"], "provisorio": estado["provisorio"], "encerrada": encerrada,

@@ -1406,42 +1406,61 @@ function aberturaAcao(d) {
   </section>`;
 }
 
-// Preço médio: o preço de cada vendedor em cada produto, com o da base embaixo e a cor do caminho até o preço-alvo, e o
-// % da meta de cada um (o aumento feito ÷ o pedido, em R$ nas quantidades vendidas).
+// Preço médio, pedido do usuário: o ponto de partida (o preço da base), o resultado (o de agora), a evolução (o % da
+// meta: 0% no ponto de partida e 100% na meta, sem teto), o ganho/perda ((resultado − partida) × as unidades vendidas
+// na campanha) e a meta (o preço-alvo). Com vários produtos, a linha do vendedor traz a evolução e o ganho somados, com
+// uma linha por produto embaixo. A cor da evolução (bi/gestao.py classe_preco): vermelho caiu, amarelo melhorou sem
+// chegar, verde chegou.
+const COR_EVOLUCAO = { ok: "var(--ok-forte)", mid: "var(--atencao-forte)", bad: "var(--ruim-forte)" };
 function gradePrecos(d) {
-  const prods = d.produtos, ind = d.indicador, it = d.item;
+  const prods = d.produtos, it = d.item, varios = prods.length > 1;
   const enc = it.situacao === "encerrada";
-  const un = (p) => esc((p.unidade || "").toLowerCase());
-  const alvoCampanha = Object.fromEntries(prods.map((p) => [p.id, p.meta]));
-  const cel = (p, u) => {
-    if (!p || (p.preco == null && p.base == null)) return '<td class="fraco">—</td>';
-    const proprio = p.meta != null && p.meta !== alvoCampanha[p.id] ? ` · alvo próprio ${fmt.moeda2(p.meta)}` : "";
-    const base = (p.base == null ? "sem base" : `base ${fmt.moeda2(p.base)}`) + proprio;
-    const agora = p.preco == null ? '<span class="fraco">sem venda</span>'
-      : `<b${p.pct != null ? ` style="color:color-mix(in srgb, ${corMeta(p.pct)} 70%, var(--tinta))"` : ""}>${fmt.moeda2(p.preco)}</b>`;
-    return `<td title="${p.pct != null ? `${fmt.pct(p.pct, 0)} do caminho até o alvo` : ""}">${agora}<small>${base}${p.quantidade ? ` · ${fmt.num(p.quantidade, 1)} ${u}` : ""}</small></td>`;
+  const info = Object.fromEntries(prods.map((p) => [p.id, p])); // o nome, a unidade e o alvo da campanha
+  const un = (id) => esc((info[id]?.unidade || "").toLowerCase());
+  const evolucao = (pct, classe, nota = "") => (pct == null ? "—"
+    : `<span class="ge-pct" style="--c:${COR_EVOLUCAO[classe] || "var(--linha-forte)"};--i:0">${fmt.pct(pct, 0)}</span>${nota ? `<small>${nota}</small>` : ""}`);
+  const ganho = (v) => (v == null ? "—" : v > 0 ? `+${fmt.moeda2(v)}` : reaisSinal(v));
+  // As cinco colunas de um produto, de um vendedor (x) ou da equipe (sem x).
+  const colunas = (y, x = null) => {
+    const partida = y.base != null ? fmt.moeda2(y.base) : `<span class="fraco">${x?.base_pendente ? "aguardando a base" : "sem base"}</span>`;
+    const resultado = y.preco == null ? '<span class="fraco">sem venda</span>'
+      : `<b>${fmt.moeda2(y.preco)}</b><small>${fmt.num(y.quantidade, 1)} ${un(y.id)}</small>`;
+    const nota = x && y.pct != null && y.base != null && y.base >= y.meta ? "já estava na meta" : "";
+    const meta = !x ? (d.linhas.some((v) => v.meta_propria) ? "<small>da campanha</small>" : "")
+      : y.meta !== info[y.id]?.meta ? "<small>própria</small>" : "";
+    return `<td>${partida}</td><td>${resultado}</td><td>${evolucao(y.pct, y.classe, nota)}</td><td>${ganho(y.ganho)}</td>
+      <td>${fmt.moeda2(y.meta)}${meta}</td>`;
   };
-  const aumento = (x) => (x.delta == null ? "—" : x.aumento_pedido
-    ? `${reaisSinal(x.delta)}<small>de ${fmt.moeda2(x.aumento_pedido)}</small>` : `${reaisSinal(x.delta)}<small>já estava no alvo</small>`);
   const premioCol = celulaPremio(it);
+  const vazio = it.premiacoes ? "<td></td>" : "";
+  const nomeVend = (x) => `<td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}${varios && x.meta_propria ? " · meta própria" : ""}</small></td>`;
+  // Com um produto, o vendedor numa linha só; com vários, a linha dele e a de cada produto.
+  const linhaProduto = (y, x, ult) => `<tr class="ge-preco-prod${ult ? " ult" : ""}${x ? " ge-clicavel" : ""}"${x ? ` data-vendedor="${x.id}"` : ""}>
+    <td class="nome-v" title="${esc(info[y.id]?.nome || "")}">${esc(info[y.id]?.nome || `Produto ${y.id}`)}</td>${colunas(y, x)}${vazio}</tr>`;
   const linhas = d.linhas.map((x) => {
-    const por = Object.fromEntries((x.produtos || []).map((p) => [p.id, p]));
-    return `<tr class="ge-clicavel" data-vendedor="${x.id}" tabindex="0"><td class="nome-v">${esc(x.nome)}<small>código ${x.id}${x.equipe ? ` · ${esc(x.equipe)}` : ""}${x.meta_propria ? " · meta própria" : ""}</small></td>
-      <td>${x.pct == null ? (x.base_pendente ? '<span class="fraco">aguardando a base</span>' : "—")
-        : `<span class="ge-pct" style="--c:${corMeta(x.pct)};--i:${intensidadeMeta(x.pct)}">${fmt.pct(x.pct, 0)}</span>`}</td>${premioCol(x)}
-      <td>${aumento(x)}</td>
-      <td>${enc ? `<span class="ge-pill ${x.classe}">${esc(rotuloClasse(x.classe, x.caminho))}</span>`
-        : it.situacao === "planejada" ? chipStatus("sem_meta", "Não começou") : x.status ? chipStatus(x.status, rotuloStatus(ind, x.status)) : "—"}</td>
-      ${prods.map((p) => cel(por[p.id], un(p))).join("")}</tr>`;
+    const ys = x.produtos || [];
+    const abre = `<tr class="ge-clicavel${varios ? " ge-preco-vend" : ""}" data-vendedor="${x.id}" tabindex="0" title="Abrir o histórico de ${esc(x.nome)}">${nomeVend(x)}`;
+    if (!varios) return `${abre}${colunas({ ...ys[0], pct: x.pct, classe: x.classe, ganho: x.ganho }, x)}${premioCol(x)}</tr>`;
+    return `${abre}<td></td><td></td><td>${x.pct == null && x.base_pendente ? '<span class="fraco">aguardando a base</span>' : evolucao(x.pct, x.classe)}</td>
+      <td>${ganho(x.ganho)}</td><td></td>${premioCol(x)}</tr>${ys.map((y, i) => linhaProduto(y, x, i === ys.length - 1)).join("")}`;
   }).join("");
-  const equipe = (p) => (p.preco == null ? '<td class="fraco">—</td>' : `<td><b>${fmt.moeda2(p.preco)}</b><small>${fmt.num(p.quantidade, 1)} ${un(p)}</small></td>`);
+  const t = d.total, tp = t.produtos || [];
+  const equipe = `<td class="nome-v">Equipe<small>os vendedores da tabela juntos</small></td>`;
+  const rodape = !varios ? `<tr>${equipe}${tp[0] ? colunas({ ...tp[0], pct: t.realizado, classe: t.classe, ganho: t.ganho }) : "<td></td>".repeat(5)}${vazio}</tr>`
+    : `<tr class="ge-preco-vend">${equipe}<td></td><td></td><td>${evolucao(t.realizado, t.classe)}</td><td>${ganho(t.ganho)}</td><td></td>${vazio}</tr>
+      ${tp.map((y, i) => linhaProduto(y, null, i === tp.length - 1)).join("")}`;
+  const periodoBase = it.base_periodo ? textoPeriodoBase(it.base_periodo, it.base_inicio, it.base_fim) : periodoTexto(it.base_inicio, it.base_fim);
   return `<section class="cartao secao entra" style="--i:2">
-    <div class="cartao-cab"><div><h3>${icone("moeda")}Preço médio por produto</h3>
-      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim") : "preço até agora"} (venda líquida ÷ quantidade) e o da base embaixo · o % da meta é o aumento de preço feito sobre a base ÷ o aumento até o preço-alvo, somados em R$ nas quantidades vendidas (base R$ 10, alvo R$ 20 e agora R$ 15 = 50%) · clique no vendedor para ver o histórico</p></div></div>
-    <div class="tabela-rolagem"><table class="dados camp-grade">
-      <thead><tr><th>Vendedor</th><th>% da meta</th>${thPremio(it)}<th title="Aumento de preço feito, em R$ nas quantidades vendidas, e o que a meta pede">Aumento</th><th>Situação</th>${prods.map((p) => `<th title="${esc(p.nome)}">${esc(p.nome)}<small>alvo ${fmt.moeda2(p.meta)}${p.unidade ? `/${un(p)}` : ""}</small></th>`).join("")}</tr></thead>
+    <div class="cartao-cab"><div><h3>${icone("moeda")}Preço médio por vendedor</h3>
+      <p class="sub">${enc ? (it.congelado ? "resultado congelado no fim da campanha" : "resultado provisório: os dados ainda não passaram do fim") : "resultado até agora"} · preço médio = venda líquida ÷ quantidade · a evolução vai de 0% no ponto de partida a 100% na meta (partida R$ 10, meta R$ 20 e resultado R$ 15 = 50%)${varios ? ", com os produtos somados em R$ nas quantidades vendidas" : ""} · clique no vendedor para ver o histórico</p></div></div>
+    <div class="tabela-rolagem"><table class="dados camp-grade${varios ? " varios" : ""}">
+      <thead><tr><th>${varios ? "Vendedor e produto" : "Vendedor"}</th><th title="O preço médio de cada um no período da base">Ponto de partida<small>${esc(periodoBase)}</small></th>
+        <th title="O preço médio de cada um na campanha, com as unidades vendidas">Resultado${enc ? "" : `<small>até ${fmt.dataCurta(d.data_ref)}</small>`}</th>
+        <th title="Quanto do caminho do ponto de partida até a meta já foi feito: 0% = o ponto de partida, 100% = a meta">Evolução</th>
+        <th title="(Resultado − ponto de partida) × as unidades vendidas na campanha">Ganho/perda</th>
+        <th title="O preço-alvo (o próprio do vendedor, quando tem)">Meta</th>${thPremio(it)}</tr></thead>
       <tbody>${linhas}</tbody>
-      <tfoot><tr><td class="nome-v">Equipe<small>aumento de todos ÷ o pedido</small></td><td><b>${d.total.realizado != null ? fmt.pct(d.total.realizado, 0) : "—"}</b></td><td></td><td></td>${it.premiacoes ? "<td></td>" : ""}${prods.map(equipe).join("")}</tr></tfoot>
+      <tfoot>${rodape}</tfoot>
     </table></div></section>`;
 }
 

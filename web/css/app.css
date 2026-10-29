@@ -2016,6 +2016,13 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .camp-grade td small, .camp-grade th small { display: block; font-size: 11.5px; font-weight: 500; color: var(--tinta-3); }
 .camp-grade tfoot td { font-weight: 700; border-top: 2px solid var(--linha-forte); background: var(--surface-2); }
 .camp-grade th:first-child, .camp-grade td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+/* preço médio com vários produtos: a linha do vendedor (a evolução e o ganho somados) e, embaixo, uma por produto */
+.camp-grade .ge-preco-vend td, .camp-grade .ge-preco-prod td { border-bottom-color: transparent; }
+.camp-grade .ge-preco-prod td { font-size: 13px; padding-top: 5px; padding-bottom: 5px; }
+.camp-grade .ge-preco-prod.ult td { padding-bottom: 10px; border-bottom-color: var(--linha); }
+.camp-grade .ge-preco-prod td:first-child { padding-left: 26px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; color: var(--tinta-2); }
+.camp-grade.varios tfoot td { bottom: auto; } /* várias linhas no rodapé: grudadas embaixo, uma cobriria a outra */
+.camp-grade tfoot .ge-preco-prod td { border-top: 0; font-weight: 500; }
 
 /* Gestão › Configurar: dias de atendimento das áreas */
 .areas-lista { display: grid; gap: 6px; margin-top: 12px; max-height: 620px; overflow: auto; padding: 2px; }

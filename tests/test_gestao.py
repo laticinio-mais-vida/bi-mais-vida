@@ -13,7 +13,8 @@ from pathlib import Path
 
 from bi.assistente import FERRAMENTAS, Ferramentas
 from bi.conversas import Conversas, NaoEncontrada
-from bi.gestao import (Gestao, alvo_de, andamento, calendario_periodo, classe_resultado, comparar, comparar_preco,
+from bi.gestao import (Gestao, alvo_de, andamento, calendario_periodo, classe_preco, classe_resultado, comparar,
+                       comparar_preco, equipe_preco, ganho_preco, produtos_preco,
                        pct_premiacao, prazo, premio_de, rotulo_padrao, situacao, texto_alvo, texto_premiacao,
                        total_premios, validar)
 from bi.indicadores import descritor, progresso_preco, progresso_preco_juntos
@@ -169,12 +170,38 @@ class TestFuncoes(unittest.TestCase):
         self.assertAlmostEqual(progresso_preco_juntos(juntos), 21.3315 / 393.0204)
         self.assertAlmostEqual(progresso_preco_juntos([(1.0, 0.0, 0.0), (0.9, -20.0, 0.0)]), 0.95)  # todos no alvo
         self.assertIsNone(progresso_preco_juntos([(None, None, None)]))
-        self.assertEqual(comparar_preco({"pct": 0.5, "aumento": 50.0}, True),
+        self.assertEqual(comparar_preco({"pct": 0.5, "aumento": 50.0, "aumento_pedido": 100.0}, True),
                          {"classe": "mid", "delta": 50.0, "delta_pct": None, "caminho": 0.5})
-        self.assertEqual(comparar_preco({"pct": 0.9999, "aumento": 99.99}, True)["classe"], "ok")
-        self.assertEqual(comparar_preco({"pct": 0.0, "aumento": 0.0}, True)["classe"], "bad")
+        self.assertEqual(comparar_preco({"pct": 0.9999, "aumento": 99.99, "aumento_pedido": 100.0}, True)["classe"], "ok")
+        self.assertEqual(comparar_preco({"pct": 0.0, "aumento": 0.0, "aumento_pedido": 100.0}, True)["classe"], "bad")
+        # já estava no alvo e caiu abaixo dele (90% de manter): caiu, não "melhorou"
+        self.assertEqual(comparar_preco({"pct": 0.9, "aumento": -20.0, "aumento_pedido": 0.0}, True)["classe"], "bad")
+        self.assertEqual(comparar_preco({"pct": 1.0, "aumento": 0.0, "aumento_pedido": 0.0}, True)["classe"], "ok")
         self.assertEqual((comparar_preco(None, True)["classe"], comparar_preco(None, False)["classe"]),
                          ("sem_dados", "sem_alvo"))
+        self.assertEqual([classe_preco(p, True) for p in (-0.2, 0.0, 0.3, 1.5, None)], ["bad", "bad", "mid", "ok", None])
+        # o ganho/perda: (agora − base) × a quantidade de agora, também no que já estava no alvo (R$ 22 → R$ 21)
+        self.assertEqual([ganho_preco(10.0, 15.0, 100.0), ganho_preco(22.0, 21.0, 10.0)], [500.0, -10.0])
+        self.assertEqual([ganho_preco(None, 15.0, 10.0), ganho_preco(10.0, None, 10.0), ganho_preco(10.0, 15.0, 0.0)],
+                         [None, None, None])
+
+    def test_equipe_preco(self):
+        # dois vendedores num produto (alvo R$ 20): A de R$ 10 (5 un na base) a R$ 15 (10 un); B de R$ 22 (5 un) a
+        # R$ 21 (10 un), já no alvo. Juntos: base R$ 16, agora R$ 18; o aumento pedido é só o de A (R$ 100, fez R$ 50)
+        c = {"metas_produto": [{"id": 1, "meta": 20.0}]}
+
+        def linha(base, preco):
+            prods = produtos_preco(c, {"1": {"preco": base, "quantidade": 5.0}}, {"1": {"preco": preco, "quantidade": 10.0}})
+            return {"base_precos": {"1": {"preco": base, "quantidade": 5.0}}, "produtos": prods,
+                    "ganho": prods[0]["ganho"]}
+        a, b = linha(10.0, 15.0), linha(22.0, 21.0)
+        self.assertEqual((a["produtos"][0]["classe"], b["produtos"][0]["classe"]), ("mid", "ok"))
+        self.assertEqual(equipe_preco(c, [a, b]), {"ganho": 40.0, "produtos": [
+            {"id": 1, "meta": 20.0, "base": 16.0, "preco": 18.0, "quantidade": 20.0, "pct": 0.5, "classe": "mid",
+             "ganho": 40.0}]})
+        self.assertEqual(equipe_preco(c, [{"base_precos": None, "produtos": produtos_preco(c, None, None), "ganho": None}]),
+                         {"ganho": None, "produtos": [{"id": 1, "meta": 20.0, "base": None, "preco": None,
+                                                       "quantidade": None, "pct": None, "classe": None, "ganho": None}]})
 
     def test_situacao_e_prazo(self):
         acao = {"tipo": "acao", "inicio": D(2026, 9, 1), "fim": D(2026, 9, 21)}
@@ -1316,8 +1343,12 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
         self.assertEqual((rubens["resultado"], rubens["pct"], rubens["classe"], rubens["delta"], rubens["aumento_pedido"]),
                          (0.6667, 0.6667, "mid", 200.0, 300.0))
         self.assertEqual(rubens["produtos"], [{"id": 27, "meta": 40.0, "base": 10.0, "preco": 30.0, "quantidade": 10.0,
-                                               "pct": 0.6667}])
-        self.assertEqual((rubens["status"], d["total"]["realizado"]), ("abaixo", 0.6667))
+                                               "pct": 0.6667, "classe": "mid", "ganho": 200.0}])
+        self.assertEqual((rubens["status"], rubens["ganho"], d["total"]["realizado"]), ("abaixo", 200.0, 0.6667))
+        # a linha "Equipe" da grade: o ponto de partida, o resultado, o ganho e a cor dos vendedores juntos
+        self.assertEqual((d["total"]["ganho"], d["total"]["classe"], d["total"]["produtos"]),
+                         (200.0, "mid", [{"id": 27, "meta": 40.0, "base": 10.0, "preco": 30.0, "quantidade": 10.0,
+                                          "pct": 0.6667, "classe": "mid", "ganho": 200.0}]))
         # no quadro, a etiqueta do vendedor e a barra da campanha com o mesmo %
         q = self.gestao.quadro(self.chefe, (None, None), "ES")
         cartao = next(a for a in q["acoes"] if a["id"] == id_)
