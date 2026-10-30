@@ -675,6 +675,22 @@ cada venda, menos as devoluções e os brindes danificados e vencidos.
 - **As regras:** a seção nova `comissao` (os motivos dos brindes) entra com o padrão nas versões já salvas. O código
   anterior ignora essa seção.
 
+#### Subtarefa automática na agenda (migração 035)
+
+Quem entra numa tarefa com autonomia (que passa a vir marcada) ganha a subtarefa automática "Crie as suas subtarefas
+para programar a execução desta tarefa", no dia em que entrou e no seguinte, pulando sábado e domingo (veja o README,
+"Subtarefa automática"). Com autonomia, o participante também passa a escolher o dia das subtarefas que cria para si.
+
+- **Ordem:** qualquer uma: os dados que o PC manda não mudaram.
+- **A migração 035** acrescenta `automatica` (falso nas que existem) e `inicio` (vazio) em `agenda_subtarefas`, com um
+  CHECK (`inicio` até o `prazo`) e um índice único (uma automática por pessoa em cada tarefa). Nada existente muda:
+  as tarefas de antes não ganham automáticas. Ensaie em BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** crie uma tarefa com prazo para depois de amanhã e uma pessoa de teste; a automática aparece
+  para ela hoje e no próximo dia de segunda a sexta. Tire a autonomia e salve: a automática sai.
+- **Voltar atrás:** o código anterior não conhece as colunas novas e mostraria as automáticas como subtarefas comuns,
+  só no dia do prazo. Antes de voltar, apague-as (`DELETE FROM agenda_subtarefas WHERE automatica`); as colunas podem
+  ficar.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

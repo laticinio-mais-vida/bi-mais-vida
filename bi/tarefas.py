@@ -6,9 +6,15 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   com o motivo.
 - Na agenda (no_mes): a tarefa no dia do prazo, para todos; cada subtarefa no dia do prazo dela, todas para quem
   criou e só as próprias para o participante. Aberta (obter), a tarefa mostra todas as subtarefas a todos.
-- Só quem criou edita e exclui a tarefa e muda prazos. A situação da tarefa (concluir e reabrir também), qualquer
-  pessoa dela muda (migração 023: concluida_por guarda quem concluiu). Com autonomia, o participante edita o título e
-  a descrição das próprias subtarefas e cria subtarefas para si, com o prazo da tarefa.
+- Só quem criou edita e exclui a tarefa e muda os prazos das subtarefas que criou. A situação da tarefa (concluir e
+  reabrir também), qualquer pessoa dela muda (migração 023: concluida_por guarda quem concluiu). Com autonomia (o
+  formulário põe em quem entra), o participante edita o título e a descrição das próprias subtarefas e cria
+  subtarefas para si, escolhendo o dia (até o prazo da tarefa), que depois muda só nas que ele mesmo criou.
+- Subtarefa automática (migração 035): quem entra com autonomia, ou ganha a autonomia depois, recebe uma subtarefa
+  pedindo que programe a execução criando as próprias subtarefas (_dias_planejar: no dia em que entrou e no seguinte de
+  segunda a sexta; nenhuma, se a tarefa vence nesse dia). É uma só: concluída num dos dias, fica feita nos dois.
+  Ninguém a edita; ela sai com a autonomia (ou com a pessoa) e encurta junto com o prazo da tarefa. Quem criou a vê na
+  tarefa aberta, não nos dias da agenda dele, e não entra no formulário de editar.
 - A subtarefa vence até o prazo da tarefa. Conclui o responsável (ou quem criou), em qualquer dia. Concluir a tarefa
   faz as subtarefas abertas contarem como feitas (pela_tarefa) enquanto ela estiver concluída.
 - Atrasada: passou do prazo sem concluir; com horário, logo depois dele; sem horário, quando o dia acaba (_vence_em).
@@ -31,7 +37,8 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
 - Avisos (o sino, bi/notificacoes.py, migração 028): cada gravação avisa, na mesma transação, quem precisa saber:
   quem entrou na tarefa, o responsável pela subtarefa nova, passada para ele ou com o prazo mudado, os participantes
   quando o prazo da tarefa muda, quem criou a tarefa quando uma subtarefa é concluída ou justificada e todos da
-  tarefa quando ela é concluída. Os avisos de prazo (vence em breve, venceu) nascem em gerar_avisos.
+  tarefa quando ela é concluída. Os avisos de prazo (vence em breve, venceu) nascem em gerar_avisos. A subtarefa
+  automática vem no aviso de quem entrou (ou no de quem ganhou a autonomia) e não tem o "vence em breve".
 """
 from __future__ import annotations
 
@@ -55,12 +62,17 @@ _MUDOU = "a tarefa acabou de mudar; abra de novo e repita"
 _NAO_ATRASOU = "{} não atrasou: a justificativa é para depois do prazo"
 RENOVAR = dt.timedelta(hours=24)  # vencida e aberta, a justificativa do prazo é pedida de novo depois disto
 DIAS_VENCEU = 7  # o aviso "venceu" (para quem criou a tarefa) sai só para os prazos vencidos nestes últimos dias
+# A subtarefa automática (migração 035): o texto é fixo.
+TITULO_PLANEJAR = "Crie as suas subtarefas para programar a execução desta tarefa"
+DESCRICAO_PLANEJAR = ("Divida a sua parte em subtarefas, cada uma no dia em que você vai fazer (até o prazo da "
+                      "tarefa). Esta subtarefa aparece em dois dias; concluída num deles, fica feita nos dois.")
+_AUTOMATICA = "a subtarefa automática não se edita: ela sai quando quem criou a tarefa tira a autonomia"
 # Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
 _COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
 _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "iniciada_em", "concluida_em", "versao",
       "concluida_por", "concluida_por_nome")
 _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
-      "concluida_por", "concluida_por_nome")
+      "concluida_por", "concluida_por_nome", "criada_por", "automatica", "inicio")
 _J = ("texto", "prazo", "hora", "criada_em", "usuario", "usuario_nome")  # uma justificativa do histórico
 # A situação (a coluna do quadro) e o que ela grava; o começo fica de quando começou, mesmo indo e voltando. A hora
 # vem do relógio da classe (%(agora)s), que os testes fixam.
@@ -79,16 +91,34 @@ def _mudar_situacao(situacao: str | None) -> str:
         return ("concluida_por = CASE WHEN concluida_em IS NULL THEN %(eu)s ELSE concluida_por END, "
                 + _SITUACOES[situacao])
     return f"{_SITUACOES[situacao]}, concluida_por = NULL"
-# As tarefas de quem vê com algo no mês: a tarefa ou uma subtarefa que ele vê vencendo nele ou, no mês de hoje,
-# atrasada (de qualquer mês).
+# As tarefas de quem vê com algo no mês: a tarefa ou uma subtarefa que ele vê num dia dele (a automática, no início
+# e no prazo) ou, no mês de hoje, atrasada (de qualquer mês). A automática de outra pessoa, quem criou não vê nos dias.
 _DO_MES = """SELECT t.id FROM agenda_tarefas t
 JOIN agenda_tarefa_pessoas eu ON eu.tarefa = t.id AND eu.usuario = %(eu)s
 WHERE t.prazo BETWEEN %(de)s AND %(ate)s
    OR (%(atrasadas)s AND t.concluida_em IS NULL AND t.prazo < %(hoje)s)
    OR EXISTS (SELECT 1 FROM agenda_subtarefas s WHERE s.tarefa = t.id
-              AND (t.criador = %(eu)s OR s.responsavel = %(eu)s)
-              AND (s.prazo BETWEEN %(de)s AND %(ate)s
+              AND (s.responsavel = %(eu)s OR (t.criador = %(eu)s AND NOT s.automatica))
+              AND (s.prazo BETWEEN %(de)s AND %(ate)s OR s.inicio BETWEEN %(de)s AND %(ate)s
                    OR (%(atrasadas)s AND t.concluida_em IS NULL AND s.concluida_em IS NULL AND s.prazo < %(hoje)s)))"""
+
+
+def _dia_util_seguinte(dia: dt.date) -> dt.date:
+    """O dia seguinte de segunda a sexta (os feriados, que mudam com a região, não contam)."""
+    dia += dt.timedelta(days=1)
+    while dia.weekday() >= 5:
+        dia += dt.timedelta(days=1)
+    return dia
+
+
+def _dias_planejar(entrou: dt.date, prazo: dt.date) -> tuple[dt.date, dt.date] | None:
+    """Os dias (início, prazo) da subtarefa automática de quem entrou na tarefa, ou ganhou a autonomia, no dia `entrou`:
+    esse dia e o seguinte de segunda a sexta. A tarefa que vence nesse dia (ou antes) não tem; a que vence até o dia
+    seguinte, só o primeiro."""
+    if prazo <= entrou:
+        return None
+    seguinte = _dia_util_seguinte(entrou)
+    return (entrou, entrou) if prazo <= seguinte else (entrou, seguinte)
 
 
 def _situacao(valor) -> str:
@@ -176,11 +206,12 @@ def _valida_tarefa(dados: dict, criador: int) -> dict:
     return t
 
 
-def _proibido_mudar(dados: dict, s: dict) -> str | None:
-    """O que o participante pediu para mudar na subtarefa e só quem criou muda (o mesmo valor de antes não conta)."""
-    if "prazo" in dados and str(dados["prazo"] or "")[:10] != s["prazo"].isoformat():
+def _proibido_mudar(dados: dict, s: dict, prazo_livre: bool = False) -> str | None:
+    """O que o participante pediu para mudar na subtarefa e só quem criou muda (o mesmo valor de antes não conta).
+    prazo_livre: a subtarefa é uma que ele mesmo criou, e o prazo dela ele muda."""
+    if not prazo_livre and "prazo" in dados and str(dados["prazo"] or "")[:10] != s["prazo"].isoformat():
         return "o prazo"
-    if "hora" in dados and _hora(dados["hora"]) != s["hora"]:
+    if not prazo_livre and "hora" in dados and _hora(dados["hora"]) != s["hora"]:
         return "o prazo"
     if "responsavel" in dados and str(dados["responsavel"]) != str(s["responsavel"]):
         return "o responsável"
@@ -255,7 +286,8 @@ class Tarefas:
         subs = {}
         for r in con.execute(
                 "SELECT s.tarefa, s.id, s.titulo, s.descricao, s.prazo, s.hora, s.responsavel, u.nome, s.iniciada_em, "
-                "s.concluida_em, s.concluida_por, c.nome FROM agenda_subtarefas s "
+                "s.concluida_em, s.concluida_por, c.nome, s.criada_por, s.automatica, s.inicio "
+                "FROM agenda_subtarefas s "
                 "JOIN usuarios u ON u.id = s.responsavel LEFT JOIN usuarios c ON c.id = s.concluida_por "
                 "WHERE s.tarefa = ANY(%s::bigint[]) "
                 "ORDER BY s.prazo, s.hora NULLS LAST, s.id", [ids]):
@@ -289,9 +321,13 @@ class Tarefas:
         for s in t["subtarefas"]:
             minha, feita = s["responsavel"] == eu, concluida or s["concluida_em"] is not None
             venceu = _venceu(s["prazo"], s["hora"], s["concluida_em"] or t["concluida_em"], agora)
+            # o texto: quem criou ou o responsável com autonomia; o prazo: quem criou ou, na que ele mesmo criou, o
+            # responsável com autonomia. A automática, ninguém.
+            texto = not s["automatica"] and (criador or (minha and autonomia))
             subtarefas.append({
                 "id": s["id"], "titulo": s["titulo"], "descricao": s["descricao"], "prazo": s["prazo"].isoformat(),
                 "hora": _hhmm(s["hora"]), "responsavel": {"id": s["responsavel"], "nome": s["responsavel_nome"]},
+                "automatica": s["automatica"], "inicio": s["inicio"] and s["inicio"].isoformat(),
                 "minha": minha, "feita": feita, "pela_tarefa": concluida and s["concluida_em"] is None,
                 "situacao": _na_coluna(feita, s["iniciada_em"]), "iniciada_em": hora(s["iniciada_em"]),
                 "concluida_em": hora(s["concluida_em"]),
@@ -299,8 +335,8 @@ class Tarefas:
                                   if s["concluida_por"] else None),
                 "atrasada": not feita and agora > _vence_em(s["prazo"], s["hora"]), "venceu": venceu,
                 "justificativas": cls._justificativas(s),
-                "pode": {"concluir": (criador or minha) and not concluida,
-                         "editar_texto": criador or (minha and autonomia), "editar_prazo": criador,
+                "pode": {"concluir": (criador or minha) and not concluida, "editar_texto": texto,
+                         "editar_prazo": texto and (criador or s["criada_por"] == eu),
                          "justificar": minha and venceu}})
         venceu = _venceu(t["prazo"], t["hora"], t["concluida_em"], agora)
         return {"id": t["id"], "titulo": t["titulo"], "descricao": t["descricao"], "prazo": t["prazo"].isoformat(),
@@ -332,9 +368,11 @@ class Tarefas:
 
     def no_mes(self, usuario: int, m: dict) -> dict:
         """Acrescenta ao mês da agenda (Agenda.mes, que dá o dia de hoje) as tarefas de quem vê: em cada dia, a tarefa e
-        as subtarefas que vencem nele (dias[].tarefas: {tarefa, subtarefa, feita}, as com horário primeiro); no mês de
-        hoje, as atrasadas dos dias anteriores, de qualquer mês (atrasadas, as mais antigas primeiro; a que venceu hoje
-        fica só no dia de hoje); e as tarefas citadas (tarefas)."""
+        as subtarefas que vencem nele, e a automática nos dois dias dela, o início e o prazo, sem o fim de semana do
+        meio (dias[].tarefas: {tarefa, subtarefa, feita}, as com horário primeiro); no mês de hoje, as atrasadas dos
+        dias anteriores, de qualquer mês
+        (atrasadas, as mais antigas primeiro; a que venceu hoje fica só no dia de hoje); e as tarefas citadas
+        (tarefas)."""
         hoje, agora = dt.date.fromisoformat(m["hoje"]), self.agora()
         dias = [dt.date.fromisoformat(d["data"]) for d in m["dias"]]
         com_atrasadas = (dias[0].year, dias[0].month) == (hoje.year, hoje.month)
@@ -346,14 +384,16 @@ class Tarefas:
         for t in tarefas:
             p = self._publica(t, usuario, agora)
             publicadas.append(p)
-            itens = [(t["prazo"], t["hora"], {"tarefa": t["id"], "subtarefa": None, "feita": p["feita"]},
-                      p["atrasada"])]
-            itens += [(s["prazo"], s["hora"], {"tarefa": t["id"], "subtarefa": s["id"], "feita": sp["feita"]},
-                       sp["atrasada"])
-                      for s, sp in zip(t["subtarefas"], p["subtarefas"]) if p["eu_criador"] or sp["minha"]]
-            for prazo, h, ref, atrasada in itens:
-                if prazo in por_dia:
-                    por_dia[prazo].append((h, ref))
+            itens = [({t["prazo"]}, t["prazo"], t["hora"],
+                      {"tarefa": t["id"], "subtarefa": None, "feita": p["feita"]}, p["atrasada"])]
+            itens += [({s["inicio"] or s["prazo"], s["prazo"]}, s["prazo"], s["hora"],
+                       {"tarefa": t["id"], "subtarefa": s["id"], "feita": sp["feita"]}, sp["atrasada"])
+                      for s, sp in zip(t["subtarefas"], p["subtarefas"])
+                      if sp["minha"] or (p["eu_criador"] and not s["automatica"])]
+            for nos_dias, prazo, h, ref, atrasada in itens:
+                for dia in nos_dias:
+                    if dia in por_dia:
+                        por_dia[dia].append((h, ref))
                 if com_atrasadas and atrasada and prazo < hoje:
                     atrasadas.append((prazo, h, ref))
 
@@ -440,11 +480,13 @@ class Tarefas:
         if not linha:
             raise NaoEncontrada(_NAO_ACHOU_SUB)
         t = self._travar(con, usuario, linha[0], _NAO_ACHOU_SUB)
-        linha = con.execute("SELECT id, titulo, descricao, prazo, hora, responsavel, concluida_em "
-                            "FROM agenda_subtarefas WHERE id = %s AND tarefa = %s", [id_, t["id"]]).fetchone()
+        campos = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "concluida_em", "criada_por",
+                  "automatica")
+        linha = con.execute(f"SELECT {', '.join(campos)} FROM agenda_subtarefas WHERE id = %s AND tarefa = %s",
+                            [id_, t["id"]]).fetchone()
         if not linha:  # saiu enquanto esperava a trava
             raise NaoEncontrada(_NAO_ACHOU_SUB)
-        return t, dict(zip(("id", "titulo", "descricao", "prazo", "hora", "responsavel", "concluida_em"), linha))
+        return t, dict(zip(campos, linha))
 
     # --- avisos (o sino, bi/notificacoes.py) ---------------------------------------------------
     @staticmethod
@@ -455,12 +497,34 @@ class Tarefas:
     def _prazo(self, prazo: dt.date, h: dt.time | None) -> str:
         return _texto_prazo(prazo, h, self.hoje())
 
-    def _avisar_incluido(self, con, pessoa: int, nome: str, eu: int, tarefa: int, t: dict) -> None:
-        """Quem entrou na tarefa: um aviso só, com quantas subtarefas são dele."""
+    def _avisar_incluido(self, con, pessoa: int, nome: str, eu: int, tarefa: int, t: dict,
+                         planejar: dt.date | None) -> None:
+        """Quem entrou na tarefa: um aviso só, com quantas subtarefas são dele e, se ganhou a automática, até quando
+        programar (planejar: o prazo dela)."""
         n = sum(s["responsavel"] == pessoa for s in t["subtarefas"])
         subs = f", com {n} subtarefa{'s' if n > 1 else ''} para você" if n else ""
         avisar(con, [pessoa], "incluido", f"{nome} incluiu você na tarefa “{t['titulo']}” (prazo "
-               f"{self._prazo(t['prazo'], t['hora'])}){subs}", eu, tarefa)
+               f"{self._prazo(t['prazo'], t['hora'])}){subs}{self._pedido_planejar(planejar)}", eu, tarefa)
+
+    def _pedido_planejar(self, planejar: dt.date | None) -> str:
+        if not planejar:
+            return ""
+        return f". Crie as suas subtarefas para programar a execução (até {self._prazo(planejar, None)})"
+
+    def _criar_planejar(self, con, tarefa: int, prazo: dt.date, pessoas) -> dict[int, dt.date]:
+        """A subtarefa automática de cada pessoa que entrou na tarefa com autonomia, ou ganhou a autonomia, agora
+        (_dias_planejar; a pessoa já precisa estar na tarefa). Devolve {pessoa: prazo} das que entraram."""
+        dias = _dias_planejar(self.hoje(), prazo)
+        if not dias:
+            return {}
+        criadas = {}
+        for p in sorted(pessoas):
+            if con.execute("INSERT INTO agenda_subtarefas (tarefa, responsavel, titulo, descricao, inicio, prazo, "
+                           "automatica) VALUES (%s, %s, %s, %s, %s, %s, true) "
+                           "ON CONFLICT (tarefa, responsavel) WHERE automatica DO NOTHING",
+                           [tarefa, p, TITULO_PLANEJAR, DESCRICAO_PLANEJAR, *dias]).rowcount:
+                criadas[p] = dias[1]
+        return criadas
 
     def _avisar_sub(self, con, s: dict, antes: tuple | None, nome: str, eu: int, tarefa: int) -> None:
         """A subtarefa nova ou mudada, para o responsável: criada ou passada para ele, ou com o prazo mudado. antes:
@@ -489,8 +553,9 @@ class Tarefas:
     def gerar_avisos(self, usuario: int) -> None:
         """Os avisos de prazo de quem pergunta (o painel pergunta a cada minuto), cada um uma vez só por item e por
         prazo, e a limpeza dos antigos. Vence em breve: no dia de antes e no do prazo, até vencer (a subtarefa para o
-        responsável, a tarefa para todos dela). Venceu: para quem criou, a subtarefa de outra pessoa que venceu nos
-        últimos DIAS_VENCEU dias (a de antes disso não avisa, para não chegar uma enxurrada de atrasos antigos)."""
+        responsável, menos a automática, que já veio no aviso de quem entrou; a tarefa para todos dela). Venceu: para
+        quem criou, a subtarefa de outra pessoa que venceu nos últimos DIAS_VENCEU dias (a de antes disso não avisa,
+        para não chegar uma enxurrada de atrasos antigos)."""
         agora = self.agora()
         hoje = agora.date()
         with self.banco.conexao() as con:
@@ -501,7 +566,7 @@ class Tarefas:
                 "WHERE t.concluida_em IS NULL AND t.prazo BETWEEN %(hoje)s AND %(amanha)s "
                 "UNION ALL SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora FROM agenda_subtarefas s "
                 "JOIN agenda_tarefas t ON t.id = s.tarefa WHERE s.responsavel = %(eu)s AND s.concluida_em IS NULL "
-                "AND t.concluida_em IS NULL AND s.prazo BETWEEN %(hoje)s AND %(amanha)s",
+                "AND NOT s.automatica AND t.concluida_em IS NULL AND s.prazo BETWEEN %(hoje)s AND %(amanha)s",
                 {"eu": usuario, "hoje": hoje, "amanha": hoje + dt.timedelta(days=1)}).fetchall()
             for tarefa, sub, titulo, prazo, h in perto:
                 if agora > _vence_em(prazo, h):
@@ -569,8 +634,8 @@ class Tarefas:
 
     # --- tarefas (só quem criou) -----------------------------------------------------------
     def criar(self, usuario: int, dados: dict) -> dict:
-        """A tarefa, as pessoas e as subtarefas, numa transação só. A resposta traz os avisos do Google de quem criou
-        (avisos)."""
+        """A tarefa, as pessoas e as subtarefas (com a automática de quem entra com autonomia), numa transação só. A
+        resposta traz os avisos do Google de quem criou (avisos)."""
         t = _valida_tarefa(dados, usuario)
         cal = calendario(self.configuracao)
         pontos = self._ponto_tarefa(t, {usuario, *t["participantes"]})
@@ -585,27 +650,35 @@ class Tarefas:
                 raise NaoEncontrada("seu usuário não existe mais")
             self._gravar_pessoas(con, linha[0], {usuario: False, **t["participantes"]})
             self._inserir_subs(con, linha[0], t["subtarefas"], usuario)
+            planejar = self._criar_planejar(con, linha[0], t["prazo"], [p for p, a in t["participantes"].items() if a])
             nome = self._nome(con, usuario)
             for p in t["participantes"]:  # um aviso por pessoa, com as subtarefas dela
-                self._avisar_incluido(con, p, nome, usuario, linha[0], t)
+                self._avisar_incluido(con, p, nome, usuario, linha[0], t, planejar.get(p))
         return {**self.obter(usuario, linha[0]), "avisos": avisos}
 
     def editar(self, usuario: int, id_, dados: dict, versao) -> dict:
         """Troca tudo: os campos, as pessoas e as subtarefas (as com id mudam, as sem id entram, as que faltam saem; a
         conclusão de cada uma fica). versao: a da tarefa que o formulário abriu (mudou desde então: recusa).
         Só quem entra agora precisa ter a página Gestão; quem já participava fica mesmo sem ela. O horário ocupado é
-        conferido só no que entra ou muda: o prazo, as pessoas novas e as subtarefas novas ou mudadas."""
+        conferido só no que entra ou muda: o prazo, as pessoas novas e as subtarefas novas ou mudadas.
+        As automáticas não vêm do formulário (as que vierem ficam como estão): saem com a autonomia ou com a pessoa,
+        encurtam com o prazo da tarefa e nascem para quem entra com autonomia ou a ganha agora."""
         cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t = self._travar(con, usuario, _id(id_, _NAO_ACHOU))
             self._so_quem_criou(t, "editá-la")
             if str(versao) != str(t["versao"]):
                 raise ValueError(_MUDOU)
+            automaticas = {str(r[0]) for r in con.execute(
+                "SELECT id FROM agenda_subtarefas WHERE tarefa = %s AND automatica", [t["id"]])}
+            dados = {**dados, "subtarefas": [s for s in dados.get("subtarefas") or []
+                                             if not (isinstance(s, dict) and str(s.get("id")) in automaticas)]}
             novo = _valida_tarefa(dados, usuario)
             antes = self._pessoas_da(con, t["id"])
             self._conferir_pessoas(con, [p for p in novo["participantes"] if p not in antes])
             subs_antes = {r[0]: tuple(r[1:]) for r in con.execute(
-                "SELECT id, responsavel, prazo, hora FROM agenda_subtarefas WHERE tarefa = %s", [t["id"]])}
+                "SELECT id, responsavel, prazo, hora FROM agenda_subtarefas WHERE tarefa = %s AND NOT automatica",
+                [t["id"]])}
             ficam = [s["id"] for s in novo["subtarefas"] if s["id"]]
             if len(set(ficam)) != len(ficam) or any(i not in subs_antes for i in ficam):
                 raise ValueError("subtarefa não encontrada nesta tarefa; abra de novo e repita")
@@ -622,8 +695,8 @@ class Tarefas:
                         "hora = %(hora)s, versao = versao + 1, atualizada_em = now() WHERE id = %(id)s",
                         {**novo, "id": t["id"]})
             self._gravar_pessoas(con, t["id"], {usuario: False, **novo["participantes"]})
-            con.execute("DELETE FROM agenda_subtarefas WHERE tarefa = %s AND NOT (id = ANY(%s::bigint[]))",
-                        [t["id"], ficam])
+            con.execute("DELETE FROM agenda_subtarefas WHERE tarefa = %s AND NOT automatica "
+                        "AND NOT (id = ANY(%s::bigint[]))", [t["id"], ficam])
             if ficam:
                 with con.cursor() as cur:
                     cur.executemany("UPDATE agenda_subtarefas SET titulo = %(titulo)s, descricao = %(descricao)s, "
@@ -631,14 +704,28 @@ class Tarefas:
                                     "atualizada_em = now() WHERE id = %(id)s",
                                     [s for s in novo["subtarefas"] if s["id"]])
             self._inserir_subs(con, t["id"], [s for s in novo["subtarefas"] if not s["id"]], usuario)
+            # as automáticas: saem as de quem ficou sem autonomia ou saiu; nenhuma vence depois da tarefa; nascem as
+            # de quem entrou com autonomia ou a ganhou agora
+            com_autonomia = [p for p, a in novo["participantes"].items() if a]
+            con.execute("DELETE FROM agenda_subtarefas WHERE tarefa = %s AND automatica "
+                        "AND NOT (responsavel = ANY(%s::bigint[]))", [t["id"], com_autonomia])
+            con.execute("UPDATE agenda_subtarefas SET prazo = %(prazo)s, inicio = least(inicio, %(prazo)s), "
+                        "atualizada_em = now() WHERE tarefa = %(id)s AND automatica AND prazo > %(prazo)s",
+                        {"prazo": novo["prazo"], "id": t["id"]})
+            planejar = self._criar_planejar(con, t["id"], novo["prazo"], [p for p in com_autonomia if not antes.get(p)])
             con.execute("DELETE FROM agenda_tarefa_pessoas WHERE tarefa = %s AND usuario <> %s "
                         "AND NOT (usuario = ANY(%s::bigint[]))", [t["id"], usuario, list(novo["participantes"])])
-            # os avisos: quem entrou (um só, com as subtarefas dele); para quem já estava, o prazo da tarefa mudado e
-            # as subtarefas novas, passadas para ele ou com o prazo mudado
+            # os avisos: quem entrou (um só, com as subtarefas dele e a automática); para quem já estava, a autonomia
+            # ganha (com a automática), o prazo da tarefa mudado e as subtarefas novas, passadas para ele ou com o
+            # prazo mudado
             nome = self._nome(con, usuario)
             entraram = [p for p in novo["participantes"] if p not in antes]
             for p in entraram:
-                self._avisar_incluido(con, p, nome, usuario, t["id"], novo)
+                self._avisar_incluido(con, p, nome, usuario, t["id"], novo, planejar.get(p))
+            for p, ate in planejar.items():
+                if p not in entraram:
+                    avisar(con, [p], "subtarefa_nova", f"{nome} deu autonomia a você na tarefa “{novo['titulo']}”"
+                           f"{self._pedido_planejar(ate)}", usuario, t["id"])
             if mudou:
                 prazo = self._prazo(novo["prazo"], novo["hora"])
                 avisar(con, [p for p in novo["participantes"] if p in antes], "prazo_mudou",
@@ -712,8 +799,8 @@ class Tarefas:
 
     # --- subtarefas ------------------------------------------------------------------------
     def nova_subtarefa(self, usuario: int, tarefa, dados: dict) -> dict:
-        """Quem criou acrescenta uma subtarefa para qualquer pessoa da tarefa, com o prazo que quiser (até o da tarefa);
-        o participante com autonomia, só para si e com o prazo da tarefa."""
+        """Quem criou acrescenta uma subtarefa para qualquer pessoa da tarefa; o participante com autonomia, só para si.
+        Os dois escolhem o prazo (até o da tarefa; sem ele, vence com a tarefa)."""
         cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t = self._travar(con, usuario, _id(tarefa, _NAO_ACHOU))
@@ -722,9 +809,7 @@ class Tarefas:
                     raise PermissionError("só quem criou a tarefa (ou quem tem autonomia nela) cria subtarefas")
                 if dados.get("responsavel") not in (None, "") and str(dados["responsavel"]) != str(usuario):
                     raise PermissionError("com autonomia, você cria subtarefas só para você")
-                if dados.get("prazo") or dados.get("hora"):
-                    raise PermissionError("só quem criou a tarefa define o prazo; a sua vence com a tarefa")
-                dados = {"titulo": dados.get("titulo"), "descricao": dados.get("descricao")}
+                dados = {k: dados.get(k) for k in ("titulo", "descricao", "prazo", "hora")}
             self._aberta(t)
             s = _valida_sub(dados, t, set(self._pessoas_da(con, t["id"])), usuario)
             avisos = self._conferir_horarios(con, cal, self._ponto_sub(s), usuario)
@@ -734,17 +819,22 @@ class Tarefas:
         return {**self.obter(usuario, t["id"]), "avisos": avisos}
 
     def editar_subtarefa(self, usuario: int, id_, dados: dict) -> dict:
-        """Muda só os campos enviados. Quem criou muda tudo; o responsável com autonomia, só o título e a descrição."""
+        """Muda só os campos enviados. Quem criou muda tudo; o responsável com autonomia, o título e a descrição e, nas
+        que ele mesmo criou, o prazo. A automática, ninguém."""
         cal = calendario(self.configuracao)
         with self.banco.conexao() as con:
             t, s = self._travar_sub(con, usuario, id_)
+            if s["automatica"]:
+                raise PermissionError(_AUTOMATICA)
             if not t["eu_criador"]:
                 if s["responsavel"] != usuario or not t["autonomia"]:
                     raise PermissionError("só quem criou a tarefa (ou o responsável, com autonomia) edita esta "
                                           "subtarefa")
-                if campo := _proibido_mudar(dados, s):
+                prazo_livre = s["criada_por"] == usuario
+                if campo := _proibido_mudar(dados, s, prazo_livre):
                     raise PermissionError(f"só quem criou a tarefa muda {campo} da subtarefa")
-                dados = {k: v for k, v in dados.items() if k in ("titulo", "descricao")}
+                dados = {k: v for k, v in dados.items()
+                         if k in ("titulo", "descricao") or (prazo_livre and k in ("prazo", "hora"))}
             atual = {"titulo": s["titulo"], "descricao": s["descricao"], "responsavel": s["responsavel"],
                      "prazo": s["prazo"].isoformat(), "hora": _hhmm(s["hora"])}
             novo = _valida_sub({**atual, **{k: v for k, v in dados.items() if k in atual}}, t,

@@ -792,23 +792,39 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
   dela, e o da subtarefa, para o responsável. Ele não pode cair no horário ocupado de ninguém: a mensagem diz quem e
   quando (sem o título da atividade, que só a pessoa vê). Ao editar, só o que entra ou muda é conferido: o prazo, as
   pessoas novas e as subtarefas novas ou mudadas.
-- **Participantes** são os usuários ativos com a página Gestão. Quem criou marca quem tem **autonomia**. Na janela
-  da tarefa, o **+ Subtarefa** no card de cada um cria uma subtarefa para a pessoa (quem criou, para qualquer uma;
-  quem tem autonomia, para si).
+- **Participantes** são os usuários ativos com a página Gestão. Quem entra já vem com **autonomia** marcada; quem
+  criou pode tirar. Na janela da tarefa, o **+ Subtarefa** no card de cada um cria uma subtarefa para a pessoa (quem
+  criou, para qualquer uma; quem tem autonomia, para si, escolhendo o dia até o prazo da tarefa).
+- **Subtarefa automática** (migração 035): quem entra na tarefa com autonomia, ou ganha a autonomia depois, recebe a
+  subtarefa **"Crie as suas subtarefas para programar a execução desta tarefa"**, com o selo **Automática**. Ela
+  aparece em dois dias: o dia em que a pessoa entrou e o seguinte, pulando sábado e domingo (criada na sexta, fica na
+  sexta e na segunda). É uma subtarefa só: concluída num dos dias, fica feita nos dois.
+
+  | Prazo da tarefa (criada na terça, 03/11) | A automática |
+  |---|---|
+  | terça, 03/11 (o mesmo dia) | não é criada |
+  | quarta, 04/11 (o dia seguinte) | só na terça |
+  | sexta, 06/11 | na terça e na quarta |
+
+  Ninguém edita a automática. Ela não entra no formulário de quem criou nem aparece nos dias da agenda de quem
+  criou, só na janela da tarefa. Tirar a autonomia (ou a pessoa) apaga a automática, mesmo feita; devolver a autonomia cria
+  outra, contando daquele dia. Se o prazo da tarefa encurtar, ela encurta junto. Vencida sem ser concluída, ela cobra a
+  justificativa como as outras subtarefas. O aviso do sino de quem entra (ou ganha a autonomia) já pede para
+  programar a execução, e a automática não tem o aviso "vence em breve".
 - **Quem pode o quê:**
 
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
   |---|---|---|---|
   | Editar e excluir a tarefa | sim | não | não |
   | Mudar a situação da tarefa (a coluna do kanban), inclusive concluir e reabrir | sim | sim | sim |
-  | Mudar prazos e responsáveis | sim | não | não |
-  | Editar título e descrição de uma subtarefa | todas | as próprias | não |
-  | Criar subtarefa | para qualquer participante | só para si, com o prazo da tarefa | não |
+  | Mudar prazos e responsáveis | sim | o prazo das subtarefas que criou para si | não |
+  | Editar título e descrição de uma subtarefa (menos a automática) | todas | as próprias | não |
+  | Criar subtarefa | para qualquer participante | só para si, escolhendo o dia | não |
   | Concluir uma subtarefa e mudar a situação dela | todas | as próprias | as próprias |
   | Justificar o atraso | da tarefa e das próprias subtarefas | das próprias subtarefas | das próprias subtarefas |
 
-- **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela: quem criou vê
-  todas, o participante vê as dele. O ícone de olho abre a tarefa com um card por pessoa e as subtarefas de todos, e
+- **Na agenda:** a tarefa aparece no dia do prazo para todos; cada subtarefa, no dia do prazo dela (a automática,
+  nos seus dois dias): quem criou vê todas (menos as automáticas dos outros), o participante vê as dele. O ícone de olho abre a tarefa com um card por pessoa e as subtarefas de todos, e
   ali cada um muda a situação da tarefa e a das suas subtarefas (e, com autonomia, edita o texto delas e cria
   subtarefas para si).
 - **Situação:** a tarefa e cada subtarefa estão **A fazer**, **Fazendo** ou **Concluída**. Na janela da tarefa, quem
@@ -1068,7 +1084,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019); o fim do horário, o horário ocupado e a única de vários dias (migração 026) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
-| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
+| `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030); a subtarefa automática, com os dois dias em que aparece (migração 035). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
 | `google_contas`, `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migrações 031 e 032): as contas Google conectadas (o e-mail, a autorização cifrada e se ela caiu), as agendas de cada conta (o id da agenda no Google, se é a principal, se está ligada, a assinatura da última leitura, quando foi lida e o último erro) e os eventos lidos das ligadas, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Desconectar a conta leva as agendas e os eventos dela; só o site usa |
@@ -1224,7 +1240,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
-| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas, quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
+| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
 | `bi/google_agenda.py` | o Google Agenda, só leitura: o login com o Google (state, PKCE e a autorização cifrada), a lista de agendas de cada conta, a leitura dos eventos pela API do Google Agenda, de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |

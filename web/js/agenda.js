@@ -7,10 +7,12 @@
 // - Tarefa: aparece no dia do prazo; cada subtarefa, no dia do prazo dela (quem criou vê todas; o participante, as
 //   dele). A janela da tarefa mostra a situação dela (A fazer, Fazendo, Concluída) e um card por pessoa com as
 //   subtarefas dela, de todos: cada um muda a situação das suas e, com autonomia, edita o texto delas e cria
-//   subtarefas para si. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas dos dias anteriores (a que
-//   venceu hoje, no horário do prazo, fica no dia). Passado o prazo, quem responde por ela (quem criou a tarefa; o
-//   responsável pela subtarefa) justifica o atraso: as justificativas formam um histórico, que todos veem. Vencida e
-//   aberta, ela bloqueia o painel de quem responde até ele justificar (avisos.js).
+//   subtarefas para si, escolhendo o dia. Quem tem autonomia recebe a subtarefa automática, que pede para programar
+//   a execução: aparece em dois dias (é uma só: feita num, feita nos dois), não se edita e não entra no formulário de
+//   quem criou, que não a vê nos dias da agenda. No dia de hoje, um bloco lista as tarefas e subtarefas atrasadas dos
+//   dias anteriores (a que venceu hoje, no horário do prazo, fica no dia). Passado o prazo, quem responde por ela
+//   (quem criou a tarefa; o responsável pela subtarefa) justifica o atraso: as justificativas formam um histórico, que
+//   todos veem. Vencida e aberta, ela bloqueia o painel de quem responde até ele justificar (avisos.js).
 // - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Qualquer pessoa da
 //   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
@@ -100,6 +102,10 @@ function quando(iso, dia) {
 }
 // O prazo de uma tarefa ou subtarefa: "30/10" ou "30/10 às 14:00".
 const prazoTxt = (x) => `${dataCurta(x.prazo)}${x.hora ? ` às ${x.hora}` : ""}`;
+// Antes do prazo da subtarefa: "Até" ou, na automática de dois dias, "Em 26/10 e" (o prazo vem depois).
+const diasDaSub = (s) => (s.inicio && s.inicio !== s.prazo ? `Em ${dataCurta(s.inicio)} e` : "Até");
+// A subtarefa automática (a que pede para programar a execução): um selo, com o porquê.
+const chipAutomatica = (s) => (s.automatica ? `<span class="chip" title="Criada sozinha para quem tem autonomia: aparece em dois dias e, concluída num deles, fica feita nos dois. Sai se a autonomia for tirada.">${icone("info")}Automática</span>` : "");
 // O horário de uma atividade: "14:00–15:00" ou, sem o fim, "14:00".
 const horario = (a) => (a.hora_fim ? `${a.hora}–${a.hora_fim}` : a.hora);
 // A atividade que se repete ou que dura vários dias (a única com o último dia): tem histórico e pode ser encerrada.
@@ -533,6 +539,9 @@ function refHtml(r, dia, n, vencida = false) {
   const dica = dicaCheck(t, s);
   const chips = [
     `<span class="chip ag-c-tarefa">${icone("tarefa")}${s ? `Subtarefa${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}` : "Tarefa"}</span>`,
+    s ? chipAutomatica(s) : "",
+    // a automática no primeiro dia: até quando ela vai
+    s && !vencida && dia < s.prazo ? `<span class="chip">${icone("relogio")}Até ${dataCurta(s.prazo)}</span>` : "",
     vencida ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(x.prazo)}</span>` : "",
     // venceu hoje, no horário do prazo: fica no dia, sem ir para o bloco das atrasadas (que é dos dias de antes)
     !vencida && x.atrasada && x.prazo === estado.dados.hoje ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu às ${x.hora}</span>` : "",
@@ -628,6 +637,8 @@ async function aoClicar(e) {
   if (b.dataset.autonomia) {
     lerSubs();
     const p = estado.tf.participantes.find((x) => x.id === Number(b.dataset.autonomia));
+    if (p.autonomia && estado.tf.automaticas.has(p.id)
+        && !confirm(`Tirar a autonomia de ${p.nome}? Ao salvar, a subtarefa automática que pede para programar a execução sai.`)) return;
     p.autonomia = !p.autonomia;
     return desenharPessoas();
   }
@@ -983,7 +994,8 @@ function subHtml(t, s) {
       <b>${esc(s.titulo)}</b>
       ${s.descricao ? `<p>${esc(s.descricao)}</p>` : ""}
       <div class="ag-chips">
-        <span class="chip ${s.atrasada ? "ag-c-atrasada" : ""}">${icone(s.atrasada ? "alerta" : "relogio")}${s.atrasada ? "Venceu em" : "Até"} ${prazoTxt(s)}</span>
+        ${chipAutomatica(s)}
+        <span class="chip ${s.atrasada ? "ag-c-atrasada" : ""}">${icone(s.atrasada ? "alerta" : "relogio")}${s.atrasada ? "Venceu em" : diasDaSub(s)} ${prazoTxt(s)}</span>
         ${s.feita ? `<span class="chip ag-c-feita">${icone("visto")}${textoConclusao(t, s, s.prazo)}</span>` : ""}
       </div>
       <div class="ag-sub-st">${situacaoHtml(s, "data-sub-situacao", `Situação de ${s.titulo}`, s.pode.concluir, dicaCheck(t, s, "mudam a situação"))}</div>
@@ -1027,27 +1039,29 @@ function formJustHtml(alvo) {
 }
 
 // A subtarefa nova (no card da pessoa) ou em edição, na janela: quem criou muda tudo (na edição, até passar para outra
-// pessoa); o participante com autonomia, só o texto.
+// pessoa); o participante com autonomia, o texto e o prazo das que ele mesmo cria (na nova, escolhe o dia).
 function formSubHtml(t, s) {
   const pessoas = [t.criador, ...t.participantes];
   const v = s || { titulo: "", descricao: "", responsavel: pessoas.find((p) => p.id === janela.para) || t.criador,
                    prazo: t.prazo, hora: t.hora };
-  const responsavel = s ? `<label class="campo-form"><span>Responsável</span><span class="campo"><select data-campo="responsavel">${pessoas.map((p) =>
+  const passar = s && t.eu_criador; // passar para outra pessoa, só quem criou
+  const responsavel = passar ? `<label class="campo-form"><span>Responsável</span><span class="campo"><select data-campo="responsavel">${pessoas.map((p) =>
       `<option value="${p.id}" ${p.id === v.responsavel.id ? "selected" : ""}>${esc(p.nome)}${p.id === t.criador.id ? " (você)" : ""}</option>`).join("")}</select></span></label>`
-    : `<input type="hidden" data-campo="responsavel" value="${v.responsavel.id}">`;
-  const prazo = t.eu_criador ? `<div class="ag-sub-edit-campos ${s ? "" : "sem-responsavel"}">
+    : s ? "" : `<input type="hidden" data-campo="responsavel" value="${v.responsavel.id}">`;
+  const prazo = s ? s.pode.editar_prazo : true; // a nova: quem pode criar escolhe o dia
+  const campos = prazo ? `<div class="ag-sub-edit-campos ${passar ? "" : "sem-responsavel"}">
       ${responsavel}
       <label class="campo-form"><span>Horário <small>(opcional)</small></span><input type="time" data-campo="hora" value="${v.hora || ""}"></label>
     </div>
     <div class="campo-form"><span>Prazo</span>${campoDia({ campo: "prazo", valor: v.prazo, max: t.prazo, maxDica: "Depois do prazo da tarefa",
       rotulo: "Prazo da subtarefa", contar: v.responsavel.id === t.eu })}</div>`
-    : `<small class="ag-sub-prazo">${icone("cadeado")}Prazo: ${s ? prazoTxt(s) : `o da tarefa (${prazoTxt(t)})`}. Só ${esc(t.criador.nome)}, que criou a tarefa, muda.</small>`;
+    : `<small class="ag-sub-prazo">${icone("cadeado")}Prazo: ${prazoTxt(s)}. Só ${esc(t.criador.nome)}, que criou a tarefa, muda.</small>`;
   return `<form class="ag-sub-edit" data-sub-form="${s ? s.id : "nova"}" novalidate>
     <label class="campo-form"><span>${s ? "Subtarefa" : "Nova subtarefa"}</span>
       <textarea data-campo="titulo" rows="1" maxlength="2000" autocomplete="off" placeholder="O que fazer">${esc(v.titulo)}</textarea></label>
     <label class="campo-form"><span>Descrição <small>(opcional)</small></span>
       <textarea data-campo="descricao" rows="2" maxlength="2000">${esc(v.descricao)}</textarea></label>
-    ${prazo}
+    ${campos}
     <div class="ag-fb-acoes"><button class="btn" type="button" data-sub-cancelar>Cancelar</button>
       <button class="btn primario" type="submit">${icone(s ? "disco" : "mais")}${s ? "Salvar" : "Criar subtarefa"}</button></div>
   </form>`;
@@ -1243,12 +1257,15 @@ function formAtividade(a, dia, modelo = null) {
 // estado.tf (desenharPessoas: um card por pessoa, com as subtarefas dela; expandida: a pessoa com o card aberto, uma
 // de cada vez; aberta: a subtarefa aberta para editar, a única com os campos, enquanto as outras mostram só o texto; a
 // nova que está sendo escrita leva compondo); os campos da subtarefa usam data-campo, não name: com nomes repetidos,
-// f.elements.titulo deixaria de ser o da tarefa.
+// f.elements.titulo deixaria de ser o da tarefa. As subtarefas automáticas (a que pede para programar a execução) não
+// entram no formulário: o servidor cuida delas pela autonomia; automaticas guarda de quem elas são.
 function formTarefa(t, dia) {
+  const subs = t ? t.subtarefas.filter((s) => !s.automatica) : [];
   estado.tf = {
     participantes: t ? t.participantes.map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [],
-    subtarefas: t ? t.subtarefas.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
-                                               prazo: s.prazo, hora: s.hora || "" })) : [],
+    subtarefas: subs.map((s) => ({ id: s.id, titulo: s.titulo, descricao: s.descricao, responsavel: s.responsavel.id,
+                                   prazo: s.prazo, hora: s.hora || "" })),
+    automaticas: new Set(t ? t.subtarefas.filter((s) => s.automatica).map((s) => s.responsavel.id) : []),
     expandida: null,
     aberta: null,
   };
@@ -1266,8 +1283,11 @@ function formTarefa(t, dia) {
         <div class="ag-pessoas" id="ag-pessoas"></div>
         <span class="campo"><select data-add-pessoa aria-label="Adicionar participante"></select></span>
         <small>Clique no nome de uma pessoa para criar as subtarefas dela: escolha o dia, escreva o que fazer e escolha o
-          dia da próxima (a que você escreveu fica guardada). Com autonomia, a pessoa edita o texto das próprias
-          subtarefas e cria subtarefas para si. Prazos, só você muda.</small>
+          dia da próxima (a que você escreveu fica guardada). Quem entra já vem com autonomia: edita o texto das
+          próprias subtarefas, cria subtarefas para si (escolhendo o dia) e recebe uma subtarefa automática pedindo
+          para programar a execução, no dia em que entra e no seguinte (pulando sábado e domingo). Tirando a
+          autonomia, ela sai. Os
+          prazos das subtarefas que você cria, só você muda.</small>
       </div>
     </div>`;
 }
@@ -1288,7 +1308,7 @@ function desenharPessoas() {
       <div class="ag-pessoa-cab">
         ${nomeDoCard(p, resumo, fechado)}
         ${p.voce ? "" : `<button type="button" class="ag-pessoa-op ${p.autonomia ? "ativo" : ""}" data-autonomia="${p.id}" aria-pressed="${p.autonomia}"
-          title="${p.autonomia ? "Com autonomia: edita o texto das próprias subtarefas e cria subtarefas para si. Clique para tirar." : "Sem autonomia: só conclui as próprias subtarefas. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
+          title="${p.autonomia ? "Com autonomia: edita o texto das próprias subtarefas, cria subtarefas para si e recebe a subtarefa automática para programar a execução. Clique para tirar." : "Sem autonomia: só conclui as próprias subtarefas. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
         <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da tarefa" aria-label="Tirar ${esc(p.nome)} da tarefa">${icone("x")}</button>`}
       </div>
       <div class="ag-pessoa-corpo">${linhas.map(([s, n]) => linhaSub(s, n, p, prazo, hora)).join("")}</div>
@@ -1497,7 +1517,7 @@ function aoMudar(e) {
   if (t.matches("[data-add-pessoa]") && t.value) {
     lerSubs();
     const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));
-    estado.tf.participantes.push({ id: p.id, nome: p.nome, autonomia: false });
+    estado.tf.participantes.push({ id: p.id, nome: p.nome, autonomia: true }); // quem entra começa com autonomia
     estado.tf.participantes.sort((a, b) => a.nome.localeCompare(b.nome));
     maisSub(p.id); // o card de quem entrou já abre, pronto para a primeira subtarefa
   }
