@@ -86,6 +86,13 @@ TABELAS_CARTEIRA = {
                            "id_area INTEGER, area VARCHAR, segmento VARCHAR"),
     "carteira_retratos": "data DATE, ativos INTEGER, entradas INTEGER, saidas INTEGER, trocas INTEGER",
 }
+# Brindes (BRINDES + LISTABRINDE) não cancelados, por dia, cliente, produto e motivo, para a premiação dos supervisores
+# (página Premiações): o Power BI desconta os brindes do faturamento líquido e conta os de motivo impróprio (ex.:
+# "Brinde - vencido") nas devoluções impróprias. Opcional como os pedidos: sem ela, a página avisa e conta sem brindes.
+TABELAS_BRINDES = {
+    "brindes_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
+                               "id_produto INTEGER, id_motivo INTEGER, valor DOUBLE, quantidade DOUBLE"),
+}
 
 
 def _data(v):
@@ -133,6 +140,7 @@ class Cache:
         self.sem_credito = False  # faltam os títulos a receber e os limites (só a Reavaliação de Crédito precisa)
         self.sem_parcelas = False  # faltam as parcelas dos títulos: o crédito conta tudo como não pago
         self.sem_carteira = False  # falta o histórico da carteira (só a cobertura da positivação precisa)
+        self.sem_brindes = False  # faltam os brindes: a premiação dos supervisores conta sem eles
         # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
         # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
         # cache anterior.
@@ -171,6 +179,7 @@ class Cache:
         sem_credito = _tabela_diferente(con, TABELAS_CREDITO) is not None
         sem_parcelas = _tabela_diferente(con, TABELAS_PARCELAS) is not None
         sem_carteira = _tabela_diferente(con, TABELAS_CARTEIRA) is not None
+        sem_brindes = _tabela_diferente(con, TABELAS_BRINDES) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -183,6 +192,7 @@ class Cache:
             self.sem_credito = sem_credito
             self.sem_parcelas = sem_parcelas
             self.sem_carteira = sem_carteira
+            self.sem_brindes = sem_brindes
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -196,8 +206,8 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos, a rede, o crédito e a carteira podem faltar (pacote do PC com o código anterior), mas, se
-        vierem, têm de estar no formato atual."""
+        cliente, os pedidos, a rede, o crédito, a carteira e os brindes podem faltar (pacote do PC com o código
+        anterior), mas, se vierem, têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
@@ -205,7 +215,8 @@ class Cache:
                     or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -226,9 +237,9 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito, parcelas ou a carteira que não deu para ler ou registrar (pedidos_erro, rede_erro,
-        credito_erro, parcelas_erro, carteira_erro) esperam a próxima cópia, em vez de extrair tudo de novo a cada
-        minuto."""
+        redes, crédito, parcelas, a carteira ou os brindes que não deu para ler ou registrar (pedidos_erro, rede_erro,
+        credito_erro, parcelas_erro, carteira_erro, brindes_erro) esperam a próxima cópia, em vez de extrair tudo de
+        novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -239,6 +250,7 @@ class Cache:
                 or (self.sem_credito and not self.info.get("credito_erro"))
                 or (self.sem_parcelas and not self.info.get("parcelas_erro"))
                 or (self.sem_carteira and not self.info.get("carteira_erro"))
+                or (self.sem_brindes and not self.info.get("brindes_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -262,9 +274,10 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito, parcelas e carteira: a leitura (ou o registro) pode ter falhado
+            # pedidos, rede, crédito, parcelas, carteira e brindes: a leitura (ou o registro) pode ter falhado
             opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO,
-                                           **TABELAS_PARCELAS, **TABELAS_CARTEIRA}.items() if k in dados}
+                                           **TABELAS_PARCELAS, **TABELAS_CARTEIRA, **TABELAS_BRINDES}.items()
+                         if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
                 con.execute(f"CREATE TABLE {nome} ({colunas})")
@@ -287,6 +300,8 @@ class Cache:
                 con.execute("CREATE INDEX ix_tr ON titulos_receber (id_cliente)")
             if "titulos_parcelas" in opcionais:
                 con.execute("CREATE INDEX ix_tp ON titulos_parcelas (id)")
+            if "brindes_clientes_itens" in opcionais:
+                con.execute("CREATE INDEX ix_bci ON brindes_clientes_itens (data)")
             self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
@@ -480,6 +495,22 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler as parcelas dos títulos (o crédito conta tudo como não pago): %s", e)
                 parcelas_erro = str(e)[:300]
+            # Os brindes (premiação dos supervisores), também à parte. Os sem cliente (transferências, consumo
+            # interno) não entram em nenhuma carteira.
+            self.estado["etapa"] = "Lendo os brindes"
+            brindes_erro = None
+            try:
+                dados["brindes_clientes_itens"] = [
+                    (_data(d), v, c, t, p, m, float(val or 0), float(q or 0))
+                    for d, v, c, t, p, m, val, q in bd.consulta(
+                        "SELECT CAST(b.DATA AS DATE), COALESCE(b.ID_VENDEDOR, 0), b.ID_CLIENTE, b.TIPOCLIENTE, "
+                        "COALESCE(l.ID_ITEM, 0), COALESCE(b.ID_MOTIVO, 0), SUM(l.VALORTOTALITEM), SUM(l.QUANTIDADE) "
+                        "FROM BRINDES b JOIN LISTABRINDE l ON l.ID_BRINDE = b.ID_BRINDE "
+                        "WHERE b.DATA >= ? AND b.DATA < ? AND b.DATACANCELAMENTO IS NULL AND b.ID_CLIENTE IS NOT NULL "
+                        "GROUP BY 1, 2, 3, 4, 5, 6", (de, ate))]
+            except Exception as e:
+                log.warning("não deu para ler os brindes (a premiação dos supervisores conta sem eles): %s", e)
+                brindes_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -494,5 +525,6 @@ class Cache:
             *([("rede_erro", rede_erro)] if rede_erro else []),
             *([("credito_erro", credito_erro)] if credito_erro else []),
             *([("parcelas_erro", parcelas_erro)] if parcelas_erro else []),
+            *([("brindes_erro", brindes_erro)] if brindes_erro else []),
         ]
         return dados

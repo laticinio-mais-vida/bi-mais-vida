@@ -646,14 +646,30 @@ Acessar bi.maisvida.cloud), e o Google limita o app a 100 pessoas, o que sobra p
 - **Voltar atrás:** tirar `cliente_id` e `cliente_segredo` (ou a `chave`) e `docker compose restart` desliga a leitura.
   O código anterior não sabe ler as tabelas novas: para voltar a ele, restaure o banco de antes junto com a pasta.
 
+#### Premiações (migração 034)
+
+A página nova **Premiações** traz as páginas "Premiacao Vendedores" e "Premiacao Supervisores" do Power BI, com abas, e a
+configuração própria (faixas, pesos, metas e nomes dos supervisores).
+
+- **Ordem:** qualquer uma, mas a página só fica completa com as duas pontas. O site mostra a página assim que recebe o
+  código. Os **brindes** (tabela nova `brindes_clientes_itens` do cache) só chegam depois que o painel do PC roda o código
+  novo: feche e abra o `iniciar.bat`, e a primeira extração lê os brindes e manda ao site. Até lá, a aba Supervisores
+  avisa e conta sem eles. O código anterior do site aceita o cache com a tabela nova (ignora o que não conhece).
+- **A migração 034** só troca o CHECK de `regras.nome` para aceitar `'premiacoes'`; nenhuma regra existente muda.
+- **Depois de publicar:** os administradores já veem a página; para os outros, marque a página em Usuários (os vendedores
+  seguem o acesso de Metas; a aba Supervisores só aparece para quem vê todos os vendedores).
+- **Voltar atrás:** o código anterior ignora as regras com nome `premiacoes` (ficam guardadas), o CHECK novo e a tabela de
+  brindes do cache.
+
 #### Voltar as regras para uma versão anterior
 
-Cada Salvar em Metas › Configurar, em Projeções › Configurar e em Sugestão de Metas › Configurar grava uma versão nova na
+Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›
+Configurar grava uma versão nova na
 tabela `regras`. Para voltar a
 uma delas, no console SQL (`docker exec -it bi_banco psql -U bi -d bi`):
 
 ```sql
--- as versões, da mais nova para a mais antiga (nome = metas, projecoes ou sugestao)
+-- as versões, da mais nova para a mais antiga (nome = metas, projecoes, sugestao ou premiacoes)
 SELECT id, nome, salva_em, salva_por_nome FROM regras ORDER BY id DESC LIMIT 20;
 -- copia a versão 12 como a mais nova (troque o 12)
 INSERT INTO regras (nome, dados, salva_por_nome) SELECT nome, dados, 'volta para a versão 12' FROM regras WHERE id = 12;

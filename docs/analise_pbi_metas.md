@@ -252,3 +252,69 @@ dois tiveram mudança de carteira). No painel, ver a página Sugestão de Metas 
 3. **Tecnologia**: app Streamlit (já instalado, filtros interativos, roda local) ou página HTML gerada como o Painel Comercial ES.
 4. **Estado/escopo do vendedor**: lista em arquivo de configuração ou pelo supervisor do ERP (3 = ES, 7 = BA).
 5. **Dias úteis**: calcular sozinho com feriados (nacionais + estaduais de ES e BA) em vez do 21 fixo.
+
+## 11. Páginas de premiação (analisadas em 30/10/2026)
+
+Páginas ocultas **Premiacao Vendedores** e **Premiacao Supervisores**, com filtros de Ano e Mês (salvos em 2026 / outubro).
+No painel viraram a página Premiações (`bi/premiacoes.py`), com as diferenças descritas no README.
+
+**Premiacao Vendedores:** matriz com uma linha por `dMetas[VENDEDOR]`, filtrada por Σ META CLIENTE > 0, com Meta Cliente,
+Meta Realizada Clientes, % Meta Clientes Realizada e a medida `Premiação`:
+
+| % da meta de clientes | Premiação |
+|---|---|
+| < 91% | 0 |
+| 91% a < 96% | 200 |
+| 96% a < 100% | 250 |
+| ≥ 100% | 350 |
+
+O total da matriz aplica o mesmo IF ao % do total (não soma os prêmios).
+
+**Premiacao Supervisores:** duas matrizes com os valores nas linhas, "Marcos" e "Ronaldo", filtradas por
+`dClientes[NOME VENDEDOR]` (o vendedor da carteira atual do cliente):
+
+- **Marcos:** os 9 vendedores do supervisor 7, sem o Edir.
+- **Ronaldo:** os 12 do supervisor 3.
+
+O filtro chega às vendas, às devoluções, aos brindes e aos títulos pelo `ID_CLIENTE`. As medidas ficam na tabela
+"Medidas Premiacao Supervisor":
+
+| Medida | Definição |
+|---|---|
+| Fat Liquido | Σ LISTAVENDA.VALORTOTALITEM das vendas válidas − Devoluções Total (devoluções não canceladas de todos os motivos + brindes não cancelados) |
+| Fat Liquido Mix | Fat Liquido sem os produtos {32, 12551, 12552} |
+| %Mix | Fat Liquido Mix ÷ Fat Liquido |
+| Fat Liquido 6 meses | Fat Liquido de EOMONTH(mês, −8)+1 a EOMONTH(mês, −2): para outubro, março a agosto |
+| Valor Inadimplencia Premiação | Σ CONTASRECEBER.TOTAL não cancelado, TIPOCLIENTE = CLIENTE, ORIGEM = VENDA, QUITADO = 0, VENCIMENTO ≤ TODAY() − 30, emitido na mesma janela de 6 meses |
+| %Inadimplencia | Valor Inadimplencia ÷ Fat Liquido 6 meses |
+| Devolucoes Improprias | Devoluções Total com motivo em {3, 4, 10–16} (o filtro de dMotivoDevolução também pega os brindes pelo ID_MOTIVO) |
+| %Devolucoes | Devolucoes Improprias ÷ Faturamento Bruto |
+| Positivação | Meta Realizada Clientes (clientes distintos com venda válida) |
+| Premiação Supervisor BA/ES | (pontos de receita + mix + inadimplência + positivação + devoluções) × Max Premiacao (5000) |
+
+Os pontos de cada indicador:
+
+| Indicador | Alcance | Pontos |
+|---|---|---|
+| Receita | Fat Liquido ÷ Meta Fat | < 0,80 → 0; senão 0,25 × MIN(alcance, 1) |
+| Mix | %Mix ÷ Meta Mix | < 0,85 → 0; senão 0,15 × MIN(alcance, 1) |
+| Inadimplência | 2 − %Inad ÷ Meta Inad | < 1 → 0; senão 0,10 |
+| Positivação | Positivação ÷ Meta Positivacao | < 0,80 → 0; senão 0,25 × MIN(alcance, 1) |
+| Devoluções | 2 − %Dev ÷ Meta Dev | < 1 → 0; senão 0,25 |
+
+As metas são números fixos no DAX:
+
+| Meta | BA | ES |
+|---|---|---|
+| Fat | 2.252.568 | 2.075.000 |
+| Mix | 0,55 | 0,55 |
+| Inadimplência | 0,0042 | 0,005 |
+| Positivação | 967 | 983 |
+| Devoluções | 0,015 | 0,015 |
+
+Conferido na METAS.xlsx: o faturamento e a positivação do BA são a soma de setembro/26 sem o Edir. O faturamento do ES é a
+soma de setembro; a positivação dele (983) fica a 1 da soma sem a Adriana (984).
+
+**Brindes no ERP** (BRINDES + LISTABRINDE, com TIPOCLIENTE e ID_MOTIVO): em outubro/26, ~R$ 5,9 mil na carteira do BA e
+~R$ 16,8 mil na do ES, a maior parte "Brinde – vencido" (motivo 16, impróprio). As transferências e o consumo interno não
+têm cliente de carteira.

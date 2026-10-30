@@ -4,16 +4,17 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", assistente: "conversa", gestao: "quadro", credito: "cartao" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", assistente: "conversa", gestao: "quadro", credito: "cartao" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   sugestao: "Meta do mês seguinte sugerida por vendedor e produto",
+  premiacoes: "Prêmio do mês de cada vendedor e de cada supervisor",
   assistente: "Perguntas sobre os dados, respondidas por IA",
   gestao: "Objetivos, campanhas e o histórico de cada vendedor",
   credito: "Limite, compras, pontualidade e títulos de cada cliente",
 };
-const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", sugestao: "configuracoes", assistente: "config-assistente", gestao: "config-gestao" }; // rota do Configurar de cada página
+const CONFIG_PAGINA = { metas: "configuracoes", projecoes: "config-projecoes", sugestao: "configuracoes", premiacoes: "configuracoes", assistente: "config-assistente", gestao: "config-gestao" }; // rota do Configurar de cada página
 
 let ctx = null, raiz = null;
 let dados = null;     // { usuarios, paginas }
@@ -79,6 +80,11 @@ function dentroDaPagina(u, pagina) {
   if (pagina === "sugestao") { // sem escolha própria: os vendedores do acesso de Metas
     return u.visoes?.length ? { texto: "os vendedores do acesso de Metas" }
       : { texto: "igual a Metas, que ainda não tem abas: nenhum vendedor", aviso: true };
+  }
+  if (pagina === "premiacoes") { // os vendedores de Metas; os supervisores só com todos os vendedores do estado
+    if (!u.visoes?.length) return { texto: "igual a Metas, que ainda não tem abas: nenhum vendedor", aviso: true };
+    return { texto: u.vendedores ? "os vendedores do acesso de Metas (sem a aba dos supervisores)"
+      : "os vendedores do acesso de Metas e o supervisor de cada estado das abas" };
   }
   if (pagina === "metas") {
     if (!u.visoes?.length) return { texto: "ainda sem abas: a página fica vazia até você escolher", aviso: true };

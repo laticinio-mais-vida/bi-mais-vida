@@ -217,3 +217,10 @@ class Regras:
         if vid in self.vendedores:
             return self.vendedores[vid]
         return SUPERVISOR_GRUPO.get(self.supervisores.get(vid), "ES")
+
+    def grupo_conhecido(self, vid: int) -> str | None:
+        """Como grupo_vendedor, mas sem o "ES" de quem não está configurado nem tem supervisor do ES ou do BA (contas
+        internas, terceiros): None. Para somar a carteira de um estado inteiro."""
+        if vid in self.vendedores:
+            return self.vendedores[vid]
+        return SUPERVISOR_GRUPO.get(self.supervisores.get(vid))

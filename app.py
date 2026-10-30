@@ -41,8 +41,8 @@ RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
 from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
-                       escopo_gestao, escopo_projecoes, escopo_sugestao, paginas_permitidas, vendedores_permitidos,
-                       visoes_permitidas)
+                       escopo_gestao, escopo_premiacoes, escopo_projecoes, escopo_sugestao, paginas_permitidas,
+                       vendedores_permitidos, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
@@ -57,6 +57,7 @@ from bi.google_agenda import GoogleAgenda  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
+from bi.premiacoes import ConfigPremiacoes, Premiacoes  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
 from bi.reanalise import Reanalises  # noqa: E402
@@ -96,7 +97,7 @@ ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
-               "/api/sugestao/aprovacao", "/api/assistente/config",
+               "/api/sugestao/aprovacao", "/api/premiacoes/config", "/api/assistente/config",
                "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
@@ -153,6 +154,8 @@ class Aplicacao:
         # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
         self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores,
                                  self.metas_aprovadas)
+        self.config_premiacoes = ConfigPremiacoes(self.banco)
+        self.premiacoes = Premiacoes(self.calc, self.config_premiacoes, self.projetor._nomes_vendedores)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -817,6 +820,13 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.sugestao.config_dados(q.get("mes")))
             if url.path == "/api/sugestao/aprovacao":  # estado=BA&mes=2026-11
                 return self._json(self.app.sugestao.aprovacao(q.get("estado"), q.get("mes")))
+            if url.path == "/api/premiacoes":
+                if "premiacoes" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página Premiações", HTTPStatus.FORBIDDEN)
+                # aba=vendedores|supervisores&mes=2026-10 (vazio = o mês dos dados)
+                return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_premiacoes(usuario)))
+            if url.path == "/api/premiacoes/config":
+                return self._json(self.app.premiacoes.config_dados(q.get("mes")))
             if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises"):
                 if not self._pode_credito(usuario):
                     return
@@ -918,6 +928,11 @@ class Manipulador(BaseHTTPRequestHandler):
                 self.app.config_sugestao.salvar(corpo.get("config") or {}, usuario)
                 log.info("%s salvou as regras da Sugestão de Metas", usuario["login"])
                 return self._json({"ok": True, **self.app.sugestao.config_dados(corpo.get("mes"))})
+            if url.path == "/api/premiacoes/config":
+                corpo = self._corpo_json()
+                self.app.config_premiacoes.salvar(corpo.get("config") or {}, usuario)
+                log.info("%s salvou as regras das Premiações", usuario["login"])
+                return self._json({"ok": True, **self.app.premiacoes.config_dados(corpo.get("mes"))})
             if url.path == "/api/sugestao/aprovacao":
                 corpo = self._corpo_json()
                 itens = corpo.get("itens")

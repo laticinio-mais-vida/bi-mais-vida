@@ -5,7 +5,8 @@ Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtro
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
-produto (as páginas de sugestão do Power BI). A página **Assistente** responde perguntas sobre os dados com IA
+produto (as páginas de sugestão do Power BI). A página **Premiações** mostra o prêmio do mês de cada vendedor e de cada
+supervisor (as páginas de premiação do Power BI). A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
@@ -17,7 +18,8 @@ uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção A
 administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
 administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
 Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa acompanha; na Sugestão de
-Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA.
+Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA; nas Premiações, as faixas dos vendedores e as
+regras dos supervisores.
 
 ## Como abrir
 
@@ -295,6 +297,82 @@ Conferência em 27/10/2026 (meta de out/26, com as regras do Power BI ligadas: f
 descontando): dos 246 volumes por produto da METAS PRODUTOS.xlsx, 179 bateram (os de Jamille, Franquelin e Vicente, todos). A
 maior parte dos outros é da Thais e do Ricardo - EU, que tiveram clientes repassados desde então; nos demais vendedores, até
 3%, com um produto da Mauricia fora disso.
+
+## Página Premiações
+
+As páginas **Premiacao Vendedores** e **Premiacao Supervisores** do Power BI (ocultas lá), numa página só, com uma aba para
+cada uma, como as abas de Metas. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os meses com META CLIENTE
+na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**; depois, como **final**.
+
+- **Vendedores:** um por linha, os que têm META CLIENTE maior que zero no mês (planilha METAS.xlsx ou meta aprovada no
+  painel, com ✓), de todos os estados. Mostra a meta de clientes, os atendidos, o % da meta, a faixa atingida, o prêmio e
+  quantos clientes faltam para a faixa seguinte. Os cartões trazem o total a pagar, os atendidos, as faixas e quem está a
+  até 3 clientes da próxima faixa. A tabela vira imagem para o WhatsApp (Copiar imagem).
+- **Supervisores:** um quadro por estado (Marcos no BA e Ronaldo no ES; os nomes mudam no Configurar), com os cinco
+  indicadores, o realizado, a meta, o alcance, os pontos e o prêmio. "Ver as contas" mostra de onde sai cada número e a
+  carteira de cada vendedor.
+- **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
+- **Acesso:** a página é liberada em Usuários. Os vendedores que cada pessoa vê são os do acesso de Metas (as abas liberadas
+  e os vendedores marcados). A aba **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os
+  vendedores (sem vendedores marcados), e só os estados das abas liberadas.
+
+### Como a premiação é calculada
+
+**Vendedores:**
+
+1. **Atendidos:** clientes distintos com venda não cancelada no mês, pelo vendedor da venda. É a mesma conta dos clientes
+   realizados da página de Metas; devolução não tira o cliente.
+2. **% da meta:** atendidos ÷ META CLIENTE.
+3. **Prêmio:** o da maior faixa atingida (as faixas não se somam). Padrão do Power BI: 91% → R$ 200, 96% → R$ 250 e 100% →
+   R$ 350. Abaixo de 91%, nada.
+
+**Supervisores:** a carteira é a de **hoje**. Entram os clientes cujo vendedor no cadastro é do estado, pelas Configurações
+das metas ou, sem configuração, pelo supervisor no ERP; terceiros, o Edir e as contas internas ficam fora. Só entram vendas,
+devoluções e brindes de cliente (sem funcionário, fornecedor ou produtor).
+
+| Indicador | Conta | Meta (padrão) | Pontos |
+|---|---|---|---|
+| Faturamento líquido (25%) | vendas do mês − devoluções não canceladas de todos os motivos (pela data de entrada) − brindes | soma das METAS FATURAMENTO dos vendedores do estado no mês | abaixo de 80% da meta, nada; acima, 25% × alcance, no máximo 25% |
+| Mix (15%) | líquido sem os produtos 32, 12551 e 12552 (a mussarela) ÷ líquido | 55% | mínimo de 85% de alcance; 15% × alcance, no máximo 15% |
+| Inadimplência (10%) | títulos de venda a cliente emitidos de 7 a 2 meses antes (para outubro, março a agosto), vencidos há 30 dias ou mais na data dos dados e ainda em aberto, ÷ o faturamento líquido desses 6 meses | 0,42% no BA e 0,5% no ES | até a meta, 10%; acima, nada |
+| Positivação (25%) | clientes da carteira com venda no mês | soma das METAS CLIENTE dos vendedores do estado no mês | mínimo de 80%; 25% × alcance, no máximo 25% |
+| Devoluções impróprias (25%) | devoluções e brindes com motivo 3, 4 ou 10 a 16 ÷ faturamento bruto | 1,5% | até a meta, 25%; acima, nada |
+
+**Prêmio = soma dos pontos × R$ 5.000.** No BA, a meta não inclui o Edir, que é outro grupo.
+
+A inadimplência conta o que está em aberto **hoje** (o dia da extração dos dados), como no Power BI: o prêmio de um mês já
+fechado muda quando um cliente paga depois.
+
+Os brindes vêm de uma tabela nova do cache (`brindes_clientes_itens`). Enquanto o computador da empresa não manda os dados
+com ela (código anterior), a aba avisa e conta sem os brindes.
+
+### Configurar (Premiações)
+
+O botão **Configurar** (só administradores) tem três seções. As regras ficam no banco, com versões, como as de Metas, e
+valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os meses que já passaram.
+
+- **Vendedores:** as faixas (o % mínimo e o prêmio em R$). Dá para acrescentar e tirar faixas.
+- **Supervisores:** o prêmio máximo, o nome de cada supervisor, o peso, o mínimo e a meta de cada indicador (a soma dos pesos
+  precisa dar 100%), os dias de atraso da inadimplência, os produtos fora do mix e os motivos das devoluções impróprias, com
+  "Restaurar padrão do Power BI".
+- **Metas dos supervisores:** para o mês escolhido, a soma automática das metas dos vendedores e um campo para trocar a meta
+  de faturamento ou de clientes daquele mês (apagar volta à soma). A meta trocada aparece marcada como "ajustada" no quadro.
+
+### Diferenças em relação ao Power BI (premiações)
+
+1. **Metas dos supervisores:** a soma das metas dos vendedores do mês. No Power BI elas ficavam fixas no DAX e eram as de
+   setembro/26: no BA, R$ 2.252.568 e 967 clientes, a soma de setembro sem o Edir; no ES, R$ 2.075.000, e os 983 clientes
+   ficam a 1 de 1.049 − Adriana.
+2. **Total dos vendedores:** a soma dos prêmios. O Power BI aplicava a faixa ao % do total, o que não servia para pagar.
+3. **Só vendas a cliente** na conta do supervisor: o Power BI ligava venda a funcionário ou fornecedor pelo código, que pode
+   coincidir com o de um cliente.
+4. **Vendedores de cada supervisor:** pelas Configurações das metas e pelo supervisor do ERP, não por uma lista fixa de nomes.
+   Hoje dá os mesmos 9 do BA e 12 do ES do Power BI.
+5. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
+
+Conferência em 30/10/2026 (outubro até 29/10, com os brindes lidos do ERP): vendedores R$ 2.700 (11 de 21 com prêmio).
+Supervisores com as metas fixas do Power BI: BA R$ 4.881,69 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
+R$ 4.843,12 e ES R$ 3.417,62.
 
 ## Página Assistente
 
@@ -940,7 +1018,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | Tabela | O que guarda |
 |---|---|
 | `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
-| `regras` | as regras de Metas, os vendedores de Projeções e as regras da Sugestão de Metas (migração 024); cada Salvar vira uma versão nova, com quem salvou e quando |
+| `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024) e as das Premiações (migração 034); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
 | `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado (no preço médio, também o preço de cada produto: `base_precos` e `resultado_precos`, migração 013) |
@@ -989,7 +1067,8 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
 abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
-Sugestão de Metas segue o acesso de Metas, sem escolha própria. A Reavaliação de Crédito não tem configuração: quem tem a
+Sugestão de Metas e as Premiações seguem o acesso de Metas, sem escolha própria (a aba Supervisores das Premiações só
+aparece para quem vê todos os vendedores). A Reavaliação de Crédito não tem configuração: quem tem a
 página vê todos os clientes. Quem foi cadastrado antes de uma
 página existir não a recebe sozinho: o administrador marca a página nova.
 
@@ -1007,7 +1086,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -1092,10 +1171,11 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, e os títulos a receber, as parcelas e os limites, para o crédito, vêm em grupos à parte: se a leitura falhar, o resto segue) |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, os títulos a receber, as parcelas e os limites, para o crédito, e os brindes, para as premiações, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
+| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), as regras da página (tabela regras) e as metas dos supervisores |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas) |

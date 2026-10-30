@@ -24,11 +24,37 @@ class TestPedidosNoCache(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True) -> Path:
+    def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
+              brindes=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
-                          carteira=carteira)
+                          carteira=carteira, brindes=brindes)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
+
+    def test_brindes_opcionais(self):
+        # sem os brindes (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-los; se a leitura
+        # falhou, espera a próxima cópia
+        arquivo = self.cache(brindes=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_brindes, c.sem_credito, c.desatualizado()), (True, False, True))
+        c.info["brindes_erro"] = "Table unknown BRINDES"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE brindes_clientes_itens (data DATE, valor DOUBLE)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("brindes_clientes_itens", str(e.exception))
 
     def test_carteira_opcional(self):
         # sem o histórico da carteira (PC com o código anterior): vale, e o PC extrai de novo uma vez para registrá-la;

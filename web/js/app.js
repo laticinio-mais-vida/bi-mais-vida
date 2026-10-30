@@ -9,6 +9,8 @@ import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarSugestao, recarregarSugestao } from "./sugestao.js";
 import { montarConfigSugestao, configSugestaoTemAlteracoes } from "./configsugestao.js";
+import { montarPremiacoes, recarregarPremiacoes } from "./premiacoes.js";
+import { montarConfigPremiacoes, configPremiacoesTemAlteracoes } from "./configpremiacoes.js";
 import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
@@ -19,7 +21,7 @@ import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 import { ligarAvisos } from "./avisos.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "gestao", "credito"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "gestao", "credito"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -79,6 +81,21 @@ const PAGINAS = {
       },
     }),
   },
+  premiacoes: {
+    nome: "Premiações",
+    titulo: "Premiações",
+    montar: (el) => montarPremiacoes(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("premiacoes", d) }),
+    recarregar: recarregarPremiacoes,
+  },
+  "config-premiacoes": {
+    titulo: "Configurações das premiações",
+    fixo: "Faixas dos vendedores, pesos e metas dos supervisores",
+    pai: "premiacoes",
+    admin: true,
+    sempreMonta: true,
+    pendente: configPremiacoesTemAlteracoes,
+    montar: (el) => montarConfigPremiacoes(el, { aoSalvar: () => app.remontar.add("premiacoes") }),
+  },
   assistente: {
     nome: "Assistente",
     titulo: "Assistente de dados",
@@ -135,6 +152,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   sugestao: (d) => `Meta de ${d.mes.rotulo_meta} · base ${d.mes.rotulo_base} · ${d.estado}`,
+  premiacoes: (d) => `${d.mes.rotulo[0].toUpperCase()}${d.mes.rotulo.slice(1)} · ${d.aba === "supervisores" ? "Supervisores" : "Vendedores"} · ${d.situacao === "final" ? "mês fechado" : "prevista"}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,

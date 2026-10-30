@@ -1504,7 +1504,8 @@ class TestMigracao008(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes",
+                                               "034_regras_premiacoes"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1551,7 +1552,8 @@ class TestMigracao013(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes",
+                                               "034_regras_premiacoes"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1585,7 +1587,7 @@ class TestMigracao033(BaseBanco):
                 ("Cinquenta", "positivacao", "fixo", "50"), ("Trinta", "frequencia", "pct", " 30 "),
                 ("Com real", "mix_medio", "fixo", "R$ 30,50"), ("Texto", "positivacao", "fixo", "Vale-compras"),
                 ("Preço", "preco_medio", "fixo", "40"), ("Sem", "positivacao", "fixo", ""))}
-        self.assertEqual(self.banco.migrar(), ["033_premiacoes"])
+        self.assertEqual(self.banco.migrar(), ["033_premiacoes", "034_regras_premiacoes"])
         with self.banco.conexao() as con:
             premios = dict(con.execute("SELECT nome, premiacoes FROM campanhas"))
         unico = lambda sobre, premio="", valor=None: {"sobre": sobre, "faixas": [{"pct": 100, "premio": premio, "valor": valor}]}
@@ -1626,7 +1628,8 @@ class TestMigracao009(BaseBanco):
                                                "025_metas_aprovadas", "026_agenda_atividades_horario",
                                                "027_agenda_justificativas", "028_notificacoes",
                                                "029_credito_reanalises", "030_agenda_subtarefas_titulo_longo",
-                                               "031_google_agenda", "032_google_login", "033_premiacoes"])
+                                               "031_google_agenda", "032_google_login", "033_premiacoes",
+                                               "034_regras_premiacoes"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()
