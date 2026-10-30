@@ -25,9 +25,9 @@ class TestPedidosNoCache(unittest.TestCase):
         self._tmp.cleanup()
 
     def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
-              brindes=True) -> Path:
+              brindes=True, comissao=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
-                          carteira=carteira, brindes=brindes)
+                          carteira=carteira, brindes=brindes, comissao=comissao)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -55,6 +55,31 @@ class TestPedidosNoCache(unittest.TestCase):
         with self.assertRaises(ValueError) as e:
             Cache.conferir(arquivo)
         self.assertIn("brindes_clientes_itens", str(e.exception))
+
+    def test_comissao_opcional(self):
+        # sem a comissão (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-la; se a leitura
+        # falhou, espera a próxima cópia
+        arquivo = self.cache(comissao=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_comissao, c.sem_brindes, c.desatualizado()), (True, False, True))
+        c.info["comissao_erro"] = "Table unknown CONFIGCOMISSAOVENDEDOR"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE comissoes_percentuais (id_vendedor INTEGER, pct DOUBLE)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("comissoes_percentuais", str(e.exception))
 
     def test_carteira_opcional(self):
         # sem o histórico da carteira (PC com o código anterior): vale, e o PC extrai de novo uma vez para registrá-la;

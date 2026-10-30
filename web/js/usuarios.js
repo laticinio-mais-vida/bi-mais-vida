@@ -9,7 +9,7 @@ const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   sugestao: "Meta do mês seguinte sugerida por vendedor e produto",
-  premiacoes: "Prêmio do mês de cada vendedor e de cada supervisor",
+  premiacoes: "Prêmio do mês de cada vendedor e de cada supervisor, e a comissão dos vendedores",
   assistente: "Perguntas sobre os dados, respondidas por IA",
   gestao: "Objetivos, campanhas e o histórico de cada vendedor",
   credito: "Limite, compras, pontualidade e títulos de cada cliente",

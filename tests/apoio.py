@@ -24,8 +24,8 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import (TABELAS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_CREDITO, TABELAS_DETALHE, TABELAS_PARCELAS,
-                      TABELAS_PEDIDOS, TABELAS_REDE, Cache)
+from bi.cache import (TABELAS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_COMISSAO, TABELAS_CREDITO, TABELAS_DETALHE,
+                      TABELAS_PARCELAS, TABELAS_PEDIDOS, TABELAS_REDE, Cache)
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -87,7 +87,8 @@ PARCELAS = [(102, 2, 2, 500.0), (103, 2, 1, 650.0), (105, 1, 0, 100.0)]
 def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
                redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True,
                parcelas: bool = True, carteira: bool = True, vigencias=(), retratos=(),
-               metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=()) -> Calculadora:
+               metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=(), comissao: bool = True,
+               linhas_comissao=(), percentuais=()) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -95,12 +96,13 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     carteira: False = cache sem o histórico da carteira; vigencias e retratos: as linhas dele (vazio = ainda sem
     nenhum dia conferido). metas_cli: {(mês, vendedor): META CLIENTE} a mais na planilha de metas. brindes: False =
     cache sem a tabela dos brindes; linhas_brindes: as linhas dela (data, vendedor, cliente, tipo, produto, motivo,
-    valor, quantidade)."""
+    valor, quantidade). comissao: False = cache sem as tabelas da comissão; linhas_comissao: as vendas com a comissão
+    gravada (data, vendedor, tipo, produto, valor, comissão); percentuais: a tabela (vendedor, produto, %)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
                           **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
                           **(TABELAS_PARCELAS if credito and parcelas else {}), **(TABELAS_CARTEIRA if carteira else {}),
-                          **(TABELAS_BRINDES if brindes else {})}.items():
+                          **(TABELAS_BRINDES if brindes else {}), **(TABELAS_COMISSAO if comissao else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -190,6 +192,10 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
         con.executemany("INSERT INTO carteira_retratos VALUES (?, ?, ?, ?, ?)", list(retratos))
     if brindes and linhas_brindes:
         con.executemany("INSERT INTO brindes_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?, ?)", list(linhas_brindes))
+    if comissao and linhas_comissao:
+        con.executemany("INSERT INTO comissoes_vendas VALUES (?, ?, ?, ?, ?, ?)", list(linhas_comissao))
+    if comissao and percentuais:
+        con.executemany("INSERT INTO comissoes_percentuais VALUES (?, ?, ?)", list(percentuais))
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),
         ("banco_copia", "2026-10-01T07:00"), ("inicio", "2026-01-01")])

@@ -93,6 +93,15 @@ TABELAS_BRINDES = {
     "brindes_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
                                "id_produto INTEGER, id_motivo INTEGER, valor DOUBLE, quantidade DOUBLE"),
 }
+# Comissão dos vendedores (aba Comissão das Premiações). O ERP grava em cada item de venda o % do vendedor para o produto
+# naquele dia e o valor da comissão (LISTAVENDA.VALORCOMISSAO = valor do item × %); a devolução não tem o valor e o
+# brinde não tem nem o %, então vem também a tabela atual de percentuais (CONFIGCOMISSAOVENDEDOR, linhas de vendedor).
+# Opcional como os pedidos: sem ela, a aba avisa que a comissão ainda não chegou.
+TABELAS_COMISSAO = {
+    "comissoes_vendas": ("data DATE, id_vendedor INTEGER, tipocliente VARCHAR, id_produto INTEGER, valor DOUBLE, "
+                         "comissao DOUBLE"),
+    "comissoes_percentuais": "id_vendedor INTEGER, id_produto INTEGER, pct DOUBLE",
+}
 
 
 def _data(v):
@@ -141,6 +150,7 @@ class Cache:
         self.sem_parcelas = False  # faltam as parcelas dos títulos: o crédito conta tudo como não pago
         self.sem_carteira = False  # falta o histórico da carteira (só a cobertura da positivação precisa)
         self.sem_brindes = False  # faltam os brindes: a premiação dos supervisores conta sem eles
+        self.sem_comissao = False  # falta a comissão das vendas e os percentuais (só a aba Comissão precisa)
         # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
         # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
         # cache anterior.
@@ -180,6 +190,7 @@ class Cache:
         sem_parcelas = _tabela_diferente(con, TABELAS_PARCELAS) is not None
         sem_carteira = _tabela_diferente(con, TABELAS_CARTEIRA) is not None
         sem_brindes = _tabela_diferente(con, TABELAS_BRINDES) is not None
+        sem_comissao = _tabela_diferente(con, TABELAS_COMISSAO) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -193,6 +204,7 @@ class Cache:
             self.sem_parcelas = sem_parcelas
             self.sem_carteira = sem_carteira
             self.sem_brindes = sem_brindes
+            self.sem_comissao = sem_comissao
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -206,8 +218,8 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos, a rede, o crédito, a carteira e os brindes podem faltar (pacote do PC com o código
-        anterior), mas, se vierem, têm de estar no formato atual."""
+        cliente, os pedidos, a rede, o crédito, a carteira, os brindes e a comissão podem faltar (pacote do PC com o
+        código anterior), mas, se vierem, têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
@@ -216,7 +228,8 @@ class Cache:
                     or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_COMISSAO, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -237,9 +250,9 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito, parcelas, a carteira ou os brindes que não deu para ler ou registrar (pedidos_erro, rede_erro,
-        credito_erro, parcelas_erro, carteira_erro, brindes_erro) esperam a próxima cópia, em vez de extrair tudo de
-        novo a cada minuto."""
+        redes, crédito, parcelas, a carteira, os brindes ou a comissão que não deu para ler ou registrar (pedidos_erro,
+        rede_erro, credito_erro, parcelas_erro, carteira_erro, brindes_erro, comissao_erro) esperam a próxima cópia, em
+        vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -251,6 +264,7 @@ class Cache:
                 or (self.sem_parcelas and not self.info.get("parcelas_erro"))
                 or (self.sem_carteira and not self.info.get("carteira_erro"))
                 or (self.sem_brindes and not self.info.get("brindes_erro"))
+                or (self.sem_comissao and not self.info.get("comissao_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -274,9 +288,9 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito, parcelas, carteira e brindes: a leitura (ou o registro) pode ter falhado
-            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO,
-                                           **TABELAS_PARCELAS, **TABELAS_CARTEIRA, **TABELAS_BRINDES}.items()
+            # pedidos, rede, crédito, parcelas, carteira, brindes e comissão: a leitura (ou o registro) pode ter falhado
+            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO, **TABELAS_PARCELAS,
+                                           **TABELAS_CARTEIRA, **TABELAS_BRINDES, **TABELAS_COMISSAO}.items()
                          if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
@@ -302,6 +316,8 @@ class Cache:
                 con.execute("CREATE INDEX ix_tp ON titulos_parcelas (id)")
             if "brindes_clientes_itens" in opcionais:
                 con.execute("CREATE INDEX ix_bci ON brindes_clientes_itens (data)")
+            if "comissoes_vendas" in opcionais:
+                con.execute("CREATE INDEX ix_cv ON comissoes_vendas (data)")
             self._conferir_detalhe(con)
             con.close()
             self.trocar(novo)
@@ -511,6 +527,26 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler os brindes (a premiação dos supervisores conta sem eles): %s", e)
                 brindes_erro = str(e)[:300]
+            # A comissão das vendas (o valor que o ERP gravou em cada item) e a tabela de percentuais por vendedor e
+            # produto, também à parte. As linhas de promotor (VENDEDOR = 0) e de supervisor (2) ficam fora.
+            self.estado["etapa"] = "Lendo as comissões"
+            comissao_erro = None
+            try:
+                vendas_comissao = [
+                    (_data(d), v, t, p, float(val or 0), float(c or 0))
+                    for d, v, t, p, val, c in bd.consulta(
+                        "SELECT CAST(v.DATA AS DATE), COALESCE(v.ID_VENDEDOR, 0), v.TIPOCLIENTE, COALESCE(l.ID_ITEM, 0), "
+                        "SUM(l.VALORTOTALITEM), SUM(COALESCE(l.VALORCOMISSAO, 0)) "
+                        "FROM VENDAS v JOIN LISTAVENDA l ON l.ID_VENDA = v.ID_VENDA "
+                        "WHERE v.DATA >= ? AND v.DATA < ? AND v.DATACANCELAMENTO IS NULL "
+                        "GROUP BY 1, 2, 3, 4", (de, ate))]
+                percentuais = [(v, p, float(c or 0)) for v, p, c in bd.consulta(
+                    "SELECT ID_VENDEDOR, ID_PRODUTO, COMISSAO FROM CONFIGCOMISSAOVENDEDOR "
+                    "WHERE VENDEDOR = 1 AND ID_VENDEDOR IS NOT NULL AND ID_PRODUTO IS NOT NULL")]
+                dados["comissoes_vendas"], dados["comissoes_percentuais"] = vendas_comissao, percentuais
+            except Exception as e:
+                log.warning("não deu para ler as comissões (a aba Comissão das Premiações fica sem dados): %s", e)
+                comissao_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -526,5 +562,6 @@ class Cache:
             *([("credito_erro", credito_erro)] if credito_erro else []),
             *([("parcelas_erro", parcelas_erro)] if parcelas_erro else []),
             *([("brindes_erro", brindes_erro)] if brindes_erro else []),
+            *([("comissao_erro", comissao_erro)] if comissao_erro else []),
         ]
         return dados

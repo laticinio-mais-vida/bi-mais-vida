@@ -2754,6 +2754,18 @@ table.dados.pr-metas .sug-num input { width: 140px; }
 .pr-config-motivos { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 14px; font-size: 13px; }
 .pr-config-motivos label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .pr-config-motivos input { accent-color: var(--laranja); }
+/* Comissão: os descontos em tom de devolução, o a pagar negativo em vermelho, a linha do vendedor leva ao detalhe. */
+.relatorio-tabela.pr-com td, .relatorio-tabela.pr-com th { white-space: nowrap; }
+.relatorio-tabela.pr-com tbody tr[data-vendedor] { cursor: pointer; }
+.relatorio-tabela.pr-com tbody tr[data-vendedor]:hover td { background: var(--acento-suave); }
+.pr-desc { color: var(--ruim); }
+.pr-neg, .relatorio-tabela .total.pr-neg { color: var(--ruim-forte); }
+table.dados.pr-com-prod td { white-space: nowrap; }
+table.dados.pr-com-prod td.esq { min-width: 220px; white-space: normal; }
+table.dados.pr-com-prod tfoot td { font-weight: 800; }
+.pr-sem-pct { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--atencao-bg); color: var(--atencao); white-space: nowrap; }
+#p-com-det .cartao-cab { flex-wrap: wrap; gap: 12px; }
+#p-com-det .campo select { min-width: 240px; }
 @media (max-width: 1180px) { .kpis.pr-kpis { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 860px) {
   .kpis.pr-kpis { grid-template-columns: 1fr; }

@@ -1,7 +1,8 @@
 // Configuração da página Premiações (só administradores): as faixas dos vendedores; o prêmio máximo, os nomes, os pesos,
 // os mínimos e as metas dos supervisores, os produtos fora do mix e os motivos das devoluções impróprias; e a meta de
-// faturamento e de clientes de um supervisor num mês, no lugar da soma das metas dos vendedores. Quem vê a página e
-// quais vendedores segue o acesso de Metas. Tudo vale depois de Salvar, para todos os meses.
+// faturamento e de clientes de um supervisor num mês, no lugar da soma das metas dos vendedores; e os motivos dos brindes
+// que descontam da comissão. Quem vê a página e quais vendedores segue o acesso de Metas. Tudo vale depois de Salvar,
+// para todos os meses.
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const INDICADORES = [
@@ -30,7 +31,7 @@ export async function montarConfigPremiacoes(container, contexto) {
   try {
     const q = new URLSearchParams(location.hash.split("?")[1] || "");
     const mes = /^\d{4}-\d{2}$/.test(q.get("m") || "") ? q.get("m") : "";
-    if (["vendedores", "supervisores", "metas"].includes(q.get("secao"))) secao = q.get("secao");
+    if (["vendedores", "supervisores", "metas", "comissao"].includes(q.get("secao"))) secao = q.get("secao");
     carregarDados(await api(`/api/premiacoes/config${mes ? `?mes=${mes}` : ""}`));
     render();
   } catch (e) {
@@ -47,9 +48,12 @@ function carregarDados(r) {
 // ---------- apoio ----------
 const pct = (v, casas = 2) => (v == null || isNaN(v) ? "" : String(Math.round(v * 100 * 10 ** casas) / 10 ** casas));
 
-// Quantas folhas (valores) mudaram entre o rascunho e o salvo (um ajuste novo conta uma vez).
+// Quantas folhas (valores) mudaram entre o rascunho e o salvo (um ajuste novo conta uma vez; uma lista de códigos, como
+// os motivos, conta como uma folha só).
 function folhas(o, prefixo = "", saida = {}) {
-  if (o && typeof o === "object") {
+  if (Array.isArray(o) && o.every((x) => x === null || typeof x !== "object")) {
+    saida[prefixo] = JSON.stringify(o);
+  } else if (o && typeof o === "object") {
     for (const [k, v] of Object.entries(o)) folhas(v, `${prefixo}.${k}`, saida);
   } else saida[prefixo] = o;
   return saida;
@@ -71,7 +75,8 @@ function render() {
   raiz.innerHTML = `
   <div class="config">
     <aside class="cartao config-menu entra" style="--i:0">
-      ${[["vendedores", "usuario", "Vendedores"], ["supervisores", "pessoas", "Supervisores"], ["metas", "alvo", "Metas dos supervisores"]]
+      ${[["vendedores", "usuario", "Vendedores"], ["supervisores", "pessoas", "Supervisores"], ["metas", "alvo", "Metas dos supervisores"],
+        ["comissao", "moeda", "Comissão"]]
         .map(([id, ic, nome]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}</button>`).join("")}
       <div class="dica">${icone("info")} As regras valem para todos os meses assim que você salvar: mudar uma faixa ou um
         peso recalcula também os meses que já passaram. Quem vê a página e quais vendedores segue o acesso de Metas.</div>
@@ -97,6 +102,7 @@ function renderSecao() {
   const alvo = raiz.querySelector("#cp-secao");
   if (secao === "supervisores") secaoSupervisores(alvo);
   else if (secao === "metas") secaoMetas(alvo);
+  else if (secao === "comissao") secaoComissao(alvo);
   else secaoVendedores(alvo);
   atualizarBarra();
 }
@@ -107,9 +113,9 @@ function atualizarBarra() {
   raiz.querySelector("#cp-n").textContent = n === 1 ? "1 alteração não salva" : `${n} alterações não salvas`;
 }
 
-function rodapePadrao() {
+function rodapePadrao(rotulo = "Restaurar padrão do Power BI") {
   return `<p class="form-erro" id="cp-erro" hidden></p>
-    <div class="sug-regras-acoes"><button class="btn" type="button" id="cp-padrao">${icone("restaurar")}Restaurar padrão do Power BI</button></div>`;
+    <div class="sug-regras-acoes"><button class="btn" type="button" id="cp-padrao">${icone("restaurar")}${rotulo}</button></div>`;
 }
 
 function ligarPadrao(alvo) {
@@ -117,7 +123,7 @@ function ligarPadrao(alvo) {
     const ajustes = rasc.supervisores.ajustes;
     rasc = clone(dados.padrao);
     rasc.supervisores.ajustes = ajustes; // os ajustes das metas de cada mês ficam
-    toast("Padrão do Power BI aplicado (faixas, pesos, metas, produtos e motivos); confira e salve");
+    toast("Padrão aplicado (faixas, pesos, metas, produtos, motivos e brindes da comissão); confira e salve");
     renderSecao();
   });
 }
@@ -244,6 +250,32 @@ function secaoSupervisores(alvo) {
     const id = Number(c.dataset.motivo);
     s.motivos_improprios = c.checked ? [...new Set([...s.motivos_improprios, id])].sort((a, b) => a - b)
       : s.motivos_improprios.filter((m) => m !== id);
+    atualizarBarra();
+  }));
+  ligarPadrao(alvo);
+}
+
+// ======================================================================================
+// Comissão: os brindes que descontam
+// ======================================================================================
+function secaoComissao(alvo) {
+  const c = rasc.comissao;
+  alvo.innerHTML = `
+  <section class="cartao secao entra" style="--i:1">
+    <div class="cartao-cab"><div><h2>${icone("moeda")}Comissão dos vendedores</h2>
+      <p class="sub">A comissão das vendas é a que o ERP gravou em cada venda (o % do vendedor para o produto no dia da
+        venda). Dela saem todas as devoluções do mês e os brindes dos motivos marcados abaixo, × o % de hoje da tabela do
+        ERP. Os % de cada vendedor e produto ficam no ERP: para mudar um %, mude lá. Entram só as equipes BA e ES.</p></div></div>
+    <h3 class="pr-config-tit">Brindes que descontam da comissão <small class="fraco">padrão: danificado (10, 11 e 12) e vencido (16); as devoluções descontam todas</small></h3>
+    <div class="pr-config-motivos">
+      ${dados.motivos.map((m) => `<label><input type="checkbox" data-motivo-com="${m.id}"${c.motivos_brindes.includes(m.id) ? " checked" : ""}>${m.id} · ${esc(m.nome)}</label>`).join("")}
+    </div>
+    ${rodapePadrao("Restaurar padrão")}
+  </section>`;
+  alvo.querySelectorAll("[data-motivo-com]").forEach((cx) => cx.addEventListener("change", () => {
+    const id = Number(cx.dataset.motivoCom);
+    c.motivos_brindes = cx.checked ? [...new Set([...c.motivos_brindes, id])].sort((a, b) => a - b)
+      : c.motivos_brindes.filter((m) => m !== id);
     atualizarBarra();
   }));
   ligarPadrao(alvo);

@@ -6,7 +6,7 @@ Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtro
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
 produto (as páginas de sugestão do Power BI). A página **Premiações** mostra o prêmio do mês de cada vendedor e de cada
-supervisor (as páginas de premiação do Power BI). A página **Assistente** responde perguntas sobre os dados com IA
+supervisor (as páginas de premiação do Power BI) e a comissão dos vendedores. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
@@ -18,8 +18,8 @@ uma gaveta que abre pelo botão de menu do topo. **Usuários** fica na seção A
 administrador vê. Cada página tem a sua configuração, no botão **Configurar** da barra de filtros dela (só para
 administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
 Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa acompanha; na Sugestão de
-Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA; nas Premiações, as faixas dos vendedores e as
-regras dos supervisores.
+Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA; nas Premiações, as faixas dos vendedores, as
+regras dos supervisores e os brindes que descontam da comissão.
 
 ## Como abrir
 
@@ -301,7 +301,7 @@ maior parte dos outros é da Thais e do Ricardo - EU, que tiveram clientes repas
 ## Página Premiações
 
 As páginas **Premiacao Vendedores** e **Premiacao Supervisores** do Power BI (ocultas lá), numa página só, com uma aba para
-cada uma, como as abas de Metas. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os meses com META CLIENTE
+cada uma, como as abas de Metas, e uma terceira aba, **Comissão**. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os meses com META CLIENTE
 na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**; depois, como **final**.
 
 - **Vendedores:** um por linha, os que têm META CLIENTE maior que zero no mês (planilha METAS.xlsx ou meta aprovada no
@@ -311,6 +311,7 @@ na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece 
 - **Supervisores:** um quadro por estado (Marcos no BA e Ronaldo no ES; os nomes mudam no Configurar), com os cinco
   indicadores, o realizado, a meta, o alcance, os pontos e o prêmio. "Ver as contas" mostra de onde sai cada número e a
   carteira de cada vendedor.
+- **Comissão:** a comissão de cada vendedor das equipes BA e ES (veja [A aba Comissão](#a-aba-comissão)).
 - **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
 - **Acesso:** a página é liberada em Usuários. Os vendedores que cada pessoa vê são os do acesso de Metas (as abas liberadas
   e os vendedores marcados). A aba **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os
@@ -346,9 +347,44 @@ fechado muda quando um cliente paga depois.
 Os brindes vêm de uma tabela nova do cache (`brindes_clientes_itens`). Enquanto o computador da empresa não manda os dados
 com ela (código anterior), a aba avisa e conta sem os brindes.
 
+### A aba Comissão
+
+A comissão de cada vendedor das equipes **BA e ES** no mês, que não vem do Power BI. Os filtros são os mesmos, mas valem
+todos os meses com dados, mesmo sem META.
+
+**De onde vem o % (conferido no ERP em 30/10/2026):**
+- O % é de cada **vendedor para cada produto**, na tabela de comissão do ERP (`CONFIGCOMISSAOVENDEDOR`, linhas de
+  vendedor). Os campos de comissão do cadastro de produto e do de vendedor estão zerados.
+- Em cada item de venda, o ERP grava o % daquele dia e o valor da comissão (`LISTAVENDA.COMISSAO` e `VALORCOMISSAO` =
+  valor do item × %).
+- Na devolução, o ERP grava só o %, às vezes 0, e não o valor. O brinde não tem %.
+- No cadastro do vendedor, as equipes BA e ES ganham comissão sobre a venda. O Edir e os terceiros ganham sobre o
+  recebimento e ficam fora da aba.
+
+**A conta:**
+1. **Comissão das vendas:** a que o ERP gravou em cada item de venda a cliente não cancelada. Mudar a tabela depois não
+   muda o passado. Venda feita antes de o produto ter % na tabela fica sem comissão: o WALDREY, por exemplo, teve 0% até
+   02/10/2026, porque a tabela dele foi preenchida em 05/10.
+2. **− Devoluções:** todas as devoluções não canceladas do mês, de todos os motivos, pela data de entrada e do vendedor
+   que está na devolução, × o **% de hoje** da tabela para o produto.
+3. **− Brindes:** os brindes do mês com os motivos escolhidos, × o % de hoje da tabela. O padrão é 10, 11 e 12
+   ("BRINDE – DANIFICADO…") e 16 ("BRINDE – VENCIDO").
+4. **A pagar** = comissão das vendas − os dois descontos. Fica negativo quando as devoluções do mês passam da comissão.
+
+Só entram vendas, devoluções e brindes de cliente: venda a funcionário, fornecedor ou produtor não tem comissão no ERP.
+Devolução ou brinde de um produto sem % na tabela do vendedor não desconta; a aba avisa e marca o produto.
+
+**Na tela:**
+- **Cartões:** o total a pagar, por estado; a comissão das vendas e o % médio; o desconto das devoluções; o dos brindes.
+- **Tabela por vendedor:** vira imagem para o WhatsApp (Copiar imagem).
+- **Comissão por produto:** do vendedor escolhido (ou clicado na tabela), com o % médio gravado e o % de hoje da tabela.
+
+A comissão vem de duas tabelas novas do cache (`comissoes_vendas` e `comissoes_percentuais`). Enquanto o computador da
+empresa não manda os dados com elas (código anterior), a aba avisa que a comissão ainda não chegou.
+
 ### Configurar (Premiações)
 
-O botão **Configurar** (só administradores) tem três seções. As regras ficam no banco, com versões, como as de Metas, e
+O botão **Configurar** (só administradores) tem quatro seções. As regras ficam no banco, com versões, como as de Metas, e
 valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os meses que já passaram.
 
 - **Vendedores:** as faixas (o % mínimo e o prêmio em R$). Dá para acrescentar e tirar faixas.
@@ -357,6 +393,8 @@ valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os m
   "Restaurar padrão do Power BI".
 - **Metas dos supervisores:** para o mês escolhido, a soma automática das metas dos vendedores e um campo para trocar a meta
   de faturamento ou de clientes daquele mês (apagar volta à soma). A meta trocada aparece marcada como "ajustada" no quadro.
+- **Comissão:** os motivos dos brindes que descontam da comissão (as devoluções descontam todas). Os % de cada vendedor
+  e produto ficam no ERP.
 
 ### Diferenças em relação ao Power BI (premiações)
 
@@ -372,7 +410,9 @@ valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os m
 
 Conferência em 30/10/2026 (outubro até 29/10, com os brindes lidos do ERP): vendedores R$ 2.700 (11 de 21 com prêmio).
 Supervisores com as metas fixas do Power BI: BA R$ 4.887,54 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
-R$ 4.843,12 e ES R$ 3.417,62.
+R$ 4.843,12 e ES R$ 3.417,62. Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11),
+de R$ 68.152,20 de comissão das vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os
+descontos de cada vendedor batem com a conta feita direto no ERP.
 
 ## Página Assistente
 
@@ -1171,11 +1211,11 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | Arquivo | O que faz |
 |---|---|
 | `app.py` | servidor local e rotas da API |
-| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, os títulos a receber, as parcelas e os limites, para o crédito, e os brindes, para as premiações, vêm em grupos à parte: se a leitura falhar, o resto segue) |
+| `bi/cache.py` | leitura do Firebird e cache DuckDB (os pedidos de venda e a rede dos clientes, para a efetividade, os títulos a receber, as parcelas e os limites, para o crédito, os brindes e a comissão, para as premiações, vêm em grupos à parte: se a leitura falhar, o resto segue) |
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
-| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), as regras da página (tabela regras) e as metas dos supervisores |
+| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas) |

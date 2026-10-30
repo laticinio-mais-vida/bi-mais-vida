@@ -23,6 +23,14 @@ funcionário ou fornecedor pelo código, que pode coincidir com o de um cliente)
   (1,5%), o peso inteiro.
 Prêmio = soma dos pontos × o máximo (R$ 5.000). As metas de faturamento e de clientes são a soma das metas dos
 vendedores do estado no mês (no Power BI ficavam fixas, as de setembro/26); o administrador pode trocá-las num mês.
+
+Comissão (não vem do Power BI; só as equipes BA e ES, que no ERP ganham comissão sobre a venda; o Edir e os terceiros
+ganham sobre o recebimento e ficam fora). O % é do vendedor para cada produto (CONFIGCOMISSAOVENDEDOR no ERP):
+- comissão das vendas: a que o ERP gravou em cada item de venda a cliente (o % do dia da venda × o valor do item), então
+  mudar a tabela não muda o passado;
+- menos as devoluções não canceladas de todos os motivos (pela data de entrada) e os brindes dos motivos escolhidos
+  (padrão: danificado e vencido), cada um × o % de hoje da tabela para o vendedor e o produto (a devolução não traz o
+  valor da comissão e às vezes vem com 0%; o brinde não tem %). Produto sem % na tabela não desconta.
 """
 from __future__ import annotations
 
@@ -35,7 +43,7 @@ from .metas import Calculadora, nome_bonito
 from .sugestao import curto_mes, indice, ler_mes, rotulo_mes, texto_mes
 
 ESTADOS = ("BA", "ES")
-ABAS = ("vendedores", "supervisores")
+ABAS = ("vendedores", "supervisores", "comissao")
 INDICADORES = ("receita", "mix", "inadimplencia", "positivacao", "devolucoes")
 TITULOS = {"receita": "Faturamento líquido", "mix": "Mix", "inadimplencia": "Inadimplência",
            "positivacao": "Positivação", "devolucoes": "Devoluções impróprias"}
@@ -65,6 +73,9 @@ def padrao() -> dict:
             "devolucoes": {"peso": 0.25, "meta": {"BA": 0.015, "ES": 0.015}},
             "ajustes": {},
         },
+        # Os brindes que descontam da comissão: "BRINDE - DANIFICADO, PROBLEMA NA PRODUÇÃO", "... NA LOGÍSTICA",
+        # "... NO CLIENTE" e "BRINDE - VENCIDO". As devoluções descontam todas.
+        "comissao": {"motivos_brindes": [10, 11, 12, 16]},
     }
 
 
@@ -162,7 +173,11 @@ def _valida(cfg: dict) -> dict:
         if lista:
             ajustes[m] = lista
     sup["ajustes"] = dict(sorted(ajustes.items()))
-    return {"versao": 1, "vendedores": {"faixas": faixas}, "supervisores": sup}
+    # As versões salvas antes da aba Comissão não têm a seção: ficam com o padrão.
+    com_in = cfg.get("comissao") or {}
+    comissao = {"motivos_brindes": _inteiros(com_in.get("motivos_brindes", base["comissao"]["motivos_brindes"]),
+                                             "motivos dos brindes da comissão")}
+    return {"versao": 1, "vendedores": {"faixas": faixas}, "supervisores": sup, "comissao": comissao}
 
 
 class ConfigPremiacoes(RegrasNoBanco):
@@ -244,8 +259,8 @@ class Premiacoes:
         if not cache.pronto():
             raise RuntimeError("os dados ainda estão sendo preparados")
         if detalhe and (cache.antigo or cache.sem_detalhe):
-            raise RuntimeError("os dados por cliente ainda não chegaram do computador da empresa; a premiação dos "
-                               "supervisores aparece depois da próxima atualização")
+            raise RuntimeError("os dados por cliente ainda não chegaram do computador da empresa; esta aba aparece "
+                               "depois da próxima atualização")
 
     @staticmethod
     def estados_supervisor(permitidos: set[int] | None, equipes: set[str] | None) -> list[str]:
@@ -263,8 +278,15 @@ class Premiacoes:
         com_meta = {indice(m["mes"]) for m in self.calc.metas.dados() if (m.get("meta_cli") or 0) > 0}
         return sorted((i for i in com_meta if primeiro <= i <= ultimo), reverse=True)
 
-    def _escolher_mes(self, mes: str | None) -> tuple[int, list[int]]:
-        meses = self.meses()
+    def meses_dados(self) -> list[int]:
+        """Todos os meses com dados, do mês dos dados ao início do cache (a aba Comissão não depende de meta)."""
+        cache = self.calc.cache
+        primeiro = indice(dt.date.fromisoformat(cache.info.get("inicio") or "2024-01-01"))
+        return list(range(indice(cache.data_ref()), primeiro - 1, -1))
+
+    def _escolher_mes(self, mes: str | None, meses: list[int] | None = None,
+                      quais: str = "com meta de clientes") -> tuple[int, list[int]]:
+        meses = self.meses() if meses is None else meses
         if not meses:
             raise ValueError("não há meses com meta de clientes na planilha de metas")
         if not mes:
@@ -272,14 +294,15 @@ class Premiacoes:
             return (atual if atual in meses else meses[0]), meses
         i = ler_mes(mes)
         if i not in meses:
-            raise ValueError(f"escolha um mês com meta de clientes entre {curto_mes(meses[-1])} e {curto_mes(meses[0])}")
+            raise ValueError(f"escolha um mês {quais} entre {curto_mes(meses[-1])} e {curto_mes(meses[0])}")
         return i, meses
 
     def _base(self, aba: str, i: int, meses: list[int], permitidos, equipes) -> dict:
         hoje = self.hoje()
         return {
             "aba": aba,
-            "abas": ["vendedores", *(["supervisores"] if self.estados_supervisor(permitidos, equipes) else [])],
+            "abas": ["vendedores", *(["supervisores"] if self.estados_supervisor(permitidos, equipes) else []),
+                     "comissao"],
             "mes": _mes(i),
             "meses": [_mes(m) for m in meses],
             "situacao": "final" if hoje > _fim(i) else "prevista",
@@ -290,13 +313,15 @@ class Premiacoes:
 
     def calcular(self, aba: str | None = None, mes: str | None = None, permitidos: set[int] | None = None,
                  equipes: set[str] | None = None) -> dict:
-        """aba: vendedores ou supervisores (vazio = vendedores); mes: AAAA-MM (vazio = o mês dos dados).
+        """aba: vendedores, supervisores ou comissao (vazio = vendedores); mes: AAAA-MM (vazio = o mês dos dados).
         permitidos/equipes: o que o usuário vê (None = sem limite), como na página de Metas."""
         aba = aba or "vendedores"
         if aba not in ABAS:
             raise ValueError(f"aba desconhecida: {aba}")
         if aba == "supervisores":
             return self.supervisores(mes, permitidos, equipes)
+        if aba == "comissao":
+            return self.comissao(mes, permitidos, equipes)
         return self.vendedores(mes, permitidos, equipes)
 
     # --- vendedores --------------------------------------------------------------------------
@@ -548,6 +573,116 @@ class Premiacoes:
             "dias_atraso": cfg["inadimplencia"]["dias"],
             "produtos_fora_mix": self._nomes_produtos(cfg["produtos_fora_mix"]),
             "motivos_improprios": self._nomes_motivos(cfg["motivos_improprios"]),
+            "sem_brindes": bool(cache.sem_brindes),
+            "avisos": self.calc.avisos() + avisos,
+        }
+
+    # --- comissão ----------------------------------------------------------------------------
+    def _movimento_comissao(self, de: dt.date, ate: dt.date, motivos: list[int]) -> dict[int, dict[int, dict]]:
+        """{vendedor: {produto: vendido, comissão gravada, devolvido, brindes}} do mês, só de tipo CLIENTE."""
+        cache = self.calc.cache
+        mov: dict[int, dict[int, dict]] = {}
+
+        def x(vid, pid):
+            return mov.setdefault(vid, {}).setdefault(
+                pid, {"vendido": 0.0, "comissao": 0.0, "devolvido": 0.0, "brindes": 0.0})
+
+        for vid, pid, valor, com in cache.consulta(
+                "SELECT id_vendedor, id_produto, SUM(valor), SUM(comissao) FROM comissoes_vendas "
+                "WHERE tipocliente = 'CLIENTE' AND data BETWEEN ? AND ? GROUP BY 1, 2", [de, ate]):
+            x(vid, pid)["vendido"] += valor
+            x(vid, pid)["comissao"] += com
+        for vid, pid, valor in cache.consulta(
+                "SELECT id_vendedor, id_produto, SUM(valor) FROM devolucoes_clientes_itens WHERE tipocliente = 'CLIENTE' "
+                "AND NOT cancelada AND data BETWEEN ? AND ? GROUP BY 1, 2", [de, ate]):
+            x(vid, pid)["devolvido"] += valor
+        if motivos and not cache.sem_brindes:
+            for vid, pid, valor in cache.consulta(
+                    "SELECT id_vendedor, id_produto, SUM(valor) FROM brindes_clientes_itens WHERE tipocliente = "
+                    f"'CLIENTE' AND data BETWEEN ? AND ? AND id_motivo IN ({','.join('?' * len(motivos))}) GROUP BY 1, 2",
+                    [de, ate, *motivos]):
+                x(vid, pid)["brindes"] += valor
+        return mov
+
+    def comissao(self, mes: str | None = None, permitidos: set[int] | None = None,
+                 equipes: set[str] | None = None) -> dict:
+        """A comissão de cada vendedor das equipes BA e ES no mês: a das vendas (gravada pelo ERP) menos as devoluções e
+        os brindes escolhidos × o % de hoje da tabela do vendedor para o produto."""
+        self._conferir(detalhe=True)
+        cache = self.calc.cache
+        if cache.sem_comissao:
+            raise RuntimeError("a comissão das vendas ainda não chegou do computador da empresa; a aba aparece depois "
+                               "da próxima atualização")
+        i, meses = self._escolher_mes(mes, self.meses_dados(), "com dados")
+        regras = self.calc.regras()
+        motivos = self.config.atual()["comissao"]["motivos_brindes"]
+        pcts = {(v, p): pct for v, p, pct in cache.consulta(
+            "SELECT id_vendedor, id_produto, MAX(pct) FROM comissoes_percentuais GROUP BY 1, 2")}
+        mov = self._movimento_comissao(_inicio(i), _fim(i), motivos)
+
+        estados = {}
+        for vid in mov:
+            estado = regras.grupo_conhecido(vid)
+            if estado in ESTADOS and (equipes is None or estado in equipes) \
+                    and (permitidos is None or vid in permitidos):
+                estados[vid] = estado
+        nomes_produtos = {p["id"]: p["nome"] for p in self._nomes_produtos(
+            sorted({pid for vid in estados for pid in mov[vid]}))}
+        nomes = self.nomes()
+        linhas = []
+        for vid, estado in estados.items():
+            produtos = []
+            for pid, r in mov[vid].items():
+                pct_tabela = pcts.get((vid, pid))
+                taxa = (pct_tabela or 0.0) / 100
+                produtos.append({
+                    "id": pid, "nome": nomes_produtos.get(pid) or f"Produto {pid}",
+                    "vendido": r["vendido"], "comissao": r["comissao"], "pct": _div(r["comissao"], r["vendido"]),
+                    "devolvido": r["devolvido"], "brindes": r["brindes"],
+                    "pct_tabela": None if pct_tabela is None else pct_tabela / 100,
+                    "desc_devolucoes": r["devolvido"] * taxa, "desc_brindes": r["brindes"] * taxa,
+                    "liquido": r["comissao"] - (r["devolvido"] + r["brindes"]) * taxa,
+                    "sem_pct": pct_tabela is None and bool(r["devolvido"] or r["brindes"]),
+                })
+            soma = lambda k: sum(p[k] for p in produtos)  # noqa: E731
+            vendido, com_bruta = soma("vendido"), soma("comissao")
+            if not (vendido or soma("devolvido") or soma("brindes")):
+                continue
+            produtos.sort(key=lambda p: (-p["comissao"], -p["devolvido"] - p["brindes"], p["nome"]))
+            c, d, b = round(com_bruta, 2), round(soma("desc_devolucoes"), 2), round(soma("desc_brindes"), 2)
+            linhas.append({
+                "id": vid, "nome": nomes.get(vid) or f"Vendedor {vid}", "estado": estado,
+                "vendido": round(vendido, 2), "comissao_vendas": c, "pct": _div(com_bruta, vendido),
+                "devolvido": round(soma("devolvido"), 2), "desc_devolucoes": d,
+                "brindes": round(soma("brindes"), 2), "desc_brindes": b, "a_pagar": round(c - d - b, 2),
+                "sem_pct": round(sum(p["devolvido"] + p["brindes"] for p in produtos if p["sem_pct"]), 2),
+                "produtos": produtos,
+            })
+        linhas.sort(key=lambda v: v["nome"].upper())
+
+        chaves = ("vendido", "comissao_vendas", "devolvido", "desc_devolucoes", "brindes", "desc_brindes", "a_pagar",
+                  "sem_pct")
+        total = {k: round(sum(v[k] for v in linhas), 2) for k in chaves}
+        total.update(pct=_div(total["comissao_vendas"], total["vendido"]), vendedores=len(linhas))
+        por_estado = [{"estado": e, "vendedores": sum(1 for v in linhas if v["estado"] == e),
+                       "a_pagar": round(sum(v["a_pagar"] for v in linhas if v["estado"] == e), 2)}
+                      for e in ESTADOS if any(v["estado"] == e for v in linhas)]
+        avisos = []
+        if cache.sem_brindes:
+            avisos.append("Os brindes ainda não chegaram do computador da empresa: a comissão está sem o desconto deles "
+                          "até a próxima atualização.")
+        sem_pct = [p for v in linhas for p in v["produtos"] if p["sem_pct"]]
+        if sem_pct:
+            valor = f"{total['sem_pct']:,.2f}".replace(",", "§").replace(".", ",").replace("§", ".")
+            avisos.append(f"R$ {valor} em devoluções e brindes ({len(sem_pct)} produto{'s' if len(sem_pct) != 1 else ''} "
+                          "de algum vendedor) não descontam: o vendedor não tem % de comissão para o produto na tabela "
+                          "do ERP. Veja em Comissão por produto.")
+        return {
+            **self._base("comissao", i, meses, permitidos, equipes),
+            "vendedores": linhas,
+            "total": total,
+            "por_estado": por_estado,
+            "motivos_brindes": self._nomes_motivos(motivos),
             "sem_brindes": bool(cache.sem_brindes),
             "avisos": self.calc.avisos() + avisos,
         }

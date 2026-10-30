@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +30,21 @@ BRINDES = [
     (D(2026, 9, 9), BA, 2, "FUNCIONARIO", 27, 16, 999.0, 1.0),     # código de outro cadastro: fica fora
     (D(2026, 8, 9), ES, 1, "CLIENTE", 27, 16, 70.0, 1.0),          # outro mês
 ]
+# Comissão. Vendas com a comissão que o ERP gravou (data, vendedor, tipo, produto, valor, comissão) e a tabela de hoje
+# (vendedor, produto, %). O Rubens (ES) tinha 1% na mussarela no dia da venda e hoje tem 2%; a manteiga saiu com 0%.
+COMISSAO_VENDAS = [
+    (D(2026, 9, 2), ES, "CLIENTE", 32, 1000.0, 10.0),
+    (D(2026, 9, 2), ES, "CLIENTE", 27, 300.0, 0.0),        # vendida antes de a manteiga ter % na tabela
+    (D(2026, 9, 15), ES, "CLIENTE", 3643, 200.0, 4.0),     # sem % na tabela hoje (o gravado vale)
+    (D(2026, 9, 20), ES, "FUNCIONARIO", 32, 80.0, 0.0),    # funcionário: fora
+    (D(2026, 9, 3), BA, "CLIENTE", 32, 5000.0, 75.0),
+    (D(2026, 9, 3), BA, "CLIENTE", 999, 400.0, 0.0),
+    (D(2026, 8, 10), BA, "CLIENTE", 32, 4000.0, 60.0),     # agosto
+    (D(2026, 9, 5), EDIR, "CLIENTE", 32, 700.0, 70.0),     # Edir: comissão sobre o recebimento, fica fora
+    (D(2026, 9, 6), 501, "CLIENTE", 32, 100.0, 15.0),      # terceiro, sem equipe: fora
+]
+PERCENTUAIS = [(ES, 32, 2.0), (ES, 27, 3.0), (BA, 32, 1.5), (EDIR, 32, 10.0)]
+BRINDE_SEM_PCT = (D(2026, 9, 10), BA, 2, "CLIENTE", 999, 12, 40.0, 1.0)  # danificado no cliente; sem % na tabela
 
 
 class ConfigFixa:
@@ -114,6 +130,20 @@ class TestRegras(unittest.TestCase):
             with self.subTest(nome), self.assertRaises(ValueError):
                 _valida(c)
 
+    def test_comissao_nas_regras(self):
+        self.assertEqual(_valida(padrao())["comissao"], {"motivos_brindes": [10, 11, 12, 16]})
+        antiga = padrao()
+        del antiga["comissao"]  # versão salva antes da aba Comissão
+        self.assertEqual(_valida(antiga)["comissao"], {"motivos_brindes": [10, 11, 12, 16]})
+        cfg = padrao()
+        cfg["comissao"]["motivos_brindes"] = ["16", 12, 16]
+        self.assertEqual(_valida(cfg)["comissao"]["motivos_brindes"], [12, 16])
+        cfg["comissao"]["motivos_brindes"] = []
+        self.assertEqual(_valida(cfg)["comissao"]["motivos_brindes"], [])  # nenhum brinde desconta
+        cfg["comissao"]["motivos_brindes"] = ["vencido"]
+        with self.assertRaises(ValueError):
+            _valida(cfg)
+
 
 class TestPremiacoes(unittest.TestCase):
     def setUp(self):
@@ -145,7 +175,8 @@ class TestPremiacoes(unittest.TestCase):
     # --- vendedores --------------------------------------------------------------------------
     def test_vendedores(self):
         r = self.montar().calcular("vendedores")
-        self.assertEqual((r["mes"]["valor"], r["situacao"], r["abas"]), ("2026-09", "final", ["vendedores", "supervisores"]))
+        self.assertEqual((r["mes"]["valor"], r["situacao"], r["abas"]),
+                         ("2026-09", "final", ["vendedores", "supervisores", "comissao"]))
         linhas = {v["id"]: v for v in r["vendedores"]}
         self.assertEqual(set(linhas), {ES, BA, EDIR})  # o 150 tem meta 0
         es, ba, edir = linhas[ES], linhas[BA], linhas[EDIR]
@@ -161,8 +192,8 @@ class TestPremiacoes(unittest.TestCase):
         self.assertEqual([v["id"] for v in p.vendedores(permitidos={BA})["vendedores"]], [BA])
         r = p.calcular("vendedores", "2026-09", None, {"ES"})
         self.assertEqual([v["id"] for v in r["vendedores"]], [ES])
-        self.assertEqual(r["abas"], ["vendedores", "supervisores"])
-        self.assertEqual(p.calcular("vendedores", None, {BA}, {"BA"})["abas"], ["vendedores"])  # só alguns vendedores
+        self.assertEqual(r["abas"], ["vendedores", "supervisores", "comissao"])
+        self.assertEqual(p.calcular("vendedores", None, {BA}, {"BA"})["abas"], ["vendedores", "comissao"])  # só alguns
 
     def test_meses(self):
         p = self.montar()
@@ -271,6 +302,108 @@ class TestPremiacoes(unittest.TestCase):
         self.assertIn(12551, produtos)  # na lista, mesmo sem venda
 
 
+class TestComissao(unittest.TestCase):
+    """Setembro/26: o Rubens (ES) e a Thais (BA). Devoluções do cache sintético: ES 100 de mussarela (motivo 1) e 50 de
+    manteiga (motivo 3), BA 250 de mussarela (e 500 cancelada)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.pasta = Path(self._tmp.name)
+
+    def tearDown(self):
+        self.calc.cache._con.close()
+        self._tmp.cleanup()
+
+    def montar(self, cfg=None, comissao=True, brindes=True):
+        pasta = Path(tempfile.mkdtemp(dir=self.pasta))  # um cache novo a cada montagem
+        self.calc = criar_calc(pasta, brindes=brindes, linhas_brindes=[*BRINDES, BRINDE_SEM_PCT] if brindes else (),
+                               comissao=comissao, linhas_comissao=COMISSAO_VENDAS, percentuais=PERCENTUAIS)
+        self.p = Premiacoes(self.calc, ConfigFixa(cfg), lambda: {ES: "Rubens", BA: "Thais", EDIR: "Edir"})
+        return self.p
+
+    def test_comissao(self):
+        r = self.montar().calcular("comissao", "2026-09")
+        self.assertEqual((r["aba"], r["situacao"], r["abas"]), ("comissao", "final", ["vendedores", "supervisores", "comissao"]))
+        linhas = {v["id"]: v for v in r["vendedores"]}
+        self.assertEqual(set(linhas), {ES, BA})  # o Edir e o terceiro ficam fora
+        es, ba = linhas[ES], linhas[BA]
+        # ES: a comissão gravada (10 + 0 + 4), não a tabela de hoje; o funcionário fica fora
+        self.assertEqual((es["estado"], es["vendido"], es["comissao_vendas"]), ("ES", 1500, 14))
+        self.assertAlmostEqual(es["pct"], 14 / 1500)
+        # devoluções de todos os motivos × % de hoje: 100 × 2% + 50 × 3%; brinde vencido 30 × 3% (a degustação não conta)
+        self.assertEqual((es["devolvido"], es["desc_devolucoes"], es["brindes"], es["desc_brindes"], es["a_pagar"]),
+                         (150, 3.5, 30, 0.9, 9.6))
+        prod = {p["id"]: p for p in es["produtos"]}
+        self.assertEqual([p["id"] for p in es["produtos"]], [32, 3643, 27])  # pela comissão
+        self.assertEqual((prod[32]["pct"], prod[32]["pct_tabela"], prod[32]["liquido"]), (0.01, 0.02, 8))
+        self.assertAlmostEqual(prod[27]["liquido"], -2.4)  # vendida sem comissão e devolvida a 3%
+        self.assertEqual((prod[3643]["pct_tabela"], prod[3643]["sem_pct"]), (None, False))  # sem desconto a fazer
+        # BA: a devolução cancelada não conta; o brinde do produto sem % na tabela não desconta
+        self.assertEqual((ba["vendido"], ba["comissao_vendas"], ba["desc_devolucoes"], ba["brindes"], ba["desc_brindes"],
+                          ba["a_pagar"], ba["sem_pct"]), (5400, 75, 3.75, 40, 0, 71.25, 40))
+        self.assertTrue(next(p for p in ba["produtos"] if p["id"] == 999)["sem_pct"])
+        t = r["total"]
+        self.assertEqual((t["vendido"], t["comissao_vendas"], t["desc_devolucoes"], t["desc_brindes"], t["a_pagar"],
+                          t["vendedores"]), (6900, 89, 7.25, 0.9, 80.85, 2))
+        self.assertEqual(r["por_estado"], [{"estado": "BA", "vendedores": 1, "a_pagar": 71.25},
+                                           {"estado": "ES", "vendedores": 1, "a_pagar": 9.6}])
+        self.assertEqual([m["id"] for m in r["motivos_brindes"]], [10, 11, 12, 16])
+        self.assertTrue(any("R$ 40,00" in a and "não descontam" in a for a in r["avisos"]))
+
+    def test_motivos_dos_brindes(self):
+        cfg = padrao()
+        cfg["comissao"]["motivos_brindes"] = [16, 26]  # vencido e degustação
+        es = next(v for v in self.montar(cfg).comissao("2026-09")["vendedores"] if v["id"] == ES)
+        self.assertEqual((es["brindes"], es["desc_brindes"]), (50, 1.3))  # 30 × 3% + 20 × 2%
+        self.calc.cache._con.close()
+        cfg["comissao"]["motivos_brindes"] = []
+        es = next(v for v in self.montar(cfg).comissao("2026-09")["vendedores"] if v["id"] == ES)
+        self.assertEqual((es["brindes"], es["desc_brindes"], es["a_pagar"]), (0, 0, 10.5))
+
+    def test_comissao_do_acesso(self):
+        p = self.montar()
+        self.assertEqual([v["id"] for v in p.comissao("2026-09", {BA})["vendedores"]], [BA])
+        self.assertEqual([v["id"] for v in p.comissao("2026-09", None, {"ES", "EDIR"})["vendedores"]], [ES])
+        self.assertEqual(p.comissao("2026-09", None, {"EDIR"})["vendedores"], [])
+        self.assertEqual(p.calcular("comissao", "2026-09", {ES}, {"ES"})["abas"], ["vendedores", "comissao"])
+
+    def test_meses(self):
+        p = self.montar()
+        r = p.comissao("2026-08")  # sem META CLIENTE em agosto: a comissão vale assim mesmo
+        # o Rubens não vendeu em agosto, mas o brinde vencido de 70 × 3% desconta
+        self.assertEqual([(v["id"], v["comissao_vendas"], v["a_pagar"]) for v in r["vendedores"]],
+                         [(ES, 0, -2.1), (BA, 60, 60)])
+        self.assertEqual(r["meses"][0]["valor"], "2026-09")
+        self.assertEqual(r["meses"][-1]["valor"], "2026-01")  # do início dos dados
+        self.assertEqual(p.comissao()["mes"]["valor"], "2026-09")  # o mês dos dados
+        with self.assertRaises(ValueError):
+            p.comissao("2026-10")
+        with self.assertRaises(ValueError):
+            p.vendedores("2026-08")  # a aba Vendedores segue só com os meses com meta
+
+    def test_a_pagar_negativo(self):
+        p = self.montar()
+        cache = self.calc.cache
+        cache._con.close()
+        con = duckdb.connect(str(cache.arquivo))
+        con.execute("INSERT INTO devolucoes_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [D(2026, 9, 25), ES, 1, "CLIENTE", 32, 2, False, 1000.0, 1.0])
+        con.close()
+        cache._abrir()
+        es = next(v for v in p.comissao("2026-09")["vendedores"] if v["id"] == ES)
+        self.assertEqual((es["desc_devolucoes"], es["a_pagar"]), (23.5, -10.4))  # 3,5 + 1000 × 2%; 14 − 23,5 − 0,9
+
+    def test_sem_comissao_ou_sem_brindes(self):
+        with self.assertRaises(RuntimeError):
+            self.montar(comissao=False).comissao("2026-09")
+        self.calc.cache._con.close()
+        r = self.montar(brindes=False).comissao("2026-09")
+        es = next(v for v in r["vendedores"] if v["id"] == ES)
+        self.assertTrue(r["sem_brindes"])
+        self.assertEqual((es["desc_brindes"], es["a_pagar"]), (0, 10.5))
+        self.assertTrue(any("brindes ainda não chegaram" in a for a in r["avisos"]))
+
+
 class TestConfigNoBanco(BaseBanco):
     def test_grava_versoes(self):
         cfg = ConfigPremiacoes(self.banco)
@@ -286,6 +419,16 @@ class TestConfigNoBanco(BaseBanco):
         ruim["supervisores"]["receita"]["peso"] = 0.5
         with self.assertRaises(ValueError):
             cfg.salvar(ruim)
+
+    def test_versao_antiga_sem_comissao(self):
+        antiga = padrao()
+        del antiga["comissao"]
+        antiga["vendedores"]["faixas"] = [{"min": 0.9, "valor": 100.0}]
+        with self.banco.conexao() as con:
+            con.execute("INSERT INTO regras (nome, dados) VALUES ('premiacoes', %s::jsonb)", [json.dumps(antiga)])
+        cfg = ConfigPremiacoes(self.banco).atual()
+        self.assertEqual((cfg["vendedores"]["faixas"], cfg["comissao"]),
+                         ([{"min": 0.9, "valor": 100.0}], {"motivos_brindes": [10, 11, 12, 16]}))
 
 
 if __name__ == "__main__":

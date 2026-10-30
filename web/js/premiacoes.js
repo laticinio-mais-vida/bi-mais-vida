@@ -1,14 +1,19 @@
 // Página Premiações: as páginas "Premiacao Vendedores" e "Premiacao Supervisores" do Power BI numa só, com uma aba para
-// cada uma, como as abas da página de Metas. A conta fica no servidor (bi/premiacoes.py); aqui é a apresentação: os
-// cartões, a tabela dos vendedores (que vira imagem para o WhatsApp), os quadros dos supervisores e o passo a passo.
+// cada uma, como as abas da página de Metas, e a aba Comissão (a comissão dos vendedores das equipes BA e ES). A conta
+// fica no servidor (bi/premiacoes.py); aqui é a apresentação: os cartões, as tabelas dos vendedores e da comissão (que
+// viram imagem para o WhatsApp), os quadros dos supervisores, a comissão por produto e o passo a passo.
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { ligarCaptura } from "./relatorio.js";
 
-const ABAS = { vendedores: { titulo: "Vendedores", icone: "usuario" }, supervisores: { titulo: "Supervisores", icone: "pessoas" } };
+const ABAS = {
+  vendedores: { titulo: "Vendedores", icone: "usuario" },
+  supervisores: { titulo: "Supervisores", icone: "pessoas" },
+  comissao: { titulo: "Comissão", icone: "moeda" },
+};
 const nomeMes = (m) => MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1);
 
 let ctx = null;
-const estado = { aba: "vendedores", mes: null, dados: null, pedido: 0, abertos: new Set() };
+const estado = { aba: "vendedores", mes: null, dados: null, pedido: 0, abertos: new Set(), vendedor: null };
 
 export function montarPremiacoes(container, contexto) {
   ctx = contexto;
@@ -52,6 +57,9 @@ export function montarPremiacoes(container, contexto) {
   });
   container.querySelector("#p-mes").addEventListener("change", (e) => { estado.mes = e.target.value; carregar(); });
   container.querySelector("#p-conteudo").addEventListener("click", aoClicar);
+  container.querySelector("#p-conteudo").addEventListener("change", (e) => {
+    if (e.target.id === "p-com-vendedor") trocarVendedor(Number(e.target.value));
+  });
   window.addEventListener("resize", posicionarIndicador);
   marcarAba();
   carregar();
@@ -107,7 +115,7 @@ async function carregar(silencioso = false) {
     ctx.subtitulo(d);
     document.getElementById("p-avisos").innerHTML = (d.avisos || [])
       .map((a) => `<div class="aviso">${icone("alerta")}<span>${esc(a)}</span></div>`).join("");
-    conteudo.innerHTML = d.aba === "supervisores" ? renderSupervisores(d) : renderVendedores(d);
+    conteudo.innerHTML = d.aba === "supervisores" ? renderSupervisores(d) : d.aba === "comissao" ? renderComissao(d) : renderVendedores(d);
     ligarCaptura(conteudo);
     animarContadores(conteudo);
     animarEntradas(conteudo);
@@ -124,8 +132,11 @@ async function carregar(silencioso = false) {
       if (!silencioso) toast(e.message, "erro");
       return carregar(silencioso);
     }
-    conteudo.innerHTML = `<div class="cartao secao vazio">${icone(e.status === 403 ? "cadeado" : "alerta")}<p>${e.status === 403 ? "" : "Não foi possível carregar: "}${esc(e.message)}</p></div>`;
-    if (!silencioso && e.status !== 403) toast(e.message, "erro");
+    // 503: os dados da aba ainda não chegaram do computador da empresa (não é erro)
+    const espera = e.status === 503;
+    const msg = espera ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : e.message;
+    conteudo.innerHTML = `<div class="cartao secao vazio">${icone(e.status === 403 ? "cadeado" : espera ? "relogio" : "alerta")}<p>${e.status === 403 || espera ? "" : "Não foi possível carregar: "}${esc(msg)}</p></div>`;
+    if (!silencioso && e.status !== 403 && !espera) toast(e.message, "erro");
   } finally {
     if (pedido === estado.pedido) conteudo.classList.remove("recarregando");
   }
@@ -140,6 +151,12 @@ function preencherPeriodo(d) {
 }
 
 function aoClicar(e) {
+  const linha = e.target.closest("tr[data-vendedor]");
+  if (linha) {
+    trocarVendedor(Number(linha.dataset.vendedor));
+    document.getElementById("p-com-det")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
   const b = e.target.closest("[data-abrir]");
   if (!b) return;
   const id = b.dataset.abrir;
@@ -424,6 +441,193 @@ function comoSupervisores(d, i) {
           <li>Só vendas a cliente: o Power BI ligava venda a funcionário ou fornecedor pelo código, que pode coincidir com o
             de um cliente.</li>
           <li>Os vendedores de cada estado vêm das Configurações das metas e do ERP, não de uma lista fixa de nomes.</li>
+        </ul>
+      </div>
+    </details>
+  </section>`;
+}
+
+// ---------- comissão ----------
+const desconto = (v) => (v ? `− ${fmt.moeda2(v)}` : "—");
+const valorOuTraco = (v) => (v ? fmt.moeda2(v) : "—");
+const pctComissao = (v) => (v == null ? "—" : fmt.pct(v, 2));
+
+// "BRINDE - DANIFICADO NO CLIENTE" -> "Danificado no cliente"
+function motivoCurto(nome) {
+  const s = nome.replace(/^BRINDE\s*-\s*/i, "").toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Para os cartões e a imagem: "danificados e vencidos" no padrão; com outros motivos, os códigos.
+function rotuloBrindes(motivos) {
+  if (!motivos.length) return "(nenhum motivo)";
+  const tipo = (m) => (!/^BRINDE/i.test(m.nome) ? "outros" : /DANIFICADO/i.test(m.nome) ? "danificados"
+    : /VENCIDO/i.test(m.nome) ? "vencidos" : "outros");
+  const tipos = new Set(motivos.map(tipo));
+  return tipos.has("outros") ? `dos motivos ${motivos.map((m) => m.id).join(", ")}` : [...tipos].join(" e ");
+}
+
+function renderComissao(d) {
+  const t = d.total;
+  if (!d.vendedores.length) {
+    return `<section class="cartao secao vazio entra" style="--i:1">${icone("moeda")}<p>Nenhum vendedor das equipes BA e ES do seu acesso vendeu em ${esc(d.mes.rotulo)}.</p></section>
+      ${comoComissao(d, 2)}`;
+  }
+  const brindes = rotuloBrindes(d.motivos_brindes);
+  const aPagar = kpi({
+    i: 1, cor: "var(--ok-forte)", ic: "moeda", rotulo: "Comissão a pagar", valor: fmt.moeda2(0), contar: t.a_pagar,
+    extra: seloSituacao(d),
+    meta: `<b>${t.vendedores}</b> vendedor${t.vendedores === 1 ? "" : "es"} das equipes BA e ES em ${esc(d.mes.rotulo)}`,
+    rodape: d.por_estado.map((e) => [`${e.estado} · ${e.vendedores} vendedor${e.vendedores === 1 ? "" : "es"}`, fmt.moeda2(e.a_pagar)]),
+  });
+  const vendas = kpi({
+    i: 2, cor: "var(--s-fat)", ic: "recibo", rotulo: "Comissão das vendas", valor: fmt.moeda2(0), contar: t.comissao_vendas,
+    meta: `sobre <b>${fmt.moeda(t.vendido)}</b> vendidos a clientes (${pctComissao(t.pct)} em média)`,
+    rodape: [["como o ERP gravou em cada venda", ""]],
+  });
+  const devolucoes = kpi({
+    i: 3, cor: "var(--ruim-forte)", ic: "devolucao", rotulo: "Desconto das devoluções", valor: fmt.moeda2(0), contar: t.desc_devolucoes,
+    meta: `de <b>${fmt.moeda(t.devolvido)}</b> devolvidos (todos os motivos)`,
+    rodape: [["× o % de hoje da tabela", ""]],
+  });
+  const descBrindes = kpi({
+    i: 4, cor: "var(--atencao-forte)", ic: "caixa", rotulo: "Desconto dos brindes", valor: fmt.moeda2(0), contar: t.desc_brindes,
+    meta: d.sem_brindes ? "os brindes ainda não chegaram do computador da empresa" : `de <b>${fmt.moeda(t.brindes)}</b> em brindes ${esc(brindes)}`,
+    rodape: d.motivos_brindes.slice(0, 4).map((m) => [`${m.id} · ${esc(motivoCurto(m.nome))}`, ""]),
+  });
+  return `<section class="kpis secao n4 pr-kpis">${aPagar}${vendas}${devolucoes}${descBrindes}</section>
+    ${tabelaComissao(d, 5, brindes)}
+    ${detalheComissao(d, 6)}
+    ${comoComissao(d, 7)}`;
+}
+
+function tabelaComissao(d, i, brindes) {
+  const t = d.total;
+  const linhas = d.vendedores.map((v, k) => `<tr style="--i:${k}" data-vendedor="${v.id}" title="Ver a comissão por produto">
+      <td class="rotulo">${esc(v.nome)}</td>
+      <td class="centro">${esc(v.estado)}</td>
+      <td>${fmt.moeda2(v.vendido)}</td>
+      <td>${fmt.moeda2(v.comissao_vendas)}</td>
+      <td>${pctComissao(v.pct)}</td>
+      <td>${valorOuTraco(v.devolvido)}</td>
+      <td class="pr-desc">${desconto(v.desc_devolucoes)}</td>
+      <td>${d.sem_brindes ? "…" : valorOuTraco(v.brindes)}</td>
+      <td class="pr-desc">${desconto(v.desc_brindes)}</td>
+      <td class="total${v.a_pagar < 0 ? " pr-neg" : ""}">${fmt.moeda2(v.a_pagar)}</td></tr>`).join("");
+  const corpo = `
+    <div class="relatorio-cab">
+      <img src="/img/logo-maisvida.png" alt="Mais Vida">
+      <div>
+        <div class="rt">Comissão dos vendedores · ${esc(d.mes.rotulo)}</div>
+        <div class="rs">${d.situacao === "final" ? "Mês fechado" : "Prevista (mês em andamento)"} · dados até ${fmt.semana(d.data_ref)}, ${fmt.data(d.data_ref)}</div>
+      </div>
+      <div class="rl"><span>Vendas: comissão gravada no ERP</span><span>Descontos: devoluções e brindes ${esc(brindes)}</span></div>
+    </div>
+    <table class="relatorio-tabela pr-tabela pr-com">
+      <thead><tr><th>Vendedor</th><th>Estado</th><th>Vendido</th><th>Comissão das vendas</th><th>% médio</th>
+        <th>Devolvido</th><th>− Comissão</th><th>Brindes</th><th>− Comissão</th><th class="total">A pagar</th></tr></thead>
+      <tbody>${linhas}</tbody>
+      <tfoot><tr><td class="rotulo">Total</td><td class="centro">${t.vendedores}</td><td>${fmt.moeda2(t.vendido)}</td>
+        <td>${fmt.moeda2(t.comissao_vendas)}</td><td>${pctComissao(t.pct)}</td><td>${valorOuTraco(t.devolvido)}</td>
+        <td class="pr-desc">${desconto(t.desc_devolucoes)}</td><td>${d.sem_brindes ? "…" : valorOuTraco(t.brindes)}</td>
+        <td class="pr-desc">${desconto(t.desc_brindes)}</td><td class="total${t.a_pagar < 0 ? " pr-neg" : ""}">${fmt.moeda2(t.a_pagar)}</td></tr></tfoot>
+    </table>`;
+  const arquivo = `comissao-vendedores-${d.mes.valor}`;
+  return `
+  <section class="cartao secao entra" style="--i:${i}">
+    <div class="cartao-cab">
+      <div><h3>${icone("moeda")}Comissão dos vendedores</h3>
+        <p class="sub">Comissão das vendas a clientes − devoluções − brindes ${esc(brindes)} · clique num vendedor para ver por produto</p></div>
+      <div class="acoes-relatorio">
+        <button class="btn" data-captura="copiar" data-arquivo="${arquivo}" title="Copia a tabela como imagem para colar no WhatsApp">${icone("disco")}Copiar imagem</button>
+        <button class="btn icone" data-captura="baixar" data-arquivo="${arquivo}" title="Baixar a tabela como imagem (PNG)">${icone("abaixo")}</button>
+      </div>
+    </div>
+    <div class="tabela-rolagem relatorio-rolagem"><div class="relatorio">${corpo}</div></div>
+  </section>`;
+}
+
+function trocarVendedor(id) {
+  const d = estado.dados;
+  if (!d || d.aba !== "comissao") return;
+  estado.vendedor = id;
+  const sec = document.getElementById("p-com-det");
+  if (!sec) return;
+  sec.outerHTML = detalheComissao(d, 0, false);
+  ligarTooltips(document.getElementById("p-com-det"));
+}
+
+function detalheComissao(d, i, entrar = true) {
+  const v = d.vendedores.find((x) => x.id === estado.vendedor) || d.vendedores[0];
+  const opcoes = d.vendedores.map((x) => `<option value="${x.id}"${x.id === v.id ? " selected" : ""}>${esc(x.nome)} (${esc(x.estado)})</option>`).join("");
+  const linhas = v.produtos.map((p) => {
+    const tabela = p.sem_pct
+      ? `<span class="pr-sem-pct" data-tt="${esc("<div class='tt-t'>Sem % na tabela</div>O vendedor não tem % de comissão para este produto na tabela do ERP: a devolução e o brinde não descontam.")}">sem % na tabela</span>`
+      : pctComissao(p.pct_tabela);
+    return `<tr>
+      <td class="esq">${esc(p.nome)} <small class="fraco">${p.id}</small></td>
+      <td>${valorOuTraco(p.vendido)}</td>
+      <td>${p.vendido ? pctComissao(p.pct) : "—"}</td>
+      <td>${valorOuTraco(p.comissao)}</td>
+      <td>${valorOuTraco(p.devolvido)}</td>
+      <td>${valorOuTraco(p.brindes)}</td>
+      <td>${tabela}</td>
+      <td class="pr-desc">${desconto(p.desc_devolucoes + p.desc_brindes)}</td>
+      <td class="total${p.liquido < -0.005 ? " pr-neg" : ""}">${fmt.moeda2(p.liquido)}</td></tr>`;
+  }).join("");
+  return `
+  <section class="cartao secao${entrar ? " entra" : ""}" style="--i:${i}" id="p-com-det">
+    <div class="cartao-cab">
+      <div><h3>${icone("caixa")}Comissão por produto</h3>
+        <p class="sub">% médio = a comissão que o ERP gravou ÷ o vendido (0% quando a venda saiu sem comissão) · % da tabela = o de hoje, usado nos descontos</p></div>
+      <label class="campo" title="Vendedor"><span class="ic-campo">${icone("usuario")}</span><select id="p-com-vendedor" aria-label="Vendedor">${opcoes}</select></label>
+    </div>
+    <div class="tabela-rolagem">
+      <table class="dados pr-com-prod">
+        <thead><tr><th>Produto</th><th>Vendido</th><th>% médio</th><th>Comissão</th><th>Devolvido</th><th>Brindes</th>
+          <th>% da tabela</th><th>− Descontos</th><th>Líquido</th></tr></thead>
+        <tbody>${linhas || `<tr><td class="esq" colspan="9">Nenhum movimento no mês.</td></tr>`}</tbody>
+        <tfoot><tr><td class="esq">Total de ${esc(v.nome)}</td><td>${fmt.moeda2(v.vendido)}</td><td>${pctComissao(v.pct)}</td>
+          <td>${fmt.moeda2(v.comissao_vendas)}</td><td>${valorOuTraco(v.devolvido)}</td><td>${valorOuTraco(v.brindes)}</td><td></td>
+          <td class="pr-desc">${desconto(v.desc_devolucoes + v.desc_brindes)}</td><td class="total${v.a_pagar < 0 ? " pr-neg" : ""}">${fmt.moeda2(v.a_pagar)}</td></tr></tfoot>
+      </table>
+    </div>
+  </section>`;
+}
+
+function comoComissao(d, i) {
+  const motivos = d.motivos_brindes.length
+    ? d.motivos_brindes.map((m) => `<b>${m.id}</b> (${esc(motivoCurto(m.nome))})`).join(", ")
+    : "nenhum (os brindes não descontam)";
+  return `
+  <section class="cartao secao entra metodo" style="--i:${i}">
+    <details>
+      <summary>
+        <h3>${icone("info")}Como a comissão é calculada</h3>
+        <span class="sub">O % de cada vendedor para cada produto vem do ERP; os descontos, das regras em Configurar</span>
+      </summary>
+      <div class="metodo-corpo">
+        <ol class="metodo-passos">
+          <li><b>Quem entra:</b> os vendedores das equipes BA e ES (pelas Configurações das metas ou pelo supervisor no
+            ERP), que no ERP ganham comissão sobre a venda. O Edir e os terceiros ganham sobre o recebimento e ficam fora.</li>
+          <li><b>O %:</b> é do vendedor para cada produto, na tabela de comissão do ERP (vendedor × produto). Para mudar um
+            %, mude no ERP.</li>
+          <li><b>Comissão das vendas:</b> a que o ERP gravou em cada item de venda a cliente não cancelada: o valor do item
+            × o % do vendedor para o produto no dia da venda. Mudar a tabela depois não muda o que já foi vendido; venda feita
+            antes de o produto ter % na tabela fica sem comissão.</li>
+          <li><b>− Devoluções:</b> todas as devoluções não canceladas do mês (todos os motivos, pela data de entrada), do
+            vendedor que está na devolução, × o % de hoje da tabela para o produto.</li>
+          <li><b>− Brindes:</b> os brindes do mês com motivo ${motivos}, × o % de hoje da tabela. Os motivos ficam em
+            Premiações › Configurar › Comissão.</li>
+          <li><b>A pagar:</b> a comissão das vendas menos os dois descontos. Fica negativa quando as devoluções do mês passam
+            da comissão.</li>
+        </ol>
+        <h4>Bom saber</h4>
+        <ul class="metodo-passos">
+          <li>Devolução ou brinde de um produto sem % na tabela do vendedor não desconta (aparece marcado em Comissão por
+            produto).</li>
+          <li>Só vendas, devoluções e brindes de cliente: venda a funcionário, fornecedor ou produtor não tem comissão no ERP.</li>
+          <li>Enquanto o mês está em andamento, a comissão aparece como prevista.</li>
         </ul>
       </div>
     </details>

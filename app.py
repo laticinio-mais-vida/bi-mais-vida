@@ -823,7 +823,7 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/premiacoes":
                 if "premiacoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Premiações", HTTPStatus.FORBIDDEN)
-                # aba=vendedores|supervisores&mes=2026-10 (vazio = o mês dos dados)
+                # aba=vendedores|supervisores|comissao&mes=2026-10 (vazio = o mês dos dados)
                 return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_premiacoes(usuario)))
             if url.path == "/api/premiacoes/config":
                 return self._json(self.app.premiacoes.config_dados(q.get("mes")))

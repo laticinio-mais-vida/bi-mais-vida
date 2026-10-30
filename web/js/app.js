@@ -89,7 +89,7 @@ const PAGINAS = {
   },
   "config-premiacoes": {
     titulo: "Configurações das premiações",
-    fixo: "Faixas dos vendedores, pesos e metas dos supervisores",
+    fixo: "Faixas dos vendedores, pesos e metas dos supervisores, brindes da comissão",
     pai: "premiacoes",
     admin: true,
     sempreMonta: true,
@@ -152,7 +152,7 @@ const TEXTO_SUBTITULO = {
   metas: (d) => `${d.periodo.rotulo} · ${d.visao.titulo}`,
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   sugestao: (d) => `Meta de ${d.mes.rotulo_meta} · base ${d.mes.rotulo_base} · ${d.estado}`,
-  premiacoes: (d) => `${d.mes.rotulo[0].toUpperCase()}${d.mes.rotulo.slice(1)} · ${d.aba === "supervisores" ? "Supervisores" : "Vendedores"} · ${d.situacao === "final" ? "mês fechado" : "prevista"}`,
+  premiacoes: (d) => `${d.mes.rotulo[0].toUpperCase()}${d.mes.rotulo.slice(1)} · ${{ supervisores: "Supervisores", comissao: "Comissão" }[d.aba] || "Vendedores"} · ${d.situacao === "final" ? "mês fechado" : "prevista"}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,

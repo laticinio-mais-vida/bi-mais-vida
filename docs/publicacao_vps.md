@@ -661,6 +661,20 @@ configuração própria (faixas, pesos, metas e nomes dos supervisores).
 - **Voltar atrás:** o código anterior ignora as regras com nome `premiacoes` (ficam guardadas), o CHECK novo e a tabela de
   brindes do cache.
 
+#### Premiações – aba Comissão (sem migração)
+
+A aba **Comissão** das Premiações calcula a comissão dos vendedores das equipes BA e ES: a comissão gravada no ERP em
+cada venda, menos as devoluções e os brindes danificados e vencidos.
+
+- **Ordem:** qualquer uma; não há migração.
+  - As duas tabelas novas do cache (`comissoes_vendas` e `comissoes_percentuais`) só chegam ao site depois que o painel do
+    PC roda o código novo. Para isso, feche e abra o `iniciar.bat`: a primeira extração lê a comissão (e os brindes, se
+    ainda faltarem) e manda ao site. A leitura da comissão leva uns 8 segundos a mais em cada extração.
+  - Até lá, a aba avisa que a comissão ainda não chegou.
+  - O código anterior do site aceita o cache com as tabelas novas.
+- **As regras:** a seção nova `comissao` (os motivos dos brindes) entra com o padrão nas versões já salvas. O código
+  anterior ignora essa seção.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›
