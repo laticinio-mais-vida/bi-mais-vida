@@ -371,7 +371,7 @@ valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os m
 5. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
 
 Conferência em 30/10/2026 (outubro até 29/10, com os brindes lidos do ERP): vendedores R$ 2.700 (11 de 21 com prêmio).
-Supervisores com as metas fixas do Power BI: BA R$ 4.881,69 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
+Supervisores com as metas fixas do Power BI: BA R$ 4.887,54 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
 R$ 4.843,12 e ES R$ 3.417,62.
 
 ## Página Assistente
