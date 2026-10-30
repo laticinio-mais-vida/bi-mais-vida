@@ -13,8 +13,9 @@
 //   dias anteriores (a que venceu hoje, no horário do prazo, fica no dia). Passado o prazo, quem responde por ela
 //   (quem criou a tarefa; o responsável pela subtarefa) justifica o atraso: as justificativas formam um histórico, que
 //   todos veem. Vencida e aberta, ela bloqueia o painel de quem responde até ele justificar (avisos.js).
-// - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas em A fazer, Fazendo e Concluída. Qualquer pessoa da
-//   tarefa arrasta o card de coluna (e muda a situação dela na janela); clicar abre a janela da tarefa.
+// - Kanban (a outra vista, no lugar da faixa e do dia): as tarefas abertas pelo vencimento do prazo da tarefa (Vencido,
+//   Vence hoje, Vence essa semana, de segunda a domingo, e Vence depois; a coluna vem do servidor) e as concluídas há
+//   pouco. O card não se arrasta: clicar abre a janela da tarefa, onde se muda a situação.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
 // ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
 // subtarefas dela; clicar no nome abre o card já com uma subtarefa nova: escolhe-se o dia, escreve-se o nome, e o dia
@@ -43,12 +44,16 @@ const MAX_ALTURA_TITULO = 220; // px: a caixa do título da subtarefa cresce com
 const REPETICOES = [["nenhuma", "Única"], ["diaria", "Diária"], ["semanal", "Semanal"], ["mensal", "Mensal"], ["intervalo", "A cada N dias"]];
 const TIPOS = [["atividade", "Atividade"], ["tarefa", "Tarefa"]];
 const VISTAS = [["agenda", "Agenda", "calendario"], ["quadro", "Kanban", "quadro"]];
-// A situação de uma tarefa ou subtarefa (a coluna do kanban): o nome, o ícone e o aviso ao mover a tarefa.
+// A situação de uma tarefa ou subtarefa (na janela da tarefa): o nome, o ícone e o aviso ao mudar a da tarefa.
 const SITUACOES = [["a_fazer", "A fazer"], ["fazendo", "Fazendo"], ["concluida", "Concluída"]];
 const NOME_SITUACAO = Object.fromEntries(SITUACOES);
 const ICONE_SITUACAO = { a_fazer: "menos", fazendo: "relogio", concluida: "certo" };
 const MOVIDA = { a_fazer: "Tarefa em A fazer", fazendo: "Tarefa em Fazendo", concluida: "Tarefa concluída" };
-const COLUNA_VAZIA = { a_fazer: "Nenhuma tarefa a fazer", fazendo: "Nenhuma tarefa sendo feita", concluida: "Nenhuma concluída há pouco" };
+// As colunas do kanban: as abertas pelo vencimento (o que o servidor dá) e as concluídas há pouco. A chave, o nome e o
+// texto da coluna vazia.
+const COLUNAS = [["vencido", "Vencido", "Nenhuma tarefa vencida"], ["hoje", "Vence hoje", "Nenhuma tarefa vence hoje"],
+  ["semana", "Vence essa semana", "Nada mais vence nesta semana"], ["depois", "Vence depois", "Nenhuma tarefa para depois"],
+  ["concluida", "Concluídas", "Nenhuma concluída há pouco"]];
 const DESCARTAR_FB = "Descartar o feedback que você estava escrevendo?";
 const DESCARTAR_FORM = "Descartar o que foi preenchido no formulário?";
 const DESCARTAR_JANELA = "Descartar o que você estava escrevendo na tarefa?";
@@ -58,11 +63,11 @@ const CHAVE_VISTA = "mv-agenda-vista";
 let raiz = null, dlg = null, tela = null; // tela: a janela em tela cheia do formulário (dentro de #ag-raiz)
 // tipo: o do formulário (atividade ou tarefa); tf: os participantes e as subtarefas do formulário da tarefa;
 // pessoas: quem pode participar ({eu, pessoas}, carregado na primeira tarefa); editando: {tipo, ...o item}; formDia: o
-// dia em que o formulário abriu. vista: agenda ou quadro (o kanban, com as tarefas de estado.quadro); arrastando: a
-// tarefa cujo card está sendo arrastado. meses: a contagem de cada dia dos meses já vistos, para escolher o dia.
+// dia em que o formulário abriu. vista: agenda ou quadro (o kanban, com as tarefas de estado.quadro). meses: a
+// contagem de cada dia dos meses já vistos, para escolher o dia.
 const estado = { mes: null, dados: null, aberto: null, editando: null, concluindo: null, form: null, formInicial: null, pedido: 0,
                  tipo: "atividade", tf: null, pessoas: null, formDia: null, vista: "agenda", quadro: null, pedidoQuadro: 0,
-                 arrastando: null, meses: new Map() };
+                 meses: new Map() };
 // A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), a justificativa de atraso sendo
 // escrita ("tarefa", o id da subtarefa ou null; uma edição de cada vez), como o que está aberto começou, na subtarefa
 // nova, para quem (o card em que ela foi aberta) e os cards de pessoa recolhidos.
@@ -85,6 +90,11 @@ const todos = (x) => [...x.itens, ...(x.tarefas || [])];
 
 function hojeLocal() {
   const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function somarDias(dia, n) {
+  const d = new Date(`${dia}T12:00`);
+  d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 function somarMes(mes, n) {
@@ -161,10 +171,6 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
   raiz.addEventListener("input", aoDigitar);
   raiz.addEventListener("keydown", aoTeclar);
   raiz.addEventListener("dia-escolhido", aoEscolherDia);
-  raiz.addEventListener("dragstart", aoArrastar);
-  raiz.addEventListener("dragover", aoPassar);
-  raiz.addEventListener("drop", aoSoltar);
-  raiz.addEventListener("dragend", fimDoArraste);
   tela.addEventListener("cancel", (e) => { if (formMudou() && !confirm(DESCARTAR_FORM)) e.preventDefault(); });
   tela.addEventListener("close", () => {
     tela.innerHTML = "";
@@ -298,10 +304,13 @@ function escreverCabecalho() {
   if (estado.vista === "quadro") {
     titulo.textContent = "Kanban das tarefas";
     if (!estado.quadro) return;
-    const conta = (k) => estado.quadro.tarefas.filter((t) => t.situacao === k).length;
-    const atrasadas = estado.quadro.tarefas.filter((t) => t.atrasada).length;
+    const conta = (k) => estado.quadro.tarefas.filter((t) => colunaDe(t) === k).length;
+    const concluidas = conta("concluida"), vencidas = conta("vencido"), hoje = conta("hoje");
     resumo.textContent = estado.quadro.tarefas.length
-      ? `${fmt.num(conta("a_fazer"))} a fazer · ${fmt.num(conta("fazendo"))} fazendo · ${plural(conta("concluida"), "concluída", "concluídas")} há pouco${atrasadas ? ` · ${plural(atrasadas, "atrasada", "atrasadas")}` : ""}`
+      ? [plural(estado.quadro.tarefas.length - concluidas, "aberta", "abertas"),
+         vencidas && plural(vencidas, "vencida", "vencidas"),
+         hoje && `${fmt.num(hoje)} ${hoje === 1 ? "vence" : "vencem"} hoje`,
+         concluidas && `${plural(concluidas, "concluída", "concluídas")} há pouco`].filter(Boolean).join(" · ")
       : "Nenhuma tarefa por aqui";
     return;
   }
@@ -817,8 +826,8 @@ function alternarTarefa(t) {
   return mexer(`/api/agenda/tarefa/${t.feita ? "desfazer" : "concluir"}`, { id: t.id }, t.feita ? "Tarefa reaberta" : "Tarefa concluída");
 }
 
-// Leva a tarefa para outra coluna (arrastando o card ou na janela dela). No kanban, o card já muda de lugar; a
-// resposta confirma (ou o recarregar devolve ele).
+// Muda a situação da tarefa (na janela dela). No kanban, o card já muda: concluída, vai para Concluídas; reaberta,
+// volta para a coluna do prazo. A resposta confirma (ou o recarregar devolve ele).
 function moverTarefa(t, situacao) {
   if (situacao === t.situacao || (situacao === "concluida" && !podeConcluir(t))) return;
   const card = estado.quadro?.tarefas.find((x) => x.id === t.id);
@@ -1660,70 +1669,59 @@ async function carregarQuadro() {
   }
 }
 
-// As três colunas: A fazer e Fazendo pelo prazo; Concluída, as concluídas por último primeiro.
+// A coluna da tarefa no kanban: a concluída em Concluídas; a aberta, a do vencimento do prazo (vem do servidor).
+const colunaDe = (t) => (t.situacao === "concluida" ? "concluida" : t.vencimento);
+
+// O período de cada coluna, embaixo do nome: "30/10", "31/10 a 01/11", "De 02/11 em diante".
+function periodo(k, q) {
+  const amanha = somarDias(q.hoje, 1);
+  if (k === "semana") {
+    if (q.semana_ate === q.hoje) return "A semana acaba hoje";
+    return amanha === q.semana_ate ? dataCurta(amanha) : `${dataCurta(amanha)} a ${dataCurta(q.semana_ate)}`;
+  }
+  return { vencido: "O prazo já passou", hoje: dataCurta(q.hoje), depois: `De ${dataCurta(somarDias(q.semana_ate, 1))} em diante`,
+           concluida: `Nos últimos ${q.dias_concluidas} dias` }[k];
+}
+
+// As colunas: as abertas pelo prazo (no mesmo dia, pelo horário, e as sem horário por último); Concluídas, as
+// concluídas por último primeiro.
 function desenharQuadro(animar) {
   const q = estado.quadro;
-  const colunas = Object.fromEntries(SITUACOES.map(([k]) => [k, []]));
-  q.tarefas.forEach((t) => colunas[t.situacao].push(t));
+  const colunas = Object.fromEntries(COLUNAS.map(([k]) => [k, []]));
+  q.tarefas.forEach((t) => colunas[colunaDe(t)].push(t));
+  const peloPrazo = (a, b) => a.prazo.localeCompare(b.prazo) || (a.hora == null) - (b.hora == null) || (a.hora || "").localeCompare(b.hora || "");
+  for (const [k] of COLUNAS) if (k !== "concluida") colunas[k].sort(peloPrazo);
   colunas.concluida.sort((a, b) => String(b.concluida_em || "~").localeCompare(String(a.concluida_em || "~")));
   escreverCabecalho();
-  raiz.querySelector("#ag-quadro").innerHTML = `<div class="ag-colunas ${animar ? "abre" : ""}">${SITUACOES.map(([k, nome]) => `
+  raiz.querySelector("#ag-quadro").innerHTML = `<div class="ag-colunas ${animar ? "abre" : ""}">${COLUNAS.map(([k, nome, vazia]) => `
       <section class="ag-coluna" data-coluna="${k}" aria-label="${nome}">
-        <h3><i class="ag-st" aria-hidden="true"></i>${nome}<span class="ag-coluna-n">${colunas[k].length}</span></h3>
-        <ul class="ag-cards">${colunas[k].map(cardHtml).join("") || `<li class="ag-coluna-vazia">${COLUNA_VAZIA[k]}</li>`}</ul>
+        <h3><i class="ag-st" aria-hidden="true"></i><span class="ag-coluna-t">${nome}<small>${periodo(k, q)}</small></span><span class="ag-coluna-n">${colunas[k].length}</span></h3>
+        <ul class="ag-cards">${colunas[k].map(cardHtml).join("") || `<li class="ag-coluna-vazia">${vazia}</li>`}</ul>
       </section>`).join("")}</div>
-    <p class="ag-quadro-dica">${icone("info")}Arraste o card para outra coluna, ou abra a tarefa e escolha a situação. As concluídas saem do kanban ${q.dias_concluidas} dias depois.</p>`;
+    <p class="ag-quadro-dica">${icone("info")}Clique no card para abrir a tarefa e mudar a situação. As colunas seguem o prazo da tarefa (a semana vai de segunda a domingo); as concluídas saem do kanban ${q.dias_concluidas} dias depois.</p>`;
 }
 
 function cardHtml(t, n) {
-  const minhas = t.subtarefas.filter((s) => s.minha && !s.feita).length;
+  const minhas = t.subtarefas.filter((s) => s.minha && !s.feita);
+  // as suas que vencem antes da tarefa: o card fica na coluna do prazo da tarefa, com o aviso
+  const vencidas = minhas.filter((s) => s.atrasada).length;
+  const hoje = minhas.filter((s) => !s.atrasada && s.prazo === estado.quadro.hoje).length;
   const chips = [
     t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Concluída em ${dataCurta(t.concluida_em.slice(0, 10))}</span>`
       : `<span class="chip ${t.atrasada ? "ag-c-atrasada" : ""}">${icone(t.atrasada ? "alerta" : "relogio")}${t.atrasada ? "Venceu em" : "Até"} ${prazoTxt(t)}</span>`,
+    t.situacao === "fazendo" ? `<span class="chip ag-c-fazendo">${icone("relogio")}Fazendo</span>` : "",
     !t.eu_criador ? `<span class="chip">${icone("usuario")}De ${esc(t.criador.nome)}</span>` : "",
     t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
-    minhas ? `<span class="chip ag-c-tarefa" title="Subtarefas suas que faltam">${icone("tarefa")}${plural(minhas, "subtarefa sua", "subtarefas suas")}</span>` : "",
+    minhas.length ? `<span class="chip ag-c-tarefa" title="Subtarefas suas que faltam">${icone("tarefa")}${plural(minhas.length, "subtarefa sua", "subtarefas suas")}</span>` : "",
+    vencidas ? `<span class="chip ag-c-atrasada">${icone("alerta")}${vencidas === 1 ? "Sua subtarefa venceu" : `${fmt.num(vencidas)} subtarefas suas venceram`}</span>` : "",
+    hoje ? `<span class="chip ag-c-hoje">${icone("relogio")}${hoje === 1 ? "Sua subtarefa vence hoje" : `${fmt.num(hoje)} subtarefas suas vencem hoje`}</span>` : "",
     t.justificativas.length ? `<span class="chip ag-c-justificada" title="${esc(t.justificativas[0].texto)}">${icone("conversa")}Atraso justificado</span>` : "",
   ].filter(Boolean).join("");
   return `<li class="ag-card ${t.atrasada ? "atrasada" : ""}" style="--i:${n}" data-card="${t.id}" tabindex="0" role="button"
-    ${t.pode.concluir ? 'draggable="true" title="Clique para abrir; arraste para mudar de coluna"' : 'title="Clique para abrir"'} aria-label="Abrir a tarefa ${esc(t.titulo)}">
+    title="Clique para abrir" aria-label="Abrir a tarefa ${esc(t.titulo)}">
     <b>${esc(t.titulo)}</b>
     ${t.descricao ? `<p>${esc(t.descricao)}</p>` : ""}
     <div class="ag-chips">${chips}</div>
     ${t.total ? `<div class="ag-card-prog">${barra(t.feitas, t.total - t.feitas)}<span>${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span></div>` : ""}
   </li>`;
-}
-
-// Arrastar o card (qualquer pessoa da tarefa): a coluna de baixo se destaca e, solto, ele muda de coluna.
-function aoArrastar(e) {
-  const card = e.target.closest?.(".ag-card[draggable]");
-  if (!card) return;
-  estado.arrastando = estado.quadro.tarefas.find((t) => t.id === Number(card.dataset.card));
-  e.dataTransfer.effectAllowed = "move";
-  e.dataTransfer.setData("text/plain", card.dataset.card);
-  requestAnimationFrame(() => card.classList.add("arrastando"));
-}
-
-function aoPassar(e) {
-  if (!estado.arrastando) return;
-  const col = e.target.closest?.(".ag-coluna");
-  const outra = !!col && col.dataset.coluna !== estado.arrastando.situacao;
-  raiz.querySelectorAll(".ag-coluna").forEach((c) => c.classList.toggle("alvo", outra && c === col));
-  if (outra) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  }
-}
-
-function aoSoltar(e) {
-  const col = e.target.closest?.(".ag-coluna"), t = estado.arrastando;
-  if (!col || !t) return;
-  e.preventDefault();
-  fimDoArraste();
-  moverTarefa(t, col.dataset.coluna);
-}
-
-function fimDoArraste() {
-  estado.arrastando = null;
-  raiz.querySelectorAll(".ag-coluna.alvo, .ag-card.arrastando").forEach((x) => x.classList.remove("alvo", "arrastando"));
 }

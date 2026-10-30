@@ -1,5 +1,5 @@
 """Tarefas da agenda (bi/tarefas.py): a conferência do formulário e, no PostgreSQL, quem vê o quê, quem pode o quê, a
-conclusão, as colunas do quadro (kanban), as atrasadas, a edição (com a versão) e o que acontece quando um usuário é
+conclusão, a situação, as colunas do quadro (kanban, pelo vencimento), as atrasadas, a edição (com a versão) e o que acontece quando um usuário é
 excluído.
 
 Os testes com o banco precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
@@ -11,7 +11,7 @@ import unittest
 from bi.agenda import Agenda
 from bi.conversas import NaoEncontrada
 from bi.tarefas import (MAX_SUBTAREFAS, MAX_TITULO_SUB, TITULO_PLANEJAR, Tarefas, _ate_o_prazo, _dias_planejar,
-                         _valida_tarefa)
+                         _valida_tarefa, _vencimento)
 from tests.apoio import BaseBanco, ConfiguracaoFixa
 
 D = dt.date
@@ -57,6 +57,20 @@ class TestValidaTarefa(unittest.TestCase):
             with self.subTest(trecho), self.assertRaises(ValueError) as e:
                 _valida_tarefa(dados, criador=1)
             self.assertIn(trecho, str(e.exception))
+
+    def test_vencimento(self):
+        """A coluna do quadro pelo prazo: a semana vai de segunda a domingo; vencido segue o horário do prazo."""
+        segunda, domingo = dt.datetime(2026, 10, 26), dt.datetime(2026, 11, 1)
+        casos = [(segunda, D(2026, 10, 25), None, "vencido"), (segunda, HOJE, None, "hoje"),
+                 (segunda, D(2026, 10, 27), None, "semana"), (segunda, D(2026, 11, 1), T(18), "semana"),
+                 (segunda, D(2026, 11, 2), None, "depois"), (segunda, D(2026, 11, 30), None, "depois"),
+                 (dt.datetime(2026, 10, 26, 15), HOJE, T(14), "vencido"),
+                 (dt.datetime(2026, 10, 26, 15), HOJE, T(16), "hoje"),
+                 (dt.datetime(2026, 10, 26, 23, 59), HOJE, None, "hoje"),  # sem horário, vence quando o dia acaba
+                 (domingo, D(2026, 11, 1), None, "hoje"), (domingo, D(2026, 11, 2), None, "depois")]
+        for agora, prazo, h, coluna in casos:
+            with self.subTest(agora=agora, prazo=prazo, hora=h):
+                self.assertEqual(_vencimento(prazo, h, agora), coluna)
 
     def test_dias_planejar(self):
         """A automática: no dia em que a pessoa entrou e no seguinte de segunda a sexta; nenhuma, se a tarefa vence
@@ -310,10 +324,14 @@ class TestTarefasNoBanco(BaseBanco):
             self.tarefas.concluir(self.ana, x["id"])
         with self.banco.conexao() as con:  # a antiga foi concluída antes dos 30 dias do quadro
             con.execute("UPDATE agenda_tarefas SET concluida_em = '2026-09-02 10:00-03' WHERE id = %s", [antiga["id"]])
+        depois = self.tarefas.criar(self.ana, {"titulo": "Novembro", "prazo": "2026-11-10"})
         q = self.tarefas.quadro(self.ana)
-        self.assertEqual((q["hoje"], q["dias_concluidas"]), ("2026-10-26", 30))
-        self.assertEqual([(x["titulo"], x["situacao"]) for x in q["tarefas"]],
-                         [("Recente", "concluida"), ("Feira", "a_fazer")])  # pelo prazo
+        self.assertEqual((q["hoje"], q["semana_ate"], q["dias_concluidas"]), ("2026-10-26", "2026-11-01", 30))
+        # pelo prazo; a concluída também diz a coluna do prazo dela, para onde volta se for reaberta
+        self.assertEqual([(x["titulo"], x["situacao"], x["vencimento"]) for x in q["tarefas"]],
+                         [("Recente", "concluida", "vencido"), ("Feira", "a_fazer", "semana"),
+                          ("Novembro", "a_fazer", "depois")])
+        self.tarefas.excluir(self.ana, depois["id"])
         beto = self.tarefas.quadro(self.beto)["tarefas"]  # participa só da feira; vê todas as subtarefas
         self.assertEqual(([x["id"] for x in beto], beto[0]["total"], beto[0]["pode"]["concluir"]), ([t["id"]], 4, True))
         self.assertEqual(self.tarefas.quadro(self.dani)["tarefas"], [])

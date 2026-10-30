@@ -634,7 +634,7 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(self.app.tarefas.pessoas(eu))
         if caminho == "/api/agenda/tarefa":  # id=…: a tarefa aberta, com as subtarefas de todos
             return self._json(self.app.tarefas.obter(eu, q.get("id")))
-        if caminho == "/api/agenda/quadro":  # o kanban: as tarefas por situação (a fazer, fazendo, concluída)
+        if caminho == "/api/agenda/quadro":  # o kanban: as tarefas pelo vencimento e as concluídas
             return self._json(self.app.tarefas.quadro(eu))
         return self._json(self.app.agenda.historico(eu, q.get("id")))
 
@@ -709,7 +709,7 @@ class Manipulador(BaseHTTPRequestHandler):
             t = tarefas.concluir(eu, id_)
         elif caminho == "/api/agenda/tarefa/desfazer":
             t = tarefas.desfazer(eu, id_)
-        elif caminho == "/api/agenda/tarefa/mover":  # situacao: a_fazer, fazendo ou concluida (a coluna do quadro)
+        elif caminho == "/api/agenda/tarefa/mover":  # situacao: a_fazer, fazendo ou concluida (na janela da tarefa)
             t = tarefas.mover(eu, id_, corpo.get("situacao"))
         elif caminho == "/api/agenda/tarefa/justificar":  # justificativa: o porquê do atraso; concluir: e conclui
             t = tarefas.justificar(eu, id_, corpo.get("justificativa"), bool(corpo.get("concluir")))

@@ -691,6 +691,15 @@ para programar a execução desta tarefa", no dia em que entrou e no seguinte, p
   só no dia do prazo. Antes de voltar, apague-as (`DELETE FROM agenda_subtarefas WHERE automatica`); as colunas podem
   ficar.
 
+#### Kanban das tarefas pelo vencimento (sem migração)
+
+O kanban da agenda deixa as colunas A fazer, Fazendo e Concluída e passa a mostrar as tarefas abertas pelo vencimento
+do prazo (Vencido, Vence hoje, Vence essa semana e Vence depois), com as concluídas numa coluna à parte (veja o
+README, "Kanban das tarefas"). O card não se arrasta mais; a situação se muda na janela da tarefa.
+
+- **Ordem:** qualquer uma; não há migração e os dados que o PC manda não mudaram.
+- **Voltar atrás:** é só voltar o código; nada foi gravado de um jeito novo.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

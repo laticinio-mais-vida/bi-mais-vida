@@ -816,7 +816,7 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
   | | Quem criou | Participante com autonomia | Participante sem autonomia |
   |---|---|---|---|
   | Editar e excluir a tarefa | sim | não | não |
-  | Mudar a situação da tarefa (a coluna do kanban), inclusive concluir e reabrir | sim | sim | sim |
+  | Mudar a situação da tarefa, inclusive concluir e reabrir | sim | sim | sim |
   | Mudar prazos e responsáveis | sim | o prazo das subtarefas que criou para si | não |
   | Editar título e descrição de uma subtarefa (menos a automática) | todas | as próprias | não |
   | Criar subtarefa | para qualquer participante | só para si, escolhendo o dia | não |
@@ -866,16 +866,26 @@ com o próprio prazo, que vai até o da tarefa (sem prazo, vence com a tarefa).
 
 #### Kanban das tarefas
 
-Em **Kanban**, as tarefas que você criou ou de que participa ficam em três colunas: **A fazer**, **Fazendo** e
-**Concluída** (as concluídas nos últimos 30 dias, as mais recentes em cima; as outras colunas, pelo prazo). As
-subtarefas não aparecem no kanban.
+Em **Kanban**, as tarefas que você criou ou de que participa ficam em colunas pelo **vencimento** do prazo da tarefa
+(o mesmo para todos da tarefa), e as concluídas numa coluna à parte. As subtarefas não aparecem no kanban.
 
-- **O card** mostra o título, o prazo (vermelho se venceu), quem criou (se não foi você), quantas pessoas
-  participam, quantas subtarefas suas faltam e o andamento das subtarefas.
-- **Mudar de coluna:** qualquer pessoa da tarefa arrasta o card; arrastar para Concluída com subtarefas abertas
-  pergunta antes, como o círculo da agenda.
-- **Clicar no card** abre a janela da tarefa, com a situação dela e a de cada subtarefa (veja **Situação** acima).
-  No celular, onde não dá para arrastar, a situação se muda por ali.
+| Coluna | O que entra (exemplo: hoje é sexta, 30/10) |
+|---|---|
+| **Vencido** | as abertas que passaram do prazo: com horário, logo depois dele; sem horário, quando o dia acaba (até 29/10, ou 30/10 com o horário já passado) |
+| **Vence hoje** | as abertas com prazo hoje que ainda não venceram (30/10) |
+| **Vence essa semana** | as abertas até o domingo desta semana, que vai de segunda a domingo (31/10 e 01/11); no domingo, fica vazia |
+| **Vence depois** | todas as outras abertas (de 02/11 em diante) |
+| **Concluídas** | as concluídas nos últimos 30 dias |
+
+- **A ordem:** nas colunas das abertas, pelo prazo (no mesmo dia, pelo horário; as sem horário por último); em
+  Concluídas, as mais recentes em cima. Embaixo do nome, cada coluna mostra o período que ela cobre.
+- **O card** mostra o título, o prazo (vermelho se venceu), **Fazendo** se a tarefa já começou, quem criou (se não
+  foi você), quantas pessoas participam, quantas subtarefas suas faltam e o andamento das subtarefas. Se uma
+  subtarefa sua venceu ou vence hoje antes da tarefa, o card avisa (**Sua subtarefa venceu**, **Sua subtarefa vence
+  hoje**), mas continua na coluna do prazo da tarefa.
+- **Clicar no card** abre a janela da tarefa, com a situação dela e a de cada subtarefa (veja **Situação** acima). O
+  card não se arrasta: a situação se muda na janela. Concluída, a tarefa vai para Concluídas; reaberta, volta para a
+  coluna do prazo.
 - **Nova**, no kanban, já abre o formulário em **Tarefa**.
 
 #### Notificações (o sino)
@@ -1240,7 +1250,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
-| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, e o kanban (a situação de cada tarefa e subtarefa) (no PostgreSQL) |
+| `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, a situação de cada tarefa e subtarefa e o kanban (as tarefas pelo vencimento) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
 | `bi/google_agenda.py` | o Google Agenda, só leitura: o login com o Google (state, PKCE e a autorização cifrada), a lista de agendas de cada conta, a leitura dos eventos pela API do Google Agenda, de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |

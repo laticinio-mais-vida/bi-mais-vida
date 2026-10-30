@@ -25,9 +25,11 @@ subtarefas de cada uma, cada uma com o próprio prazo. As atividades, só de cad
   vencido; não se edita nem se apaga. Todos da tarefa veem; a tarefa continua atrasada até ser concluída.
 - Pendências (pendencias): aberta e vencida, sem justificativa do prazo de agora nas últimas 24 horas, a tarefa ou a
   subtarefa bloqueia o painel de quem responde por ela até ele justificar (web/js/avisos.js).
-- Quadro (kanban, quadro): as tarefas em três colunas pela situação, a fazer, fazendo (iniciada_em, migração 021) ou
-  concluída (concluida_em manda). Qualquer pessoa da tarefa muda ela de coluna (mover); a subtarefa
-  (mover_subtarefa), o responsável ou quem criou. As concluídas ficam no quadro por DIAS_NO_QUADRO dias.
+- Situação: a fazer, fazendo (iniciada_em, migração 021) ou concluída (concluida_em manda). Qualquer pessoa da tarefa
+  muda a da tarefa (mover); a da subtarefa (mover_subtarefa), o responsável ou quem criou.
+- Quadro (kanban, quadro): as tarefas abertas em colunas pelo vencimento do prazo da tarefa (_vencimento: vencido,
+  hoje, essa semana, de segunda a domingo, ou depois), as mesmas para todos, e as concluídas nos últimos
+  DIAS_NO_QUADRO dias numa coluna à parte.
 - versao: sobe a cada mudança na tarefa, nas pessoas ou nas subtarefas (concluir não conta). Editar confere, para o
   Salvar de quem criou não apagar uma subtarefa que um participante acabou de criar.
 - Horário ocupado (migração 026, bi/agenda.py): o horário da tarefa vale para todas as pessoas dela; o da subtarefa,
@@ -74,8 +76,8 @@ _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "
 _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
       "concluida_por", "concluida_por_nome", "criada_por", "automatica", "inicio")
 _J = ("texto", "prazo", "hora", "criada_em", "usuario", "usuario_nome")  # uma justificativa do histórico
-# A situação (a coluna do quadro) e o que ela grava; o começo fica de quando começou, mesmo indo e voltando. A hora
-# vem do relógio da classe (%(agora)s), que os testes fixam.
+# A situação (a fazer, fazendo ou concluída) e o que ela grava; o começo fica de quando começou, mesmo indo e
+# voltando. A hora vem do relógio da classe (%(agora)s), que os testes fixam.
 _SITUACOES = {"a_fazer": "iniciada_em = NULL, concluida_em = NULL",
               "fazendo": "iniciada_em = coalesce(iniciada_em, %(agora)s), concluida_em = NULL",
               "concluida": "concluida_em = coalesce(concluida_em, %(agora)s)"}
@@ -134,6 +136,22 @@ def _na_coluna(concluida: bool, iniciada_em) -> str:
 def _vence_em(prazo: dt.date, h: dt.time | None) -> dt.datetime:
     """Quando o prazo vence (hora local, sem fuso): no horário dele ou, sem horário, quando o dia acaba."""
     return dt.datetime.combine(prazo, h) if h else dt.datetime.combine(prazo + dt.timedelta(days=1), dt.time())
+
+
+def _vencimento(prazo: dt.date, h: dt.time | None, agora: dt.datetime) -> str:
+    """A coluna do quadro pelo prazo: vencido (passou do prazo, como _vence_em; o de um dia antes de hoje, sempre),
+    hoje, semana (até o domingo desta semana, que vai de segunda a domingo) ou depois."""
+    hoje = agora.date()
+    if prazo < hoje or agora > _vence_em(prazo, h):
+        return "vencido"
+    if prazo == hoje:
+        return "hoje"
+    return "semana" if prazo <= _domingo(hoje) else "depois"
+
+
+def _domingo(dia: dt.date) -> dt.date:
+    """O último dia da semana de `dia` (de segunda a domingo)."""
+    return dia + dt.timedelta(days=6 - dia.weekday())
 
 
 def _local(momento: dt.datetime) -> dt.datetime:
@@ -407,7 +425,9 @@ class Tarefas:
 
     def quadro(self, usuario: int) -> dict:
         """O quadro (kanban) de quem vê: as tarefas de que participa, abertas e as concluídas nos últimos
-        DIAS_NO_QUADRO dias, cada uma com a situação (a coluna) e as subtarefas de todos (o card mostra o andamento)."""
+        DIAS_NO_QUADRO dias, cada uma com a situação, as subtarefas de todos (o card mostra o andamento) e o
+        vencimento, a coluna pelo prazo (também nas concluídas, para a página saber para onde ela volta se for
+        reaberta). semana_ate: o domingo desta semana, o último dia da coluna "essa semana"."""
         hoje = self.hoje()
         with self.banco.conexao() as con:
             ids = [r[0] for r in con.execute(
@@ -417,8 +437,9 @@ class Tarefas:
                 [usuario, hoje - dt.timedelta(days=DIAS_NO_QUADRO)])]
             tarefas = self._carregar(con, ids)
         agora = self.agora()
-        return {"hoje": hoje.isoformat(), "dias_concluidas": DIAS_NO_QUADRO,
-                "tarefas": [self._publica(t, usuario, agora) for t in tarefas]}
+        return {"hoje": hoje.isoformat(), "semana_ate": _domingo(hoje).isoformat(), "dias_concluidas": DIAS_NO_QUADRO,
+                "tarefas": [{**self._publica(t, usuario, agora), "vencimento": _vencimento(t["prazo"], t["hora"], agora)}
+                            for t in tarefas]}
 
     def pendencias(self, usuario: int) -> list[dict]:
         """O que a pessoa precisa justificar agora (o painel fica bloqueado até ela justificar): as tarefas que ela
@@ -763,8 +784,8 @@ class Tarefas:
         return self._situar_tarefa(usuario, id_, None)
 
     def mover(self, usuario: int, id_, situacao) -> dict:
-        """Leva a tarefa para outra coluna do quadro: a_fazer, fazendo ou concluida (concluir e reabrir, como
-        concluir e desfazer)."""
+        """Muda a situação da tarefa: a_fazer, fazendo ou concluida (concluir e reabrir, como concluir e
+        desfazer)."""
         return self._situar_tarefa(usuario, id_, _situacao(situacao))
 
     def _justificar(self, con, tarefa: int, subtarefa: int | None, usuario: int, prazo: dt.date, h: dt.time | None,
