@@ -33,6 +33,11 @@ Aprovação de metas (Configurar, só administrador; bi/aprovacao.py): a meta de
 para aprovar com o total, a mussarela (ES) e os clientes editáveis. Os clientes vêm preenchidos com os ativos da carteira
 no dia 1º do mês da meta, o número que a META CLIENTE da planilha acompanha.
 
+Ajustes de volume (na própria página, só administrador; bi/ajustes.py): a meta de volume de uma linha da conta (BA:
+vendedor × área × produto; ES: vendedor × produto) trocada pelo número do administrador; a meta em R$ dela é o volume ×
+o preço médio. Tudo que soma as linhas (produtos, áreas, vendedores, resumo, aprovação, Assistente) usa o ajuste. No ES
+com filtro de área, a parte da área acompanha o ajuste do vendedor × produto no mesmo %.
+
 O acumulado do ano vai até o mês base (no Power BI ia até o último mês fechado pela data de hoje, o mesmo resultado no
 uso normal; em janeiro o Power BI dava +20% para todos, porque o ano atual vinha vazio).
 """
@@ -62,6 +67,8 @@ MAX_PRAZO = 5
 DIAS_SEMANA = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
 MAX_FATURAMENTOS = 31
 MAX_PRODUTOS_IA = 40
+MAX_AJUSTES = 500  # linhas numa gravação de ajustes de volume
+MAX_VOLUME = 1e9
 _MES = re.compile(r"^(\d{4})-(\d{2})$")
 
 
@@ -235,13 +242,15 @@ class _Soma:
         self.peso_por = peso  # "vb" (mesmo produto: pelo volume) ou "base_rs" (produtos diferentes: pelo valor)
         self.vb = self.meta = self.base_rs = self.meta_rs = self.bruto = self.qv = self.ya = self.yp = 0.0
         self.p_saz = self.p_cre = self.p_fat = self.peso = 0.0
-        self.n = 0
+        self.formula = 0.0  # a meta de volume sem os ajustes
+        self.n = self.ajustes = 0
         self.ultima = None
         self.fats: set = set()
 
     def somar(self, ln: dict) -> None:
-        for k in ("vb", "meta", "base_rs", "meta_rs", "bruto", "qv", "ya", "yp"):
+        for k in ("vb", "meta", "base_rs", "meta_rs", "bruto", "qv", "ya", "yp", "formula"):
             setattr(self, k, getattr(self, k) + ln[k])
+        self.ajustes += ln["ajuste"] is not None
         w = max(ln[self.peso_por], 0.0)
         self.p_saz += w * ln["saz"]
         self.p_cre += w * ln["cre"]
@@ -267,20 +276,26 @@ class _Soma:
             "efeito_faturamentos": media(self.p_fat),
             "faturamentos": {"base": fb, "meta": ft} if fb is not None else None,
             "exata": exata,
+            "meta_formula": self.formula, "ajustes": self.ajustes,
+            # a linha da conta, quando é uma só: a página edita a meta de volume dela (área 0 no ES)
+            "linha": ({"vendedor": ln["v"], "area": ln["a"] or 0, "preco": ln["preco"], "ajuste": ln["ajuste"]}
+                      if exata else None),
         }
 
 
 # --- a página --------------------------------------------------------------------------------
 class Sugestao:
-    def __init__(self, calc: Calculadora, config, areas, nomes, aprovadas=None):
+    def __init__(self, calc: Calculadora, config, areas, nomes, aprovadas=None, ajustes=None):
         """config: ConfigSugestao (ou algo com atual()). areas: função que devolve os dias de atendimento das áreas
         ({id_area: [dias ISO]}, bi/gestao.py). nomes: função com {id_vendedor: nome} (o da planilha de metas mais
-        recente, senão o do ERP). aprovadas: MetasAprovadas (bi/aprovacao.py), para a aba de aprovação."""
+        recente, senão o do ERP). aprovadas: MetasAprovadas (bi/aprovacao.py), para a aba de aprovação. ajustes:
+        AjustesVolume (bi/ajustes.py), os ajustes de volume da página (None = só a fórmula)."""
         self.calc = calc
         self.config = config
         self.areas = areas
         self.nomes = nomes
         self.aprovadas = aprovadas
+        self.ajustes = ajustes
         self._trava = threading.Lock()
         self._memo: tuple = (None, None)
 
@@ -380,13 +395,27 @@ class Sugestao:
         k["memo"][chave] = r
         return r
 
+    def _ajustes(self, i_meta: int) -> dict[tuple, dict]:
+        """Os ajustes de volume do mês da meta ({(vendedor, área, produto): {...}}, área 0 no ES)."""
+        if self.ajustes is None:
+            return {}
+        return self.ajustes.do_mes(dt.date(i_meta // 12, i_meta % 12 + 1, 1))
+
     def _linhas(self, d: dict, k: dict, vendedores: list[int], area: int | None, i_meta: int) -> tuple[list, dict]:
         """As linhas no grão da conta (BA: vendedor × área × produto; ES: vendedor × produto) com volume no mês base, e
-        o que ficou fora no BA por área sem faturamento ({área: R$ do mês base})."""
+        o que ficou fora no BA por área sem faturamento ({área: R$ do mês base}). meta é a meta de volume com o ajuste
+        do administrador (formula, sem ele; ajuste, o que foi gravado ou None)."""
         ib, iml = i_meta - 1, i_meta - 12
         ibl = ib - 12
         jan = ib - ib % 12
         es = k["estado"] == "ES"
+        ajustes = self._ajustes(i_meta)
+        escala = {}  # ES com filtro de área: a parte da área acompanha o ajuste do vendedor × produto, no mesmo %
+        if es and area is not None and any(c[0] in vendedores for c in ajustes):
+            for ln in self._linhas(d, k, sorted({c[0] for c in ajustes} & set(vendedores)), None, i_meta)[0]:
+                if ln["ajuste"] is not None:
+                    escala[(ln["v"], ln["p"])] = (ln["meta"] / ln["formula"] if ln["formula"] > 0
+                                                  else float(ln["meta"] > 0))
         linhas, fora = [], defaultdict(float)
         for v in vendedores:
             grupos = d["mov"].get(v, {})
@@ -420,10 +449,14 @@ class Sugestao:
                 yp = sum(vol(i) for i in range(jan - 12, ibl + 1))
                 saz_bruta, saz = sazonalidade(vly, vly1, fbl, ftl, k["teto_saz"])
                 acum, cre = crescimento_proposto(ya, yp, k["alvo"], k["teto_cre"])
-                meta = vb / fb * saz * (ft or 0) * cre
+                formula = meta = vb / fb * saz * (ft or 0) * cre
+                ajuste = ajustes.get((v, 0 if es else a, p))
+                if ajuste is not None:
+                    meta = meta * escala.get((v, p), 1.0) if es and area is not None else ajuste["volume"]
                 linhas.append({"v": v, "a": a, "p": p, "vb": vb, "vly": vly, "vly1": vly1, "ya": ya, "yp": yp,
                                "bruto": bruto, "qv": qv, "fb": fb, "ft": ft or 0, "fbl": fbl, "ftl": ftl,
                                "saz_bruta": saz_bruta, "saz": saz, "acum": acum, "cre": cre, "meta": meta,
+                               "formula": formula, "ajuste": ajuste,
                                "preco": preco, "base_rs": vb * preco, "meta_rs": meta * preco})
         return linhas, dict(fora)
 
@@ -534,6 +567,17 @@ class Sugestao:
                           f"{'ficaram' if len(fora) > 1 else 'ficou'} fora da sugestão ({lista}): {clientes} "
                           f"cliente{'s' if clientes != 1 else ''} da carteira e R$ {valor} no mês base. Marque os dias "
                           "em Gestão › Configurar.")
+        if self.ajustes is not None and self.ajustes.aviso:
+            avisos.append(self.ajustes.aviso)
+        if permitidos is None and equipes is None:  # o administrador vê os ajustes que a conta não usa mais
+            presentes = {(ln["v"], ln["a"] or 0, ln["p"]) for ln in linhas_resumo}
+            do_estado = set(todos)
+            perdidos = [c for c in self._ajustes(i_meta) if c[0] in do_estado and c not in presentes]
+            if perdidos:
+                n = len(perdidos)
+                avisos.append(f"{n} ajuste{'s' if n > 1 else ''} de volume de {rotulo_mes(i_meta)} "
+                              f"{'não entram' if n > 1 else 'não entra'} na sugestão: a linha saiu da conta (cliente "
+                              "repassado, área sem faturamento ou sem venda no mês base).")
 
         areas_opcao = sorted({a for (v, a) in d["clientes_area"] if v in escolhidos}, key=nome_area)
         return {
@@ -559,6 +603,8 @@ class Sugestao:
             "fora": fora_info,
             "avisos": avisos,
             "parametros": self._parametros(k, i_meta),
+            # o administrador pode ajustar a meta de volume das linhas (com o banco no ar)
+            "ajustes": {"disponivel": self.ajustes is not None and not self.ajustes.aviso},
         }
 
     def _grafico(self, d: dict, k: dict, vendedores: list[int], area, ib: int, produtos: set[int]) -> dict:
@@ -614,7 +660,8 @@ class Sugestao:
                       f"(ano passado, teto de +{p['teto_sazonalidade']:.0%}) × faturamentos do mês da meta × crescimento "
                       f"proposto ({p['crescimento']:.0%} no ano menos o acumulado de {p['acumulado']['de']} a "
                       f"{p['acumulado']['ate']}, entre 0% e +{p['teto_crescimento']:.0%}); R$ = volume × preço médio "
-                      "bruto do mês base. Carteira atual de cada vendedor."),
+                      "bruto do mês base. Carteira atual de cada vendedor. O administrador pode trocar a meta de "
+                      "volume de uma linha na página (ajustada = true; meta_volume_formula é a da conta)."),
         }
         enxuto = lambda x: round(x, 4) if isinstance(x, float) else x  # noqa: E731
         if vendedor is None:
@@ -637,7 +684,9 @@ class Sugestao:
             saida["produtos"] = [{"id": x["id"], "produto": x["nome"], "unidade": x["unidade"],
                                   "volume_base": enxuto(x["volume_base"]), "meta_volume": enxuto(x["meta_volume"]),
                                   "preco_medio": enxuto(x["preco"]), "meta_rs": enxuto(x["meta_rs"]),
-                                  "sazonalidade": enxuto(x["sazonalidade"]), "crescimento_proposto": enxuto(x["crescimento"])}
+                                  "sazonalidade": enxuto(x["sazonalidade"]), "crescimento_proposto": enxuto(x["crescimento"]),
+                                  **({"ajustada": True, "meta_volume_formula": enxuto(x["meta_formula"])}
+                                     if x["ajustes"] else {})}
                                  for x in r["produtos"][:MAX_PRODUTOS_IA]]
             if len(r["produtos"]) > MAX_PRODUTOS_IA:
                 saida["aviso_produtos"] = f"{len(r['produtos'])} produtos; mostrando os {MAX_PRODUTOS_IA} de maior meta"
@@ -901,6 +950,73 @@ class Sugestao:
         if registros:
             self.aprovadas.gravar(b["dia1"], registros, autor)
         return self.aprovacao(b["estado"], texto_mes(b["i_meta"]))
+
+    # --- ajustes de volume ------------------------------------------------------------------------
+    def ajustar(self, estado: str | None, mes: str | None, itens: list, autor: dict | None) -> dict:
+        """Grava os ajustes de volume da página (só administrador): itens = [{id_vendedor, id_area (BA; no ES, 0 ou
+        vazio), id_produto, meta_volume (vazio = volta à fórmula)}], cada um uma linha da sugestão de hoje. Quem tem a
+        meta aprovada no mês ganha a diferença na aprovada (bi/ajustes.py). Devolve os vendedores com a aprovada
+        alterada."""
+        if self.ajustes is None:
+            raise RuntimeError("os ajustes de volume precisam do banco de dados")
+        if not isinstance(itens, list) or not itens:
+            raise ValueError("nenhum ajuste para gravar")
+        if len(itens) > MAX_AJUSTES:
+            raise ValueError(f"no máximo {MAX_AJUSTES} ajustes de uma vez")
+        self._conferir()
+        regras = self.calc.regras()
+        d = self._dados(regras)
+        primeiro, ultimo = self.meses_possiveis()
+        i_meta = ler_mes(mes) if mes else indice(self.calc.cache.data_ref())
+        if not primeiro <= i_meta <= ultimo:
+            raise ValueError(f"escolha um mês da meta entre {curto_mes(primeiro)} e {curto_mes(ultimo)}")
+        estado = str(estado or "").upper()
+        if estado not in ESTADOS:
+            raise ValueError(f"estado inválido: {estado or 'vazio'}")
+        es = estado == "ES"
+        todos = set(self._vendedores(d, regras, estado, None, None, i_meta))
+        pedidos, vistos = [], set()
+        for it in itens:
+            if not isinstance(it, dict):
+                raise ValueError("ajuste inválido")
+            try:
+                v, p = int(it.get("id_vendedor")), int(it.get("id_produto"))
+                a = 0 if es else int(it.get("id_area"))
+            except (TypeError, ValueError):
+                raise ValueError("ajuste sem vendedor, área ou produto válidos") from None
+            if v not in todos:
+                raise ValueError(f"o vendedor {v} não está entre os vendedores do {estado} em {curto_mes(i_meta)}")
+            if (v, a, p) in vistos:
+                raise ValueError(f"o produto {p} do vendedor {v} veio duas vezes")
+            vistos.add((v, a, p))
+            valor = it.get("meta_volume")
+            if valor is None or valor == "":
+                volume = None
+            else:
+                try:
+                    volume = float(valor)
+                except (TypeError, ValueError):
+                    raise ValueError(f"a meta de volume do produto {p}: use um número") from None
+                if not 0 <= volume <= MAX_VOLUME:  # também NaN
+                    raise ValueError(f"a meta de volume do produto {p}: use um número a partir de zero")
+                volume = round(volume, 4)
+            pedidos.append((v, a, p, volume))
+        linhas, _ = self._linhas(d, self._contexto(regras, estado), sorted({x[0] for x in pedidos}), None, i_meta)
+        por_chave = {(ln["v"], 0 if es else ln["a"], ln["p"]): ln for ln in linhas}
+        nomes = self.nomes()
+        mudancas = []
+        for v, a, p, volume in pedidos:
+            ln = por_chave.get((v, a, p))
+            nome_p = d["produtos"].get(p, (f"Produto {p}", ""))
+            if ln is None:
+                onde = "" if es else f" na área {d['nomes_areas'].get(a) or a}"
+                raise ValueError(f"{nome_p[0]}{onde} não está na sugestão de {nomes.get(v) or f'Vendedor {v}'} em "
+                                 f"{curto_mes(i_meta)} (sem venda no mês base ou área sem faturamento)")
+            mudancas.append({"v": v, "a": a, "p": p, "volume": volume, "formula": ln["formula"], "preco": ln["preco"],
+                             "produto": nome_p[0], "unidade": nome_p[1] or "",
+                             "grupo": "mussarela" if regras.grupo_produto(p) == "mussarela" else "outras"})
+        alteradas = self.ajustes.gravar(dt.date(i_meta // 12, i_meta % 12 + 1, 1), mudancas, autor, self.aprovadas)
+        return {"estado": estado, "mes": texto_mes(i_meta), "gravados": len(mudancas), "aprovadas": alteradas}
 
 
 def _reais(valor, nome: str) -> float:

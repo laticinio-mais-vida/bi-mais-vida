@@ -1,6 +1,7 @@
 // Página Sugestão de Metas: a meta do mês seguinte de cada vendedor, por produto (as páginas "Sugestão de Meta BA/ES"
 // do Power BI). A conta fica no servidor (bi/sugestao.py); aqui é a apresentação: cartões, gráfico, tabela por produto
-// (no BA também por área), o resumo dos vendedores e o passo a passo.
+// (no BA também por área), o resumo dos vendedores e o passo a passo. O administrador ajusta a meta de volume de uma
+// linha da conta (no BA, o produto dentro da área; no ES, o produto) e grava pela barra Salvar (bi/ajustes.py).
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast } from "./util.js";
 import { colunasLinha } from "./graficos.js";
 import { ligarCaptura } from "./relatorio.js";
@@ -10,8 +11,13 @@ const MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "s
 const ORIGEM = { ajuste: "ajustado à mão", fixo: "número fixo", automatico: "pelos dias de atendimento" };
 
 let ctx = null;
+let ligouDocumento = false;
+// rasc: os ajustes de volume ainda não salvos ({"vendedor:área:produto": {v, a, p, volume (null = volta à fórmula),
+// formula, salvo, preco, ...}}), do estado e mês de rascDe; linhas: as linhas ajustáveis da tabela desenhada.
 const estado = { estado: null, mes: null, vendedor: null, area: null, visao: "produtos", produto: null,
-                 abertas: new Set(), dados: null, pedido: 0 };
+                 abertas: new Set(), dados: null, pedido: 0, rasc: {}, rascDe: null, linhas: {} };
+
+export function sugestaoTemAlteracoes() { return Object.keys(estado.rasc).length > 0; }
 
 export function montarSugestao(container, contexto) {
   ctx = contexto;
@@ -25,6 +31,8 @@ export function montarSugestao(container, contexto) {
   estado.visao = (q.get("t") || salvo.t) === "areas" ? "areas" : "produtos";
   estado.produto = null;
   estado.dados = null;
+  estado.rasc = {};
+  estado.rascDe = null;
 
   container.innerHTML = `
     <div class="controles entra" style="--i:0">
@@ -43,11 +51,16 @@ export function montarSugestao(container, contexto) {
     <div id="s-conteudo"><div class="grade secao">
       <div class="kpis n4 sug-kpis"><div class="esqueleto" style="height:200px"></div><div class="esqueleto" style="height:200px"></div><div class="esqueleto" style="height:200px"></div><div class="esqueleto" style="height:200px"></div></div>
       <div class="esqueleto" style="height:380px"></div></div>
+    </div>
+    <div class="barra-salvar" id="s-barra" data-acompanha-tela-cheia>
+      <span id="s-barra-n">Ajustes não salvos</span>
+      <button class="btn" type="button" id="s-descartar">Descartar</button>
+      <button class="btn primario" type="button" id="s-salvar">${icone("disco")}Salvar ajustes</button>
     </div>`;
 
   container.querySelector("#s-estado").addEventListener("click", (e) => {
     const b = e.target.closest("[data-estado]");
-    if (!b || b.dataset.estado === estado.estado) return;
+    if (!b || b.dataset.estado === estado.estado || !descartarSePreciso()) return;
     estado.estado = b.dataset.estado;
     estado.vendedor = null;
     estado.area = null;
@@ -59,10 +72,40 @@ export function montarSugestao(container, contexto) {
     carregar();
   });
   container.querySelector("#s-area").addEventListener("change", (e) => { estado.area = e.target.value ? Number(e.target.value) : null; carregar(); });
-  container.querySelector("#s-mes").addEventListener("change", (e) => { estado.mes = e.target.value; carregar(); });
+  container.querySelector("#s-mes").addEventListener("change", (e) => {
+    if (!descartarSePreciso()) { e.target.value = estado.mes; return; }
+    estado.mes = e.target.value;
+    carregar();
+  });
   container.querySelector("#s-limpar").addEventListener("click", () => { estado.vendedor = null; estado.area = null; carregar(); });
   container.querySelector("#s-conteudo").addEventListener("click", aoClicar);
+  if (!ligouDocumento) {  // no documento: em tela cheia, a tabela sai de #s-conteudo
+    ligouDocumento = true;
+    document.addEventListener("input", aoDigitar);
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-aj-limpar]");
+      if (!b) return;
+      definirAjuste(b.dataset.ajLimpar, null);
+      const inp = document.querySelector(`input[data-aj="${b.dataset.ajLimpar}"]`);
+      if (inp) inp.value = "";
+    });
+  }
+  container.querySelector("#s-salvar").addEventListener("click", salvarAjustes);
+  container.querySelector("#s-descartar").addEventListener("click", () => {
+    estado.rasc = {};
+    atualizarBarra();
+    if (estado.dados) trocarTabela(estado.dados);
+  });
   carregar();
+}
+
+// Trocar de estado ou de mês perde os ajustes não salvos (eles são daquele estado e mês): pergunta antes.
+function descartarSePreciso() {
+  if (!sugestaoTemAlteracoes()) return true;
+  if (!confirm("Descartar os ajustes de volume que ainda não foram salvos?")) return false;
+  estado.rasc = {};
+  atualizarBarra();
+  return true;
 }
 
 export function recarregarSugestao() { if (ctx) carregar(true); }
@@ -100,6 +143,9 @@ async function carregar(silencioso = false) {
     estado.mes = d.mes.meta;
     estado.vendedor = d.filtros.vendedor;
     estado.area = d.filtros.area;
+    if (estado.rascDe !== `${d.estado}|${d.mes.meta}`) estado.rasc = {};  // os ajustes são do estado e mês
+    estado.rascDe = `${d.estado}|${d.mes.meta}`;
+    atualizarBarra();
     if (estado.produto && !d.grafico.produtos[estado.produto]) estado.produto = null;
     atualizarUrl();
     preencherFiltros(d);
@@ -115,6 +161,8 @@ async function carregar(silencioso = false) {
       estado.vendedor = null;
       estado.area = null;
       estado.mes = null;
+      estado.rasc = {};
+      atualizarBarra();
       toast(e.message, "erro");
       return carregar(silencioso);
     }
@@ -184,11 +232,13 @@ function posRender(raiz, d) {
   animarEntradas(raiz);
   ligarTooltips(raiz);
   desenharGrafico(d);
+  pintarAjustes();
 }
 
 function aoClicar(e) {
   const d = estado.dados;
   if (!d) return;
+  if (e.target.closest("input[data-aj], [data-aj-limpar]")) return;  // ajustar a meta não escolhe o produto do gráfico
   const v = e.target.closest("[data-vendedor]");
   if (v) {
     const id = Number(v.dataset.vendedor);
@@ -331,7 +381,8 @@ const COLUNAS = [
   ["Meta (R$)", "Meta (volume) × preço médio"],
 ];
 
-function celulas(x, unidade, comVolume = true) {
+// chave: a linha que o administrador ajusta (ajustavel); null = só mostra.
+function celulas(x, unidade, comVolume = true, chave = null) {
   const fat = x.faturamentos
     ? `${fmt.dias(x.faturamentos.base)} → ${fmt.dias(x.faturamentos.meta)}`
     : `<span data-tt="${esc("<div class='tt-t'>Efeito dos faturamentos</div>as áreas têm números diferentes: média do efeito de cada uma, pelo volume")}">${sinal(x.efeito_faturamentos)}<small class="fraco">efeito</small></span>`;
@@ -343,17 +394,19 @@ function celulas(x, unidade, comVolume = true) {
     <td>${saz}</td>
     <td>${sinal(x.acumulado)}</td>
     <td>${sinal(x.crescimento)}</td>
-    <td>${comVolume ? volume(x.meta_volume, unidade) : "—"}</td>
+    ${chave ? celulaAjuste(chave, unidade) : `<td>${comVolume ? volume(x.meta_volume, unidade) : "—"}${x.ajustes ? marcaAjuste(x, unidade) : ""}</td>`}
     <td>${comVolume ? fmt.moeda2(x.preco) : "—"}</td>
-    <td class="sug-meta">${fmt.moeda(x.meta_rs)}${comVolume ? "" : `<small class="fraco">base ${fmt.moeda(x.base_rs)}</small>`}</td>`;
+    <td class="sug-meta"${chave ? ` data-aj-rs="${chave}"` : ""}>${fmt.moeda(x.meta_rs)}${comVolume ? "" : `<small class="fraco">base ${fmt.moeda(x.base_rs)}</small>`}</td>`;
 }
 
 function linhaProduto(p, k, filho = false) {
+  const chave = ajustavel(p, filho);
   return `<tr data-produto="${p.id}" class="${filho ? "filho " : ""}${String(p.id) === estado.produto ? "sel" : ""}" style="--i:${Math.min(k, 30)}">
-    <td class="nome-v">${esc(p.nome)}<small>código ${p.id}${p.unidade ? ` · ${esc(p.unidade)}` : ""}</small></td>${celulas(p, p.unidade)}</tr>`;
+    <td class="nome-v">${esc(p.nome)}<small>código ${p.id}${p.unidade ? ` · ${esc(p.unidade)}` : ""}</small></td>${celulas(p, p.unidade, true, chave)}</tr>`;
 }
 
 function corpoTabela(d) {
+  estado.linhas = {};
   const porArea = d.estado === "BA" && estado.visao === "areas";
   if (!porArea) return `<tbody>${d.produtos.map((p, k) => linhaProduto(p, k)).join("")}</tbody>`;
   return d.areas.map((a, k) => {
@@ -371,6 +424,19 @@ function corpoTabela(d) {
   }).join("");
 }
 
+// O que o administrador faz para ajustar a meta de volume, no subtítulo da tabela. Sem vendedor escolhido, só a linha
+// de um vendedor só tem campo; a que soma vários pede o filtro de vendedor.
+function dicaAjuste(d) {
+  if (!ctx.admin || !d.ajustes?.disponivel) return "";
+  if (d.estado === "BA" && estado.visao !== "areas") return " · para ajustar a meta de volume, use Por área";
+  if (d.estado === "ES" && d.filtros.area) return " · tire o filtro de área para ajustar a meta de volume";
+  const linhas = d.estado === "BA" ? d.areas.flatMap((a) => a.produtos) : d.produtos;
+  const editaveis = linhas.filter((x) => x.linha).length;
+  if (!editaveis) return " · escolha um vendedor para ajustar a meta de volume";
+  return ` · digite na meta de volume${d.estado === "BA" ? " de um produto" : ""} para ajustar${
+    editaveis < linhas.length ? " (produto de mais de um vendedor: escolha o vendedor)" : ""}`;
+}
+
 function tabela(d, i) {
   const ba = d.estado === "BA";
   const c = d.cartoes;
@@ -379,7 +445,7 @@ function tabela(d, i) {
   <section class="cartao secao entra" style="--i:${i}" id="s-cartao-tabela">
     <div class="cartao-cab">
       <div><h3>${icone("caixa")}Meta por ${ba && estado.visao === "areas" ? "área e produto" : "produto"}</h3>
-        <p class="sub">${ba && estado.visao === "areas" ? "Clique numa área para ver os produtos dela" : `Soma ${ba ? "das áreas e " : ""}dos vendedores escolhidos`} · clique num produto para ver o gráfico dele · ordem pela meta em R$</p></div>
+        <p class="sub">${ba && estado.visao === "areas" ? "Clique numa área para ver os produtos dela" : `Soma ${ba ? "das áreas e " : ""}dos vendedores escolhidos`} · clique num produto para ver o gráfico dele · ordem pela meta em R$${dicaAjuste(d)}</p></div>
       ${ba ? `<div class="sug-acoes">
         ${estado.visao === "areas" ? `<button class="btn" type="button" data-abrir-todas>${icone(estado.abertas.size < d.areas.length ? "expandir" : "recolher")}${estado.abertas.size < d.areas.length ? "Abrir todas" : "Recolher todas"}</button>` : ""}
         <div class="seg-mini" role="group" aria-label="Agrupar a tabela">
@@ -404,6 +470,132 @@ function trocarTabela(d) {
   novo.classList.remove("entra");
   ligarTelaCheia(novo.parentElement);
   ligarTooltips(novo);
+  pintarAjustes();
+}
+
+// ---------- ajustes da meta de volume (só o administrador) ----------
+// A linha da conta que a página ajusta: no BA, o produto dentro da área (tabela por área); no ES, o produto sem filtro
+// de área. Só quando é uma linha só (com todos os vendedores, um produto pode somar vários). Guarda em estado.linhas o
+// que o rascunho e a barra usam; devolve a chave ("vendedor:área:produto") ou null.
+function ajustavel(x, naArea) {
+  const d = estado.dados;
+  if (!ctx.admin || !d.ajustes?.disponivel || !x.linha) return null;
+  if (d.estado === "BA" ? !naArea : d.filtros.area) return null;
+  const chave = `${x.linha.vendedor}:${x.linha.area}:${x.id}`;
+  const aj = x.linha.ajuste;
+  estado.linhas[chave] = {
+    v: x.linha.vendedor, a: x.linha.area, p: x.id, nome: x.nome, unidade: x.unidade, preco: x.linha.preco,
+    formula: x.meta_formula, salvo: aj ? aj.volume : null, quem: aj && aj.salva_por, quando: aj && aj.salva_em,
+  };
+  return chave;
+}
+
+function celulaAjuste(chave, unidade) {
+  const l = estado.linhas[chave];
+  const valor = chave in estado.rasc ? estado.rasc[chave].volume : l.salvo;
+  return `<td class="sug-aj-cel"><span class="sug-num sug-aj">
+      <input type="number" min="0" step="any" inputmode="decimal" data-aj="${chave}"
+        value="${valor == null || !isFinite(valor) ? "" : +valor.toFixed(4)}" placeholder="${fmt.num(l.formula, 1)}"
+        aria-label="Meta de volume de ${esc(l.nome)}" title="A meta de volume desta linha; vazio = a da fórmula, em cinza">
+      <button type="button" class="sug-limpar" data-aj-limpar="${chave}" title="Voltar para a fórmula" aria-label="Voltar para a fórmula" hidden>${icone("x")}</button>
+    </span>${unidade ? `<small class="fraco un">${esc(unidade)}</small>` : ""}<small class="fraco sug-aj-nota"></small></td>`;
+}
+
+// Linha somada (área, produto de vários vendedores ou de várias áreas) que tem ajuste: a marca, com a fórmula.
+function marcaAjuste(x, unidade) {
+  const aj = x.linha && x.linha.ajuste;
+  const quem = aj ? `ajustada${aj.salva_por ? ` por ${esc(aj.salva_por)}` : ""}${aj.salva_em ? ` em ${fmt.dataHora(aj.salva_em)}` : ""}`
+    : `${x.ajustes} linha${x.ajustes === 1 ? "" : "s"} com a meta de volume ajustada pelo administrador`;
+  const tt = `<div class='tt-t'>Meta de volume ajustada</div>${quem}<br>pela fórmula: ${fmt.num(x.meta_formula, 1)}${unidade ? ` ${esc(unidade)}` : ""}`;
+  return `<small class="sug-aj-marca" data-tt="${esc(tt)}">${icone("ajustes")}${x.ajustes > 1 ? `${x.ajustes} ajustes` : "ajustado"}</small>`;
+}
+
+function pintarAjustes() {
+  document.querySelectorAll("#s-conteudo input[data-aj], .tela-cheia input[data-aj]").forEach((i) => pintarAjuste(i.dataset.aj));
+}
+
+// Cor, × e nota da célula e o R$ da linha, sem redesenhar a tabela (o cursor continua no campo).
+function pintarAjuste(chave) {
+  const l = estado.linhas[chave];
+  const inp = document.querySelector(`input[data-aj="${chave}"]`);
+  if (!l || !inp) return;
+  const r = estado.rasc[chave];
+  const valor = r ? r.volume : l.salvo;
+  const invalido = valor != null && !(valor >= 0);
+  const caixa = inp.closest(".sug-aj");
+  caixa.classList.toggle("ajustado", valor != null && !invalido);
+  caixa.classList.toggle("rasc", !!r);
+  caixa.classList.toggle("invalido", invalido);
+  caixa.querySelector("[data-aj-limpar]").hidden = valor == null && !invalido;
+  const nota = inp.closest("td").querySelector(".sug-aj-nota");
+  nota.textContent = [invalido ? "use um número a partir de zero" : valor != null ? `fórmula ${fmt.num(l.formula, 1)}` : "",
+    r ? "falta salvar" : ""].filter(Boolean).join(" · ");
+  nota.title = l.salvo != null && l.quem ? `Ajustada por ${l.quem}${l.quando ? ` em ${fmt.dataHora(l.quando)}` : ""}` : "";
+  const rs = document.querySelector(`[data-aj-rs="${chave}"]`);
+  if (rs) {
+    const vol = valor == null ? l.formula : invalido ? null : valor;
+    const antes = (l.salvo ?? l.formula) * l.preco;
+    rs.innerHTML = `${vol == null ? "—" : fmt.moeda(vol * l.preco)}${r ? `<small class="fraco">era ${fmt.moeda(antes)}</small>` : ""}`;
+  }
+}
+
+function aoDigitar(e) {
+  const inp = e.target.closest?.("input[data-aj]");
+  if (!inp) return;
+  const t = inp.value.trim();
+  definirAjuste(inp.dataset.aj, t === "" ? (inp.validity.badInput ? NaN : null) : Number(t));
+}
+
+// volume null = volta para a fórmula; igual ao gravado = sem alteração.
+function definirAjuste(chave, volume) {
+  const l = estado.linhas[chave];
+  if (!l) return;
+  const igual = volume == null ? l.salvo == null : l.salvo != null && Math.abs(volume - l.salvo) < 1e-6;
+  if (igual) delete estado.rasc[chave]; else estado.rasc[chave] = { ...l, volume };
+  pintarAjuste(chave);
+  atualizarBarra();
+}
+
+function atualizarBarra() {
+  const barra = document.getElementById("s-barra");
+  if (!barra) return;
+  const itens = Object.values(estado.rasc);
+  barra.classList.toggle("visivel", itens.length > 0);
+  if (!itens.length) return;
+  const dif = itens.reduce((s, r) => {
+    const vol = r.volume == null ? r.formula : r.volume >= 0 ? r.volume : r.salvo ?? r.formula;
+    return s + (vol - (r.salvo ?? r.formula)) * r.preco;
+  }, 0);
+  const d = estado.dados;
+  const nome = (v) => d?.opcoes.vendedores.find((x) => x.id === v)?.nome || `vendedor ${v}`;
+  const aprovadas = [...new Set(itens.map((r) => r.v))].filter((v) => d?.resumo.find((x) => x.id === v)?.aprovada).map(nome);
+  document.getElementById("s-barra-n").textContent = `${itens.length === 1 ? "1 ajuste não salvo" : `${itens.length} ajustes não salvos`}`
+    + ` · meta ${dif >= 0 ? "+" : "−"}${fmt.moeda(Math.abs(dif))}`
+    + (aprovadas.length ? ` · muda a meta aprovada de ${aprovadas.join(", ")}` : "");
+}
+
+async function salvarAjustes() {
+  const itens = Object.values(estado.rasc);
+  if (!itens.length || !estado.rascDe) return;
+  const ruim = itens.find((r) => r.volume != null && !(r.volume >= 0));
+  if (ruim) { toast(`A meta de volume de ${ruim.nome} precisa ser um número a partir de zero.`, "erro"); return; }
+  const [uf, mes] = estado.rascDe.split("|");
+  const btn = document.getElementById("s-salvar");
+  btn.disabled = true;
+  try {
+    const r = await api("/api/sugestao/ajustes", { json: { estado: uf, mes, itens: itens.map((x) => (
+      { id_vendedor: x.v, id_area: x.a, id_produto: x.p, meta_volume: x.volume })) } });
+    estado.rasc = {};
+    atualizarBarra();
+    toast(r.aprovadas.length ? `Ajustes gravados; a meta aprovada de ${r.aprovadas.join(", ")} mudou junto`
+      : `${r.gravados === 1 ? "Ajuste gravado" : `${r.gravados} ajustes gravados`}`);
+    if (ctx.aoAjustar) ctx.aoAjustar(r.aprovadas.length > 0);
+    carregar(true);
+  } catch (e) {
+    toast(e.message, "erro");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ---------- resumo dos vendedores ----------
@@ -477,6 +669,10 @@ function comoCalcula(d, i) {
           <li><b>Meta (volume):</b> por faturamento × sazonalidade × faturamentos de ${esc(m.rotulo_meta)} × crescimento proposto.</li>
           <li><b>Meta (R$):</b> a meta em volume × o preço médio do mês base, que é o faturamento <b>bruto</b> ÷ o volume vendido
             (sem descontar devoluções). O total é a soma das linhas, e "todos os vendedores" é a soma da sugestão de cada um.</li>
+          <li><b>Ajustes do administrador:</b> a meta de volume de uma linha (${ba ? "no BA, o produto dentro da área, na tabela Por área" : "no ES, o produto de um vendedor"})
+            pode ser trocada na tabela; a linha fica marcada como ajustada e a fórmula aparece em cinza. A meta em R$ dela é o
+            volume ajustado × o preço médio, e o resto da página soma com o ajuste. Se a meta do vendedor já está aprovada
+            (Configurar › Aprovação de metas), a aprovada ganha a mesma diferença no produto e em R$; os outros produtos não mudam.</li>
         </ol>
         <h4>Diferenças em relação ao Power BI</h4>
         <ul class="metodo-passos">

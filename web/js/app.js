@@ -7,7 +7,7 @@ import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
-import { montarSugestao, recarregarSugestao } from "./sugestao.js";
+import { montarSugestao, recarregarSugestao, sugestaoTemAlteracoes } from "./sugestao.js";
 import { montarConfigSugestao, configSugestaoTemAlteracoes } from "./configsugestao.js";
 import { montarPremiacoes, recarregarPremiacoes } from "./premiacoes.js";
 import { montarConfigPremiacoes, configPremiacoesTemAlteracoes } from "./configpremiacoes.js";
@@ -62,7 +62,12 @@ const PAGINAS = {
   sugestao: {
     nome: "Sugestão de Metas",
     titulo: "Sugestão de metas",
-    montar: (el) => montarSugestao(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("sugestao", d) }),
+    pendente: sugestaoTemAlteracoes,
+    // Ajustar a meta de volume de quem tem a meta aprovada muda o painel de Metas: as outras páginas de dados remontam.
+    montar: (el) => montarSugestao(el, {
+      admin: ehAdmin(), subtitulo: (d) => subtitulo("sugestao", d),
+      aoAjustar: (aprovadas) => { if (aprovadas) PAGINAS_DE_DADOS.filter((p) => p !== "sugestao").forEach((p) => app.remontar.add(p)); },
+    }),
     recarregar: recarregarSugestao,
   },
   "config-sugestao": {

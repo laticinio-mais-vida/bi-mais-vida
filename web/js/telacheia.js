@@ -5,6 +5,7 @@
 import { icone, animarContadores, animarEntradas } from "./util.js";
 
 let ativo = null;
+let ativoJunto = [];  // [elemento, marcador do lugar dele] levados para a camada da tela cheia
 
 export function ligarTelaCheia(raiz) {
   raiz.querySelectorAll(".cartao").forEach((card) => {
@@ -37,6 +38,8 @@ export function sairTelaCheia(sairDoNavegador = true) {
   card.style.width = "";
   if (marcador.parentNode) marcador.replaceWith(card);
   ["tooltip", "toasts"].forEach((id) => document.body.appendChild(document.getElementById(id)));
+  ativoJunto.forEach(([el, lugar]) => lugar.parentNode && lugar.replaceWith(el));
+  ativoJunto = [];
   document.getElementById("tooltip").hidden = true;
   camada.remove();
   document.body.classList.remove("sem-rolagem");
@@ -54,6 +57,7 @@ export function sairTelaCheia(sairDoNavegador = true) {
 function entrar(card) {
   if (ativo) sairTelaCheia(false);
   const r = card.getBoundingClientRect();
+  const pagina = card.closest(".pagina");  // antes de o cartão ir para a camada
   const camada = document.createElement("div");
   camada.className = "tela-cheia";
   // Pedir a tela cheia ainda dentro do clique (o navegador só permite assim); se não der, fica a camada.
@@ -68,6 +72,13 @@ function entrar(card) {
   card.before(marcador);
   camada.querySelector(".tc-palco").appendChild(card);
   ["tooltip", "toasts"].forEach((id) => camada.appendChild(document.getElementById(id)));
+  // o que a página quer à vista em tela cheia (ex.: a barra Salvar dos ajustes da Sugestão de Metas)
+  ativoJunto = [...(pagina ? pagina.querySelectorAll("[data-acompanha-tela-cheia]") : [])].map((el) => {
+    const lugar = document.createComment("lugar de um elemento em tela cheia");
+    el.before(lugar);
+    camada.appendChild(el);
+    return [el, lugar];
+  });
   card.classList.add("em-tela-cheia");
   const btn = card.querySelector(":scope > .btn-tela-cheia");
   btn.innerHTML = icone("recolher");

@@ -2646,6 +2646,15 @@ table.sug-tabela th, table.sug-tabela td { padding: 8px 10px; }
 .sug-abrir:hover { background: var(--surface-3); }
 .sug-abrir .ic { width: 16px; height: 16px; }
 .sug-tabela tbody.aberto .sug-abrir { transform: rotate(90deg); }
+/* ajuste da meta de volume (só o administrador) */
+.sug-tabela td.sug-aj-cel { white-space: nowrap; }
+.sug-tabela .sug-aj input { width: 92px; }
+.sug-tabela .sug-aj.rasc input { border-style: dashed; border-color: var(--laranja); }
+.sug-tabela .sug-aj.invalido input { border-color: var(--ruim); background: color-mix(in srgb, var(--ruim) 8%, var(--surface)); }
+.sug-tabela td small.sug-aj-nota:empty { display: none; }
+.sug-tabela .sug-aj + small.un { margin-left: 4px; }
+.sug-tabela small.sug-aj-marca { display: inline-flex; align-items: center; gap: 3px; width: max-content; margin-top: 2px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--laranja) 14%, transparent); color: color-mix(in srgb, var(--laranja) 70%, var(--tinta)); font-size: 11px; font-weight: 700; cursor: help; }
+.sug-aj-marca .ic { width: 11px; height: 11px; }
 .sug-resumo tbody tr[data-vendedor] { cursor: pointer; }
 .sug-resumo tbody tr[data-vendedor]:hover td { color: var(--acento-tinta); }
 .sug-resumo tbody tr.sel td { background: var(--rel-meta); font-weight: 700; }

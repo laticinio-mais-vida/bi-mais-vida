@@ -15,6 +15,7 @@ from pathlib import Path
 
 import duckdb
 
+from bi.ajustes import AjustesVolume
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas, distribuir, juntar
 from bi.assistente import _metas_produto, _metas_vendedor
 from bi.banco import BancoForaDoAr
@@ -96,7 +97,10 @@ class TestJuntar(unittest.TestCase):
         self.assertEqual(metas.versao, (1, 0))
 
 
-class TestAprovacao(BaseBanco):
+class BaseAprovacao(BaseBanco):
+    """O cache sintético com a carteira, as aprovadas e os ajustes de volume no banco de teste (tests/test_ajustes.py
+    também usa)."""
+
     def setUp(self):
         super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
@@ -121,8 +125,9 @@ class TestAprovacao(BaseBanco):
         self.calc = Calculadora(cache, MetasComAprovadas(calc.metas, self.aprovadas, "metas"),
                                 MetasComAprovadas(calc.metas_produtos, self.aprovadas, "produtos"), calc.configuracao)
         self.cfg = ConfigFixa()
+        self.ajustes = AjustesVolume(self.banco)
         self.sug = Sugestao(self.calc, self.cfg, lambda: {ORLA: [3]},
-                            lambda: {JAMILLE: "Jamille", EDIR: "Edir", RUBENS: "Rubens"}, self.aprovadas)
+                            lambda: {JAMILLE: "Jamille", EDIR: "Edir", RUBENS: "Rubens"}, self.aprovadas, self.ajustes)
         self.admin = {"id": self.criar_usuario("admin2", "admin"), "nome": "Admin2"}
 
     def tearDown(self):
@@ -138,6 +143,8 @@ class TestAprovacao(BaseBanco):
         item = {"id_vendedor": v, "aprovada": True, "versao": self.linha(aba, v)["versao"], **campos}
         return self.sug.aprovar(estado, mes, [item], self.admin)
 
+
+class TestAprovacao(BaseAprovacao):
     def test_aba(self):
         aba = self.sug.aprovacao("BA", "2026-10")
         self.assertEqual([v["id"] for v in aba["vendedores"]], [JAMILLE, EDIR])  # pela sugerida

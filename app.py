@@ -44,6 +44,7 @@ from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, es
                        escopo_gestao, escopo_premiacoes, escopo_projecoes, escopo_sugestao, paginas_permitidas,
                        vendedores_permitidos, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
+from bi.ajustes import AjustesVolume  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
 from bi.assistente import Assistente, ErroAssistente  # noqa: E402
 from bi.banco import Banco, BancoForaDoAr  # noqa: E402
@@ -97,7 +98,7 @@ ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 # Só o administrador usa: regras de cálculo, atualização forçada, cadastro de acessos e o que muda na Gestão.
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
-               "/api/sugestao/aprovacao", "/api/premiacoes/config", "/api/assistente/config",
+               "/api/sugestao/aprovacao", "/api/sugestao/ajustes", "/api/premiacoes/config", "/api/assistente/config",
                "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
@@ -151,9 +152,10 @@ class Aplicacao:
                                      conversas=self.conversas, reanalises=self.reanalises)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
         self.config_sugestao = ConfigSugestao(self.banco)
-        # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda.
+        # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda; os ajustes de volume da
+        # página ficam no banco (e mudam junto a meta aprovada).
         self.sugestao = Sugestao(self.calc, self.config_sugestao, self.gestao._areas, self.projetor._nomes_vendedores,
-                                 self.metas_aprovadas)
+                                 self.metas_aprovadas, AjustesVolume(self.banco))
         self.config_premiacoes = ConfigPremiacoes(self.banco)
         self.premiacoes = Premiacoes(self.calc, self.config_premiacoes, self.projetor._nomes_vendedores)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
@@ -942,6 +944,13 @@ class Manipulador(BaseHTTPRequestHandler):
                 r = self.app.sugestao.aprovar(corpo.get("estado"), corpo.get("mes"), itens, usuario)
                 log.info("%s gravou a aprovação de metas do %s em %s (%s vendedor(es))", usuario["login"], r["estado"],
                          r["mes"]["meta"], len(itens))
+                return self._json({"ok": True, **r})
+            if url.path == "/api/sugestao/ajustes":  # a meta de volume de linhas da sugestão, na própria página
+                corpo = self._corpo_json()
+                r = self.app.sugestao.ajustar(corpo.get("estado"), corpo.get("mes"), corpo.get("itens"), usuario)
+                log.info("%s gravou %s ajuste(s) de volume da sugestão do %s em %s%s", usuario["login"], r["gravados"],
+                         r["estado"], r["mes"], f" (aprovadas alteradas: {', '.join(r['aprovadas'])})"
+                         if r["aprovadas"] else "")
                 return self._json({"ok": True, **r})
             if url.path in ("/api/credito/reanalise", "/api/credito/reanalise/excluir"):
                 return self._mudar_reanalise(usuario, url.path, self._corpo_json())

@@ -205,7 +205,8 @@ da METAS.xlsx; no ES, a sugestão é a referência para a meta.
 - **Evolução:** o volume de cada mês do ano do mês base e do ano anterior e a sazonalidade de cada mês para o seguinte, como
   no Power BI. Clicar num produto da tabela mostra o gráfico só dele.
 - **Meta por produto:** volume base, faturamentos, sazonalidade, acumulado do ano, crescimento proposto, meta em volume, preço
-  médio e meta em R$. No BA, também **por área**, com os produtos de cada área.
+  médio e meta em R$. No BA, também **por área**, com os produtos de cada área. O administrador pode **ajustar a meta de
+  volume** de uma linha na própria tabela (veja [Ajustes de volume](#ajustes-de-volume-na-página)).
 - **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada
   (a aprovada no painel, com ✓, ou a da METAS.xlsx; Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
 - **Como a sugestão é calculada:** o passo a passo com os números em vigor.
@@ -235,6 +236,28 @@ carteira de cada vendedor (o cliente repassado leva o histórico, como nas Proje
 "Quantidades Faturamentos.xlsx"), e um aviso diz quantos clientes e quanto do mês base ficaram fora. Mês base ainda aberto
 também tem aviso.
 
+### Ajustes de volume na página
+
+O administrador troca a meta de volume que a fórmula deu numa linha da conta, na própria tabela da página:
+
+- **Onde:** no BA, só na visão **Por área**, no produto dentro da área (a conta do BA é por vendedor × área × produto); a visão
+  Por produto mostra a soma, marcada como ajustada. No ES, na tabela por produto, sem filtro de área (a conta do ES junta as
+  áreas; com o filtro, a parte da área acompanha o ajuste no mesmo %). Só a linha de **um vendedor só** tem campo: um
+  produto que soma vários vendedores (13 das 39 áreas do BA têm mais de um) pede o filtro de vendedor.
+- **Como:** digita o volume (em cinza, o da fórmula); a linha mostra a meta em R$ nova (volume × o preço médio da linha) e a
+  barra soma a diferença. Vale depois de **Salvar ajustes**; o × volta para a fórmula. Trocar de estado ou mês pergunta antes
+  de descartar o que não foi salvo. Exemplo (Jamille, nov/26, Mussarela Mais Vida 4kg na PS - ORLA): a fórmula dá 1.539,9 kg
+  × R$ 39,14 = R$ 60.269; com 2.000 kg, R$ 78.276, e a meta sugerida dela sobe R$ 18.006.
+- **O que muda:** tudo que soma as linhas usa o ajuste: o total do produto e da área, os cartões, o resumo dos vendedores, a
+  **Sugerida** da Aprovação de metas e o Assistente. O número digitado não muda quando a conta muda depois.
+- **Meta já aprovada:** o produto ganha (ou perde) na aprovada a **mesma diferença** de volume, e a meta em R$ muda diferença
+  × preço da linha; os outros produtos não mudam, e a aprovação mostra "alterada por". Para isso o retrato da aprovada anda
+  pelo fator dela (meta ÷ sugerida), que fica igual: editar o R$ em Configurar continua movendo todos os produtos (os
+  ajustados também) no mesmo %. A barra avisa "muda a meta aprovada de …" antes de salvar.
+- **Linha que sai da conta** (cliente repassado, área sem faturamento, sem venda no mês base): o ajuste deixa de contar, e o
+  administrador vê um aviso. Produto sem venda no mês base não tem linha, então não dá para criar meta para ele.
+- **Só no site**, como a aprovação: os ajustes ficam na tabela `sugestao_ajustes` do banco onde foram salvos.
+
 ### Configurar (Sugestão de Metas)
 
 O botão **Configurar** (só administradores) tem três seções. As duas primeiras são as regras da conta, gravadas no banco
@@ -256,9 +279,10 @@ outras linhas; no BA, a meta de volume por produto na aba Produtos BA), no Assis
 METAS.xlsx e da METAS PRODUTOS.xlsx daquele vendedor e mês**. Os outros vendedores e meses seguem as planilhas. Um mês
 aprovado aparece no filtro de Metas mesmo sem estar nas planilhas.
 
-- **Meta (R$):** vem com a sugestão, arredondada ao real, e pode ser editada. A **meta de volume** de cada produto muda no
-  mesmo percentual: no BA, volume sugerido × (meta aprovada ÷ sugerida). Clicar no nome do vendedor mostra os produtos com a
-  meta de volume que vai para o painel.
+- **Meta (R$):** vem com a sugestão (com os ajustes de volume da página), arredondada ao real, e pode ser editada. A **meta
+  de volume** de cada produto muda no mesmo percentual: no BA, volume sugerido × (meta aprovada ÷ sugerida). Clicar no nome
+  do vendedor mostra os produtos com a meta de volume que vai para o painel. A meta de volume de um produto se ajusta na
+  própria página (veja [Ajustes de volume](#ajustes-de-volume-na-página)).
 - **Mussarela (só no ES):** vem com a soma dos produtos do grupo mussarela da sugestão (Configurações das metas). O
   administrador pode mudar, e outras linhas é o resto. Ao editar o total, a mussarela acompanha no mesmo percentual. Os
   produtos de mussarela seguem o fator da mussarela, e os outros o das outras linhas.
@@ -1096,6 +1120,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `campanha_produtos` | o preço-alvo de cada produto nas ações e objetivos de preço médio |
 | `areas_atendimento` | os dias de atendimento de cada área comercial (efetividade) |
 | `metas_aprovadas` | as metas aprovadas na Sugestão de Metas (migração 025): uma linha por gravação (vale a última de cada vendedor × mês; `aprovada` falso = retirada), com o total, a mussarela e as outras linhas, os clientes, o retrato da sugestão (`sugerida_fat`, `sugerida_mus`, os clientes da carteira) e a meta de volume de cada produto (`produtos`) |
+| `sugestao_ajustes` | os ajustes de volume da página Sugestão de Metas (migração 037): uma linha por ajuste em vigor (mês da meta × vendedor × área × produto; área 0 no ES), com o volume e quem salvou; apagar volta para a fórmula |
 | `agenda_atividades` e `agenda_registros` | a agenda de cada pessoa: as atividades com a repetição e o horário, e cada dia concluído com o feedback (migrações 018 e 019); o fim do horário, o horário ocupado e a única de vários dias (migração 026) |
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030); a subtarefa automática, com os dois dias em que aparece (migração 035). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
@@ -1246,7 +1271,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
 | `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
-| `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê |
+| `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |
+| `bi/ajustes.py` | ajustes de volume da página Sugestão de Metas (tabela sugestao_ajustes): os em vigor, em memória, e a gravação que leva a diferença para a meta aprovada na mesma transação |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |

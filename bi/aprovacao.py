@@ -12,6 +12,9 @@ a planilha. Fica no banco de onde foi aprovada (o site): o painel do PC continua
   mussarela pelo fator da mussarela e os outros pelo das outras linhas. Volume × preço soma o total aprovado.
 - Cada gravação é uma linha nova na tabela metas_aprovadas (migração 025), com quem salvou; vale a última de cada
   vendedor × mês, e aprovada = false é a aprovação retirada.
+- Os ajustes de volume da página (bi/ajustes.py) entram na aprovada com a mesma diferença (somar_ajustes): o produto
+  ganha o volume que a linha ganhou na página e a meta em R$ ganha diferença × preço da linha; os outros produtos não
+  mudam.
 """
 from __future__ import annotations
 
@@ -46,6 +49,77 @@ def distribuir(produtos: list[dict], meta_fat: float, meta_mus: float, es: bool)
     saida = [{**p, "meta_volume": round(p["volume_sugerido"] * (fm if p["grupo"] == "mussarela" else fo), 4)}
              for p in produtos]
     return saida, sobra
+
+
+def _fator(alvo: float, soma: float) -> float | None:
+    """O fator de distribuir() de um grupo (meta ÷ sugerida). Sem produto e sem meta no grupo, 1: o produto que entrar
+    fica com o volume do ajuste. None = não dá para somar um ajuste sem mexer nos outros produtos (meta zerada com
+    produtos, ou meta sem produto para ir)."""
+    if soma > 0 and alvo > 0:
+        return alvo / soma
+    if soma <= 0 and alvo < 0.005:
+        return 1.0
+    return None
+
+
+def somar_ajustes(aprovada: dict, deltas: dict[int, dict]) -> dict:
+    """A aprovação com os ajustes de volume da página: deltas = {produto: {"volume": diferença de volume, "rs": diferença
+    × preço de cada linha, "produto", "unidade", "grupo"}}. O produto ganha a diferença na meta de volume e a meta em
+    R$ ganha a diferença em R$; os outros produtos não mudam. Para isso o retrato (volume sugerido e preço do produto,
+    sugerida) anda pelo fator da aprovação (meta ÷ sugerida; no ES, o do grupo), que fica igual: as edições do R$ em
+    Configurar continuam movendo todos os produtos no mesmo %. A meta de volume de um produto não fica abaixo de zero."""
+    es = aprovada["estado"] == "ES"
+    nome = aprovada["vendedor"]
+    produtos = [dict(p) for p in aprovada["produtos"]]
+    por_id = {p["id"]: p for p in produtos}
+    soma = lambda mus: sum(p["volume_sugerido"] * p["preco"] for p in produtos  # noqa: E731
+                           if (p["grupo"] == "mussarela") == mus)
+    meta_fat, meta_mus = aprovada["meta_fat"], aprovada["meta_mus"] if es else 0.0
+    if es:
+        fatores = {"mussarela": _fator(meta_mus, soma(True)), "outras": _fator(meta_fat - meta_mus, soma(False))}
+    else:
+        f = _fator(meta_fat, soma(True) + soma(False))
+        fatores = {"mussarela": f, "outras": f}
+    sug_fat, sug_mus = aprovada["sugerida_fat"], aprovada["sugerida_mus"]
+    for pid, d in deltas.items():
+        p = por_id.get(pid)
+        grupo = p["grupo"] if p else d["grupo"]
+        f = fatores[grupo]
+        if f is None:
+            qual = f"a meta de {'mussarela' if grupo == 'mussarela' else 'outras linhas'}" if es else "a meta"
+            raise ValueError(f"{qual} aprovada de {nome} não tem como receber o ajuste de {d['produto']} sem mexer nos "
+                             "outros produtos: confira a aprovação em Configurar")
+        dv, drs = d["volume"], d["rs"]
+        if p is None:
+            if dv <= 0:
+                continue
+            p = {"id": pid, "produto": d["produto"], "unidade": d["unidade"], "grupo": grupo, "volume_sugerido": 0.0,
+                 "preco": drs / dv}
+            produtos.append(p)
+            por_id[pid] = p
+        valor = p["volume_sugerido"] * p["preco"]  # o R$ do produto no retrato
+        volume = p["volume_sugerido"] + dv / f
+        novo = valor + drs / f
+        if volume <= 1e-9 or novo <= 0:  # o produto fica sem meta: sai o que ele tinha
+            volume, novo = 0.0, 0.0
+            drs = -valor * f
+        else:
+            p["preco"] = novo / volume
+        p["volume_sugerido"] = volume
+        meta_fat += drs
+        sug_fat += (novo - valor)
+        if grupo == "mussarela":
+            sug_mus += (novo - valor)
+            if es:
+                meta_mus += drs
+    meta_fat = round(meta_fat, 2)
+    if meta_fat <= 0:
+        raise ValueError(f"a meta aprovada de {nome} ficaria zerada: retire a aprovação em Configurar")
+    meta_mus = round(min(max(meta_mus, 0.0), meta_fat), 2) if es else 0.0
+    lista, _ = distribuir(produtos, meta_fat, meta_mus, es)
+    return {**aprovada, "meta_fat": meta_fat, "meta_mus": meta_mus,
+            "meta_out": round(meta_fat - meta_mus, 2) if es else 0.0,
+            "sugerida_fat": round(sug_fat, 2), "sugerida_mus": round(sug_mus, 2), "produtos": lista}
 
 
 def juntar(base: list[dict], vigentes: list[dict], tipo: str) -> list[dict]:
@@ -144,17 +218,34 @@ class MetasAprovadas:
                     raise ValueError(f"a meta de {r['vendedor']} foi alterada{quem} em {_quando(atual and atual[2])} "
                                      "enquanto você editava; recarregue a aba para ver a versão nova")
             for r in registros:
-                con.execute(
-                    "INSERT INTO metas_aprovadas (mes, id_vendedor, estado, aprovada, vendedor, meta_fat, meta_mus, "
-                    "meta_out, meta_cli, sugerida_fat, sugerida_mus, clientes_carteira, clientes_dia, produtos, salva_por, "
-                    "salva_por_nome) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
-                    "(SELECT id FROM usuarios WHERE id = %s), %s)",
-                    [mes, r["id_vendedor"], r["estado"], r["aprovada"], r["vendedor"], r["meta_fat"], r["meta_mus"],
-                     r["meta_out"], r["meta_cli"], r["sugerida_fat"], r["sugerida_mus"], r["clientes_carteira"],
-                     r["clientes_dia"], json.dumps(r["produtos"], ensure_ascii=False), autor and autor["id"],
-                     autor and autor["nome"]])
-        with self._trava:  # relê no próximo uso
+                inserir(con, mes, r, autor)
+        self.esquecer()
+
+    def esquecer(self) -> None:
+        """Relê as aprovadas no próximo uso (depois de gravar nelas, aqui ou nos ajustes da página)."""
+        with self._trava:
             self._vigentes, self._falhou_em = None, None
+
+
+def ultimas(con, mes: dt.date, vendedores) -> dict[int, dict]:
+    """A última linha de cada vendedor no mês (aprovada ou retirada), dentro da transação de quem vai gravar."""
+    linhas = con.execute(f"SELECT DISTINCT ON (id_vendedor) {', '.join(CAMPOS)} FROM metas_aprovadas "
+                         "WHERE mes = %s AND id_vendedor = ANY(%s) ORDER BY id_vendedor, id DESC",
+                         [mes, list(vendedores)]).fetchall()
+    return {x["id_vendedor"]: x for x in map(_linha, linhas)}
+
+
+def inserir(con, mes: dt.date, r: dict, autor: dict | None) -> None:
+    """Uma linha nova em metas_aprovadas (a gravação vale a partir dela)."""
+    con.execute(
+        "INSERT INTO metas_aprovadas (mes, id_vendedor, estado, aprovada, vendedor, meta_fat, meta_mus, "
+        "meta_out, meta_cli, sugerida_fat, sugerida_mus, clientes_carteira, clientes_dia, produtos, salva_por, "
+        "salva_por_nome) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
+        "(SELECT id FROM usuarios WHERE id = %s), %s)",
+        [mes, r["id_vendedor"], r["estado"], r["aprovada"], r["vendedor"], r["meta_fat"], r["meta_mus"],
+         r["meta_out"], r["meta_cli"], r["sugerida_fat"], r["sugerida_mus"], r["clientes_carteira"],
+         r["clientes_dia"], json.dumps(r["produtos"], ensure_ascii=False), autor and autor["id"],
+         autor and autor["nome"]])
 
 
 class MetasComAprovadas:
