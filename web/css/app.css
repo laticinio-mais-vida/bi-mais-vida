@@ -1019,10 +1019,22 @@ body.sem-rolagem { overflow: hidden; }
   padding: 14px 16px 10px; background: var(--surface); border-bottom: 1px solid var(--linha);
 }
 .pa-cab b { font-size: 15px; }
+.pa-cab-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 14px; }
 .pa-cab .ge-link { font-size: 12.5px; }
 .pa-lista { display: grid; gap: 2px; margin: 0; padding: 6px; list-style: none; }
+.pa-linha { position: relative; }
+/* a lixeira fica por cima do canto do item (o item guarda o espaço dela), ao passar o mouse ou com o foco */
+.pa-excluir {
+  position: absolute; top: 11px; right: 8px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--tinta-3); cursor: pointer; visibility: hidden;
+}
+.pa-excluir .ic { width: 15px; height: 15px; }
+.pa-linha:hover .pa-excluir, .pa-linha:focus-within .pa-excluir { visibility: visible; }
+.pa-excluir:hover { background: var(--surface-3); color: var(--ruim); }
+.pa-excluir:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; color: var(--ruim); }
+@media (hover: none) { .pa-excluir { visibility: visible; } }
 .pa-item {
-  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 12px;
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px 40px 10px 10px; border: 0; border-radius: 12px;
   background: none; color: var(--tinta); text-align: left; cursor: pointer; font: 500 13px/1.4 var(--f-texto);
   transition: background .2s;
 }

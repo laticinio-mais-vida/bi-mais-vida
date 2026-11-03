@@ -63,6 +63,29 @@ class TestNotificacoes(BaseBanco):
         with self.assertRaises(ValueError):
             self.notificacoes.marcar_lidas(self.beto, ["um"])
 
+    def test_excluir(self):
+        """A excluída sai da lista e do número; a de outra pessoa fica; o aviso de prazo excluído não volta."""
+        self.criar()
+        self.limpar()
+        self.relogio["agora"] = dt.datetime(2026, 10, 27, 8, 0)  # véspera do Estande
+        self.tarefas.gerar_avisos(self.beto)
+        with self.banco.conexao() as con:
+            avisar(con, [self.beto, self.caio], "concluida", "x", self.ana, None)
+        (x, estande) = self.notificacoes.listar(self.beto)["itens"]
+        self.assertEqual(self.notificacoes.excluir(self.ana, [x["id"]]), 0)  # as do Beto não são da Ana
+        self.assertEqual(self.notificacoes.contar(self.beto), 2)
+        self.assertEqual(self.notificacoes.excluir(self.beto, [estande["id"]]), 1)  # não lida: sai do número também
+        self.tarefas.gerar_avisos(self.beto)  # o "vence em breve" do Estande não volta
+        self.assertEqual(self.textos(self.beto), [("concluida", "x")])
+        self.assertEqual(self.notificacoes.excluir(self.beto, todas=True), 0)
+        self.assertEqual(self.notificacoes.listar(self.beto), {"nao_lidas": 0, "itens": []})
+        self.assertEqual(self.textos(self.caio), [("concluida", "x")])
+        self.relogio["agora"] = dt.datetime(2026, 10, 28, 8, 0)  # véspera do Material: aviso novo, depois da exclusão
+        self.tarefas.gerar_avisos(self.beto)
+        self.assertEqual(self.textos(self.beto), [("vence_em_breve", "“Material” vence amanhã (29/10)")])
+        with self.assertRaises(ValueError):
+            self.notificacoes.excluir(self.beto, ["um"])
+
     def test_avisos_das_acoes(self):
         t = self.criar()
         self.assertEqual(self.textos(self.beto), [("incluido", "Ana incluiu você na tarefa “Feira” (prazo 30/10 às "

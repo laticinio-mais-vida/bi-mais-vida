@@ -7,6 +7,8 @@ tarefas da agenda (bi/tarefas.py). Uma linha por aviso e por pessoa (notificacoe
 - Avisos de prazo (vence em breve, venceu): o servidor do site não tem nada rodando de tempos em tempos, então eles
   nascem quando o painel de quem recebe pergunta (Tarefas.gerar_avisos), uma vez só por item e por prazo (chave).
 - Ficam DIAS_GUARDAR dias (limpar). A lista traz os MAX_LISTA mais recentes; ler um aviso (ou todos) marca como lido.
+- Excluir (um aviso ou todos) só esconde do sino (excluida_em, migração 036): a linha fica até a limpeza, para o aviso
+  de prazo, que tem chave, não voltar no minuto seguinte.
 """
 from __future__ import annotations
 
@@ -40,8 +42,7 @@ class Notificacoes:
     def contar(self, usuario: int) -> int:
         """Quantas a pessoa ainda não leu (o número no sino)."""
         with self.banco.conexao() as con:
-            return con.execute("SELECT count(*) FROM notificacoes WHERE usuario = %s AND lida_em IS NULL",
-                               [usuario]).fetchone()[0]
+            return _nao_lidas(con, usuario)
 
     def listar(self, usuario: int) -> dict:
         """As MAX_LISTA mais recentes, da mais nova para a mais antiga, e quantas não foram lidas."""
@@ -49,9 +50,9 @@ class Notificacoes:
             linhas = con.execute(
                 "SELECT n.id, n.tipo, n.texto, n.tarefa, n.subtarefa, n.autor, u.nome, n.criada_em, n.lida_em "
                 "FROM notificacoes n LEFT JOIN usuarios u ON u.id = n.autor WHERE n.usuario = %s "
-                "ORDER BY n.criada_em DESC, n.id DESC LIMIT %s", [usuario, MAX_LISTA]).fetchall()
-            nao_lidas = con.execute("SELECT count(*) FROM notificacoes WHERE usuario = %s AND lida_em IS NULL",
-                                    [usuario]).fetchone()[0]
+                "AND n.excluida_em IS NULL ORDER BY n.criada_em DESC, n.id DESC LIMIT %s",
+                [usuario, MAX_LISTA]).fetchall()
+            nao_lidas = _nao_lidas(con, usuario)
         return {"nao_lidas": nao_lidas,
                 "itens": [{"id": i, "tipo": tipo, "texto": texto, "tarefa": tarefa, "subtarefa": sub,
                            "autor": {"id": autor, "nome": nome} if autor else None, "criada_em": hora(criada),
@@ -61,19 +62,40 @@ class Notificacoes:
     def marcar_lidas(self, usuario: int, ids=None, todas: bool = False) -> int:
         """Marca como lidas as notificações ids da pessoa (as de outra pessoa ficam como estão), ou todas; devolve
         quantas ainda não foram lidas."""
-        if not todas:
-            try:
-                ids = sorted({int(i) for i in ids or []})
-            except (TypeError, ValueError):
-                raise ValueError("notificações inválidas") from None
+        ids = None if todas else _ids(ids)
         with self.banco.conexao() as con:
             if todas:
                 con.execute("UPDATE notificacoes SET lida_em = now() WHERE usuario = %s AND lida_em IS NULL", [usuario])
             elif ids:
                 con.execute("UPDATE notificacoes SET lida_em = now() WHERE usuario = %s AND lida_em IS NULL "
                             "AND id = ANY(%s::bigint[])", [usuario, ids])
-            return con.execute("SELECT count(*) FROM notificacoes WHERE usuario = %s AND lida_em IS NULL",
-                               [usuario]).fetchone()[0]
+            return _nao_lidas(con, usuario)
+
+    def excluir(self, usuario: int, ids=None, todas: bool = False) -> int:
+        """Tira do sino as notificações ids da pessoa (as de outra pessoa ficam como estão), ou todas; devolve
+        quantas ainda não foram lidas."""
+        ids = None if todas else _ids(ids)
+        with self.banco.conexao() as con:
+            if todas:
+                con.execute("UPDATE notificacoes SET excluida_em = now() WHERE usuario = %s AND excluida_em IS NULL",
+                            [usuario])
+            elif ids:
+                con.execute("UPDATE notificacoes SET excluida_em = now() WHERE usuario = %s AND excluida_em IS NULL "
+                            "AND id = ANY(%s::bigint[])", [usuario, ids])
+            return _nao_lidas(con, usuario)
+
+
+def _ids(ids) -> list[int]:
+    try:
+        return sorted({int(i) for i in ids or []})
+    except (TypeError, ValueError):
+        raise ValueError("notificações inválidas") from None
+
+
+def _nao_lidas(con, usuario: int) -> int:
+    """As que estão no sino e a pessoa ainda não leu (a excluída não conta)."""
+    return con.execute("SELECT count(*) FROM notificacoes WHERE usuario = %s AND lida_em IS NULL "
+                       "AND excluida_em IS NULL", [usuario]).fetchone()[0]
 
 
 def limpar(con, usuario: int) -> None:

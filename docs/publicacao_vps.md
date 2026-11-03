@@ -700,6 +700,21 @@ README, "Kanban das tarefas"). O card não se arrasta mais; a situação se muda
 - **Ordem:** qualquer uma; não há migração e os dados que o PC manda não mudaram.
 - **Voltar atrás:** é só voltar o código; nada foi gravado de um jeito novo.
 
+#### Excluir notificações do sino (migração 036)
+
+Cada notificação do sino ganha uma lixeira, e o topo do painel ganha **Excluir todas** (veja o README, "Notificações
+(o sino)").
+
+- **Ordem:** qualquer uma: os dados que o PC manda não mudaram.
+- **A migração 036** só acrescenta `excluida_em` (vazio) em `notificacoes`; nada existente muda. A excluída fica na
+  tabela, escondida, até a limpeza dos 90 dias: assim o aviso de prazo, que sai uma vez só, não volta. Ensaie em
+  BEGIN/ROLLBACK, como as outras.
+- **Depois de publicar:** abra o sino, exclua uma notificação e recarregue a página: ela não volta, e o número cai se
+  ela não tinha sido lida.
+- **Voltar atrás:** o código anterior não conhece a coluna e mostraria de novo as que foram excluídas. Se isso
+  incomodar, antes de voltar apague-as de vez (`DELETE FROM notificacoes WHERE excluida_em IS NOT NULL`); a coluna
+  pode ficar.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

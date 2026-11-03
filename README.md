@@ -892,8 +892,10 @@ Em **Kanban**, as tarefas que você criou ou de que participa ficam em colunas p
 
 Quem tem a página Gestão vê, no topo de qualquer página, um **sino** à esquerda do nome, com o número de notificações
 não lidas. Clicar abre a lista com as 50 mais recentes; clicar numa abre a tarefa na Gestão e marca como lida, e
-**Marcar todas como lidas** zera o número. O painel confere a cada minuto e ao voltar para a aba. Ninguém recebe aviso
-do que ele mesmo fez, e as notificações ficam guardadas por 90 dias.
+**Marcar todas como lidas** zera o número. A **lixeira** de cada notificação (aparece ao passar o mouse; no celular,
+sempre) tira ela do sino, e **Excluir todas**, depois de confirmar, tira todas; não dá para desfazer. O painel confere
+a cada minuto e ao voltar para a aba. Ninguém recebe aviso do que ele mesmo fez, e as notificações ficam guardadas por
+90 dias.
 
 | Aviso | Quem recebe | Exemplo |
 |---|---|---|
@@ -908,7 +910,9 @@ do que ele mesmo fez, e as notificações ficam guardadas por 90 dias.
 Os avisos de prazo nascem quando o painel de quem recebe pergunta, uma vez só por item e por prazo: prorrogado, o
 prazo novo avisa de novo. "Vence em breve" sai no dia de antes e no do prazo, até vencer; "venceu" sai só para os
 prazos dos últimos 7 dias, para não chegar uma enxurrada de atrasos antigos. A tarefa excluída leva as notificações
-dela.
+dela. A notificação excluída no sino não volta: ela só fica escondida até completar os 90 dias (migração 036), porque
+apagada de vez, o aviso de prazo, que sai uma vez só, sairia de novo no minuto seguinte. Um prazo novo (prorrogado)
+avisa de novo, como antes.
 
 #### Google Agenda (só leitura)
 
@@ -1096,7 +1100,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_propostas` | as propostas do Assistente para a agenda que a pessoa já confirmou no botão, para não aplicar duas vezes (migração 019) |
 | `agenda_tarefas`, `agenda_tarefa_pessoas` e `agenda_subtarefas` | as tarefas da agenda: o prazo, quem participa (quem criou também, e com que autonomia) e as subtarefas de cada um, com o prazo e a conclusão (migração 020) e quando começou a ser feita, a coluna Fazendo do kanban (migração 021), a justificativa do atraso (migração 022, passada para `agenda_justificativas` pela 027) e quem concluiu a tarefa (migração 023); o título da subtarefa vai até 2000 caracteres (migração 030); a subtarefa automática, com os dois dias em que aparece (migração 035). Excluir um usuário apaga as tarefas que ele criou e as subtarefas dele nas dos outros |
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
-| `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa e quando foi lida; os avisos de prazo têm uma chave, para sair uma vez só (migração 028) |
+| `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa, quando foi lida e quando foi excluída (a excluída fica escondida até a limpeza dos 90 dias); os avisos de prazo têm uma chave, para sair uma vez só (migrações 028 e 036) |
 | `google_contas`, `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migrações 031 e 032): as contas Google conectadas (o e-mail, a autorização cifrada e se ela caiu), as agendas de cada conta (o id da agenda no Google, se é a principal, se está ligada, a assinatura da última leitura, quando foi lida e o último erro) e os eventos lidos das ligadas, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Desconectar a conta leva as agendas e os eventos dela; só o site usa |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
@@ -1251,7 +1255,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, a situação de cada tarefa e subtarefa e o kanban (as tarefas pelo vencimento) (no PostgreSQL) |
-| `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas e marcar como lidas (no PostgreSQL) |
+| `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas, marcar como lidas e excluir (no PostgreSQL) |
 | `bi/google_agenda.py` | o Google Agenda, só leitura: o login com o Google (state, PKCE e a autorização cifrada), a lista de agendas de cada conta, a leitura dos eventos pela API do Google Agenda, de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |

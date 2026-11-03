@@ -7,7 +7,8 @@
 //   já terminou), e o aviso de pedir a prorrogação a quem criou a tarefa. O que estava sendo escrito na página de trás
 //   fica como estava.
 // - O sino (no topo, à esquerda do nome): o número de notificações não lidas (bi/notificacoes.py) e, clicando, o painel
-//   com as mais recentes. Clicar numa abre a tarefa na Gestão (#/gestao?tarefa=…) e marca como lida.
+//   com as mais recentes. Clicar numa abre a tarefa na Gestão (#/gestao?tarefa=…) e marca como lida; a lixeira (ao
+//   passar o mouse) tira ela do sino, e Excluir todas, depois de confirmar, tira todas.
 import { abrirTarefaNaAgenda, atualizarTarefaAberta, recarregarAgenda } from "./agenda.js";
 import { api, esc, fmt, icone, toast } from "./util.js";
 
@@ -94,17 +95,24 @@ function fecharPainel() {
 function desenharPainel(d) {
   if (painel.hidden) return; // fechou enquanto a lista chegava
   contarNaoLidas(d.nao_lidas);
-  painel.innerHTML = `<div class="pa-cab"><b>Notificações</b>
-      ${d.nao_lidas ? `<button type="button" class="ge-link" data-ler-todas>Marcar todas como lidas</button>` : ""}</div>
+  painel.innerHTML = `<div class="pa-cab"><b>Notificações</b>${d.itens.length ? `<span class="pa-cab-acoes">
+      ${d.nao_lidas ? `<button type="button" class="ge-link" data-ler-todas>Marcar todas como lidas</button>` : ""}
+      <button type="button" class="ge-link" data-excluir-todas>Excluir todas</button></span>` : ""}</div>
     ${d.itens.length ? `<ul class="pa-lista">${d.itens.map(itemAviso).join("")}</ul>`
       : `<p class="pa-vazio">${icone("sino")}Nenhuma notificação por enquanto.</p>`}`;
 }
 
 function itemAviso(n) {
-  return `<li><button type="button" class="pa-item ${n.lida ? "" : "nova"}" data-aviso="${n.id}" data-tarefa="${n.tarefa || ""}">
+  return `<li class="pa-linha"><button type="button" class="pa-item ${n.lida ? "" : "nova"}" data-aviso="${n.id}" data-tarefa="${n.tarefa || ""}">
     <span class="pa-ic pa-${n.tipo}">${icone(ICONE_AVISO[n.tipo] || "info")}</span>
     <span class="pa-txt"><span>${esc(n.texto)}</span><small>${quandoFoi(n.criada_em)}</small></span>
-  </button></li>`;
+  </button>
+  <button type="button" class="pa-excluir" data-excluir="${n.id}" title="Excluir" aria-label="Excluir a notificação">${icone("lixeira")}</button></li>`;
+}
+
+// Pede a lista de novo e redesenha o painel (depois de marcar como lidas ou excluir).
+async function recarregarPainel() {
+  desenharPainel(await api("/api/notificacoes").catch(() => ({ nao_lidas: 0, itens: [] })));
 }
 
 // "agora", "há 5 min", "há 3 h" (hoje), "ontem às 14:03" ou "26/10 às 14:03".
@@ -123,18 +131,37 @@ async function aoClicarPainel(e) {
   const b = e.target.closest("button");
   if (!b) return;
   if ("lerTodas" in b.dataset) {
-    if (await marcarLidas({ todas: true })) desenharPainel(await api("/api/notificacoes").catch(() => ({ nao_lidas: 0, itens: [] })));
+    if (await mudar("lidas", { todas: true })) await recarregarPainel();
     return;
   }
+  if ("excluirTodas" in b.dataset) {
+    if (confirm("Excluir todas as notificações? Não dá para desfazer.") && await mudar("excluir", { todas: true })) await recarregarPainel();
+    return;
+  }
+  if (b.dataset.excluir) return excluirUma(b);
   if (!b.dataset.aviso) return;
   fecharPainel();
-  if (b.classList.contains("nova")) marcarLidas({ ids: [Number(b.dataset.aviso)] });
+  if (b.classList.contains("nova")) mudar("lidas", { ids: [Number(b.dataset.aviso)] });
   if (b.dataset.tarefa) irParaTarefa(Number(b.dataset.tarefa));
 }
 
-async function marcarLidas(json) {
+// Tira a notificação do sino; o foco vai para a que ficou no lugar dela (ou para o sino, se não sobrou nenhuma).
+async function excluirUma(b) {
+  const i = [...painel.querySelectorAll(".pa-linha")].indexOf(b.closest(".pa-linha"));
+  b.disabled = true;
+  if (!(await mudar("excluir", { ids: [Number(b.dataset.excluir)] }))) {
+    b.disabled = false;
+    return;
+  }
+  await recarregarPainel();
+  const itens = painel.querySelectorAll(".pa-item");
+  (itens[Math.min(i, itens.length - 1)] || sino).focus();
+}
+
+// lidas: marcar como lidas; excluir: tirar do sino. Devolve se deu certo (o erro aparece num toast).
+async function mudar(acao, json) {
   try {
-    const r = await api("/api/notificacoes/lidas", { json });
+    const r = await api(`/api/notificacoes/${acao}`, { json });
     contarNaoLidas(r.nao_lidas);
     return true;
   } catch (e) {

@@ -651,11 +651,14 @@ class Manipulador(BaseHTTPRequestHandler):
         return self._json({"pendencias": self.app.tarefas.pendencias(eu),
                            "nao_lidas": self.app.notificacoes.contar(eu)})
 
-    def _marcar_lidas(self, usuario: dict, corpo: dict):
-        """As notificações que a pessoa abriu no sino (ids) ou todas (todas); a resposta traz quantas faltam ler."""
+    def _mudar_notificacoes(self, usuario: dict, caminho: str, corpo: dict):
+        """As notificações que a pessoa abriu no sino (lidas) ou tirou dele (excluir): ids, ou todas; a resposta traz
+        quantas faltam ler."""
         if not self._pode_gestao(usuario):
             return
-        n = self.app.notificacoes.marcar_lidas(usuario["id"], corpo.get("ids"), bool(corpo.get("todas")))
+        fazer = (self.app.notificacoes.excluir if caminho == "/api/notificacoes/excluir"
+                 else self.app.notificacoes.marcar_lidas)
+        n = fazer(usuario["id"], corpo.get("ids"), bool(corpo.get("todas")))
         return self._json({"ok": True, "nao_lidas": n})
 
     def _mudar_agenda(self, usuario: dict, caminho: str, corpo: dict):
@@ -954,8 +957,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":
                 return self._salvar_config_gestao(usuario, self._corpo_json())
-            if url.path == "/api/notificacoes/lidas":  # ids: as que a pessoa abriu; todas: marcar todas
-                return self._marcar_lidas(usuario, self._corpo_json())
+            if url.path in ("/api/notificacoes/lidas", "/api/notificacoes/excluir"):  # ids, ou todas
+                return self._mudar_notificacoes(usuario, url.path, self._corpo_json())
             if url.path in ROTAS_AGENDA_MUDAR:
                 return self._mudar_agenda(usuario, url.path, self._corpo_json())
             if url.path == "/api/config/padrao":
