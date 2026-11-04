@@ -57,6 +57,7 @@ function contarRegras() {
   let n = 0;
   for (const e of ["ES", "BA"]) if (rasc.crescimento[e] !== orig.crescimento[e]) n++;
   for (const k of ["teto_sazonalidade", "teto_crescimento"]) if (rasc[k] !== orig[k]) n++;
+  for (const k of ["ativa", "teto", "piso"]) if (rasc.faixa[k] !== orig.faixa[k]) n++;
   for (const a of new Set([...Object.keys(rasc.fixos), ...Object.keys(orig.fixos)])) if (rasc.fixos[a] !== orig.fixos[a]) n++;
   for (const a of new Set([...Object.keys(rasc.prazos), ...Object.keys(orig.prazos)])) if (rasc.prazos[a] !== orig.prazos[a]) n++;
   const meses = new Set([...Object.keys(rasc.ajustes), ...Object.keys(orig.ajustes)]);
@@ -127,17 +128,32 @@ function campoPct(chave, rotulo, valor, dica) {
   </label>`;
 }
 
+// Liga/desliga (a faixa): a caixa de marcar, com "ligada"/"desligada" ao lado.
+function campoLigar(chave, rotulo, valor, dica) {
+  return `<label class="sug-campo">
+    <span class="r"><b>${rotulo}</b><small>${dica}</small></span>
+    <span class="sug-liga"><input type="checkbox" data-regra-ligar="${chave}" ${valor ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span></span>
+    <em data-ligar-texto="${chave}">${valor ? "ligada" : "desligada"}</em>
+  </label>`;
+}
+
 function secaoRegras(alvo) {
   const p = dados.padrao;
   alvo.innerHTML = `
   <section class="cartao secao entra" style="--i:1">
     <div class="cartao-cab"><div><h2>${icone("tendencia")}Regras da conta</h2>
-      <p class="sub">O padrão é o do Power BI: ${pct(p.crescimento.ES)}% de crescimento no ano e tetos de ${pct(p.teto_sazonalidade)}%.</p></div></div>
+      <p class="sub">O padrão é o do Power BI: ${pct(p.crescimento.ES)}% de crescimento no ano e tetos de ${pct(p.teto_sazonalidade)}%;
+        a faixa é a de 03/11/2026: ligada, teto de ${pct(p.faixa.teto)}% e folga do piso de ${pct(p.faixa.piso)}%.</p></div></div>
     <div class="sug-regras">
       ${campoPct("crescimento.ES", "Crescimento desejado no ano · ES", rasc.crescimento.ES, "O crescimento proposto completa o que falta para chegar nele")}
       ${campoPct("crescimento.BA", "Crescimento desejado no ano · BA", rasc.crescimento.BA, "O BA inclui o Edir")}
       ${campoPct("teto_sazonalidade", "Teto da sazonalidade", rasc.teto_sazonalidade, "Alta do ano passado acima disso fica no teto; queda reduz a meta")}
       ${campoPct("teto_crescimento", "Teto do crescimento proposto", rasc.teto_crescimento, "Quem caiu muito no ano recebe no máximo isso")}
+      <p class="sug-regras-sub">Faixa da meta<small>A meta de volume de cada linha fica entre um piso e um teto. As referências são a média dos
+        3 meses até o mês base e a dos 3 meses em volta do mês da meta no ano passado (por faturamento × faturamentos do mês da meta).</small></p>
+      ${campoLigar("faixa.ativa", "Usar a faixa", rasc.faixa.ativa, "Desligada, vale só a conta (fórmula)")}
+      ${campoPct("faixa.teto", "Teto da faixa", rasc.faixa.teto, "Acima da maior referência; a meta não passa dele")}
+      ${campoPct("faixa.piso", "Folga do piso", rasc.faixa.piso, "Abaixo da menor referência; 0% = a meta não fica abaixo da própria referência")}
     </div>
     <p class="form-erro" id="cs-erro" hidden></p>
     <div class="sug-regras-acoes"><button class="btn" type="button" id="cs-padrao">${icone("restaurar")}Restaurar padrão do Power BI</button></div>
@@ -148,13 +164,20 @@ function secaoRegras(alvo) {
     if (b) rasc[a][b] = v; else rasc[a] = v;
     atualizarBarra();
   }));
+  alvo.querySelectorAll("[data-regra-ligar]").forEach((inp) => inp.addEventListener("change", () => {
+    const [a, b] = inp.dataset.regraLigar.split(".");
+    rasc[a][b] = inp.checked;
+    alvo.querySelector(`[data-ligar-texto="${inp.dataset.regraLigar}"]`).textContent = inp.checked ? "ligada" : "desligada";
+    atualizarBarra();
+  }));
   alvo.querySelector("#cs-padrao").addEventListener("click", () => {
     rasc.crescimento = clone(p.crescimento);
     rasc.teto_sazonalidade = p.teto_sazonalidade;
     rasc.teto_crescimento = p.teto_crescimento;
+    rasc.faixa = clone(p.faixa);
     rasc.fixos = clone(p.fixos);
     rasc.prazos = clone(p.prazos);
-    toast("Padrão aplicado (também as áreas quinzenais e os prazos de faturamento); confira e salve");
+    toast("Padrão aplicado (também a faixa, as áreas quinzenais e os prazos de faturamento); confira e salve");
     renderSecao();
   });
 }
@@ -283,7 +306,7 @@ function aoClicar(e) {
 
 // ---------- gravação ----------
 function erro(msg) {
-  if (secao !== "regras" && /crescimento|teto/.test(msg)) { secao = "regras"; render(); }
+  if (secao !== "regras" && /crescimento|teto|faixa/.test(msg)) { secao = "regras"; render(); }
   const el = raiz.querySelector("#cs-erro");
   if (el) { el.textContent = msg; el.hidden = false; }
   toast(msg, "erro");
@@ -293,7 +316,8 @@ async function salvar() {
   const regras = contarRegras() > 0, metas = contarAprovacao() > 0;
   if (regras) {
     for (const [v, nome] of [[rasc.crescimento.ES, "o crescimento desejado do ES"], [rasc.crescimento.BA, "o crescimento desejado do BA"],
-      [rasc.teto_sazonalidade, "o teto da sazonalidade"], [rasc.teto_crescimento, "o teto do crescimento proposto"]]) {
+      [rasc.teto_sazonalidade, "o teto da sazonalidade"], [rasc.teto_crescimento, "o teto do crescimento proposto"],
+      [rasc.faixa.teto, "o teto da faixa"], [rasc.faixa.piso, "a folga do piso da faixa"]]) {
       if (!(v >= 0 && v <= 1)) return erro(`Use um valor entre 0% e 100% para ${nome}.`);
     }
   }

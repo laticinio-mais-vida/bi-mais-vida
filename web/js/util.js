@@ -19,6 +19,7 @@ const ICONES = {
   certo: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16.2 9.5"/>',
   alerta: '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.3v.2"/>',
   abaixo: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v9M8 12.5l4 4 4-4"/>',
+  acima: '<circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8 11.5l4-4 4 4"/>',
   menos: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
   busca: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
   usuario: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',

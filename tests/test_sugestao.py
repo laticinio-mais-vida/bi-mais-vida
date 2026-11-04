@@ -2,7 +2,9 @@
 regras da página, o acesso e a ferramenta do Assistente.
 
 O cache sintético reproduz o exemplo do plano: Jamille (98, BA), área PS - ORLA (170, atendida na quarta e faturada na
-quinta), Bebida Láctea 900G (2105), mês base set/26 e meta de out/26 -> 5.974 de volume e R$ 21.414,66.
+quinta), Bebida Láctea 900G (2105), mês base set/26 e meta de out/26 -> 5.974 de volume e R$ 21.414,66 pela conta; com
+a faixa (piso e teto, ligada por padrão) a meta cai para o teto, 5.206. Os testes da conta pura desligam a faixa
+(SEM_FAIXA); test_faixa e test_faixa_no_es_com_filtro_de_area conferem a faixa.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from bi.cache import (TABELAS, TABELAS_CARTEIRA, TABELAS_CREDITO, TABELAS_DETALH
 from bi.calendario import Calendario
 from bi.configuracao import padrao as padrao_metas
 from bi.metas import Calculadora
-from bi.sugestao import (Sugestao, _valida, crescimento_proposto, faturamentos_do_mes, ler_mes, padrao,
+from bi.sugestao import (Sugestao, _valida, crescimento_proposto, faixa_da_meta, faturamentos_do_mes, ler_mes, padrao,
                          sazonalidade, texto_mes)
 from tests.apoio import BaseBanco, ConfiguracaoFixa, PlanilhaFalsa, criar_assistente
 
@@ -28,6 +30,7 @@ D = dt.date
 JAMILLE, EDIR, RUBENS = 98, 85, 124
 ORLA, SEM_DIA, ROTA_ES = 170, 999, 1
 BEBIDA, MUSSARELA = 2105, 32
+SEM_FAIXA = {"faixa": {"ativa": False}}  # as regras com a faixa desligada: a conta pura
 
 
 class ConfigFixa:
@@ -134,6 +137,23 @@ class TestFuncoes(unittest.TestCase):
         self.assertEqual(crescimento_proposto(70, 100, 0.12, 0.2)[1], 1.2)     # caiu 30%: teto
         self.assertAlmostEqual(crescimento_proposto(105, 100, 0.12, 0.2)[1], 1.07)
 
+    def test_faixa_da_meta(self):
+        cfg = {"ativa": True, "teto": 0.2, "piso": 0.0}
+        # ritmos de 30 (recente) e 40 (ano passado) por faturamento, 5 faturamentos no mês da meta: referências 150 e 200
+        f = faixa_da_meta(100.0, [30, 30, 30], [40, 40, 40], 5, cfg)
+        self.assertEqual((f["recente"], f["ano_passado"], f["piso"], f["teto"]), (150.0, 200.0, 150.0, 240.0))
+        self.assertEqual((f["proposta"], f["efeito"]), (150.0, "piso"))  # abaixo do piso: sobe até ele
+        f = faixa_da_meta(300.0, [30, 30, 30], [40, 40, 40], 5, cfg)
+        self.assertEqual((f["proposta"], f["efeito"]), (240.0, "teto"))  # acima do teto: desce até ele
+        f = faixa_da_meta(200.0, [30, 30, 30], [40, 40, 40], 5, cfg)
+        self.assertEqual((f["proposta"], f["efeito"]), (200.0, None))    # dentro: a conta fica
+        f = faixa_da_meta(300.0, [30, 30, 30], [0, 0, 0], 5, cfg)        # sem venda no ano passado: só a recente
+        self.assertEqual((f["ano_passado"], f["piso"], f["teto"], f["proposta"]), (None, 150.0, 180.0, 180.0))
+        self.assertAlmostEqual(faixa_da_meta(100.0, [30, 30, 30], [40], 5, {**cfg, "piso": 0.1})["piso"], 135.0)
+        self.assertIsNone(faixa_da_meta(100.0, [30], [40], 5, {**cfg, "ativa": False}))
+        self.assertIsNone(faixa_da_meta(100.0, [], [], 5, cfg))      # sem referência
+        self.assertIsNone(faixa_da_meta(0.0, [30], [40], None, cfg))  # sem faturamento no mês da meta
+
     def test_faturamentos_do_mes(self):
         cal = Calendario()
         quarta = [3]
@@ -166,6 +186,12 @@ class TestRegras(unittest.TestCase):
         self.assertEqual(cfg["crescimento"], {"ES": 0.12, "BA": 0.12})
         self.assertEqual((cfg["teto_sazonalidade"], cfg["teto_crescimento"]), (0.2, 0.2))
         self.assertEqual(_valida(padrao())["fixos"]["291"], 2)
+        # a faixa de 03/11/2026; regras gravadas antes dela (sem o campo, ou só com parte) recebem o padrão
+        self.assertEqual(cfg["faixa"], {"ativa": True, "teto": 0.2, "piso": 0.0})
+        antiga = {k: v for k, v in padrao().items() if k != "faixa"}
+        self.assertEqual(_valida(antiga)["faixa"], {"ativa": True, "teto": 0.2, "piso": 0.0})
+        self.assertEqual(_valida({**padrao(), "faixa": {"teto": 0.1}})["faixa"], {"ativa": True, "teto": 0.1, "piso": 0.0})
+        self.assertFalse(_valida({**padrao(), **SEM_FAIXA})["faixa"]["ativa"])
 
     def test_prazos(self):
         self.assertEqual(_valida(padrao())["prazos"], {"207": 2, "209": 2})
@@ -185,7 +211,10 @@ class TestRegras(unittest.TestCase):
                             ({"fixos": {"45": 0}}, "faturamentos fixos da área 45"),
                             ({"ajustes": {"2026-09": {"166": 2.5}}}, "faturamentos da área 166"),
                             ({"ajustes": {"setembro": {"166": 2}}}, "mês inválido"),
-                            ({"fixos": {"abc": 2}}, "código de área")):
+                            ({"fixos": {"abc": 2}}, "código de área"),
+                            ({"faixa": {"teto": 2}}, "teto da faixa"),
+                            ({"faixa": {"piso": -0.1}}, "folga do piso da faixa"),
+                            ({"faixa": {"ativa": "sim"}}, "ligada ou desligada")):
             with self.assertRaises(ValueError) as e:
                 _valida({**padrao(), **ruim})
             self.assertIn(texto, str(e.exception))
@@ -207,7 +236,12 @@ class TestSugestao(unittest.TestCase):
     def linha(self, r, produto=BEBIDA):
         return next(p for p in r["produtos"] if p["id"] == produto)
 
+    def sem_faixa(self, **mudar):
+        """As regras com a faixa desligada (e o que mais se quiser): para conferir a conta pura."""
+        self.cfg.cfg = _valida({**padrao(), **SEM_FAIXA, **mudar})
+
     def test_exemplo_do_plano(self):
+        self.sem_faixa()
         r = self.sug.calcular("BA", "2026-10", JAMILLE)
         p = self.linha(r)
         self.assertAlmostEqual(p["volume_base"], 4365)  # sem a devolução cancelada e a do motivo 3
@@ -253,24 +287,78 @@ class TestSugestao(unittest.TestCase):
         self.assertIsNone(so_area["fora"])  # com o filtro da área, a sem dia nem entra
 
     def test_ajuste_e_numero_fixo(self):
+        self.sem_faixa()
         base = self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))["meta_volume"]
-        self.cfg.cfg = _valida({**padrao(), "ajustes": {"2026-09": {str(ORLA): 5}}})
+        self.sem_faixa(ajustes={"2026-09": {str(ORLA): 5}})
         r = self.sug.calcular("BA", "2026-10", JAMILLE)
         self.assertAlmostEqual(self.linha(r)["meta_volume"], base * 4 / 5)
         self.assertEqual(next(a for a in r["areas"] if a["id"] == ORLA)["origem"]["2026-09"], "ajuste")
         # número fixo (quinzenal): 2 em todo mês, também no ano passado
-        self.cfg.cfg = _valida({**padrao(), "fixos": {str(ORLA): 2}})
+        self.sem_faixa(fixos={str(ORLA): 2})
         p = self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))
         self.assertEqual(p["faturamentos"], {"base": 2, "meta": 2})
         self.assertAlmostEqual(p["sazonalidade"], 6268 / 5398 - 1)
         # prazo de 2 dias úteis: quinta -> sexta; set/26 4 -> out/26 5 continua (as quintas e sextas caem iguais)
-        self.cfg.cfg = _valida({**padrao(), "prazos": {str(ORLA): 2}})
+        self.sem_faixa(prazos={str(ORLA): 2})
         self.assertEqual(self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))["faturamentos"], {"base": 4, "meta": 5})
-        self.cfg.cfg = _valida({**padrao(), "prazos": {str(ORLA): 3}})  # segunda: set/26 4, out/26 4
+        self.sem_faixa(prazos={str(ORLA): 3})  # segunda: set/26 4, out/26 4
         self.assertEqual(self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))["faturamentos"], {"base": 4, "meta": 4})
         # a área que passa a ter número fixo entra, mesmo sem dia
-        self.cfg.cfg = _valida({**padrao(), "fixos": {str(SEM_DIA): 2}})
+        self.sem_faixa(fixos={str(SEM_DIA): 2})
         self.assertIsNone(self.sug.calcular("BA", "2026-10", JAMILLE)["fora"])
+
+    def test_faixa(self):
+        # Jamille, Bebida na Orla, meta de out/26: a conta dá 5.974. Referência recente = média de jul, ago e set/26 por
+        # faturamento (0, 0 e 4365 ÷ 4) × 5; ano passado = média de set, out e nov/25 ((5398 ÷ 4 + 6268 ÷ 5 + 0) ÷ 3) × 5.
+        # Piso = a recente (a menor), teto = 1,2 × a do ano passado, e a conta passa do teto.
+        recente, ano = (4365 / 4) / 3 * 5, (5398 / 4 + 6268 / 5) / 3 * 5
+        r = self.sug.calcular("BA", "2026-10", JAMILLE)
+        p = self.linha(r)
+        self.assertAlmostEqual(p["meta_calculada"], 5974.03, places=1)
+        self.assertAlmostEqual(p["meta_volume"], 1.2 * ano)
+        self.assertAlmostEqual(p["meta_formula"], p["meta_volume"])  # sem ajuste, a sugerida é a conta na faixa
+        self.assertAlmostEqual(p["meta_rs"], 1.2 * ano * 15862 / 4425)
+        self.assertAlmostEqual(p["variacao"], 1.2 * ano / 4365 - 1)
+        self.assertEqual(p["faixa"], {"piso": 0, "teto": 1})
+        fl = p["faixa_linha"]
+        self.assertEqual(fl["efeito"], "teto")
+        self.assertAlmostEqual(fl["recente"], recente)
+        self.assertAlmostEqual(fl["ano_passado"], ano)
+        self.assertAlmostEqual(fl["piso"], recente)
+        self.assertAlmostEqual(fl["teto"], 1.2 * ano)
+        self.assertEqual(r["parametros"]["faixa"]["recente"], {"de": "jul/26", "ate": "set/26"})
+        self.assertEqual(r["parametros"]["faixa"]["ano_passado"], {"de": "set/25", "ate": "nov/25"})
+        self.assertAlmostEqual(r["cartoes"]["meta_rs"], sum(x["meta_rs"] for x in r["produtos"]))
+        # a linha que soma vários (todos os vendedores): só a contagem, sem o detalhe. O Edir, só com o mês base, tem como
+        # referência a recente (300 ÷ 4 ÷ 3 × 5 = 125), e a conta dele (375) passa do teto (150)
+        todos = self.linha(self.sug.calcular("BA", "2026-10"))
+        self.assertEqual((todos["faixa"], todos["faixa_linha"]), ({"piso": 0, "teto": 2}, None))
+        self.assertAlmostEqual(todos["meta_volume"], 1.2 * ano + 150)
+        # o Assistente vê a contagem
+        ia = next(x for x in self.sug.para_ia("BA", "2026-10", JAMILLE)["produtos"] if x["id"] == BEBIDA)
+        self.assertEqual(ia["faixa"], {"piso": 0, "teto": 1})
+        # a folga do piso e o teto são regras; desligada, vale a conta
+        self.cfg.cfg = _valida({**padrao(), "faixa": {"teto": 0.5, "piso": 0.2}})
+        fl = self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))["faixa_linha"]
+        self.assertAlmostEqual(fl["piso"], 0.8 * recente)
+        self.assertAlmostEqual(fl["teto"], 1.5 * ano)
+        self.sem_faixa()
+        p = self.linha(self.sug.calcular("BA", "2026-10", JAMILLE))
+        self.assertAlmostEqual(p["meta_volume"], 5974.03, places=1)
+        self.assertEqual((p["faixa"], p["faixa_linha"]), ({"piso": 0, "teto": 0}, None))
+
+    def test_faixa_no_es_com_filtro_de_area(self):
+        # Rubens, Mussarela, meta de out/26: a conta (105 ÷ 21 × 1,0 × 21 × 1,026) passa do teto, 1,2 × a referência do ano
+        # passado ((110 ÷ 22 + 115 ÷ 23 + 0) ÷ 3 × 21 = 70). Com o filtro de área, a parte da área (a única) acompanha.
+        r = self.sug.calcular("ES", "2026-10", RUBENS)
+        p = self.linha(r, MUSSARELA)
+        self.assertEqual(p["faixa_linha"]["efeito"], "teto")
+        self.assertAlmostEqual(p["meta_volume"], 1.2 * 70)
+        area = r["opcoes"]["areas"][0]["id"]
+        q = self.linha(self.sug.calcular("ES", "2026-10", RUBENS, area), MUSSARELA)
+        self.assertAlmostEqual(q["meta_volume"], p["meta_volume"])
+        self.assertEqual(q["faixa_linha"]["efeito"], "teto")
+        self.assertAlmostEqual(q["faixa_linha"]["teto"], p["faixa_linha"]["teto"])
 
     def test_regras_da_pagina(self):
         self.cfg.cfg = _valida({**padrao(), "crescimento": {"ES": 0.12, "BA": 0.30}, "teto_crescimento": 0.5})
@@ -335,6 +423,7 @@ class TestSugestao(unittest.TestCase):
         self.assertEqual(r["produtos"], [])
 
     def test_assistente(self):
+        self.sem_faixa()
         r = self.sug.para_ia("BA", "2026-10")
         self.assertEqual({v["id"] for v in r["vendedores"]}, {JAMILLE, EDIR})
         self.assertNotIn("produtos", r)

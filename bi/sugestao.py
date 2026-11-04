@@ -12,6 +12,12 @@ A conta, por linha (BA: vendedor × área × produto; ES: vendedor × produto, c
 - crescimento proposto = 1 + 12% − (acumulado do ano até o mês base ÷ mesmo período do ano passado − 1), entre 0% e
   +20%. Sem venda no acumulado do ano passado = 0%;
 - meta (volume) = por faturamento × sazonalidade × faturamentos do mês da meta × crescimento proposto;
+- faixa (decisão de 03/11/2026, pelo teste contra o realizado de ago–out/26: erro por item de 32% para 26%): a meta de
+  volume da conta fica entre um piso e um teto. Referências, as duas × os faturamentos do mês da meta: a média do ritmo
+  (volume ÷ faturamentos) dos 3 meses até o mês base (recente) e a dos 3 meses em volta do mês da meta no ano passado
+  (o mês base, o da meta e o seguinte; sem venda neles, não conta). Piso = menor referência × (1 − folga, 0%); teto =
+  maior × (1 + 20%). Abaixo do piso sobe até ele, acima do teto desce até ele, dentro a conta fica. Os números e o
+  liga/desliga ficam em Configurar;
 - preço médio = faturamento bruto do mês base ÷ volume vendido nele, sem descontar devoluções (decisão de 27/10/2026;
   o Power BI usava o líquido de todas as devoluções e dos brindes);
 - meta (R$) = meta (volume) × preço médio. O total de um vendedor é a soma das linhas, e "todos" é a soma dos vendedores.
@@ -36,7 +42,7 @@ no dia 1º do mês da meta, o número que a META CLIENTE da planilha acompanha.
 Ajustes de volume (na própria página, só administrador; bi/ajustes.py): a meta de volume de uma linha da conta (BA:
 vendedor × área × produto; ES: vendedor × produto) trocada pelo número do administrador; a meta em R$ dela é o volume ×
 o preço médio. Tudo que soma as linhas (produtos, áreas, vendedores, resumo, aprovação, Assistente) usa o ajuste. No ES
-com filtro de área, a parte da área acompanha o ajuste do vendedor × produto no mesmo %.
+com filtro de área, a parte da área acompanha a faixa e o ajuste do vendedor × produto no mesmo %.
 
 O acumulado do ano vai até o mês base (no Power BI ia até o último mês fechado pela data de hoje, o mesmo resultado no
 uso normal; em janeiro o Power BI dava +20% para todos, porque o ano atual vinha vazio).
@@ -104,9 +110,11 @@ def _fim(i: int) -> dt.date:
 
 # --- regras da página -----------------------------------------------------------------------
 def padrao() -> dict:
-    """O que o Power BI fazia: 12% de crescimento no ano, tetos de 20% e as áreas quinzenais da planilha; e os prazos de
-    faturamento que as vendas mostram."""
+    """O que o Power BI fazia: 12% de crescimento no ano, tetos de 20% e as áreas quinzenais da planilha; os prazos de
+    faturamento que as vendas mostram; e a faixa de 03/11/2026 (ligada, teto de 20% sobre a maior referência e piso na
+    menor, sem folga)."""
     return {"versao": 1, "crescimento": {"ES": 0.12, "BA": 0.12}, "teto_sazonalidade": 0.2, "teto_crescimento": 0.2,
+            "faixa": {"ativa": True, "teto": 0.2, "piso": 0.0},
             "fixos": dict(FIXOS_PBI), "prazos": dict(PRAZOS_VENDAS), "ajustes": {}}
 
 
@@ -152,6 +160,12 @@ def _valida(cfg: dict) -> dict:
         "teto_crescimento": _fracao(cfg.get("teto_crescimento", base["teto_crescimento"]),
                                     "teto do crescimento proposto"),
     }
+    fx = cfg.get("faixa") or {}  # regras gravadas antes da faixa não têm o campo: vale o padrão
+    ativa = fx.get("ativa", base["faixa"]["ativa"])
+    if not isinstance(ativa, bool):
+        raise ValueError("faixa: use ligada ou desligada")
+    saida["faixa"] = {"ativa": ativa, "teto": _fracao(fx.get("teto", base["faixa"]["teto"]), "teto da faixa"),
+                      "piso": _fracao(fx.get("piso", base["faixa"]["piso"]), "folga do piso da faixa")}
     fixos = {}
     for a, n in (cfg.get("fixos") or {}).items():
         fixos[_area(a)] = _quantidade(n, f"faturamentos fixos da área {a}", 1)
@@ -235,6 +249,31 @@ def crescimento_proposto(acum: float, acum_ly: float, alvo: float, teto: float) 
     return razao, min(max(1 + alvo - (razao - 1), 1.0), 1 + teto)
 
 
+def faixa_da_meta(formula: float, recentes: list, ano_passado: list, fat_meta, cfg: dict) -> dict | None:
+    """A faixa (decisão de 03/11/2026): a meta de volume da conta fica entre um piso e um teto. recentes e ano_passado
+    são os ritmos (volume ÷ faturamentos) dos 3 meses até o mês base e dos 3 em volta do mês da meta no ano passado,
+    só nos meses com faturamento; as referências são as médias deles × fat_meta (a do ano passado só com venda). Piso =
+    menor referência × (1 − folga); teto = maior × (1 + teto). cfg: {"ativa", "teto", "piso"} das regras da página.
+    None com a faixa desligada ou sem referência; senão {"recente", "ano_passado" (None sem venda), "piso", "teto",
+    "proposta" (a conta dentro da faixa) e "efeito" ("piso", "teto" ou None, quando a conta já estava dentro)}."""
+    if not cfg["ativa"] or not fat_meta:
+        return None
+    refs = {}
+    if recentes:
+        refs["recente"] = sum(recentes) / len(recentes) * fat_meta
+    if ano_passado and sum(ano_passado) > 0:
+        refs["ano_passado"] = sum(ano_passado) / len(ano_passado) * fat_meta
+    if not refs:
+        return None
+    piso = (1 - cfg["piso"]) * min(refs.values())
+    teto = (1 + cfg["teto"]) * max(refs.values())
+    proposta = min(max(formula, piso), teto)
+    folga = 1e-9 * max(1.0, abs(formula))
+    efeito = "piso" if proposta > formula + folga else "teto" if proposta < formula - folga else None
+    return {"recente": refs.get("recente"), "ano_passado": refs.get("ano_passado"), "piso": piso, "teto": teto,
+            "proposta": proposta, "efeito": efeito}
+
+
 class _Soma:
     """Junta linhas da conta (produto de vários vendedores, área, vendedor, total) para a tela."""
 
@@ -242,15 +281,19 @@ class _Soma:
         self.peso_por = peso  # "vb" (mesmo produto: pelo volume) ou "base_rs" (produtos diferentes: pelo valor)
         self.vb = self.meta = self.base_rs = self.meta_rs = self.bruto = self.qv = self.ya = self.yp = 0.0
         self.p_saz = self.p_cre = self.p_fat = self.peso = 0.0
-        self.formula = 0.0  # a meta de volume sem os ajustes
+        self.formula = 0.0  # a meta de volume da conta, antes da faixa e dos ajustes
+        self.proposta = 0.0  # a conta dentro da faixa, sem os ajustes
         self.n = self.ajustes = 0
+        self.na_faixa = {"piso": 0, "teto": 0}  # linhas que a faixa moveu
         self.ultima = None
         self.fats: set = set()
 
     def somar(self, ln: dict) -> None:
-        for k in ("vb", "meta", "base_rs", "meta_rs", "bruto", "qv", "ya", "yp", "formula"):
+        for k in ("vb", "meta", "base_rs", "meta_rs", "bruto", "qv", "ya", "yp", "formula", "proposta"):
             setattr(self, k, getattr(self, k) + ln[k])
         self.ajustes += ln["ajuste"] is not None
+        if ln["faixa"] and ln["faixa"]["efeito"]:
+            self.na_faixa[ln["faixa"]["efeito"]] += 1
         w = max(ln[self.peso_por], 0.0)
         self.p_saz += w * ln["saz"]
         self.p_cre += w * ln["cre"]
@@ -276,7 +319,12 @@ class _Soma:
             "efeito_faturamentos": media(self.p_fat),
             "faturamentos": {"base": fb, "meta": ft} if fb is not None else None,
             "exata": exata,
-            "meta_formula": self.formula, "ajustes": self.ajustes,
+            "meta_formula": self.proposta,  # sem o ajuste do administrador: a conta dentro da faixa
+            "meta_calculada": self.formula,  # a conta antes da faixa
+            "faixa": dict(self.na_faixa), "ajustes": self.ajustes,
+            # o que a faixa fez na linha, quando é uma só: efeito (piso, teto ou None) e as referências
+            "faixa_linha": ({c: ln["faixa"][c] for c in ("efeito", "recente", "ano_passado", "piso", "teto")}
+                            if exata and ln["faixa"] else None),
             # a linha da conta, quando é uma só: a página edita a meta de volume dela (área 0 no ES)
             "linha": ({"vendedor": ln["v"], "area": ln["a"] or 0, "preco": ln["preco"], "ajuste": ln["ajuste"]}
                       if exata else None),
@@ -368,7 +416,7 @@ class Sugestao:
         return {"cfg": cfg, "cal": self.calc.calendario(regras), "estado": estado,
                 "dias": self.areas() if estado == "BA" else {}, "memo": {},
                 "alvo": cfg["crescimento"][estado], "teto_saz": cfg["teto_sazonalidade"],
-                "teto_cre": cfg["teto_crescimento"]}
+                "teto_cre": cfg["teto_crescimento"], "faixa": cfg["faixa"]}
 
     @staticmethod
     def _faturamentos(k: dict, area: int | None, i: int) -> tuple[int | None, str | None]:
@@ -403,19 +451,18 @@ class Sugestao:
 
     def _linhas(self, d: dict, k: dict, vendedores: list[int], area: int | None, i_meta: int) -> tuple[list, dict]:
         """As linhas no grão da conta (BA: vendedor × área × produto; ES: vendedor × produto) com volume no mês base, e
-        o que ficou fora no BA por área sem faturamento ({área: R$ do mês base}). meta é a meta de volume com o ajuste
-        do administrador (formula, sem ele; ajuste, o que foi gravado ou None)."""
+        o que ficou fora no BA por área sem faturamento ({área: R$ do mês base}). formula é a meta de volume da conta;
+        proposta, a conta dentro da faixa (faixa: o que faixa_da_meta devolveu, ou None); meta, a proposta ou o ajuste
+        do administrador (ajuste, o que foi gravado ou None)."""
         ib, iml = i_meta - 1, i_meta - 12
         ibl = ib - 12
         jan = ib - ib % 12
         es = k["estado"] == "ES"
         ajustes = self._ajustes(i_meta)
-        escala = {}  # ES com filtro de área: a parte da área acompanha o ajuste do vendedor × produto, no mesmo %
-        if es and area is not None and any(c[0] in vendedores for c in ajustes):
-            for ln in self._linhas(d, k, sorted({c[0] for c in ajustes} & set(vendedores)), None, i_meta)[0]:
-                if ln["ajuste"] is not None:
-                    escala[(ln["v"], ln["p"])] = (ln["meta"] / ln["formula"] if ln["formula"] > 0
-                                                  else float(ln["meta"] > 0))
+        # ES com filtro de área: a faixa e o ajuste são do vendedor × produto inteiro (todas as áreas), e a parte da área
+        # acompanha os dois no mesmo %
+        cheias = ({(ln["v"], ln["p"]): ln for ln in self._linhas(d, k, vendedores, None, i_meta)[0]}
+                  if es and area is not None else {})
         linhas, fora = [], defaultdict(float)
         for v in vendedores:
             grupos = d["mov"].get(v, {})
@@ -449,14 +496,27 @@ class Sugestao:
                 yp = sum(vol(i) for i in range(jan - 12, ibl + 1))
                 saz_bruta, saz = sazonalidade(vly, vly1, fbl, ftl, k["teto_saz"])
                 acum, cre = crescimento_proposto(ya, yp, k["alvo"], k["teto_cre"])
-                formula = meta = vb / fb * saz * (ft or 0) * cre
-                ajuste = ajustes.get((v, 0 if es else a, p))
-                if ajuste is not None:
-                    meta = meta * escala.get((v, p), 1.0) if es and area is not None else ajuste["volume"]
+                formula = vb / fb * saz * (ft or 0) * cre
+                cheia = cheias.get((v, p))
+                if cheia is not None:  # a parte da área, no mesmo % da linha inteira do vendedor × produto
+                    parte = formula / cheia["formula"] if cheia["formula"] > 0 else 0.0
+                    proposta, meta, ajuste = cheia["proposta"] * parte, cheia["meta"] * parte, cheia["ajuste"]
+                    faixa = cheia["faixa"] and {c: x * parte if isinstance(x, float) else x
+                                                for c, x in cheia["faixa"].items()}
+                else:
+                    # ritmo (volume ÷ faturamentos) de um mês, para as referências da faixa; None sem faturamento
+                    ritmo = lambda i: ((max(vol(i), 0.0) / self._faturamentos(k, a, i)[0])  # noqa: E731
+                                       if self._faturamentos(k, a, i)[0] else None)
+                    recentes = [r for r in (ritmo(i) for i in (ib - 2, ib - 1, ib)) if r is not None]
+                    ano = [r for r in (ritmo(i) for i in (ibl, iml, iml + 1)) if r is not None]
+                    faixa = faixa_da_meta(formula, recentes, ano, ft or 0, k["faixa"])
+                    proposta = faixa["proposta"] if faixa else formula
+                    ajuste = ajustes.get((v, 0 if es else a, p))
+                    meta = proposta if ajuste is None else ajuste["volume"]
                 linhas.append({"v": v, "a": a, "p": p, "vb": vb, "vly": vly, "vly1": vly1, "ya": ya, "yp": yp,
                                "bruto": bruto, "qv": qv, "fb": fb, "ft": ft or 0, "fbl": fbl, "ftl": ftl,
                                "saz_bruta": saz_bruta, "saz": saz, "acum": acum, "cre": cre, "meta": meta,
-                               "formula": formula, "ajuste": ajuste,
+                               "formula": formula, "proposta": proposta, "faixa": faixa, "ajuste": ajuste,
                                "preco": preco, "base_rs": vb * preco, "meta_rs": meta * preco})
         return linhas, dict(fora)
 
@@ -641,6 +701,9 @@ class Sugestao:
         ib = i_meta - 1
         jan = ib - ib % 12
         return {"crescimento": k["alvo"], "teto_sazonalidade": k["teto_saz"], "teto_crescimento": k["teto_cre"],
+                # a faixa: as regras e os meses das duas referências
+                "faixa": {**k["faixa"], "recente": {"de": curto_mes(ib - 2), "ate": curto_mes(ib)},
+                          "ano_passado": {"de": curto_mes(ib - 12), "ate": curto_mes(i_meta - 11)}},
                 "acumulado": {"de": curto_mes(jan), "ate": curto_mes(ib), "de_ly": curto_mes(jan - 12),
                               "ate_ly": curto_mes(ib - 12)},
                 "base_ly": curto_mes(ib - 12), "meta_ly": curto_mes(i_meta - 12),
@@ -654,6 +717,12 @@ class Sugestao:
         números dele (e os produtos, com produtos=True ou com vendedor)."""
         r = self.calcular(estado, mes, vendedor, None, permitidos, equipes)
         p = r["parametros"]
+        fx = p["faixa"]
+        faixa = ((f" Faixa: a meta de volume de cada linha fica entre o piso ({1 - fx['piso']:.0%} da menor referência) "
+                  f"e o teto ({1 + fx['teto']:.0%} da maior); referências = média do ritmo por faturamento de "
+                  f"{fx['recente']['de']} a {fx['recente']['ate']} e a de {fx['ano_passado']['de']} a "
+                  f"{fx['ano_passado']['ate']}, × faturamentos do mês da meta (faixa nos produtos = quantas linhas "
+                  "subiram ao piso ou desceram ao teto).") if fx["ativa"] else " Faixa (piso e teto) desligada.")
         saida = {
             "estado": r["estado"], "mes_da_meta": r["mes"]["rotulo_meta"], "mes_base": r["mes"]["rotulo_base"],
             "regra": (f"meta por {p['grao']}: volume do mês base ÷ faturamentos ({p['faturamentos']}) × sazonalidade "
@@ -661,7 +730,8 @@ class Sugestao:
                       f"proposto ({p['crescimento']:.0%} no ano menos o acumulado de {p['acumulado']['de']} a "
                       f"{p['acumulado']['ate']}, entre 0% e +{p['teto_crescimento']:.0%}); R$ = volume × preço médio "
                       "bruto do mês base. Carteira atual de cada vendedor. O administrador pode trocar a meta de "
-                      "volume de uma linha na página (ajustada = true; meta_volume_formula é a da conta)."),
+                      "volume de uma linha na página (ajustada = true; meta_volume_formula é a da conta, com a faixa)."
+                      + faixa),
         }
         enxuto = lambda x: round(x, 4) if isinstance(x, float) else x  # noqa: E731
         if vendedor is None:
@@ -685,6 +755,7 @@ class Sugestao:
                                   "volume_base": enxuto(x["volume_base"]), "meta_volume": enxuto(x["meta_volume"]),
                                   "preco_medio": enxuto(x["preco"]), "meta_rs": enxuto(x["meta_rs"]),
                                   "sazonalidade": enxuto(x["sazonalidade"]), "crescimento_proposto": enxuto(x["crescimento"]),
+                                  **({"faixa": x["faixa"]} if x["faixa"]["piso"] or x["faixa"]["teto"] else {}),
                                   **({"ajustada": True, "meta_volume_formula": enxuto(x["meta_formula"])}
                                      if x["ajustes"] else {})}
                                  for x in r["produtos"][:MAX_PRODUTOS_IA]]
@@ -1012,7 +1083,8 @@ class Sugestao:
                 onde = "" if es else f" na área {d['nomes_areas'].get(a) or a}"
                 raise ValueError(f"{nome_p[0]}{onde} não está na sugestão de {nomes.get(v) or f'Vendedor {v}'} em "
                                  f"{curto_mes(i_meta)} (sem venda no mês base ou área sem faturamento)")
-            mudancas.append({"v": v, "a": a, "p": p, "volume": volume, "formula": ln["formula"], "preco": ln["preco"],
+            # "formula" para bi/ajustes.py é o que vale sem o ajuste: a conta dentro da faixa
+            mudancas.append({"v": v, "a": a, "p": p, "volume": volume, "formula": ln["proposta"], "preco": ln["preco"],
                              "produto": nome_p[0], "unidade": nome_p[1] or "",
                              "grupo": "mussarela" if regras.grupo_produto(p) == "mussarela" else "outras"})
         alteradas = self.ajustes.gravar(dt.date(i_meta // 12, i_meta % 12 + 1, 1), mudancas, autor, self.aprovadas)

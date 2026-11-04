@@ -715,6 +715,20 @@ Cada notificação do sino ganha uma lixeira, e o topo do painel ganha **Excluir
   incomodar, antes de voltar apague-as de vez (`DELETE FROM notificacoes WHERE excluida_em IS NOT NULL`); a coluna
   pode ficar.
 
+#### Faixa da sugestão de metas (sem migração)
+
+A Sugestão de Metas ganha a **faixa** (piso e teto) na meta de volume de cada linha, as colunas **Variação** e **Faixa** na
+tabela e os campos da faixa em Configurar › Regras da conta (veja o README, "Como a sugestão é calculada").
+
+- **Ordem:** qualquer uma; não há migração e os dados que o PC manda não mudaram.
+- **Regras:** as regras `sugestao` gravadas não têm os campos novos; o código preenche com o padrão ao ler (faixa ligada,
+  teto 20%, folga do piso 0%), e o próximo Salvar em Configurar grava uma versão com eles. A sugestão muda assim que o
+  código subir, sem ninguém abrir Configurar (a de nov/26 cai de R$ 4.905 mil para R$ 4.864 mil nos dois estados); o
+  que já foi aprovado não é regravado, e os ajustes de volume gravados continuam valendo.
+- **Depois de publicar:** abra a Sugestão de Metas e confira a coluna Faixa (↑ piso, ↓ teto, —) e, em Configurar › Regras
+  da conta, os três campos da faixa.
+- **Voltar atrás:** é só voltar o código; a versão anterior ignora os campos novos das regras.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

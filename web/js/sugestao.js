@@ -376,9 +376,11 @@ const COLUNAS = [
   ["Sazonalidade", "Ritmo do mês da meta sobre o do mês base, no ano passado, por faturamento (teto; queda reduz a meta)"],
   ["Acumulado", "Volume do ano até o mês base sobre o mesmo período do ano passado"],
   ["Cresc. proposto", "O que falta para o crescimento desejado no ano (de 0% até o teto)"],
-  ["Meta (volume)", "Volume do mês base ÷ faturamentos × sazonalidade × faturamentos do mês da meta × crescimento proposto"],
+  ["Meta (volume)", "Volume do mês base ÷ faturamentos × sazonalidade × faturamentos do mês da meta × crescimento proposto, dentro da faixa (piso e teto)"],
+  ["Variação", "Meta (volume) sobre o volume base, só nas linhas de produto"],
   ["Preço médio", "Faturamento bruto do mês base ÷ volume vendido (sem descontar devoluções)"],
   ["Meta (R$)", "Meta (volume) × preço médio"],
+  ["Faixa", "— a conta ficou entre o piso e o teto · ↑ piso: subiu até o piso · ↓ teto: baixou até o teto · faixa: algum item da soma foi movido · ajuste: a meta é a do administrador"],
 ];
 
 // chave: a linha que o administrador ajusta (ajustavel); null = só mostra.
@@ -388,6 +390,8 @@ function celulas(x, unidade, comVolume = true, chave = null) {
     : `<span data-tt="${esc("<div class='tt-t'>Efeito dos faturamentos</div>as áreas têm números diferentes: média do efeito de cada uma, pelo volume")}">${sinal(x.efeito_faturamentos)}<small class="fraco">efeito</small></span>`;
   const travou = x.sazonalidade_calculada != null && Math.abs(x.sazonalidade_calculada - x.sazonalidade) > 0.00005;
   const saz = sinal(x.sazonalidade) + (travou ? `<small class="fraco sug-calc">calculada ${sinal(x.sazonalidade_calculada)}</small>` : "");
+  // na linha ajustável, a variação e a coluna Faixa acompanham o campo (pintarAjuste); data-modo diz o que está desenhado
+  const faixa = chave ? ` data-aj-faixa="${chave}" data-modo="${x.linha.ajuste ? "ajuste" : "faixa"}"` : "";
   return `
     <td>${comVolume ? volume(x.volume_base, unidade) : "—"}</td>
     <td>${fat}</td>
@@ -395,9 +399,36 @@ function celulas(x, unidade, comVolume = true, chave = null) {
     <td>${sinal(x.acumulado)}</td>
     <td>${sinal(x.crescimento)}</td>
     ${chave ? celulaAjuste(chave, unidade) : `<td>${comVolume ? volume(x.meta_volume, unidade) : "—"}${x.ajustes ? marcaAjuste(x, unidade) : ""}</td>`}
+    <td${chave ? ` data-aj-var="${chave}"` : ""}>${comVolume ? sinal(x.variacao) : "—"}</td>
     <td>${comVolume ? fmt.moeda2(x.preco) : "—"}</td>
-    <td class="sug-meta"${chave ? ` data-aj-rs="${chave}"` : ""}>${fmt.moeda(x.meta_rs)}${comVolume ? "" : `<small class="fraco">base ${fmt.moeda(x.base_rs)}</small>`}</td>`;
+    <td class="sug-meta"${chave ? ` data-aj-rs="${chave}"` : ""}>${fmt.moeda(x.meta_rs)}${comVolume ? "" : `<small class="fraco">base ${fmt.moeda(x.base_rs)}</small>`}</td>
+    <td class="sug-faixa-cel"${faixa}>${marcaFaixa(x, unidade)}</td>`;
 }
+
+// A coluna Faixa. Linha de uma conta só: o que a faixa fez com a conta (↑ piso, ↓ teto ou —), ou "ajuste" quando a meta
+// é a do administrador (ajustada força isso: a célula acompanha o campo enquanto ele digita). Linha que soma várias
+// contas: "faixa" se algum item foi movido para cima ou para baixo, senão —.
+function marcaFaixa(x, unidade, ajustada = null) {
+  const un = unidade ? ` ${esc(unidade)}` : "";
+  const f = x.faixa || { piso: 0, teto: 0 };
+  if (x.linha) {
+    if (ajustada ?? !!x.linha.ajuste) return marcaAjustada();
+    const l = x.faixa_linha;
+    if (!l || !l.efeito) return "—";
+    const sobe = l.efeito === "piso";
+    const tt = `<div class='tt-t'>${sobe ? "Subiu até o piso" : "Baixou até o teto"}</div>`
+      + `pela conta: ${fmt.num(x.meta_calculada, 1)}${un}<br>recente (média de 3 meses): ${fmt.num(l.recente, 1)}${un}`
+      + `<br>ano passado: ${l.ano_passado == null ? "sem venda" : fmt.num(l.ano_passado, 1) + un}`
+      + `<br>piso ${fmt.num(l.piso, 1)} · teto ${fmt.num(l.teto, 1)}`;
+    return `<span class="sug-faixa ${sobe ? "sobe" : "desce"}" data-tt="${esc(tt)}">${icone(sobe ? "acima" : "abaixo")}${sobe ? "piso" : "teto"}</span>`;
+  }
+  if (!f.piso && !f.teto) return "—";
+  const partes = [f.piso ? `${f.piso} ${f.piso === 1 ? "item subiu" : "itens subiram"} até o piso` : "",
+    f.teto ? `${f.teto} ${f.teto === 1 ? "item baixou" : "itens baixaram"} até o teto` : ""].filter(Boolean).join("<br>");
+  return `<span class="sug-faixa misto" data-tt="${esc(`<div class='tt-t'>Faixa</div>${partes}`)}">faixa</span>`;
+}
+
+const marcaAjustada = () => `<span class="sug-faixa ajuste" title="A meta de volume desta linha é a do administrador">${icone("ajustes")}ajuste</span>`;
 
 function linhaProduto(p, k, filho = false) {
   const chave = ajustavel(p, filho);
@@ -457,7 +488,8 @@ function tabela(d, i) {
       <thead><tr><th>${ba && estado.visao === "areas" ? "Área / produto" : "Produto"}</th>${COLUNAS.map(([n, t]) => `<th title="${esc(t)}">${n}</th>`).join("")}</tr></thead>
       ${corpoTabela(d)}
       <tfoot><tr><td>Total</td><td>—</td><td>${fatTotal}</td><td>${sinal(c.sazonalidade)}</td><td>${sinal(c.acumulado)}</td>
-        <td>${sinal(c.crescimento)}</td><td>—</td><td>—</td><td class="sug-meta">${fmt.moeda(c.meta_rs)}<small class="fraco">base ${fmt.moeda(c.base_rs)}</small></td></tr></tfoot>
+        <td>${sinal(c.crescimento)}</td><td>—</td><td>—</td><td>—</td><td class="sug-meta">${fmt.moeda(c.meta_rs)}<small class="fraco">base ${fmt.moeda(c.base_rs)}</small></td>
+        <td class="sug-faixa-cel">${marcaFaixa(c, "")}</td></tr></tfoot>
     </table></div>
   </section>`;
 }
@@ -484,8 +516,9 @@ function ajustavel(x, naArea) {
   const chave = `${x.linha.vendedor}:${x.linha.area}:${x.id}`;
   const aj = x.linha.ajuste;
   estado.linhas[chave] = {
-    v: x.linha.vendedor, a: x.linha.area, p: x.id, nome: x.nome, unidade: x.unidade, preco: x.linha.preco,
+    v: x.linha.vendedor, a: x.linha.area, p: x.id, nome: x.nome, unidade: x.unidade, preco: x.linha.preco, vb: x.volume_base,
     formula: x.meta_formula, salvo: aj ? aj.volume : null, quem: aj && aj.salva_por, quando: aj && aj.salva_em,
+    faixaHtml: marcaFaixa(x, x.unidade, false),  // a coluna Faixa quando o campo está vazio
   };
   return chave;
 }
@@ -496,17 +529,17 @@ function celulaAjuste(chave, unidade) {
   return `<td class="sug-aj-cel"><span class="sug-num sug-aj">
       <input type="number" min="0" step="any" inputmode="decimal" data-aj="${chave}"
         value="${valor == null || !isFinite(valor) ? "" : +valor.toFixed(4)}" placeholder="${fmt.num(l.formula, 1)}"
-        aria-label="Meta de volume de ${esc(l.nome)}" title="A meta de volume desta linha; vazio = a da fórmula, em cinza">
-      <button type="button" class="sug-limpar" data-aj-limpar="${chave}" title="Voltar para a fórmula" aria-label="Voltar para a fórmula" hidden>${icone("x")}</button>
+        aria-label="Meta de volume de ${esc(l.nome)}" title="A meta de volume desta linha; vazio = a sugerida pela conta (com a faixa), em cinza">
+      <button type="button" class="sug-limpar" data-aj-limpar="${chave}" title="Voltar para a sugerida" aria-label="Voltar para a sugerida" hidden>${icone("x")}</button>
     </span>${unidade ? `<small class="fraco un">${esc(unidade)}</small>` : ""}<small class="fraco sug-aj-nota"></small></td>`;
 }
 
-// Linha somada (área, produto de vários vendedores ou de várias áreas) que tem ajuste: a marca, com a fórmula.
+// Linha somada (área, produto de vários vendedores ou de várias áreas) que tem ajuste: a marca, com a sugerida.
 function marcaAjuste(x, unidade) {
   const aj = x.linha && x.linha.ajuste;
   const quem = aj ? `ajustada${aj.salva_por ? ` por ${esc(aj.salva_por)}` : ""}${aj.salva_em ? ` em ${fmt.dataHora(aj.salva_em)}` : ""}`
     : `${x.ajustes} linha${x.ajustes === 1 ? "" : "s"} com a meta de volume ajustada pelo administrador`;
-  const tt = `<div class='tt-t'>Meta de volume ajustada</div>${quem}<br>pela fórmula: ${fmt.num(x.meta_formula, 1)}${unidade ? ` ${esc(unidade)}` : ""}`;
+  const tt = `<div class='tt-t'>Meta de volume ajustada</div>${quem}<br>sugerida pela conta (com a faixa): ${fmt.num(x.meta_formula, 1)}${unidade ? ` ${esc(unidade)}` : ""}`;
   return `<small class="sug-aj-marca" data-tt="${esc(tt)}">${icone("ajustes")}${x.ajustes > 1 ? `${x.ajustes} ajustes` : "ajustado"}</small>`;
 }
 
@@ -528,14 +561,24 @@ function pintarAjuste(chave) {
   caixa.classList.toggle("invalido", invalido);
   caixa.querySelector("[data-aj-limpar]").hidden = valor == null && !invalido;
   const nota = inp.closest("td").querySelector(".sug-aj-nota");
-  nota.textContent = [invalido ? "use um número a partir de zero" : valor != null ? `fórmula ${fmt.num(l.formula, 1)}` : "",
+  nota.textContent = [invalido ? "use um número a partir de zero" : valor != null ? `sugerida ${fmt.num(l.formula, 1)}` : "",
     r ? "falta salvar" : ""].filter(Boolean).join(" · ");
   nota.title = l.salvo != null && l.quem ? `Ajustada por ${l.quem}${l.quando ? ` em ${fmt.dataHora(l.quando)}` : ""}` : "";
+  const vol = valor == null ? l.formula : invalido ? null : valor;
   const rs = document.querySelector(`[data-aj-rs="${chave}"]`);
   if (rs) {
-    const vol = valor == null ? l.formula : invalido ? null : valor;
     const antes = (l.salvo ?? l.formula) * l.preco;
     rs.innerHTML = `${vol == null ? "—" : fmt.moeda(vol * l.preco)}${r ? `<small class="fraco">era ${fmt.moeda(antes)}</small>` : ""}`;
+  }
+  const variacao = document.querySelector(`[data-aj-var="${chave}"]`);
+  if (variacao) variacao.textContent = vol == null || !(l.vb > 0) ? "—" : sinal(vol / l.vb - 1);
+  // a coluna Faixa: "ajuste" com um número no campo, senão o que a faixa fez com a conta (redesenha só quando troca)
+  const faixa = document.querySelector(`[data-aj-faixa="${chave}"]`);
+  const modo = valor != null && !invalido ? "ajuste" : "faixa";
+  if (faixa && faixa.dataset.modo !== modo) {
+    faixa.dataset.modo = modo;
+    faixa.innerHTML = modo === "ajuste" ? marcaAjustada() : l.faixaHtml;
+    ligarTooltips(faixa);
   }
 }
 
@@ -667,10 +710,18 @@ function comoCalcula(d, i) {
             ${esc(p.acumulado.ate)} sobre ${esc(p.acumulado.de_ly)} a ${esc(p.acumulado.ate_ly)}, entre <b>0%</b> e
             <b>+${fmt.pct(p.teto_crescimento, 0)}</b>. Quem já cresceu mais que ${fmt.pct(p.crescimento, 0)} no ano fica com 0%.</li>
           <li><b>Meta (volume):</b> por faturamento × sazonalidade × faturamentos de ${esc(m.rotulo_meta)} × crescimento proposto.</li>
+          <li><b>Faixa:</b> ${p.faixa.ativa
+            ? `a meta de volume fica entre um piso e um teto. As referências são a média do ritmo (volume ÷ faturamentos) de
+            ${esc(p.faixa.recente.de)} a ${esc(p.faixa.recente.ate)} e a de ${esc(p.faixa.ano_passado.de)} a ${esc(p.faixa.ano_passado.ate)}
+            (o ano passado em volta do mês da meta; sem venda nele, não conta), as duas × os faturamentos de ${esc(m.curto_meta)}.
+            Piso = <b>${fmt.pct(1 - p.faixa.piso, 0)}</b> da menor referência; teto = <b>${fmt.pct(1 + p.faixa.teto, 0)}</b> da maior.
+            Abaixo do piso a meta sobe até ele (↑ piso); acima do teto desce até ele (↓ teto); dentro, a conta fica (—).
+            Decisão de 03/11/2026, pelo teste contra o realizado de ago–out/26: o erro por item caiu de 32% para 26%.`
+            : "desligada em Configurar: vale a conta."}</li>
           <li><b>Meta (R$):</b> a meta em volume × o preço médio do mês base, que é o faturamento <b>bruto</b> ÷ o volume vendido
             (sem descontar devoluções). O total é a soma das linhas, e "todos os vendedores" é a soma da sugestão de cada um.</li>
           <li><b>Ajustes do administrador:</b> a meta de volume de uma linha (${ba ? "no BA, o produto dentro da área, na tabela Por área" : "no ES, o produto de um vendedor"})
-            pode ser trocada na tabela; a linha fica marcada como ajustada e a fórmula aparece em cinza. A meta em R$ dela é o
+            pode ser trocada na tabela; a linha fica marcada como ajustada (também na coluna Faixa) e a sugerida pela conta aparece em cinza. A meta em R$ dela é o
             volume ajustado × o preço médio, e o resto da página soma com o ajuste. Se a meta do vendedor já está aprovada
             (Configurar › Aprovação de metas), a aprovada ganha a mesma diferença no produto e em R$; os outros produtos não mudam.</li>
         </ol>

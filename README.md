@@ -204,9 +204,12 @@ da METAS.xlsx; no ES, a sugestão é a referência para a meta.
   e crescimento proposto, em média ponderada quando há várias linhas).
 - **Evolução:** o volume de cada mês do ano do mês base e do ano anterior e a sazonalidade de cada mês para o seguinte, como
   no Power BI. Clicar num produto da tabela mostra o gráfico só dele.
-- **Meta por produto:** volume base, faturamentos, sazonalidade, acumulado do ano, crescimento proposto, meta em volume, preço
-  médio e meta em R$. No BA, também **por área**, com os produtos de cada área. O administrador pode **ajustar a meta de
-  volume** de uma linha na própria tabela (veja [Ajustes de volume](#ajustes-de-volume-na-página)).
+- **Meta por produto:** volume base, faturamentos, sazonalidade, acumulado do ano, crescimento proposto, meta em volume (já
+  dentro da faixa), variação da meta sobre o volume base, preço médio, meta em R$ e a coluna **Faixa**: "—" quando a conta
+  ficou entre o piso e o teto, "↑ piso" quando subiu até o piso, "↓ teto" quando baixou até o teto (numa linha que soma
+  várias contas, "faixa" se algum item foi movido) e "ajuste" quando a meta é a do administrador. No BA, também **por
+  área**, com os produtos de cada área. O administrador pode **ajustar a meta de volume** de uma linha na própria tabela
+  (veja [Ajustes de volume](#ajustes-de-volume-na-página)).
 - **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada
   (a aprovada no painel, com ✓, ou a da METAS.xlsx; Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
 - **Como a sugestão é calculada:** o passo a passo com os números em vigor.
@@ -229,7 +232,15 @@ carteira de cada vendedor (o cliente repassado leva o histórico, como nas Proje
 4. **Crescimento proposto:** 12% − (acumulado do ano até o mês base ÷ mesmo período do ano passado − 1), entre 0% e +20%. Sem
    venda no acumulado do ano passado = 0%.
 5. **Meta (volume)** = por faturamento × sazonalidade × faturamentos do mês da meta × crescimento proposto.
-6. **Meta (R$)** = meta (volume) × preço médio do mês base, que é o faturamento **bruto** ÷ o volume vendido. O total é a soma
+6. **Faixa** (decisão de 03/11/2026): a meta de volume fica entre um piso e um teto. As referências são a média do ritmo (volume
+   ÷ faturamentos) dos 3 meses até o mês base e a dos 3 meses em volta do mês da meta no ano passado (o mês base, o da meta e
+   o seguinte; sem venda neles, não conta), as duas × os faturamentos do mês da meta. Piso = menor referência (menos a folga
+   configurada, 0%); teto = maior × (1 + 20%). Abaixo do piso a meta sobe até ele; acima do teto desce até ele; dentro, a
+   conta fica. No teste contra o realizado de ago–out/26 (3.638 linhas), o erro por item caiu de 32% para 26% e o do total
+   de cada vendedor de 11% para 10%; 57% das linhas mudam. Limites conhecidos: produto sem venda no mês base continua sem
+   linha; um produto novo na linha (sem venda nos 2 meses antes do base) tem a referência recente puxada para baixo pelos
+   meses sem venda, e um cliente perdido há menos de 3 meses puxa o piso para cima — o ajuste manual resolve os dois.
+7. **Meta (R$)** = meta (volume) × preço médio do mês base, que é o faturamento **bruto** ÷ o volume vendido. O total é a soma
    das linhas; "todos os vendedores" é a soma de cada um.
 
 Área sem dia de atendimento e sem número fixo fica fora, como no Power BI (que deixava fora as áreas ausentes da planilha
@@ -244,8 +255,9 @@ O administrador troca a meta de volume que a fórmula deu numa linha da conta, n
   Por produto mostra a soma, marcada como ajustada. No ES, na tabela por produto, sem filtro de área (a conta do ES junta as
   áreas; com o filtro, a parte da área acompanha o ajuste no mesmo %). Só a linha de **um vendedor só** tem campo: um
   produto que soma vários vendedores (13 das 39 áreas do BA têm mais de um) pede o filtro de vendedor.
-- **Como:** digita o volume (em cinza, o da fórmula); a linha mostra a meta em R$ nova (volume × o preço médio da linha) e a
-  barra soma a diferença. Vale depois de **Salvar ajustes**; o × volta para a fórmula. Trocar de estado ou mês pergunta antes
+- **Como:** digita o volume (em cinza, o sugerido pela conta, já dentro da faixa); a linha mostra a meta em R$ nova (volume ×
+  o preço médio da linha), a variação e "ajuste" na coluna Faixa, e a barra soma a diferença. Vale depois de **Salvar
+  ajustes**; o × volta para o sugerido. Trocar de estado ou mês pergunta antes
   de descartar o que não foi salvo. Exemplo (Jamille, nov/26, Mussarela Mais Vida 4kg na PS - ORLA): a fórmula dá 1.539,9 kg
   × R$ 39,14 = R$ 60.269; com 2.000 kg, R$ 78.276, e a meta sugerida dela sobe R$ 18.006.
 - **O que muda:** tudo que soma as linhas usa o ajuste: o total do produto e da área, os cartões, o resumo dos vendedores, a
@@ -264,7 +276,9 @@ O botão **Configurar** (só administradores) tem três seções. As duas primei
 com versões, como as regras de Metas:
 
 - **Regras da conta:** crescimento desejado no ano (ES e BA, 12%), teto da sazonalidade (20%) e teto do crescimento proposto
-  (20%), com "Restaurar padrão do Power BI".
+  (20%), e a **faixa da meta**: usar a faixa (ligada), teto da faixa (20% acima da maior referência) e folga do piso (0%
+  abaixo da menor), com "Restaurar padrão do Power BI" (que também restaura a faixa). As regras gravadas antes da faixa não
+  têm os campos dela: valem os padrões até o próximo Salvar.
 - **Faturamentos por área (BA):** para o mês da meta escolhido, os quatro meses que a conta usa (base, meta e os dois do ano
   passado). Para cada área: os dias de atendimento (mudam em Gestão › Configurar), o prazo do faturamento com o dia em que
   a área de fato fatura nas vendas dos últimos 6 meses, o número **fixo** por mês (as quinzenais: Itamaraju, Teixeira,
