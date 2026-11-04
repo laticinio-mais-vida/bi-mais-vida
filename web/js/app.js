@@ -5,6 +5,7 @@ import { api, esc, fmt, icone, irParaLogin, ligarTema, preencherIcones, toast } 
 import { montarMetas, recarregarMetas } from "./metas.js";
 import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
+import { montarConfigCredito, configCreditoTemAlteracoes } from "./configcredito.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarSugestao, recarregarSugestao, sugestaoTemAlteracoes } from "./sugestao.js";
@@ -139,6 +140,15 @@ const PAGINAS = {
     titulo: "Reavaliação de Crédito",
     montar: (el) => montarCredito(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("credito", d) }),
     recarregar: recarregarCredito,
+  },
+  "config-credito": {
+    titulo: "Configurações do crédito",
+    fixo: "Prazo mínimo entre reanálises e validade dos dados do Serasa",
+    pai: "credito",
+    admin: true,
+    sempreMonta: true,
+    pendente: configCreditoTemAlteracoes,
+    montar: (el) => montarConfigCredito(el, { aoSalvar: () => app.remontar.add("credito") }),
   },
   usuarios: {
     titulo: "Usuários e acessos",

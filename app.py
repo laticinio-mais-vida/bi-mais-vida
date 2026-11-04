@@ -61,7 +61,8 @@ from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # no
 from bi.premiacoes import ConfigPremiacoes, Premiacoes  # noqa: E402
 from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
-from bi.reanalise import Reanalises  # noqa: E402
+from bi.reanalise import ConfigCredito, Reanalises  # noqa: E402
+from bi.serasa import DadosSerasa  # noqa: E402
 from bi.sugestao import ConfigSugestao, Sugestao  # noqa: E402
 from bi.tarefas import Tarefas  # noqa: E402
 from bi.uso import RegistroUso  # noqa: E402
@@ -99,10 +100,11 @@ ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
                "/api/sugestao/aprovacao", "/api/sugestao/ajustes", "/api/premiacoes/config", "/api/assistente/config",
-               "/api/gestao/config", *ROTAS_GESTAO_MUDAR}
+               "/api/gestao/config", "/api/credito/config", *ROTAS_GESTAO_MUDAR}
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
 PAGINAS_HTML = ("/", "/index.html", "/login", "/login.html")
+MAX_PDF_SERASA = 10 * 1024 * 1024  # o PDF do Serasa que a página de crédito envia (bi/serasa.py)
 
 
 def _json_padrao(o):
@@ -145,8 +147,11 @@ class Aplicacao:
         self.config_projecoes = ConfigProjecoes(self.banco)
         self.projetor = Projetor(self.calc, self.config_projecoes)
         self.credito = Credito(self.cache, self.projetor._nomes_vendedores)
-        # As reanálises de crédito ficam só no banco do site (no PC, a página avisa e não grava).
-        self.reanalises = Reanalises(self.banco, self.credito, self.vps)
+        # As reanálises de crédito e os dados do Serasa ficam só no banco do site (no PC, a página avisa e não grava). As
+        # regras do crédito (o prazo mínimo entre reanálises e a validade do Serasa) são do administrador.
+        self.config_credito = ConfigCredito(self.banco)
+        self.serasa = DadosSerasa(self.banco, self.credito, self.vps, self.config_credito)
+        self.reanalises = Reanalises(self.banco, self.credito, self.vps, config=self.config_credito, serasa=self.serasa)
         self.conversas = Conversas(self.banco)
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas, reanalises=self.reanalises)
@@ -486,6 +491,27 @@ class Manipulador(BaseHTTPRequestHandler):
         r = self.app.reanalises.registrar(usuario, corpo)
         if not r["ja_existia"]:
             log.info("%s registrou a reanálise de crédito %s (cliente %s)", usuario["login"], r["id"], corpo.get("cliente"))
+        return self._json({"ok": True, **r})
+
+    def _mudar_serasa(self, usuario: dict, caminho: str, q: dict):
+        """Enviar o PDF do Serasa de um cliente (o corpo é o PDF; cliente e confirmar no endereço) ou excluir um envio
+        (quem enviou ou um administrador); a resposta traz a lista nova do cliente."""
+        if not self._pode_credito(usuario):
+            return
+        if caminho == "/api/credito/serasa/excluir":
+            corpo = self._corpo_json()
+            r = self.app.serasa.excluir(usuario, corpo.get("id"))
+            log.info("%s excluiu os dados do Serasa %s", usuario["login"], corpo.get("id"))
+            return self._json({"ok": True, **r})
+        tamanho = int(self.headers.get("Content-Length") or 0)
+        if tamanho > MAX_PDF_SERASA:
+            raise ValueError(f"o arquivo passou de {MAX_PDF_SERASA // (1024 * 1024)} MB")
+        conteudo = self.rfile.read(tamanho) if tamanho else b""
+        r = self.app.serasa.enviar(usuario, q.get("cliente"), conteudo, q.get("confirmar") == "1")
+        if "confirmar" in r:
+            return self._json({"ok": False, **r})
+        if not r["ja_existia"]:
+            log.info("%s enviou os dados do Serasa %s (cliente %s)", usuario["login"], r["id"], q.get("cliente"))
         return self._json({"ok": True, **r})
 
     def _pode_assistente(self, usuario: dict) -> bool:
@@ -832,7 +858,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_premiacoes(usuario)))
             if url.path == "/api/premiacoes/config":
                 return self._json(self.app.premiacoes.config_dados(q.get("mes")))
-            if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises"):
+            if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises",
+                            "/api/credito/serasa"):
                 if not self._pode_credito(usuario):
                     return
                 if url.path == "/api/credito/busca":
@@ -841,11 +868,19 @@ class Manipulador(BaseHTTPRequestHandler):
                     return self._json(self.app.credito.analisar(q.get("cliente"), q.get("limite")))
                 if url.path == "/api/credito/reanalises":  # cliente=12: as reanálises registradas e o que o form usa
                     return self._json(self.app.reanalises.listar(q.get("cliente"), usuario))
+                if url.path == "/api/credito/serasa":  # cliente=12: o último envio do Serasa e os anteriores
+                    return self._json(self.app.serasa.listar(q.get("cliente"), usuario))
                 # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
-                return self._json(self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"),
-                                                            inteiro("vendedor"), ordem=q.get("ordem") or None,
-                                                            sentido=q.get("sentido") or None))
+                d = self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"), inteiro("vendedor"),
+                                              ordem=q.get("ordem") or None, sentido=q.get("sentido") or None)
+                try:  # as regras do crédito, para o "como calcula": a página abre mesmo com o banco fora do ar
+                    d["regras"] = self.app.config_credito.atual()
+                except BancoForaDoAr:
+                    d["regras"] = None
+                return self._json(d)
+            if url.path == "/api/credito/config":  # as regras do crédito (só o administrador)
+                return self._json({"config": self.app.config_credito.atual(), "ativo": self.app.vps})
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":
@@ -954,6 +989,12 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json({"ok": True, **r})
             if url.path in ("/api/credito/reanalise", "/api/credito/reanalise/excluir"):
                 return self._mudar_reanalise(usuario, url.path, self._corpo_json())
+            if url.path in ("/api/credito/serasa", "/api/credito/serasa/excluir"):
+                return self._mudar_serasa(usuario, url.path, {k: v[-1] for k, v in parse_qs(url.query).items()})
+            if url.path == "/api/credito/config":
+                cfg = self.app.config_credito.salvar(self._corpo_json().get("config") or {}, usuario)
+                log.info("%s salvou as regras do crédito: %s", usuario["login"], cfg)
+                return self._json({"ok": True, "config": cfg, "ativo": self.app.vps})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):

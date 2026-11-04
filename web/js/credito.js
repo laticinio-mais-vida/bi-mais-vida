@@ -2,18 +2,25 @@
 // pelos títulos a receber de venda (mês e ano pela emissão, vendedor do título); limite, prazo e restante de um ou
 // mais clientes (os limites somam), com as parcelas já pagas dos boletos divididos. Com um cliente, o parecer de um
 // limite total novo (Indicado, com ressalvas ou Não indicado), o registro da reanálise (o limite e o prazo liberados e
-// a justificativa) e as reanálises anteriores dele. A conta, a regra do parecer, a ordem da tabela e o retrato que a
-// reanálise grava ficam no servidor (bi/credito.py e bi/reanalise.py); aqui é a apresentação.
+// a justificativa) e as reanálises anteriores dele, e os dados do Serasa que vieram do PDF. A conta, a regra do parecer,
+// o prazo mínimo entre reanálises, a ordem da tabela, a leitura do PDF e o retrato que a reanálise grava ficam no
+// servidor (bi/credito.py, bi/reanalise.py e bi/serasa.py); aqui é a apresentação.
+//
+// Cores: só verde (bom) e vermelho (ruim), num tom cada, pelo que o número é comparado (o que bate exato fica verde);
+// o que não é comparado com nada fica neutro (cinza).
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { anel } from "./graficos.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
+const COR = { bom: "var(--cr-bom)", ruim: "var(--cr-ruim)", neutro: "var(--cr-neutro)" };
+const TOLERANCIA = 7; // dias depois do vencimento em que o título ainda é pontual (bi/credito.py)
+// A situação contra a tolerância: até 7 dias de atraso é verde (a vencer, vencido há pouco, quitado em dia).
 const SITUACAO = {
-  a_vencer: { rotulo: "A vencer", classe: "sem_meta", icone: "calendario" },
-  vencido: { rotulo: "Vencido", classe: "atencao", icone: "calendario" },
-  inadimplente: { rotulo: "Inadimplente", classe: "abaixo", icone: "alerta" },
-  quitado: { rotulo: "Quitado", classe: "no_ritmo", icone: "certo" },
-  quitado_atraso: { rotulo: "Quitado com atraso", classe: "atencao", icone: "alerta" },
+  a_vencer: { rotulo: "A vencer", classe: "bom", icone: "calendario" },
+  vencido: { rotulo: "Vencido", classe: "bom", icone: "calendario" },
+  inadimplente: { rotulo: "Inadimplente", classe: "ruim", icone: "alerta" },
+  quitado: { rotulo: "Quitado", classe: "bom", icone: "certo" },
+  quitado_atraso: { rotulo: "Quitado com atraso", classe: "ruim", icone: "alerta" },
 };
 // Colunas da tabela (chave = a coluna de ordenar no servidor) e o sentido do primeiro clique.
 const COLUNAS = [
@@ -35,9 +42,11 @@ let ctx = null;
 // limite: o limite total pedido no parecer (some ao trocar de cliente); analise: o pedido do parecer em andamento.
 // parecer: o último parecer mostrado (o registro grava o pedido dele); reanalises: o que /api/credito/reanalises
 // trouxe do cliente (historico: o pedido em andamento); rascunho: o que foi digitado no registro, que fica quando a
-// página é refeita por um filtro e some ao trocar de cliente ou depois de registrar.
+// página é refeita por um filtro e some ao trocar de cliente ou depois de registrar; serasa: o que /api/credito/serasa
+// trouxe do cliente (lendoSerasa: o pedido em andamento; enviandoSerasa: um PDF subindo).
 const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordem: null, limite: null, dados: null, pedido: 0,
-  busca: 0, analise: 0, parecer: null, reanalises: null, historico: 0, rascunho: null };
+  busca: 0, analise: 0, parecer: null, reanalises: null, historico: 0, rascunho: null, serasa: null, lendoSerasa: 0,
+  enviandoSerasa: false };
 
 export function montarCredito(container, contexto) {
   ctx = contexto;
@@ -79,6 +88,7 @@ export function montarCredito(container, contexto) {
         <label class="campo"><span class="ic-campo">${icone("usuario")}</span><select id="cr-vendedor" aria-label="Vendedor do título">
           <option value="">Todos os vendedores</option></select></label>
         <button class="btn btn-limpar" type="button" id="cr-limpar" hidden>${icone("x")}Limpar filtros</button>
+        ${ctx.admin ? `<a class="btn btn-config" href="#/config-credito" title="Prazo mínimo entre reanálises e validade dos dados do Serasa">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
       <div class="cr-escolhidos" id="cr-escolhidos" aria-label="Clientes escolhidos" hidden></div>
     </div>
@@ -185,6 +195,7 @@ async function carregar(silencioso = false, soTabela = false) {
     conteudo.innerHTML = render(d);
     posRender(conteudo);
     ligarOrdem(document.getElementById("cr-tabela"));
+    ligarSerasa();
     ligarAnalise();
     ligarReanalises();
   } catch (e) {
@@ -373,23 +384,24 @@ function render(d) {
   const k = d.cartoes, cr = d.credito, n = d.clientes.length;
   const periodo = descricaoFiltro(d);
   let h = n ? cabecalhoClientes(d) : "";
-  if (n === 1) h += cartaoAnalise(d, 2) + cartaoReanalises(3);
+  if (n === 1) h += cartaoSerasa(2) + cartaoAnalise(d, 3) + cartaoReanalises(4);
+  // Compras, quantidade, ticket e limite não são comparados com nada: neutros.
   h += `<section class="kpis secao n4">
-    ${kpiValor(1, "var(--s-fat)", "Valor total das compras", "moeda", k.valor, "moeda", periodo)}
-    ${kpiValor(2, "var(--s-out)", "Quantidade de compras", "recibo", k.quantidade, "num", "títulos a receber de venda")}
-    ${kpiValor(3, "var(--k-vm)", "Ticket médio", "etiqueta", k.ticket, "moeda", "valor ÷ quantidade de compras")}
+    ${kpiValor(1, COR.neutro, "Valor total das compras", "moeda", k.valor, "moeda", periodo)}
+    ${kpiValor(2, COR.neutro, "Quantidade de compras", "recibo", k.quantidade, "num", "títulos a receber de venda")}
+    ${kpiValor(3, COR.neutro, "Ticket médio", "etiqueta", k.ticket, "moeda", "valor ÷ quantidade de compras")}
     ${kpiInadimplencia(4, k, periodo)}
   </section>`;
   h += `<section class="kpis secao n4">
-    ${kpiPontualidade(5, k)}
-    ${cr ? kpiValor(6, "var(--k-cli)", "Limite de crédito", "cartao", cr.limite, "moeda",
+    ${kpiPontualidade(5, k, d.regra_parecer)}
+    ${cr ? kpiValor(6, COR.neutro, "Limite de crédito", "cartao", cr.limite, "moeda",
       n > 1 ? `soma dos limites de ${n} clientes` : cr.limite > 0 ? "do cadastro do cliente" : "sem limite no cadastro",
       [["Prazo", umOuVarios(cr.prazos, "prazos diferentes")],
        ["Vendedor da carteira", umOuVarios(cr.carteiras, "vendedores")]])
-      : kpiSemCliente(6, "var(--k-cli)", "Limite de crédito", "cartao")}
-    ${cr ? kpiUtilizado(7, cr) : kpiSemCliente(7, "var(--s-out)", "Limite já utilizado", "tendencia",
+      : kpiSemCliente(6, COR.neutro, "Limite de crédito", "cartao")}
+    ${cr ? kpiUtilizado(7, cr) : kpiSemCliente(7, COR.neutro, "Limite já utilizado", "tendencia",
       "Tudo o que o cliente ainda tem em aberto.")}
-    ${cr ? kpiRestante(8, cr) : kpiSemCliente(8, "var(--s-mus)", "Limite restante", "escudo")}
+    ${cr ? kpiRestante(8, cr) : kpiSemCliente(8, COR.neutro, "Limite restante", "escudo")}
   </section>`;
   h += tabela(d, 9);
   h += comoCalcula(d, 10);
@@ -403,11 +415,14 @@ function posRender(raiz) {
   ligarTooltips(raiz);
 }
 
+// O que está em aberto contra o limite: passou dele (o restante ficou negativo) é vermelho; igual ao limite, ainda verde.
+const passouDoLimite = (cr) => cr.restante < -0.005;
+
 function chipsSituacao(d) {
   const cr = d.credito, k = d.cartoes, chips = [];
-  if (k.inadimplencia > 0) chips.push(`<span class="status abaixo">${icone("alerta")}Inadimplente</span>`);
-  if (cr.limite > 0 && cr.restante < 0) chips.push(`<span class="status abaixo">${icone("alerta")}Passou do limite</span>`);
-  if (!chips.length && cr.em_aberto === 0) chips.push(`<span class="status no_ritmo">${icone("certo")}Nada em aberto</span>`);
+  if (k.inadimplencia > 0) chips.push(`<span class="status ruim">${icone("alerta")}Inadimplente</span>`);
+  if (cr.limite > 0 && passouDoLimite(cr)) chips.push(`<span class="status ruim">${icone("alerta")}Passou do limite</span>`);
+  if (!chips.length && cr.em_aberto === 0) chips.push(`<span class="status bom">${icone("certo")}Nada em aberto</span>`);
   return chips.join("");
 }
 
@@ -436,16 +451,17 @@ function cabecalhoClientes(d) {
       <tbody>${d.clientes.map((c) => `<tr>
         <td class="cr-nome">${esc(c.nome)}<small>código ${c.id}${c.carteira ? ` · carteira de ${esc(c.carteira)}` : ""}</small></td>
         <td>${esc(c.prazo || "—")}</td><td>${fmt.moeda2(c.limite)}</td><td>${fmt.moeda2(c.em_aberto)}</td>
-        <td class="${c.restante < 0 ? "cr-negativo" : ""}">${fmt.moeda2(c.restante)}</td></tr>`).join("")}</tbody>
+        <td class="${passouDoLimite(c) ? "cr-negativo" : ""}">${fmt.moeda2(c.restante)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td>Total</td><td></td><td>${fmt.moeda2(cr.limite)}</td><td>${fmt.moeda2(cr.em_aberto)}</td>
-        <td class="${cr.restante < 0 ? "cr-negativo" : ""}">${fmt.moeda2(cr.restante)}</td></tr></tfoot>
+        <td class="${passouDoLimite(cr) ? "cr-negativo" : ""}">${fmt.moeda2(cr.restante)}</td></tr></tfoot>
     </table></div>
   </section>`;
 }
 
-function kpiPontualidade(i, k) {
-  const cor = k.pontualidade == null ? "var(--linha-forte)" : k.pontualidade >= 0.9 ? "var(--ok-forte)"
-    : k.pontualidade >= 0.7 ? "var(--atencao-forte)" : "var(--ruim-forte)";
+// Pontualidade contra o "ok" da regra do parecer (90%): 90% exato é verde.
+function kpiPontualidade(i, k, regra) {
+  const ok = regra?.pontual_ok ?? 0.9;
+  const cor = k.pontualidade == null ? COR.neutro : k.pontualidade + 1e-9 >= ok ? COR.bom : COR.ruim;
   return `
   <article class="cartao kpi entra" style="--i:${i};--cor:${cor}">
     ${cab("Pontualidade", "certo")}</div>
@@ -461,14 +477,15 @@ function kpiPontualidade(i, k) {
 }
 
 function kpiInadimplencia(i, k, periodo) {
-  const cor = k.inadimplencia > 0 ? "var(--ruim-forte)" : "var(--ok-forte)";
+  const cor = k.inadimplencia > 0 ? COR.ruim : COR.bom;
   return kpiValor(i, cor, "Inadimplência", "alerta", k.inadimplencia, "moeda",
-    `em aberto, vencido há mais de 7 dias · ${periodo}`);
+    `em aberto, vencido há mais de ${TOLERANCIA} dias · ${periodo}`);
 }
 
+// Restante contra zero: zero (usou o limite exato) ainda é verde.
 function kpiRestante(i, cr) {
-  const passou = cr.restante < 0;
-  const cor = passou ? "var(--ruim-forte)" : "var(--s-mus)";
+  const passou = passouDoLimite(cr);
+  const cor = passou ? COR.ruim : COR.bom;
   const usado = cr.usado ?? (cr.em_aberto > 0 ? 1 : 0);
   const escala = Math.max(1, usado);
   const meta = cr.limite > 0
@@ -496,7 +513,8 @@ function kpiUtilizado(i, cr) {
     ? [["Títulos em aberto", fmt.moeda(cr.titulos_abertos)],
        ["Parcelas já pagas", `− ${fmt.moeda(cr.pago_parcelas)}`]]
     : [];
-  return kpiValor(i, cr.limite > 0 && cr.restante < 0 ? "var(--ruim-forte)" : "var(--s-out)", "Limite já utilizado",
+  // contra o limite: até o limite (igual também) é verde
+  return kpiValor(i, passouDoLimite(cr) ? COR.ruim : COR.bom, "Limite já utilizado",
     "tendencia", cr.em_aberto, "moeda", meta, rodape);
 }
 
@@ -524,7 +542,7 @@ function tabela(d, i, animar = true) {
     if (l.dias_atraso == null) return "—";
     const tt = l.dias_atraso < 0 ? `${-l.dias_atraso} dia${l.dias_atraso === -1 ? "" : "s"} antes do vencimento`
       : l.quitado ? "dias entre o vencimento e a quitação" : `dias desde o vencimento até ${fmt.data(d.hoje)}`;
-    return `<span class="cr-dias${l.dias_atraso > 7 ? " atraso" : ""}" data-tt="${esc(tt)}">${fmt.num(l.dias_atraso)}</span>`;
+    return `<span class="cr-dias${l.dias_atraso > TOLERANCIA ? " atraso" : ""}" data-tt="${esc(tt)}">${fmt.num(l.dias_atraso)}</span>`;
   };
   const situacao = (s) => {
     const x = SITUACAO[s] || SITUACAO.a_vencer;
@@ -557,11 +575,231 @@ function tabela(d, i, animar = true) {
   </section>`;
 }
 
+// ---------- dados do Serasa (o PDF do Relato PJ, lido no servidor: bi/serasa.py) ----------
+const MAX_PDF = 10 * 1024 * 1024;
+const SUB_SERASA = "do PDF do Relato – Pessoa Jurídica: a fundação, o score, o histórico de pagamento e as anotações negativas";
+const FAIXAS_ATRASO = ["8_15", "16_30", "31_60", "mais_60"];
+
+const cabSerasa = (sub, acoes = "") =>
+  `<div class="cartao-cab"><div><h3>${icone("arquivo")}Dados do Serasa</h3><p class="sub">${sub}</p></div>${acoes}</div>`;
+
+function cartaoSerasa(i) {
+  return `
+  <section class="cartao secao entra cr-serasa" id="cr-serasa" style="--i:${i}">
+    ${cabSerasa(SUB_SERASA)}
+    <div class="esqueleto" style="height:110px"></div>
+  </section>`;
+}
+
+function ligarSerasa() {
+  const card = document.getElementById("cr-serasa");
+  if (!card) return;
+  card.addEventListener("click", (e) => {
+    if (e.target.closest("[data-enviar-pdf]")) card.querySelector("#cr-serasa-arquivo")?.click();
+    const x = e.target.closest("[data-excluir-serasa]");
+    if (x) excluirSerasa(Number(x.dataset.excluirSerasa), x);
+  });
+  card.addEventListener("change", (e) => {
+    if (e.target.id !== "cr-serasa-arquivo") return;
+    const arquivo = e.target.files?.[0];
+    e.target.value = ""; // escolher o mesmo arquivo de novo também conta
+    if (arquivo) enviarSerasa(arquivo);
+  });
+  desenharSerasa(); // a página refeita por um filtro já mostra os do mesmo cliente enquanto lê de novo
+  carregarSerasa();
+}
+
+async function carregarSerasa() {
+  if (!document.getElementById("cr-serasa") || estado.clientes.length !== 1) return;
+  const cliente = estado.clientes[0].id, pedido = ++estado.lendoSerasa;
+  try {
+    const r = await api(`/api/credito/serasa?cliente=${cliente}`);
+    if (pedido !== estado.lendoSerasa) return;
+    estado.serasa = { ...r, cliente };
+  } catch (e) {
+    if (pedido !== estado.lendoSerasa) return;
+    estado.serasa = { erro: e.message, cliente };
+  }
+  desenharSerasa();
+}
+
+// "há 5 anos e 11 meses" desde uma data (AAAA-MM-DD).
+function haQuanto(iso) {
+  const [a, m, d] = iso.split("-").map(Number), hoje = new Date();
+  const meses = (hoje.getFullYear() - a) * 12 + hoje.getMonth() + 1 - m - (hoje.getDate() < d ? 1 : 0);
+  if (meses < 1) return "há menos de um mês";
+  const anos = Math.floor(meses / 12), resto = meses % 12;
+  const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+  if (!anos) return `há ${plural(meses, "mês", "meses")}`;
+  return `há ${plural(anos, "ano", "anos")}${resto ? ` e ${plural(resto, "mês", "meses")}` : ""}`;
+}
+
+const idadeConsulta = (dias) => (dias <= 0 ? "de hoje" : dias === 1 ? "de ontem" : `de ${fmt.num(dias)} dias atrás`);
+const pctCurto = (v) => fmt.pct(v, Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? 0 : 1);
+const valorCurto = (v) => (v >= 1e6 ? `${fmt.num(v / 1e6, 1)} mi` : v >= 1e3 ? `${fmt.num(v / 1e3, 1)} mil` : fmt.num(v, 2));
+
+// Uma faixa do Serasa ({de, ate}): "200 a 250", "R$ 6 mil a 6,5 mil", "91% a 93%"; sem valor, "—".
+function faixaTexto(x, tipo) {
+  if (!x || x.de == null) return "—";
+  const f = tipo === "pct" ? pctCurto : tipo === "reais" ? valorCurto : (v) => fmt.num(v);
+  const t = x.de === x.ate ? f(x.de) : `${f(x.de)} a ${f(x.ate)}`;
+  return tipo === "reais" ? `R$ ${t}` : t;
+}
+
+// Pontual é verde; uma faixa de atraso com algum título (ou valor), vermelha; o resto (à vista, total) fica neutro.
+function corFaixa(chave, x) {
+  if (chave === "pontual") return "bom";
+  return FAIXAS_ATRASO.includes(chave) && (x?.ate || 0) > 0 ? "ruim" : "";
+}
+
+function corpoSerasa(x) {
+  const sc = x.score;
+  const numeros = `
+    <div class="cr-parecer-numeros cr-serasa-topo">
+      ${numero("Empresa no relatório", esc(x.razao_social || x.nome_fantasia || "—"),
+        `CNPJ ${esc(x.cnpj)}${x.nome_fantasia && x.razao_social ? ` · ${esc(x.nome_fantasia)}` : ""}`)}
+      ${numero("Fundação", x.fundacao ? fmt.data(x.fundacao) : "—", x.fundacao ? haQuanto(x.fundacao) : "não veio no relatório")}
+      ${numero("Score", sc ? `${fmt.num(sc.valor)} <small class="cr-de">de 1000</small>` : "—",
+        sc ? [sc.probabilidade != null ? `probabilidade de inadimplência ${fmt.pct(sc.probabilidade, 2)}` : "",
+          sc.risco ? `risco ${esc(sc.risco.toLowerCase())}` : ""].filter(Boolean).join(" · ") : "não veio no relatório")}
+    </div>
+    ${sc?.alerta ? `<p class="cr-bloqueio cr-serasa-alerta">${icone("alerta")}<span><b>Aviso do Serasa:</b> ${esc(sc.alerta)}</span></p>` : ""}`;
+  // O histórico de pagamento numa tabela só: os títulos por faixa e a pontualidade em R$ têm as mesmas faixas (a
+  // pontualidade traz também o total do mês).
+  const porFaixa = new Map(x.faixas.map((f) => [f.chave, f]));
+  const emReais = new Map(x.pontualidade.map((f) => [f.chave, f]));
+  const chaves = [...new Set([...porFaixa.keys(), ...emReais.keys()])];
+  const historico = chaves.length ? `
+    <div class="tabela-rolagem"><table class="dados cr-serasa-tab">
+      <thead>
+        <tr><th class="esq" rowspan="2">Faixa</th><th colspan="2" class="cr-grupo">Títulos</th><th colspan="3" class="cr-grupo">Em R$</th></tr>
+        <tr><th>Quantidade</th><th>%</th><th>Total</th><th>Médio</th><th>%</th></tr>
+      </thead>
+      <tbody>${chaves.map((k) => {
+        const t = porFaixa.get(k), r = emReais.get(k);
+        const cor = k === "total_mes" ? "cr-serasa-total" : corFaixa(k, t?.quantidade?.de != null ? t.quantidade : t?.percentual || r?.total);
+        return `<tr class="${cor}"><td class="esq">${esc((t || r).rotulo)}</td>
+          <td>${t ? faixaTexto(t.quantidade, "num") : ""}</td><td>${t ? faixaTexto(t.percentual, "pct") : ""}</td>
+          <td>${r ? faixaTexto(r.total, "reais") : "—"}</td><td>${r ? faixaTexto(r.medio, "reais") : "—"}</td>
+          <td>${r ? faixaTexto(r.percentual, "pct") : "—"}</td></tr>`;
+      }).join("")}</tbody></table></div>`
+    : `<p class="cr-hist-vazio">O Serasa não tem histórico de pagamento desta empresa (as faixas e a pontualidade vieram vazias no relatório).</p>`;
+  const ocorrencias = x.anotacoes.filter((a) => a.quantidade !== 0);
+  // O total das ocorrências; com alguma linha que não deu para ler, só quantos tipos têm ocorrência.
+  const lidas = ocorrencias.every((a) => a.quantidade != null && a.valor != null);
+  const qtd = ocorrencias.reduce((s, a) => s + (a.quantidade || 0), 0);
+  const total = ocorrencias.reduce((s, a) => s + (a.valor || 0), 0);
+  const resumoAnot = !ocorrencias.length ? `<span class="status bom">${icone("certo")}Nada consta</span>`
+    : `<span class="status ruim">${icone("alerta")}${lidas
+      ? `${fmt.num(qtd)} ocorrência${qtd === 1 ? "" : "s"} · ${fmt.moeda2(total)}`
+      : `${ocorrencias.length} tipo${ocorrencias.length === 1 ? "" : "s"} com ocorrência`}</span>`;
+  const anotacoes = `
+    <table class="dados cr-serasa-tab cr-serasa-anot"><thead><tr><th class="esq">Tipo</th><th>Quantidade</th><th>Valor</th></tr></thead>
+      <tbody>${x.anotacoes.map((a) => a.quantidade === 0
+        ? `<tr class="bom"><td class="esq">${esc(a.rotulo)}</td><td colspan="2">nada consta</td></tr>`
+        : a.quantidade == null && a.valor == null
+          ? `<tr class="ruim"><td class="esq">${esc(a.rotulo)}</td><td colspan="2" class="cr-quebra">${a.texto ? `não deu para ler (“${esc(a.texto)}”)` : "não veio no relatório"}: confira no PDF</td></tr>`
+          : `<tr class="ruim"><td class="esq">${esc(a.rotulo)}</td><td>${a.quantidade == null ? "?" : fmt.num(a.quantidade)}</td>
+              <td>${a.valor == null ? "?" : fmt.moeda2(a.valor)}</td></tr>`).join("")}</tbody></table>`;
+  // O histórico vazio já tem o aviso dele; aqui, o resto que faltou (fundação, score).
+  const outros = x.faltou.filter((f) => !["títulos por faixa", "pontualidade em R$"].includes(f));
+  const faltou = outros.length ? `<p class="cr-parecer-nota">Não veio no relatório: ${esc(outros.join(", "))}.</p>` : "";
+  return `${numeros}
+    <div class="cr-serasa-blocos">
+      <div><h4>Histórico de pagamento comercial</h4>${historico}</div>
+      <div><h4>Anotações negativas ${resumoAnot}</h4>${anotacoes}</div>
+    </div>${faltou}`;
+}
+
+function anterioresSerasa(lista) {
+  if (!lista.length) return "";
+  return `
+    <details class="cr-hist-numeros cr-serasa-anteriores"><summary>Envios anteriores (${lista.length})</summary>
+      <ul>${lista.map((x) => {
+        const ocorr = x.anotacoes.filter((a) => a.quantidade !== 0).length;
+        return `<li><span><b>Consulta de ${fmt.dataHora(x.emitido_em)}</b> · score ${x.score ? fmt.num(x.score.valor) : "—"} ·
+          <span class="${ocorr ? "cr-v-ruim" : "cr-v-bom"}">${ocorr ? `anotações em ${ocorr} tipo${ocorr === 1 ? "" : "s"}` : "nada consta"}</span>
+          <small>enviada em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}</small></span>
+          ${x.pode_excluir ? `<button type="button" class="btn perigo cr-hist-excluir" data-excluir-serasa="${x.id}"
+            aria-label="Excluir a consulta de ${fmt.dataHora(x.emitido_em)}">${icone("lixeira")}Excluir</button>` : ""}</li>`;
+      }).join("")}</ul>
+    </details>`;
+}
+
+function desenharSerasa() {
+  const card = document.getElementById("cr-serasa"), s = estado.serasa;
+  if (!card || !s || estado.clientes.length !== 1 || s.cliente !== estado.clientes[0].id) return;
+  const arquivo = `<input type="file" id="cr-serasa-arquivo" accept="application/pdf,.pdf" hidden>`;
+  if (s.erro) {
+    card.innerHTML = cabSerasa(SUB_SERASA) + `<div class="aviso">${icone("alerta")}<span>Não foi possível ler os dados do Serasa: ${esc(s.erro)}</span></div>`;
+    return;
+  }
+  if (!s.ativo) {
+    card.innerHTML = cabSerasa(SUB_SERASA) + `<div class="aviso">${icone("info")}<span>${esc(s.aviso)}</span></div>`;
+    return;
+  }
+  const enviando = estado.enviandoSerasa;
+  const botao = (rotulo) => `<button type="button" class="btn${s.atual ? "" : " primario"}" data-enviar-pdf${enviando ? " disabled" : ""}>
+    ${icone("arquivo")}${enviando ? "Lendo o PDF…" : rotulo}</button>`;
+  const x = s.atual;
+  if (!x) {
+    card.innerHTML = cabSerasa(SUB_SERASA, `<div class="cr-serasa-acoes">${botao("Enviar PDF")}</div>`) + `
+      <p class="cr-hist-vazio">Nenhum dado do Serasa para este cliente. Envie o PDF do Relato – Pessoa Jurídica: o painel
+        guarda só a fundação, o score, o histórico de pagamento e as anotações negativas; o PDF não fica guardado.</p>${arquivo}`;
+    return;
+  }
+  const dica = `Os dados do Serasa valem por ${s.validade_dias} dias, contados da emissão do relatório`;
+  const selo = `<span class="status ${x.desatualizado ? "ruim" : "bom"}" title="${esc(dica)}">${icone("relogio")}${x.desatualizado ? "Desatualizado" : "Atualizado"}: consulta ${idadeConsulta(x.idade_dias)}</span>`;
+  const acoes = `<div class="cr-serasa-acoes">${selo}${botao("Enviar PDF novo")}
+    ${x.pode_excluir ? `<button type="button" class="btn perigo" data-excluir-serasa="${x.id}">${icone("lixeira")}Excluir</button>` : ""}</div>`;
+  const sub = `Consulta emitida pelo Serasa em <b>${fmt.dataHora(x.emitido_em)}</b> · enviada ao painel em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}`;
+  card.innerHTML = cabSerasa(sub, acoes) + corpoSerasa(x) + anterioresSerasa(s.anteriores) + arquivo;
+}
+
+async function enviarSerasa(arquivo, confirmar = false) {
+  const s = estado.serasa, cliente = estado.clientes.length === 1 ? estado.clientes[0].id : null;
+  if (!cliente || !s?.ativo || s.cliente !== cliente) return;
+  if (arquivo.size > MAX_PDF) { toast("O arquivo passou de 10 MB.", "erro"); return; }
+  estado.enviandoSerasa = true;
+  desenharSerasa();
+  try {
+    const r = await api(`/api/credito/serasa?cliente=${cliente}${confirmar ? "&confirmar=1" : ""}`,
+      { method: "POST", headers: { "Content-Type": "application/pdf" }, body: arquivo });
+    if (r.confirmar) { // o nome do relatório não bate com o do cliente
+      if (confirm(r.confirmar)) return await enviarSerasa(arquivo, true);
+      return;
+    }
+    if (estado.clientes[0]?.id === cliente) estado.serasa = { ...r, cliente };
+    toast(r.ja_existia ? "Este PDF já estava gravado para o cliente." : "Dados do Serasa gravados.");
+  } catch (e) {
+    toast(e.message, "erro");
+  } finally {
+    estado.enviandoSerasa = false;
+    desenharSerasa();
+  }
+}
+
+async function excluirSerasa(id, botao) {
+  if (!confirm("Excluir estes dados do Serasa? Eles saem desta página e das próximas reanálises.")) return;
+  const cliente = estado.serasa?.cliente;
+  botao.disabled = true;
+  try {
+    const r = await api("/api/credito/serasa/excluir", { json: { id } });
+    estado.serasa = { ...r, cliente };
+    desenharSerasa();
+    toast("Dados do Serasa excluídos.");
+  } catch (e) {
+    toast(e.message, "erro");
+    botao.disabled = false;
+  }
+}
+
 // ---------- parecer de um limite novo (a regra é do servidor: Credito.analisar) ----------
+// "Com ressalvas" ainda é indicado: verde, com o ícone de alerta; os critérios de atenção é que ficam vermelhos.
 const PARECER = {
-  indicado: { rotulo: "Indicado", classe: "no_ritmo", cor: "ok", icone: "certo" },
-  ressalvas: { rotulo: "Indicado com ressalvas", classe: "atencao", cor: "mid", icone: "alerta" },
-  nao_indicado: { rotulo: "Não indicado", classe: "abaixo", cor: "bad", icone: "x" },
+  indicado: { rotulo: "Indicado", classe: "bom", icone: "certo" },
+  ressalvas: { rotulo: "Indicado com ressalvas", classe: "bom", icone: "alerta" },
+  nao_indicado: { rotulo: "Não indicado", classe: "ruim", icone: "x" },
 };
 const ICONE_CRITERIO = { ok: "certo", atencao: "alerta", bloqueio: "x" };
 const vezes = (v) => `${fmt.num(v, 1)}×`;
@@ -680,7 +918,7 @@ function parecer(a) {
     : Math.abs(variacao) < 0.0005 ? "o mesmo de hoje"
     : `${variacao > 0 ? "+" : "−"}${fmt.pct(Math.abs(variacao), 0)} sobre o de hoje (${fmt.moeda(n.limite_atual)})`;
   return `
-  <div class="cr-parecer ${p.cor} entra" style="--i:0">
+  <div class="cr-parecer ${p.classe} entra" style="--i:0">
     <div class="cr-parecer-cab">
       <span class="status ${p.classe}">${icone(p.icone)}${p.rotulo}</span>
       <span class="cr-parecer-pedido">limite pedido <b>${fmt.moeda2(a.pedido)}</b> · ${comparado}</span>
@@ -751,12 +989,12 @@ function situacaoErp(x) {
   const e = x.erp;
   if (!e) return "";
   if (e.situacao === "aplicado") {
-    return `<p class="cr-erp ok">${icone("certo")}<span>O cadastro do ERP já está com o limite e o prazo da última reanálise.</span></p>`;
+    return `<p class="cr-erp bom">${icone("certo")}<span>O cadastro do ERP já está com o limite e o prazo da última reanálise.</span></p>`;
   }
   if (e.situacao === "aguardando") {
     return `<p class="cr-erp">${icone("relogio")}<span>A última reanálise foi registrada com os dados de agora: o cadastro do ERP aparece na próxima atualização.</span></p>`;
   }
-  return `<p class="cr-erp atencao">${icone("alerta")}<span>O cadastro do ERP está com <b>${fmt.moeda2(e.limite)} · ${esc(e.prazo || "sem prazo")}</b>,
+  return `<p class="cr-erp ruim">${icone("alerta")}<span>O cadastro do ERP está com <b>${fmt.moeda2(e.limite)} · ${esc(e.prazo || "sem prazo")}</b>,
     diferente da última reanálise (${fmt.moeda2(x.limite_liberado)} · ${esc(x.prazo_liberado)}).</span></p>`;
 }
 
@@ -773,6 +1011,7 @@ function itemReanalise(x) {
       <span class="cr-hist-quando"><b>${fmt.dataHora(x.feita_em)}</b> · ${esc(x.feita_por)}</span>
       <span class="cr-hist-tipo">${tipo}</span>
       <span class="status ${p.classe}" title="Parecer da regra para o limite pedido">${icone(p.icone)}${p.rotulo}</span>
+      ${x.bloqueio ? `<span class="status ruim" title="Registrada pelo administrador dentro do prazo mínimo: ${esc(x.bloqueio)}">${icone("cadeado")}passou do bloqueio</span>` : ""}
       ${x.pode_excluir ? `<button type="button" class="btn perigo cr-hist-excluir" data-excluir="${x.id}"
         aria-label="Excluir a reanálise de ${fmt.dataHora(x.feita_em)}">${icone("lixeira")}Excluir</button>` : ""}
     </div>
@@ -804,7 +1043,7 @@ function desenharHistorico() {
   if (r.erro) corpo = `<div class="aviso">${icone("alerta")}<span>Não foi possível ler as reanálises: ${esc(r.erro)}</span></div>`;
   else if (!r.ativo) corpo = `<div class="aviso">${icone("info")}<span>${esc(r.aviso)}</span></div>`;
   else if (!lista.length) corpo = `<p class="cr-hist-vazio">Nenhuma reanálise registrada para este cliente. Analise um limite e registre a decisão logo abaixo do parecer.</p>`;
-  else corpo = situacaoErp(lista[0]) + `<ol class="cr-hist">${lista.map(itemReanalise).join("")}</ol>`;
+  else corpo = avisoBloqueio(r.bloqueio) + situacaoErp(lista[0]) + `<ol class="cr-hist">${lista.map(itemReanalise).join("")}</ol>`;
   const sub = lista.length ? `${lista.length} registrada${lista.length === 1 ? "" : "s"}, da mais nova para a mais antiga`
     : "o limite e o prazo liberados em cada reanálise, com a justificativa";
   card.innerHTML = `
@@ -835,9 +1074,34 @@ function desenharRegistro() {
         <textarea name="justificativa" rows="3" maxlength="2000" placeholder="Por que liberou esse limite e esse prazo?">${esc(s?.justificativa || "")}</textarea>
         <small>Não escreva CPF, telefone ou endereço: o Assistente lê as justificativas.</small></label>
       <p class="cr-registro-resumo" id="cr-registro-resumo" aria-live="polite"></p>
+      <div id="cr-registro-bloqueio" aria-live="polite"></div>
       <div><button class="btn primario" type="submit">${icone("certo")}Registrar reanálise</button></div>
     </form>`;
   resumoRegistro();
+}
+
+// ---------- prazo mínimo entre reanálises (a regra é do servidor: Reanalises._bloqueio) ----------
+const textoBloqueio = (b) => `aumento só a partir de ${fmt.data(b.aumento_a_partir_de)} (prazo mínimo de ${b.dias} dias desde a reanálise de ${fmt.data(b.ultima_em)})`;
+
+function avisoBloqueio(b) {
+  if (!b) return "";
+  return `<p class="cr-bloqueio">${icone("cadeado")}<span><b>Próximo aumento de limite a partir de ${fmt.data(b.aumento_a_partir_de)}</b>:
+    prazo mínimo de ${b.dias} dias desde a reanálise de ${fmt.data(b.ultima_em)}. Redução, corte e manter o limite podem ser registrados.</span></p>`;
+}
+
+// Só aumento esbarra no prazo: quem não é administrador não registra; o administrador marca "Registrar mesmo assim".
+function bloqueioRegistro(f, aumento) {
+  const b = estado.reanalises?.bloqueio, alvo = f.querySelector("#cr-registro-bloqueio");
+  const bloqueado = !!(b && aumento);
+  if (!bloqueado) alvo.innerHTML = "";
+  else if (!alvo.firstChild) {
+    alvo.innerHTML = `
+      <div class="cr-bloqueio">${icone("cadeado")}<span>Este cliente está no prazo mínimo entre reanálises: <b>${textoBloqueio(b)}</b>.
+        ${ctx.admin ? "Como administrador, você pode registrar mesmo assim, e a reanálise fica marcada como “passou do bloqueio”."
+          : "Redução, corte ou manter o limite podem ser registrados."}</span></div>
+      ${ctx.admin ? `<label class="cr-passar"><input type="checkbox" name="passar">Registrar mesmo assim</label>` : ""}`;
+  }
+  f.querySelector('button[type="submit"]').disabled = bloqueado && !(ctx.admin && f.passar?.checked);
 }
 
 // O que o registro vai gravar, enquanto a pessoa digita.
@@ -858,6 +1122,7 @@ function resumoRegistro() {
   const outro = v != null && Math.abs(v - a.pedido) >= 0.005
     ? `<small>O parecer acima é do limite pedido (${fmt.moeda2(a.pedido)}); o registro guarda também o da regra para o valor liberado.</small>` : "";
   f.querySelector("#cr-registro-resumo").innerHTML = partes.join(" · ") + outro;
+  bloqueioRegistro(f, v != null && v > antes + 0.005);
 }
 
 async function registrar(f) {
@@ -876,7 +1141,7 @@ async function registrar(f) {
   botao.disabled = true;
   try {
     const novo = await api("/api/credito/reanalise", { json: { chave: r.chave, cliente: a.cliente.id, pedido: a.pedido,
-      liberado, prazo: f.prazo.value, justificativa, dados_ate: estado.dados?.extraido_em } });
+      liberado, prazo: f.prazo.value, justificativa, dados_ate: estado.dados?.extraido_em, passar_bloqueio: !!f.passar?.checked } });
     estado.rascunho = null;
     estado.reanalises = { ...novo, cliente: a.cliente.id };
     desenharHistorico();
@@ -885,8 +1150,10 @@ async function registrar(f) {
   } catch (e) {
     toast(e.message, "erro");
     if (e.status === 400 && /atualizados/.test(e.message)) carregar(true); // extração nova: refaz a página e o parecer
+    else if (e.status === 400 && /prazo mínimo/.test(e.message)) carregarReanalises(); // outro registrou antes: o bloqueio aparece
   } finally {
     botao.disabled = false;
+    resumoRegistro(); // o botão volta desligado se o aumento continua bloqueado
   }
 }
 
@@ -956,6 +1223,22 @@ function comoCalcula(d, i) {
             pontualidade, o que está em aberto, os 12 meses da regra, o mês a mês e o parecer), para comparar decisões
             depois e para o Assistente. O registro não muda o ERP e fica só no site. Não dá para editar: quem registrou ou
             um administrador exclui e registra de novo.</li>
+          <li><b>Prazo mínimo entre reanálises:</b> ${d.regras ? (d.regras.intervalo_reanalise_dias
+              ? `${d.regras.intervalo_reanalise_dias} dias` : "desligado (0 dias)") : "o que o administrador definir"},
+            em Configurar (administrador). Depois de uma reanálise do cliente, um <b>aumento</b> de limite só pode ser
+            registrado passado esse prazo, contado do dia dela; redução, corte e manter o limite passam sempre, e uma
+            reanálise excluída não conta. O administrador pode registrar mesmo assim, e a reanálise fica marcada como
+            “passou do bloqueio”.</li>
+          <li><b>Dados do Serasa</b> (com um cliente escolhido): quem tem a página envia o PDF do Relato – Pessoa
+            Jurídica, e o painel lê e guarda só a data de fundação, o score (com a probabilidade de inadimplência e o
+            risco), os títulos por faixa de atraso, a pontualidade em R$ e as anotações negativas (tipo, quantidade e
+            valor). O PDF não fica guardado. A idade conta da data em que o Serasa emitiu o relatório: passando de
+            ${d.regras ? `${d.regras.serasa_validade_dias} dias` : "a validade definida em Configurar"}, aparece como
+            desatualizado. Os dados ficam só no site e entram no retrato das próximas reanálises do cliente.</li>
+          <li><b>Cores:</b> verde é o que está bom e vermelho o que está ruim, pelo que cada número é comparado:
+            pontualidade com ${fmt.pct(d.regra_parecer?.pontual_ok ?? 0.9, 0)}, inadimplência com zero, o que está em
+            aberto com o limite, o atraso com ${TOLERANCIA} dias, a idade do Serasa com a validade. O que bate exato
+            fica verde; o que não tem com o que comparar (compras, ticket, limite, score) fica cinza.</li>
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. A ordem vale para todos os

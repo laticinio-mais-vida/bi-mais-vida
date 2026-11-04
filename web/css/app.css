@@ -1419,6 +1419,16 @@ body.sem-rolagem { overflow: hidden; }
 }
 
 /* ---------- Reavaliação de Crédito ---------- */
+/* Só duas cores, num tom cada: verde (bom) e vermelho (ruim), pelo que o número é comparado; o resto é neutro. Os selos
+   têm contorno (texto, ícone e borda no mesmo tom), sem fundo claro; os trilhos do anel e da barra ficam cinza. */
+#pagina-credito { --cr-bom: var(--ok); --cr-ruim: var(--ruim); --cr-neutro: var(--tinta-3); }
+#pagina-credito .status.bom { background: transparent; color: var(--cr-bom); box-shadow: inset 0 0 0 1.5px var(--cr-bom); }
+#pagina-credito .status.ruim { background: transparent; color: var(--cr-ruim); box-shadow: inset 0 0 0 1.5px var(--cr-ruim); }
+#pagina-credito .status.neutro { background: transparent; color: var(--tinta-2); box-shadow: inset 0 0 0 1.5px var(--linha-forte); }
+#pagina-credito .anel .trilho { stroke: var(--surface-3); }
+#pagina-credito .medidor-trilho { background: var(--surface-3); }
+#pagina-credito .aviso { background: var(--surface-2); border-color: var(--linha); }
+#pagina-credito .aviso .ic { color: var(--tinta-3); }
 /* Quatro cartões por linha: o valor encolhe pelo número de caracteres (--n) para caber na largura do cartão. */
 #pagina-credito .kpi { container-type: inline-size; }
 #pagina-credito .kpi-simples .kpi-valor[style*="--n"] { font-size: min(40px, 100cqi / (var(--n) * .58)); }
@@ -1440,19 +1450,19 @@ body.sem-rolagem { overflow: hidden; }
 .cr-chip button:hover, .cr-chip button:focus-visible { background: color-mix(in srgb, var(--laranja) 25%, transparent); outline: none; }
 .cr-chip button .ic { width: 14px; height: 14px; }
 .cr-chip-soma { margin-left: 4px; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; }
-.cr-negativo { color: var(--ruim); font-weight: 700; }
+.cr-negativo { color: var(--cr-ruim); font-weight: 700; }
 .cr-ordem { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
 .cr-ordem:hover, .cr-ordem.ativa { color: var(--acento-tinta); }
 .cr-ordem:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 4px; }
 .cr-seta { font-size: 10px; opacity: .4; }
 .cr-ordem.ativa .cr-seta { opacity: 1; }
 .cr-pago-cel small { display: block; color: var(--tinta-3); font-size: 11.5px; }
-.cr-pago { color: var(--ok); font-weight: 700; }
+.cr-pago { color: var(--cr-bom); font-weight: 700; }
 .cr-cliente.cr-cliente-varios { padding: 0 0 14px; }
 .cr-varios .cr-nome { text-align: left; font-weight: 600; }
 .cr-varios .cr-nome small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 11.5px; }
 .cr-cliente { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
-.cr-cliente-icone { flex: none; width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: #fff; background: var(--k-cli); }
+.cr-cliente-icone { flex: none; width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: var(--tinta-2); background: var(--surface-3); }
 .cr-cliente-nome { min-width: 0; flex: 1; }
 .cr-cliente-nome b { display: block; font-family: var(--f-titulo); font-size: 18px; overflow-wrap: anywhere; }
 .cr-cliente-nome small { display: block; color: var(--tinta-3); font-size: 13px; margin-top: 2px; }
@@ -1466,7 +1476,7 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-titulos .cr-nome small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 11.5px; }
 .cr-titulos td:last-child, .cr-titulos th:last-child { text-align: left; }
 .cr-titulos td .status { padding: 3px 9px 3px 6px; font-size: 12px; }
-.cr-dias.atraso { color: var(--ruim); font-weight: 700; }
+.cr-dias.atraso { color: var(--cr-ruim); font-weight: 700; }
 /* parecer de um limite novo */
 .cr-analise .cartao-cab { margin-bottom: 12px; }
 .cr-analise-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
@@ -1480,9 +1490,8 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
   --c: var(--linha-forte);
   padding: 16px 18px; border-radius: 16px; border: 1px solid var(--linha); border-left: 4px solid var(--c); background: var(--surface);
 }
-.cr-parecer.ok { --c: var(--ok-forte); }
-.cr-parecer.mid { --c: var(--atencao-forte); }
-.cr-parecer.bad { --c: var(--ruim-forte); }
+.cr-parecer.bom { --c: var(--cr-bom); }
+.cr-parecer.ruim { --c: var(--cr-ruim); }
 .cr-parecer-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 14px; }
 .cr-parecer-cab .status { font-size: 14px; padding: 6px 14px 6px 10px; }
 .cr-parecer-cab .status .ic { width: 17px; height: 17px; }
@@ -1494,11 +1503,11 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-criterios li span:not(.cr-crit-ic) { color: var(--tinta-2); }
 .cr-crit-ic { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; }
 .cr-crit-ic .ic { width: 15px; height: 15px; stroke-width: 2.4; }
-.cr-criterios .ok .cr-crit-ic { background: var(--ok-bg); color: var(--ok); }
-.cr-criterios .atencao .cr-crit-ic { background: var(--atencao-bg); color: var(--atencao); }
-.cr-criterios .bloqueio .cr-crit-ic { background: var(--ruim-bg); color: var(--ruim); }
-.cr-sugerido { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 16px; padding: 10px 14px; border-radius: 12px; background: var(--acento-suave); font-size: 13.5px; }
-.cr-sugerido > .ic { flex: none; color: var(--acento); }
+/* critério ok: verde; atenção (ícone de alerta) e bloqueio (✕): vermelhos */
+.cr-criterios .ok .cr-crit-ic { color: var(--cr-bom); box-shadow: inset 0 0 0 1.5px var(--cr-bom); }
+.cr-criterios .atencao .cr-crit-ic, .cr-criterios .bloqueio .cr-crit-ic { color: var(--cr-ruim); box-shadow: inset 0 0 0 1.5px var(--cr-ruim); }
+.cr-sugerido { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 16px; padding: 10px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--linha); font-size: 13.5px; }
+.cr-sugerido > .ic { flex: none; color: var(--tinta-3); }
 .cr-sugerido p { flex: 1; min-width: min(100%, 240px); margin: 0; }
 .cr-sugerido .btn { height: 34px; padding: 0 12px; font-size: 13px; }
 .cr-parecer-numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 10px 18px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--linha); font-size: 12.5px; }
@@ -1526,12 +1535,20 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-registro-resumo small { display: block; margin-top: 3px; color: var(--tinta-3); font-size: 12px; }
 .cr-historico .cartao-cab { margin-bottom: 12px; }
 .cr-hist-vazio { margin: 0; color: var(--tinta-3); font-size: 13.5px; }
-.cr-erp { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border-radius: 12px; background: var(--acento-suave); font-size: 13px; }
-.cr-erp .ic { flex: none; width: 17px; height: 17px; margin-top: 1px; color: var(--acento); }
-.cr-erp.ok { background: var(--ok-bg); }
-.cr-erp.ok .ic { color: var(--ok); }
-.cr-erp.atencao { background: var(--atencao-bg); }
-.cr-erp.atencao .ic { color: var(--atencao); }
+.cr-erp { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--linha); background: var(--surface-2); font-size: 13px; }
+.cr-erp .ic { flex: none; width: 17px; height: 17px; margin-top: 1px; color: var(--tinta-3); }
+.cr-erp.bom { border-color: var(--cr-bom); }
+.cr-erp.bom .ic { color: var(--cr-bom); }
+.cr-erp.ruim { border-color: var(--cr-ruim); }
+.cr-erp.ruim .ic { color: var(--cr-ruim); }
+/* o prazo mínimo entre reanálises */
+.cr-bloqueio { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--cr-ruim); font-size: 13px; }
+.cr-bloqueio > .ic { flex: none; width: 17px; height: 17px; margin-top: 1px; color: var(--cr-ruim); }
+.cr-bloqueio b { color: var(--cr-ruim); }
+#cr-registro-bloqueio:empty { display: none; }
+#cr-registro-bloqueio .cr-bloqueio { margin: 0; }
+.cr-passar { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13.5px; font-weight: 700; cursor: pointer; }
+.cr-passar input { width: 17px; height: 17px; accent-color: var(--cr-ruim); }
 .cr-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .cr-hist-item { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--linha); background: var(--surface); }
 .cr-hist-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
@@ -1547,6 +1564,36 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-hist-numeros { margin-top: 8px; font-size: 12.5px; }
 .cr-hist-numeros summary { width: fit-content; cursor: pointer; color: var(--acento); font-weight: 600; }
 .cr-hist-numeros .cr-parecer-numeros { margin-top: 10px; }
+/* dados do Serasa */
+.cr-serasa .cartao-cab { flex-wrap: wrap; gap: 10px 14px; margin-bottom: 4px; }
+.cr-serasa .cartao-cab .sub b { color: var(--tinta-2); }
+.cr-serasa-acoes { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.cr-serasa-acoes .btn { height: 36px; padding: 0 12px; font-size: 13px; }
+.cr-serasa-topo { margin-top: 8px; padding-top: 0; border-top: 0; }
+.cr-serasa-topo b { overflow-wrap: anywhere; }
+.cr-serasa-topo .cr-de { display: inline; font-size: 12px; font-weight: 500; color: var(--tinta-3); }
+.cr-serasa-alerta { margin: 12px 0 0; }
+.cr-serasa-blocos { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 14px 22px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--linha); }
+.cr-serasa-blocos > div { min-width: 0; }
+.cr-serasa-blocos h4 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 8px; font-size: 13.5px; }
+.cr-serasa-blocos h4 .status { padding: 2px 9px 2px 6px; font-size: 12px; }
+table.dados.cr-serasa-tab { width: 100%; font-size: 13px; }
+table.dados.cr-serasa-tab th, table.dados.cr-serasa-tab td { padding: 6px 8px; }
+.cr-serasa-tab .esq { text-align: left; }
+.cr-serasa-tab th, .cr-serasa-tab td:not(.cr-quebra) { white-space: nowrap; }
+.cr-serasa-tab .cr-grupo { text-align: center; border-bottom: 1px solid var(--linha); }
+table.dados.cr-serasa-tab td.esq { white-space: nowrap; }  /* a faixa numa linha só (a tabela rola de lado) */
+table.dados.cr-serasa-anot td.esq { white-space: normal; }
+.cr-serasa-tab .cr-quebra { white-space: normal; text-align: left; }
+.cr-serasa-tab tr.bom td { color: var(--cr-bom); }
+.cr-serasa-tab tr.ruim td { color: var(--cr-ruim); font-weight: 600; }
+.cr-serasa-tab tr.cr-serasa-total td { font-weight: 700; border-top: 1px solid var(--linha-forte); }
+.cr-v-bom { color: var(--cr-bom); }
+.cr-v-ruim { color: var(--cr-ruim); font-weight: 600; }
+.cr-serasa-anteriores { margin-top: 14px; }
+.cr-serasa-anteriores ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.cr-serasa-anteriores li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--linha); border-radius: 12px; font-size: 13px; }
+.cr-serasa-anteriores li small { display: block; color: var(--tinta-3); font-size: 12px; }
 @media (max-width: 860px) {
   .cr-busca, .cr-busca .campo, .cr-busca .campo input, #pagina-credito .filtros .campo, #pagina-credito .filtros .campo select { width: 100%; }
   .cr-sugestoes { width: 100%; }
@@ -1554,6 +1601,7 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
   .cr-cliente-chips { justify-content: flex-start; }
   .cr-analise-form .campo, .cr-analise-form .campo input { width: 100%; }
   .cr-analise-form .btn { flex: 1; justify-content: center; }
+  .cr-serasa-blocos { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- Assistente (chat) ---------- */

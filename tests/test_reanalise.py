@@ -1,6 +1,7 @@
 """Reanálises de crédito (bi/reanalise.py): registrar (o retrato calculado no servidor, as conferências, a chave que não
 grava duas vezes, a extração que mudou entre analisar e registrar), listar com o cadastro de hoje, excluir (quem pode, e
-a linha fica guardada), o painel do PC que só avisa e o que o Assistente lê (por cliente, parecidas e o resumo).
+a linha fica guardada), o painel do PC que só avisa, o que o Assistente lê (por cliente, parecidas e o resumo) e o prazo
+mínimo entre reanálises (só aumento bloqueia; o administrador passa e a reanálise fica marcada).
 
 Usa o cache sintético de tests/apoio.py (hoje = 01/10/2026) e o banco de teste (BI_TESTE_POSTGRES).
 """
@@ -17,7 +18,7 @@ from bi import assistente as modulo_assistente
 from bi.assistente import Ferramentas
 from bi.conversas import NaoEncontrada, novo_id
 from bi.credito import Credito, perfil_do_retrato
-from bi.reanalise import AVISO_PC, Reanalises, decisao, distancia
+from bi.reanalise import AVISO_PC, PADRAO_REGRAS, ConfigCredito, Reanalises, decisao, distancia
 from tests.apoio import NOMES, BaseBanco, criar_assistente, criar_calc
 
 
@@ -276,3 +277,84 @@ class TestAssistente(Base):
         self.assertEqual((p["erro"], [x["cliente"]["id"] for x in r["reanalises"]]), (None, [2, 4]))
         _, p = com.executar("reanalises_credito", {"id_cliente": "Mercado", "parecidos": False})
         self.assertIn("código de cliente", p["erro"])
+
+
+class TestPrazoMinimo(Base):
+    def setUp(self):
+        super().setUp()
+        self.config = ConfigCredito(self.banco)
+        self.config.salvar({"intervalo_reanalise_dias": 30, "serasa_validade_dias": 90}, self.admin)
+        self.reanalises = Reanalises(self.banco, self.credito, ativo=True, config=self.config)
+
+    def recuar(self, dias: int) -> None:
+        """Faz as reanálises do cliente 1 terem sido registradas há `dias` dias."""
+        with self.banco.conexao() as con:
+            con.execute("UPDATE credito_reanalises SET feita_em = feita_em - make_interval(days => %s)", [dias])
+
+    def test_so_aumento_bloqueia(self):
+        self.reanalises.registrar(self.ana, self.dados())  # manteve os 5.000 de hoje
+        ate = dt.date.today() + dt.timedelta(days=30)
+        with self.assertRaises(ValueError) as e:
+            self.reanalises.registrar(self.bia, self.dados(liberado=6000))
+        self.assertIn(f"aumento só a partir de {ate:%d/%m/%Y} (prazo mínimo de 30 dias desde a reanálise de "
+                      f"{dt.date.today():%d/%m/%Y})", str(e.exception))
+        with self.assertRaises(ValueError):  # quem não é administrador não passa, mesmo pedindo
+            self.reanalises.registrar(self.bia, self.dados(liberado=6000, passar_bloqueio=True))
+        for liberado in (5000, 4000, 0):  # manter, reduzir e cortar passam
+            self.reanalises.registrar(self.bia, self.dados(liberado=liberado))
+        r = self.reanalises.listar(1, self.ana)
+        self.assertEqual(r["bloqueio"]["aumento_a_partir_de"], ate.isoformat())
+        self.assertEqual(r["bloqueio"]["dias"], 30)
+        self.assertEqual(self.contar("credito_reanalises"), 4)
+        self.assertEqual(self.contar("credito_reanalises", "bloqueio IS NOT NULL"), 0)
+
+    def test_o_administrador_passa_e_fica_marcado(self):
+        self.reanalises.registrar(self.ana, self.dados())
+        with self.assertRaises(ValueError) as e:
+            self.reanalises.registrar(self.admin, self.dados(liberado=6000))
+        self.assertIn("Registrar mesmo assim", str(e.exception))
+        r = self.reanalises.registrar(self.admin, self.dados(liberado=6000, passar_bloqueio=True))
+        x = r["reanalises"][0]
+        self.assertTrue(x["bloqueio"].startswith("aumento só a partir de"))
+        self.assertIsNone(r["reanalises"][1]["bloqueio"])
+        ia = self.reanalises.para_ia(1, False)["reanalises"]
+        self.assertEqual(ia[0]["passou_do_bloqueio"], x["bloqueio"])
+        self.assertNotIn("passou_do_bloqueio", ia[1])
+
+    def test_o_prazo_conta_em_dias_e_a_excluida_nao_conta(self):
+        primeira = self.reanalises.registrar(self.ana, self.dados())
+        self.recuar(29)
+        with self.assertRaises(ValueError):
+            self.reanalises.registrar(self.ana, self.dados(liberado=6000))
+        self.recuar(1)  # 30 dias: o prazo acabou
+        self.assertIsNone(self.reanalises.listar(1, self.ana)["bloqueio"])
+        segunda = self.reanalises.registrar(self.ana, self.dados(liberado=6000))
+        self.assertIsNone(segunda["reanalises"][0]["bloqueio"])
+        self.assertIsNotNone(self.reanalises.listar(1, self.ana)["bloqueio"])  # a de agora começa outro prazo
+        self.reanalises.excluir(self.ana, segunda["id"])  # excluída por engano: vale a anterior (há 30 dias)
+        self.assertIsNone(self.reanalises.listar(1, self.ana)["bloqueio"])
+        self.reanalises.excluir(self.ana, primeira["id"])
+        self.reanalises.registrar(self.ana, self.dados(liberado=7000))  # sem nenhuma: aumento passa
+
+    def test_zero_desliga_e_a_mesma_chave_de_novo(self):
+        d = self.dados(liberado=6000)
+        self.reanalises.registrar(self.ana, d)  # a primeira do cliente: sem bloqueio
+        self.assertEqual(self.reanalises.registrar(self.ana, d)["ja_existia"], True)  # clique duplo não esbarra no prazo
+        self.config.salvar({"intervalo_reanalise_dias": 0, "serasa_validade_dias": 90}, self.admin)
+        self.reanalises.registrar(self.ana, self.dados(liberado=7000))
+        self.assertIsNone(self.reanalises.listar(1, self.ana)["bloqueio"])
+        sem = Reanalises(self.banco, self.credito, ativo=True)  # sem as regras: sem prazo
+        sem.registrar(self.ana, self.dados(liberado=8000))
+
+    def test_regras(self):
+        self.assertEqual(ConfigCredito(self.banco).atual(),
+                         {"versao": 1, "intervalo_reanalise_dias": 30, "serasa_validade_dias": 90})
+        self.assertEqual(self.config.validar({}), PADRAO_REGRAS)
+        self.assertEqual(self.config.validar({"intervalo_reanalise_dias": "15", "serasa_validade_dias": 60.0}),
+                         {"versao": 1, "intervalo_reanalise_dias": 15, "serasa_validade_dias": 60})
+        for errado in ({"intervalo_reanalise_dias": -1}, {"intervalo_reanalise_dias": 366},
+                       {"intervalo_reanalise_dias": 1.5}, {"intervalo_reanalise_dias": "abc"},
+                       {"intervalo_reanalise_dias": True}, {"intervalo_reanalise_dias": None},
+                       {"serasa_validade_dias": 0}, {"serasa_validade_dias": 366}):
+            with self.assertRaises(ValueError, msg=errado):
+                self.config.validar(errado)

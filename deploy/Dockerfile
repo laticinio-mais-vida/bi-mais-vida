@@ -5,8 +5,9 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf-8
 # psycopg: o banco PostgreSQL do painel (usuários, regras, conversas e uso do Assistente).
 # XlsxWriter e fpdf2: os arquivos Excel e PDF que o Assistente prepara para baixar.
 # cryptography: a leitura do Google Agenda, com a autorização de cada conta cifrada.
+# pypdf: a leitura do PDF do Serasa na página de crédito.
 RUN pip install --no-cache-dir duckdb==1.5.5 pandas==3.0.5 numpy==2.4.4 anthropic==1.15.0 \
-    "psycopg[binary]==3.3.6" psycopg-pool==3.3.3 XlsxWriter==3.3.0 fpdf2==2.8.9 cryptography==50.0.2
+    "psycopg[binary]==3.3.6" psycopg-pool==3.3.3 XlsxWriter==3.3.0 fpdf2==2.8.9 cryptography==50.0.2 pypdf==6.21.4
 WORKDIR /app
 EXPOSE 8050
 CMD ["python", "app.py", "--sem-navegador"]

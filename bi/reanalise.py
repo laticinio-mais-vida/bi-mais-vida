@@ -10,6 +10,10 @@ IA ajudar nas decisões; o Assistente já lê, com a ferramenta reanalises_credi
 - O retrato tem de ser o que a pessoa viu: se chegou uma extração nova entre analisar e registrar, o registro é
   recusado e a página refaz o parecer.
 - O que aconteceu depois não é gravado: sai dos títulos emitidos depois do registro (Credito.depois), na hora.
+- Prazo mínimo entre reanálises (ConfigCredito, configurado pelo administrador): depois de uma reanálise do cliente, um
+  aumento de limite só pode ser registrado a partir do dia dela + N dias; redução, corte e manter passam sempre. O
+  administrador pode registrar mesmo assim, e a reanálise guarda a regra que valia (coluna bloqueio, migração 038).
+- O retrato leva também o último envio do Serasa do cliente (bi/serasa.py), quando há um.
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import math
 
 from .acesso import eh_admin
 from .banco import hora, inicio_do_dia
+from .configuracao import RegrasNoBanco
 from .conversas import NaoEncontrada, id_valido, novo_id
 from .credito import Credito, dias_prazo, perfil_do_retrato
 
@@ -44,8 +49,53 @@ COMPARAR = {
 INADIMPLENTE = 2  # a diferença entre um inadimplente e quem não é
 CAMPOS = ("id", "id_cliente", "cliente", "limite_antes", "prazo_antes", "limite_pedido", "limite_liberado",
           "prazo_liberado", "justificativa", "parecer", "parecer_liberado", "limite_sugerido", "dados_ate", "retrato",
-          "feita_em", "feita_por", "feita_por_nome")
+          "feita_em", "feita_por", "feita_por_nome", "bloqueio")
 _VALORES = ("limite_antes", "limite_pedido", "limite_liberado", "limite_sugerido")
+TRAVA = 38  # pg_advisory_xact_lock(TRAVA, cliente): duas reanálises do mesmo cliente ao mesmo tempo, uma de cada vez
+# As regras do crédito (tabela regras, nome "credito"): o prazo mínimo entre reanálises (0 = sem bloqueio) e os dias até
+# os dados do Serasa ficarem desatualizados.
+PADRAO_REGRAS = {"versao": 1, "intervalo_reanalise_dias": 0, "serasa_validade_dias": 90}
+
+
+def _dias(valor, nome: str, minimo: int, maximo: int) -> int:
+    try:
+        v = float(valor) if not isinstance(valor, bool) and valor not in (None, "") else math.nan
+    except (TypeError, ValueError):
+        v = math.nan
+    if not math.isfinite(v):
+        raise ValueError(f"{nome}: digite um número de dias")
+    if v != int(v):
+        raise ValueError(f"{nome}: use um número inteiro de dias")
+    if not minimo <= v <= maximo:
+        raise ValueError(f"{nome}: de {minimo} a {maximo} dias")
+    return int(v)
+
+
+def _valida_regras(cfg: dict) -> dict:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    b = PADRAO_REGRAS
+    return {"versao": 1,
+            "intervalo_reanalise_dias": _dias(cfg.get("intervalo_reanalise_dias", b["intervalo_reanalise_dias"]),
+                                              "prazo mínimo entre reanálises", 0, 365),
+            "serasa_validade_dias": _dias(cfg.get("serasa_validade_dias", b["serasa_validade_dias"]),
+                                          "validade dos dados do Serasa", 1, 365)}
+
+
+class ConfigCredito(RegrasNoBanco):
+    """Regras da página Reavaliação de Crédito (tabela regras, nome "credito"), salvas pelo administrador."""
+
+    nome = "credito"
+    _valida = staticmethod(_valida_regras)
+
+    def _padrao(self) -> dict:
+        return dict(PADRAO_REGRAS)
+
+
+def texto_bloqueio(b: dict) -> str:
+    """O bloqueio que vale (Reanalises._bloqueio), para a mensagem e para a marca da reanálise."""
+    ate, dia = dt.date.fromisoformat(b["aumento_a_partir_de"]), dt.date.fromisoformat(b["ultima_em"])
+    return (f"aumento só a partir de {ate:%d/%m/%Y} (prazo mínimo de {b['dias']} dias desde a reanálise de "
+            f"{dia:%d/%m/%Y})")
 
 
 def _cliente(valor) -> int:
@@ -147,10 +197,30 @@ class Reanalises:
     """As reanálises de crédito, na tabela credito_reanalises. ativo: o site, que grava e lê; no PC (False) a página só
     avisa que elas ficam no site."""
 
-    def __init__(self, banco, credito: Credito, ativo: bool):
+    def __init__(self, banco, credito: Credito, ativo: bool, config: ConfigCredito | None = None, serasa=None):
+        """config: as regras do crédito (None = sem prazo mínimo); serasa: os dados do Serasa (bi/serasa.py), que vão
+        para o retrato (None = o retrato fica sem eles)."""
         self.banco = banco
         self.credito = credito
         self.ativo = ativo
+        self.config = config
+        self.serasa = serasa
+
+    def _bloqueio(self, con, cliente: int) -> dict | None:
+        """O prazo mínimo entre reanálises, se ele vale hoje para o cliente: a última reanálise (sem as excluídas), o
+        prazo e o dia a partir do qual um aumento pode ser registrado. None = não há bloqueio."""
+        dias = self.config.atual()["intervalo_reanalise_dias"] if self.config else 0
+        if not dias:
+            return None
+        linha = con.execute("SELECT id, feita_em FROM credito_reanalises WHERE id_cliente = %s AND excluida_em IS NULL "
+                            "ORDER BY feita_em DESC, id DESC LIMIT 1", [cliente]).fetchone()
+        if linha is None:
+            return None
+        dia = linha[1].astimezone().date()
+        ate = dia + dt.timedelta(days=dias)
+        if dt.date.today() >= ate:
+            return None
+        return {"dias": dias, "ultima_id": linha[0], "ultima_em": dia.isoformat(), "aumento_a_partir_de": ate.isoformat()}
 
     # --- a página ------------------------------------------------------------------------
     def listar(self, cliente, usuario: dict) -> dict:
@@ -165,11 +235,12 @@ class Reanalises:
             linhas = con.execute(
                 f"SELECT {', '.join(CAMPOS)} FROM credito_reanalises WHERE id_cliente = %s AND excluida_em IS NULL "
                 "ORDER BY id DESC LIMIT %s", [cliente, MAX_LISTA]).fetchall()
+            bloqueio = self._bloqueio(con, cliente)
         itens = [self._item(_linha(r), usuario) for r in linhas]
         if itens:
             itens[0]["erp"] = self._erp(itens[0], cadastro, extraido)
         return {"ativo": True, "aviso": None, "reanalises": itens, "prazos": self.credito.prazos(),
-                "chave": novo_id(), "cadastro": cadastro, "dados_ate": extraido}
+                "chave": novo_id(), "cadastro": cadastro, "dados_ate": extraido, "bloqueio": bloqueio}
 
     @staticmethod
     def _item(d: dict, usuario: dict) -> dict:
@@ -182,6 +253,7 @@ class Reanalises:
                                  "justificativa", "parecer", "parecer_liberado", "limite_sugerido")},
             "dados_ate": d["dados_ate"].isoformat(timespec="seconds"),
             "decisao": decisao(d["limite_antes"], d["limite_liberado"], d["prazo_antes"], d["prazo_liberado"]),
+            "bloqueio": d["bloqueio"],  # registrada pelo administrador dentro do prazo mínimo: a regra que valia
             # O que a página mostra em "Ver os números do dia"
             "numeros": {
                 "compras_valor": hist.get("compras_valor"), "compras_qtd": hist.get("compras_qtd"),
@@ -204,9 +276,10 @@ class Reanalises:
 
     def registrar(self, usuario: dict, dados: dict) -> dict:
         """Grava uma reanálise: {chave, cliente, pedido (o valor analisado no parecer), liberado, prazo, justificativa,
-        dados_ate (a extração que a página mostrava)}. O retrato e os pareceres são calculados aqui. A mesma chave de
-        novo não grava outra vez (ja_existia). Dado inválido ou extração nova -> ValueError; dados de crédito ainda não
-        chegaram -> RuntimeError. Devolve o id e a lista nova do cliente (listar)."""
+        dados_ate (a extração que a página mostrava), passar_bloqueio (o administrador registra um aumento dentro do
+        prazo mínimo)}. O retrato e os pareceres são calculados aqui. A mesma chave de novo não grava outra vez
+        (ja_existia). Dado inválido, extração nova ou aumento dentro do prazo mínimo -> ValueError; dados de crédito
+        ainda não chegaram -> RuntimeError. Devolve o id e a lista nova do cliente (listar)."""
         if not self.ativo:
             raise ValueError(AVISO_PC)
         chave = id_valido(dados.get("chave"))
@@ -228,26 +301,43 @@ class Reanalises:
             raise RuntimeError("os dados ainda estão sendo preparados")
         if str(dados.get("dados_ate") or "") != retrato["dados_ate"]:
             raise ValueError(DADOS_NOVOS)
+        if self.serasa is not None:
+            retrato["serasa"] = self.serasa.ultimo(cliente)
         parecer, cadastro = retrato["parecer"], retrato["cadastro"]
+        aumento = liberado > (cadastro["limite"] or 0) + 0.005
         with self.banco.conexao() as con:
-            linha = con.execute(
-                "INSERT INTO credito_reanalises (chave, id_cliente, cliente, limite_antes, prazo_antes, limite_pedido, "
-                "limite_liberado, prazo_liberado, justificativa, parecer, parecer_liberado, limite_sugerido, dados_ate, "
-                "retrato, feita_por, feita_por_nome) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s::jsonb, (SELECT id FROM usuarios WHERE id = %s), %s) ON CONFLICT (chave) DO NOTHING RETURNING id",
-                [chave, cliente, retrato["cliente"]["nome"], cadastro["limite"], cadastro["prazo"], pedido, liberado,
-                 prazo, justificativa, parecer["pedido"]["parecer"],
-                 parecer["liberado"]["parecer"] if parecer["liberado"] else None, parecer["pedido"]["limite_sugerido"],
-                 dt.datetime.fromisoformat(retrato["dados_ate"]), json.dumps(retrato, ensure_ascii=False),
-                 usuario["id"], usuario["nome"]]).fetchone()
-            if linha is None:  # a mesma chave de novo: clique duplo, ou a rede repetiu o envio
-                antiga = con.execute("SELECT id, id_cliente, feita_por FROM credito_reanalises WHERE chave = %s",
-                                     [chave]).fetchone()
+            # Uma de cada vez por cliente: duas pessoas registrando juntas não passam as duas pelo prazo mínimo.
+            con.execute("SELECT pg_advisory_xact_lock(%s::int, %s::int)", [TRAVA, cliente])
+            antiga = con.execute("SELECT id, id_cliente, feita_por FROM credito_reanalises WHERE chave = %s",
+                                 [chave]).fetchone()
+            if antiga is not None:  # a mesma chave de novo: clique duplo, ou a rede repetiu o envio
                 if (antiga[1], antiga[2]) != (cliente, usuario["id"]):
                     raise ValueError("o formulário expirou; recarregue a página")
                 id_, ja_existia = antiga[0], True
             else:
-                id_, ja_existia = linha[0], False
+                marca = None
+                b = self._bloqueio(con, cliente) if aumento else None
+                if b:
+                    texto = texto_bloqueio(b)
+                    if not eh_admin(usuario):
+                        raise ValueError(f"este cliente está no prazo mínimo entre reanálises: {texto}. Redução, corte "
+                                         "ou manter o limite podem ser registrados")
+                    if dados.get("passar_bloqueio") is not True:
+                        raise ValueError(f"este cliente está no prazo mínimo entre reanálises: {texto}. Para registrar "
+                                         "mesmo assim, marque “Registrar mesmo assim”")
+                    marca = texto
+                id_ = con.execute(
+                    "INSERT INTO credito_reanalises (chave, id_cliente, cliente, limite_antes, prazo_antes, "
+                    "limite_pedido, limite_liberado, prazo_liberado, justificativa, parecer, parecer_liberado, "
+                    "limite_sugerido, dados_ate, retrato, feita_por, feita_por_nome, bloqueio) VALUES (%s, %s, %s, %s, "
+                    "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, (SELECT id FROM usuarios WHERE id = %s), %s, %s) "
+                    "RETURNING id",
+                    [chave, cliente, retrato["cliente"]["nome"], cadastro["limite"], cadastro["prazo"], pedido,
+                     liberado, prazo, justificativa, parecer["pedido"]["parecer"],
+                     parecer["liberado"]["parecer"] if parecer["liberado"] else None,
+                     parecer["pedido"]["limite_sugerido"], dt.datetime.fromisoformat(retrato["dados_ate"]),
+                     json.dumps(retrato, ensure_ascii=False), usuario["id"], usuario["nome"], marca]).fetchone()[0]
+                ja_existia = False
         return {"id": id_, "ja_existia": ja_existia, **self.listar(cliente, usuario)}
 
     def excluir(self, usuario: dict, id_) -> dict:
@@ -341,6 +431,8 @@ class Reanalises:
             "justificativa": _cortar(d["justificativa"], JUSTIFICATIVA_IA),
             "depois": depois,
         }
+        if d.get("bloqueio"):  # o administrador registrou um aumento dentro do prazo mínimo entre reanálises
+            saida["passou_do_bloqueio"] = d["bloqueio"]
         if "distancia" in d:
             saida["distancia"] = round(d["distancia"], 2)
         return saida

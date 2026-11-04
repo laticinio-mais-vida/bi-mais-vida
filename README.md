@@ -44,8 +44,9 @@ O projeto usa o Python 3.11 que já está na máquina, com `fdb` (Firebird), `du
 com o pandas), que já estão instalados. Usuários, regras e o histórico do Assistente ficam num PostgreSQL instalado
 no próprio PC (veja [Banco de dados](#banco-de-dados)), que precisa de `pip install "psycopg[binary]" psycopg-pool`.
 O Assistente precisa também de `pip install anthropic`, só onde for usado, e de `pip install XlsxWriter fpdf2` para os
-arquivos Excel e PDF que ele prepara. A leitura do Google Agenda (só no site) usa `cryptography`; no PC, ele serve só
-para os testes. No VPS, tudo já vem na imagem.
+arquivos Excel e PDF que ele prepara. A leitura do Google Agenda (só no site) usa `cryptography`, e a leitura do PDF
+do Serasa na página de crédito (só no site) usa `pypdf`; no PC, eles servem só para os testes. No VPS, tudo já vem na
+imagem.
 
 ## De onde vêm os dados
 
@@ -555,7 +556,9 @@ pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cac
 prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
 Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. O mesmo vale para as reanálises de
 crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
-vão para a IA só nas perguntas de quem tem a página. Do **Google Agenda** de cada pessoa (veja
+vão para a IA só nas perguntas de quem tem a página. Dos **dados do Serasa** (veja [Dados do Serasa](#dados-do-serasa)),
+o banco do site guarda só a fundação, o score, o histórico de pagamento, as anotações negativas, o CNPJ e a razão
+social; o PDF não fica guardado (os sócios e o CPF deles não entram), e nada disso vai para a IA. Do **Google Agenda** de cada pessoa (veja
 [Google Agenda](#google-agenda-só-leitura)), o banco do site guarda só o título, o horário e se o evento está ocupado
 (sem descrição, local nem convidados), e só o dono vê; o título e o horário vão para a IA só quando ele pergunta da
 própria agenda. A IA trata esses títulos como dado, nunca como instrução: qualquer pessoa pode mandar um convite.
@@ -1114,6 +1117,52 @@ registros, isso vira a base para uma IA ajudar nas decisões de crédito.
   clientes com os números mais parecidos com os de hoje dele) e um resumo por parecer da regra. A comparação usa
   pontualidade em 12 meses, compras por mês, maior saldo em aberto, tempo de cliente, inadimplência e, com um pedido,
   o pedido ÷ o maior saldo. As reanálises entram como referência ao lado do parecer da regra, sem trocá-lo.
+- **Prazo mínimo entre reanálises** (em **Configurar**, só o administrador; começa desligado, 0 dias): depois de uma
+  reanálise do cliente, um **aumento** de limite (liberado maior que o limite do cadastro de hoje) só pode ser
+  registrado a partir do dia dela + o prazo. Redução, corte e manter o limite passam sempre; a reanálise excluída não
+  conta. O administrador pode registrar mesmo assim, marcando "Registrar mesmo assim", e a reanálise guarda a regra
+  que valia (coluna `bloqueio`, que a página mostra como "passou do bloqueio" e o Assistente recebe). Duas pessoas
+  registrando o mesmo cliente ao mesmo tempo passam uma de cada vez.
+- O retrato leva também o último envio do Serasa do cliente (`serasa`: emissão, idade, fundação, score, faixas,
+  pontualidade em R$ e anotações), ou `null` quando não há nenhum.
+
+### Dados do Serasa
+
+Com um cliente escolhido, quem tem a página envia o **PDF do Relato – Pessoa Jurídica** do Serasa (até 10 MB e 20
+páginas). O servidor lê o texto do PDF (`pypdf`, sem IA nem OCR: o relatório vem do Chrome, com texto) e guarda só:
+
+- a **data de fundação**;
+- o **score** (de 0 a 1000), com a probabilidade de inadimplência, o risco e o aviso da caixa vermelha quando ela
+  não traz a probabilidade (ex.: "DEFAULT - DIVIDA VENCIDA COM INSTITUICAO FINANCEIRA HA MAIS DE 90 DIAS");
+- o **histórico de pagamento comercial**: os títulos por faixa de atraso (pontual, 8-15, 16-30, 31-60, +60 e à vista:
+  quantidade e %) e a pontualidade em R$ (total, médio e % de cada faixa e do mês). O Serasa dá intervalos ("200 A
+  250", "6 MIL A 6,5 MIL"): ficam o texto e os números de/até;
+- as **anotações negativas**: PEFIN, REFIN, dívidas vencidas, protestos, cheques sem fundos, ações judiciais e
+  falências, com a quantidade e o valor ("NÃO CONSTAM OCORRÊNCIAS" = 0). Uma linha que não dá para ler fica sem número,
+  com o texto que veio, e a página manda conferir no PDF.
+
+Regras:
+
+- **O PDF não fica guardado:** é lido na memória e descartado. O atraso médio mês a mês, os fornecedores, os sócios e
+  as consultas ao Serasa ficam de fora.
+- **Idade:** conta da data em que o Serasa emitiu o relatório (pode chegar hoje um PDF antigo). Passando da validade
+  (em Configurar; padrão 90 dias), a página mostra "Desatualizado". Aparecem também quando e por quem foi enviado.
+- **Cliente certo:** se a razão social e o nome fantasia do relatório não batem com o nome e a razão social do
+  cadastro (sem LTDA, EPP…), a página pergunta antes de gravar.
+- **Vários envios:** cada envio é uma linha nova; a página mostra o de emissão mais recente e os anteriores. O mesmo
+  PDF de novo para o cliente não grava outra vez. Quem enviou ou um administrador exclui (a linha fica guardada).
+- **Só no site**, como as reanálises; no painel do PC, a página avisa.
+- Faltando o CNPJ, a data de emissão ou a tabela das anotações, o arquivo é recusado (não é o relatório). Sem score,
+  grava e mostra "não veio no relatório"; com o histórico vazio (empresa sem histórico no Serasa), a página diz isso.
+
+### Cores da página
+
+Só verde (bom) e vermelho (ruim), num tom cada, pelo que cada número é comparado: pontualidade com o "ok" da regra do
+parecer (90%), inadimplência com zero, o que está em aberto com o limite (o restante com zero), o atraso e a situação
+do título com a tolerância de 7 dias, os critérios do parecer (atenção e bloqueio são vermelhos; "Indicado com
+ressalvas" é verde, com o ícone de alerta), a idade do Serasa com a validade, as anotações com zero. O que bate exato
+fica verde; o que não é comparado com nada (compras, quantidade, ticket, limite, score) fica cinza. Botões, campos e o
+cliente escolhido seguem o padrão do painel.
 
 ## Banco de dados
 
@@ -1126,7 +1175,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | Tabela | O que guarda |
 |---|---|
 | `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
-| `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024) e as das Premiações (migração 034); cada Salvar vira uma versão nova, com quem salvou e quando |
+| `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024), as das Premiações (migração 034) e as do crédito, o prazo mínimo entre reanálises e a validade do Serasa (migração 038); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
 | `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado (no preço médio, também o preço de cada produto: `base_precos` e `resultado_precos`, migração 013) |
@@ -1141,7 +1190,8 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa, quando foi lida e quando foi excluída (a excluída fica escondida até a limpeza dos 90 dias); os avisos de prazo têm uma chave, para sair uma vez só (migrações 028 e 036) |
 | `google_contas`, `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migrações 031 e 032): as contas Google conectadas (o e-mail, a autorização cifrada e se ela caiu), as agendas de cada conta (o id da agenda no Google, se é a principal, se está ligada, a assinatura da última leitura, quando foi lida e o último erro) e os eventos lidos das ligadas, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Desconectar a conta leva as agendas e os eventos dela; só o site usa |
-| `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em` |
+| `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em`; a registrada pelo administrador dentro do prazo mínimo guarda a regra em `bloqueio` (migração 038) |
+| `credito_serasa` | os dados do Serasa, só no site (migração 038): uma linha por envio, que não muda depois, com o cliente, o CNPJ e a razão social do relatório, a emissão, o hash do arquivo (o mesmo PDF não grava duas vezes), a fundação, o score e o resto em `dados` (veja [Dados do Serasa](#dados-do-serasa)) e quem enviou; o excluído fica com `excluido_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -1288,7 +1338,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |
 | `bi/ajustes.py` | ajustes de volume da página Sugestão de Metas (tabela sugestao_ajustes): os em vigor, em memória, e a gravação que leva a diferença para a meta aprovada na mesma transação |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
-| `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas) |
+| `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas); as regras do crédito (tabela regras) e o prazo mínimo entre reanálises |
+| `bi/serasa.py` | os dados do Serasa (tabela credito_serasa, só no site): a leitura do PDF do Relato PJ, enviar, listar, excluir e o último envio para o retrato |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
