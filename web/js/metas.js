@@ -418,13 +418,7 @@ function renderVendedores(d) {
     return h + `<div class="cartao secao vazio entra" style="--i:1">${icone("usuario")}<p>Nenhum vendedor desta visão tem meta em ${esc(d.periodo.rotulo)}.</p></div>`;
   }
   const cards = [];
-  if (tipo === "completa") {
-    cards.push(kpi({ i: 1, titulo: "Faturamento", ic: "moeda", cor: COR.fat, ind: ind.faturamento, cal }));
-    cards.push(kpi({ i: 2, titulo: "Mussarela", ic: "queijo", cor: COR.mus, ind: ind.mussarela, cal }));
-    cards.push(kpi({ i: 3, titulo: "Outras linhas", ic: "leite", cor: COR.out, ind: ind.outras, cal }));
-    cards.push(kpi({ i: 4, titulo: "Clientes atendidos", ic: "pessoas", cor: COR.cli, ind: ind.clientes, tipo: "num", cal }));
-    cards.push(kpiVendaMedia(5, ind.venda_media));
-  } else if (tipo === "faturamento") {
+  if (tipo === "faturamento") { // Metas ES, Metas BA e Metas Edir
     cards.push(kpi({ i: 1, titulo: "Faturamento", ic: "moeda", cor: COR.fat, ind: ind.faturamento, cal }));
     cards.push(kpi({ i: 2, titulo: "Clientes atendidos", ic: "pessoas", cor: COR.cli, ind: ind.clientes, tipo: "num", cal }));
     cards.push(kpiVendaMedia(3, ind.venda_media));
@@ -447,9 +441,7 @@ function renderVendedores(d) {
   h += `<section class="kpis secao n${cards.length}">${cards.join("")}</section>`;
 
   // corrida + ranking/composição
-  const metricas = tipo === "completa"
-    ? [["fat", "Faturamento"], ["mus", "Mussarela"], ["out", "Outras linhas"]]
-    : tipo === "outras" ? [["out", "Outras linhas"]] : [["fat", "Faturamento"]];
+  const metricas = tipo === "outras" ? [["out", "Outras linhas"]] : [["fat", "Faturamento"]];
   if (!estado.metricaCorrida || !metricas.some((m) => m[0] === estado.metricaCorrida)) estado.metricaCorrida = metricas[0][0];
   h += `<section class="duas-colunas secao">
     <article class="cartao entra" style="--i:6">
@@ -479,7 +471,7 @@ function renderVendedores(d) {
   }
   h += `</section>`;
 
-  if ((tipo === "completa" || tipo === "outras") && !unico) h += renderCategorias(d, 8);
+  if (tipo === "outras" && !unico) h += renderCategorias(d, 8);
   h += relatorioVendedores(d, 9);
   return h;
 }

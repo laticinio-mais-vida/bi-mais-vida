@@ -13,7 +13,7 @@ GRUPOS_PRODUTO = ("mussarela", "outras", "fora")
 GRUPOS_VENDEDOR = ("ES", "BA", "EDIR", "OCULTO")
 
 VISOES = {
-    "es": {"titulo": "Metas ES", "grupos": ["ES"], "regiao": "ES", "tipo": "completa"},
+    "es": {"titulo": "Metas ES", "grupos": ["ES"], "regiao": "ES", "tipo": "faturamento"},  # igual à Metas BA (nov/26)
     "ba": {"titulo": "Metas BA", "grupos": ["BA"], "regiao": "BA", "tipo": "faturamento"},
     "edir": {"titulo": "Metas Edir", "grupos": ["EDIR"], "regiao": "BA", "tipo": "faturamento"},
     "outras_es": {"titulo": "Outras Linhas ES", "grupos": ["ES"], "regiao": "ES", "tipo": "outras"},

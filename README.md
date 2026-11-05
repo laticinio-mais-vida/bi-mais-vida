@@ -106,6 +106,10 @@ Em cada aba:
   - Em Outras Linhas ES, a tabela "Falta Outras Linhas / Dentro da meta?" fica num cartão separado, com o
     próprio Copiar imagem, para mandar as duas imagens separadas no WhatsApp.
   - Em Produtos BA e Produtos ES a tabela traz Meta e Realizado por vendedor, com os produtos em ordem alfabética.
+- **Metas ES** tem a mesma tela da Metas BA (desde novembro de 2026): faturamento, clientes, venda média e composição
+  (mussarela × outras linhas), a corrida e o ranking de faturamento e a tabela com faturamento, venda média e clientes.
+  Os cartões e as linhas da tabela de mussarela e outras linhas e as categorias saíram dela; a meta de outras linhas
+  continua na aba Outras Linhas ES.
 - **Produtos ES** é igual à Produtos BA, com os vendedores do ES e o calendário do ES. A meta de volume vem da METAS
   PRODUTOS.xlsx (que só tem o ES em janeiro de 2026) ou da meta aprovada no painel (Aprovação de metas). Nas duas abas de
   produtos, o filtro de meses mostra só os meses com meta de produto de algum vendedor da aba.

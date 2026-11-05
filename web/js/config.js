@@ -374,7 +374,7 @@ function secaoVendedores(alvo) {
     <div class="cartao-cab"><div>
       <h2>${icone("pessoas")}Região de cada vendedor</h2>
       <p class="sub">Define em quais visões cada vendedor da planilha de metas aparece.
-      <b>ES</b>: Metas ES, Outras Linhas ES e Produtos ES ·<b>BA</b>: Metas BA e Produtos BA · <b>Edir</b>: Metas Edir e Produtos BA · <b>Oculto</b>: não aparece.
+      <b>ES</b>: Metas ES, Outras Linhas ES e Produtos ES · <b>BA</b>: Metas BA e Produtos BA · <b>Edir</b>: Metas Edir e Produtos BA · <b>Oculto</b>: não aparece.
       Vendedor novo que ainda não estiver aqui segue o supervisor do ERP.</p>
     </div></div>
     <div class="lista-produtos">

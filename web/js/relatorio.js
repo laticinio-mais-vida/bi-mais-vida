@@ -67,15 +67,6 @@ function linhasDoRelatorio(d) {
     R("Meta Realizada Outras Linhas", "real", (c) => c.outras.realizado, "moeda", { ocultaZero: true }),
     R("% Meta Outras Linhas Realizada", "pct", pct("outras"), "pct", { status: st("outras") }),
   ];
-  if (tipo === "completa") {
-    return [
-      ...fat,
-      R("Meta Mussarela", "meta", (c) => c.mussarela.meta, "moeda"),
-      R("Meta Realizada Mussarela", "real", (c) => c.mussarela.realizado, "moeda", { ocultaZero: true }),
-      R("% Meta Mussarela Realizada", "pct", pct("mussarela"), "pct", { status: st("mussarela") }),
-      ...out, ...cats, ...vm, ...cli,
-    ];
-  }
   if (tipo === "outras") {
     return [...out, R("Meta Restante Outras Linhas", "real", (c) => c.outras.meta - c.outras.realizado, "moeda"), ...cats];
   }
