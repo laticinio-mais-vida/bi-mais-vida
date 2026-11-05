@@ -1,4 +1,5 @@
-"""Cálculo das visões de metas (equivalentes às páginas Metas ES, BA, Edir, Outras Linhas ES e Produtos BA).
+"""Cálculo das visões de metas (equivalentes às páginas Metas ES, BA, Edir, Outras Linhas ES e Produtos BA, mais a
+Produtos ES, que o Power BI não tinha: a meta de volume por produto dos vendedores do ES).
 
 Regras (as mesmas do Power BI, com os parâmetros vindos da página Configurações):
 - venda válida: VENDAS.DATACANCELAMENTO nula; conta pelo vendedor e pela data da venda;
@@ -147,11 +148,15 @@ class Calculadora:
             padrao = data_ref.replace(day=1)
         elif meses:
             padrao = meses[-1]
-        meses_produtos = sorted({m["mes"] for m in self.metas_produtos.dados()})
+        # Nas abas de produtos, só os meses com meta de produto de algum vendedor da aba (o ES só tem alguns).
+        regras = self.regras()
+        meses_produtos = {k: sorted({m["mes"] for m in self.metas_produtos.dados()
+                                     if regras.grupo_vendedor(m["id_vendedor"]) in v["grupos"]})
+                          for k, v in VISOES.items() if v["tipo"] == "produtos"}
         return {
             "visoes": [{"id": k, "titulo": v["titulo"], "tipo": v["tipo"], "regiao": v["regiao"]} for k, v in VISOES.items()],
             "meses": [{"ano": m.year, "mes": m.month} for m in meses],
-            "meses_produtos": [{"ano": m.year, "mes": m.month} for m in meses_produtos],
+            "meses_produtos": {k: [{"ano": m.year, "mes": m.month} for m in lista] for k, lista in meses_produtos.items()},
             "padrao": {"ano": padrao.year, "mes": padrao.month} if padrao else None,
             "nomes_meses": MESES,
         }

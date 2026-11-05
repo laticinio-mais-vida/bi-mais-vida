@@ -18,6 +18,7 @@ VISOES = {
     "edir": {"titulo": "Metas Edir", "grupos": ["EDIR"], "regiao": "BA", "tipo": "faturamento"},
     "outras_es": {"titulo": "Outras Linhas ES", "grupos": ["ES"], "regiao": "ES", "tipo": "outras"},
     "produtos_ba": {"titulo": "Produtos BA", "grupos": ["BA", "EDIR"], "regiao": "BA", "tipo": "produtos"},
+    "produtos_es": {"titulo": "Produtos ES", "grupos": ["ES"], "regiao": "ES", "tipo": "produtos"},
 }
 
 # --- Padrões vindos do Power BI -------------------------------------------------------------

@@ -240,6 +240,7 @@ class TestAprovacao(BaseAprovacao):
         rub = self.linha(aba, RUBENS)
         self.assertGreater(rub["sugerida"]["mus"], 0)
         self.assertGreater(rub["sugerida"]["fat"], rub["sugerida"]["mus"])  # com a Bebida Láctea
+        self.assertEqual(self.calc.opcoes()["meses_produtos"]["produtos_es"], [])  # ainda sem meta de produto no ES
         a = self.linha(self.aprovar("ES", "2026-10", RUBENS, meta_fat=10000, meta_mus=3000, meta_cli=1), RUBENS)["aprovada"]
         self.assertEqual((a["meta_fat"], a["meta_mus"], a["meta_out"]), (10000.0, 3000.0, 7000.0))
         rs = lambda grupo: sum(p["meta_volume"] * p["preco"] for p in a["produtos"] if p["grupo"] == grupo)  # noqa: E731
@@ -247,6 +248,17 @@ class TestAprovacao(BaseAprovacao):
         self.assertAlmostEqual(rs("outras"), 7000, places=0)
         v = next(x for x in self.calc.visao("es", [(2026, 10)])["linhas"] if x["id"] == RUBENS)
         self.assertEqual((v["faturamento"]["meta"], v["mussarela"]["meta"], v["outras"]["meta"]), (10000.0, 3000.0, 7000.0))
+        # aba Produtos ES: a meta de volume de cada produto da aprovada, com o calendário do ES; a Produtos BA não o vê
+        op = self.calc.opcoes()["meses_produtos"]
+        self.assertEqual((op["produtos_es"], op["produtos_ba"]), ([{"ano": 2026, "mes": 10}], []))
+        d = self.calc.visao("produtos_es", [(2026, 10)])
+        self.assertEqual((d["calendario"]["regiao"], [c["id"] for c in d["colunas"]]), ("ES", [RUBENS]))
+        metas = {p["id"]: p["por_vendedor"][str(RUBENS)]["meta"] for p in d["produtos"] if p["tem_meta"]}
+        self.assertEqual(metas.keys(), {p["id"] for p in a["produtos"] if p["meta_volume"]})
+        for p in a["produtos"]:
+            if p["meta_volume"]:
+                self.assertAlmostEqual(metas[p["id"]], p["meta_volume"], places=3)
+        self.assertEqual(self.calc.visao("produtos_ba", [(2026, 10)])["colunas"], [])
 
     def test_vendedor_sem_meta_recente(self):
         aba = self.sug.aprovacao("ES", "2026-10")

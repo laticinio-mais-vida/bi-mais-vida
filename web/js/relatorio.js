@@ -126,7 +126,7 @@ function tabelaDentroDaMeta(colunas) {
     </table>`;
 }
 
-// ---------- Produtos BA (Meta e Realizado por vendedor) ----------
+// ---------- Produtos BA e Produtos ES (Meta e Realizado por vendedor) ----------
 export function relatorioProdutos(d, i) {
   const cols = d.colunas.map((c) => ({ ...c, rotulo: c.nome_erp || c.nome }));
   const comTotal = cols.length > 1;
@@ -147,9 +147,9 @@ export function relatorioProdutos(d, i) {
         <td class="rotulo produto">${esc(p.nome)}</td>${cols.map((c) => par(p.por_vendedor[String(c.id)])).join("")}${comTotal ? par(p.tem_meta ? p.total : { ...p.total, meta: null }, "total") : ""}
       </tr>`).join("")}</tbody>
     </table>`;
-  const corpo = cabecalho(d, "Metas Produtos BA") + tabela;
+  const corpo = cabecalho(d, `Metas ${d.visao.titulo}`) + tabela;
   const sub = "Mesmo formato da matriz do Power BI: meta de volume e volume vendido (líquido das devoluções que descontam)";
-  return cartao(d, i, "Metas de volume por produto", sub, corpo, `metas-produtos-ba-${d.periodo.arquivo}`);
+  return cartao(d, i, "Metas de volume por produto", sub, corpo, `metas-${d.visao.id.replace("_", "-")}-${d.periodo.arquivo}`);
 }
 
 // ---------- imagem para o WhatsApp ----------

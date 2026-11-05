@@ -1,7 +1,7 @@
 # BI de Metas Mais Vida
 
 Versão em Python das páginas de metas do Power BI (Metas ES, Metas BA, Metas Edir, Metas Produtos BA e
-Metas Outras Linhas ES), reunidas numa página só, com abas por visão e filtros de vendedores, meses e anos
+Metas Outras Linhas ES, mais a Produtos ES, que o Power BI não tinha), reunidas numa página só, com abas por visão e filtros de vendedores, meses e anos
 (todos de seleção múltipla), e uma página de Configurações para as regras que antes ficavam dentro das
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
@@ -79,11 +79,12 @@ As abas no topo substituem as páginas do Power BI:
 | Metas Edir | Metas Edir | grupo Edir |
 | Outras Linhas ES | Metas Outras Linhas ES | grupo ES |
 | Produtos BA | Metas Produtos BA | grupos BA e Edir |
+| Produtos ES | (não havia no Power BI) | grupo ES |
 
 Filtros (todos de seleção múltipla, com Aplicar; nada marcado é todos):
 
 - **Vendedores:** um ou vários. Clicar num vendedor no ranking, no nome dele na tabela ou no cartão de
-  Produtos BA mostra só ele; clicar de novo volta para todos. Com Ctrl (Cmd no Mac) o clique soma ou tira o
+  Produtos BA ou Produtos ES mostra só ele; clicar de novo volta para todos. Com Ctrl (Cmd no Mac) o clique soma ou tira o
   vendedor dos já marcados.
 - **Meses** e **Anos:** os meses marcados dos anos marcados, por exemplo setembro e outubro, ou todos os
   meses de 2026. Com vários meses, metas e realizados somam os meses (como uma segmentação do Power BI), a
@@ -104,7 +105,10 @@ Em cada aba:
   vendedores nas colunas (ordem alfabética) e Total no fim. Metas em azul e categorias em amarelo.
   - Em Outras Linhas ES, a tabela "Falta Outras Linhas / Dentro da meta?" fica num cartão separado, com o
     próprio Copiar imagem, para mandar as duas imagens separadas no WhatsApp.
-  - Em Produtos BA a tabela traz Meta e Realizado por vendedor, com os produtos em ordem alfabética.
+  - Em Produtos BA e Produtos ES a tabela traz Meta e Realizado por vendedor, com os produtos em ordem alfabética.
+- **Produtos ES** é igual à Produtos BA, com os vendedores do ES e o calendário do ES. A meta de volume vem da METAS
+  PRODUTOS.xlsx (que só tem o ES em janeiro de 2026) ou da meta aprovada no painel (Aprovação de metas). Nas duas abas de
+  produtos, o filtro de meses mostra só os meses com meta de produto de algum vendedor da aba.
   - As linhas de categoria seguem as categorias definidas em Configurações.
 - **Tela cheia:** todo cartão tem um botão de tela cheia no canto superior direito (aparece ao passar o
   mouse), como no Power BI web. Indicadores e tabelas são ampliados para caber na tela, o gráfico da corrida
@@ -290,7 +294,7 @@ com versões, como as regras de Metas:
 
 Em Configurar › **Aprovação de metas**, o administrador escolhe o estado e o mês da meta e vê cada vendedor com a meta que a
 sugestão gerou. Ao aprovar, a meta passa a valer sozinha no **painel de Metas** (faturamento, clientes e, no ES, mussarela e
-outras linhas; no BA, a meta de volume por produto na aba Produtos BA), no Assistente e na Gestão, **no lugar das linhas da
+outras linhas; e a meta de volume por produto nas abas Produtos BA e Produtos ES), no Assistente e na Gestão, **no lugar das linhas da
 METAS.xlsx e da METAS PRODUTOS.xlsx daquele vendedor e mês**. Os outros vendedores e meses seguem as planilhas. Um mês
 aprovado aparece no filtro de Metas mesmo sem estar nas planilhas.
 

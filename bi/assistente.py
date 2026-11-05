@@ -455,7 +455,8 @@ FERRAMENTAS = [
                         "atingido, situação (batida, no ritmo, atenção, abaixo), projeção do mês e quanto falta "
                         "por dia útil. Visões: es (Metas ES: faturamento, mussarela, outras linhas e clientes), ba "
                         "(Metas BA), edir (Metas Edir), outras_es (Outras Linhas ES, com as categorias), "
-                        "produtos_ba (metas de volume por produto do BA)."),
+                        "produtos_ba (metas de volume por produto do BA), produtos_es (metas de volume por produto "
+                        "do ES)."),
         "input_schema": _objeto({
             "visao": {"type": "string", "enum": list(VISOES)},
             "meses": {"type": "array", "items": {"type": "string"},

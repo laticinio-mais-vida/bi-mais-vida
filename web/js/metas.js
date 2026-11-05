@@ -1,5 +1,5 @@
-// Página Metas: uma página só, com as visões do Power BI (ES, BA, Edir, Outras Linhas ES, Produtos BA)
-// como abas, mais os filtros de vendedores, meses e anos, todos de seleção múltipla (nada marcado = todos).
+// Página Metas: uma página só, com as visões do Power BI (ES, BA, Edir, Outras Linhas ES, Produtos BA), mais a
+// Produtos ES, como abas, mais os filtros de vendedores, meses e anos, todos de seleção múltipla (nada marcado = todos).
 // Vários meses somam metas e realizados, como uma segmentação do Power BI; a conta fica em bi/metas.py.
 import {
   api, esc, fmt, icone, chipStatus, STATUS, corStatus, MESES, animarContadores, animarEntradas,
@@ -10,7 +10,7 @@ import { relatorioVendedores, relatorioProdutos, ligarCaptura } from "./relatori
 import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
 import { multiSelecao } from "./multiselecao.js";
 
-const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa" };
+const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa", produtos_es: "caixa" };
 const COR = { fat: "var(--s-fat)", mus: "var(--s-mus)", out: "var(--s-out)", cli: "var(--k-cli)", vm: "var(--k-vm)" };
 const SEMANA = ["D", "S", "T", "Q", "Q", "S", "S"];
 const nomeMes = (m) => MESES[m - 1][0].toUpperCase() + MESES[m - 1].slice(1);
@@ -101,8 +101,10 @@ export function montarMetas(container, contexto) {
 
 export function recarregarMetas() { if (ctx && filtroV) carregar(true); }
 
+// Nas abas de produtos, só os meses com meta de produto de vendedores daquela aba.
 function mesesDaVisao() {
-  return estado.visao === "produtos_ba" ? ctx.opcoes.meses_produtos : ctx.opcoes.meses;
+  const v = ctx.opcoes.visoes.find((x) => x.id === estado.visao);
+  return v?.tipo === "produtos" ? ctx.opcoes.meses_produtos[estado.visao] || [] : ctx.opcoes.meses;
 }
 
 // Meses com metas que entram no filtro: os anos marcados × os meses marcados (vazio = todos).
@@ -531,7 +533,7 @@ function renderCategorias(d, i) {
 }
 
 // ======================================================================================
-// Produtos BA (meta de volume por produto e vendedor)
+// Produtos BA e Produtos ES (meta de volume por produto e vendedor)
 // ======================================================================================
 function renderProdutos(d) {
   const ind = d.indicadores, cal = d.calendario;
