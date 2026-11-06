@@ -673,7 +673,7 @@ _VISITAVEL = "NOT COALESCE(k.inativo, false) AND NOT contains(upper(COALESCE(k.c
 
 
 def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: dict[int, list[int]],
-                 abrir: str | None = None) -> dict:
+                 abrir: str | None = None, distintos: bool = False) -> dict:
     """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos na
     rota do dia (de clientes das áreas atendidas nesse dia da semana) ÷ as visitas esperadas no dia. Pedido de cliente
     de área de outro dia não conta (o "fora de rota" do Power BI). Dia sem visita esperada (o fim de semana, o dia sem
@@ -684,7 +684,10 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
     esperado em todo dia de atendimento da área dele; o quinzenal, se não comprou nos 7 dias antes; o mensal, se não
     comprou nos 21 dias antes (as três semanas anteriores). O cliente fora da previsão que compra no dia entra nas
     visitas desse dia (decisão do usuário: antes o pedido contava sem a visita, e o dia passava de 100%). Compra =
-    pedido de venda (de qualquer vendedor e em qualquer dia). Cliente sem frequência no cadastro conta como semanal."""
+    pedido de venda (de qualquer vendedor e em qualquer dia). Cliente sem frequência no cadastro conta como semanal.
+
+    distintos: o numerador conta os clientes com pedido na rota do dia (cada um uma vez), não os pedidos: os
+    atendimentos do painel de desempenho (bi/desempenho.py). As visitas esperadas são as mesmas."""
     onde_k, params_k = _carteira(c, ids)
     grupos = ("k.id_vendedor_carteira AS v, k.id_area AS a, COALESCE(k.area, '(sem área)') AS ar, "
               "COALESCE(k.segmento, '(sem segmento)') AS s")
@@ -700,7 +703,8 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
     visitas: dict = {}
     if rota:
         for v, a, ar, s, data, n in cur.execute(
-                f"{com_rota[0]} SELECT {grupos}, p.data, SUM(p.pedidos) FROM _pedidos_venda p "
+                f"{com_rota[0]} SELECT {grupos}, p.data, "
+                f"{'COUNT(DISTINCT p.id_cliente)' if distintos else 'SUM(p.pedidos)'} FROM _pedidos_venda p "
                 f"JOIN clientes k ON k.id_cliente = p.id_cliente "
                 f"JOIN rota r ON r.id_area = k.id_area AND r.dia_semana = isodow(p.data) "
                 f"WHERE {_PEDIDO_VALIDO} AND p.data BETWEEN ? AND ? AND {onde_k} GROUP BY 1, 2, 3, 4, 5",

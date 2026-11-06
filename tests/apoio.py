@@ -88,7 +88,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True,
                parcelas: bool = True, carteira: bool = True, vigencias=(), retratos=(),
                metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=(), comissao: bool = True,
-               linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True) -> Calculadora:
+               linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True, linhas_pedidos_detalhe=(),
+               pedidos_extras=()) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -98,7 +99,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     cache sem a tabela dos brindes; linhas_brindes: as linhas dela (data, vendedor, cliente, tipo, produto, motivo,
     valor, quantidade). comissao: False = cache sem as tabelas da comissão; linhas_comissao: as vendas com a comissão
     gravada (data, vendedor, tipo, produto, valor, comissão); percentuais: a tabela (vendedor, produto, %).
-    pedidos_detalhe: False = cache sem os pedidos um a um e os itens deles (vazias quando vêm)."""
+    pedidos_detalhe: False = cache sem os pedidos um a um e os itens deles; linhas_pedidos_detalhe: os cabeçalhos
+    (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
                           **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
@@ -175,6 +177,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                 (D(2026, 9, 24), BA, 13, "CLIENTE", "PEDIDOVENDA", 0, 1, 70.0),    # bloqueado: o pedido conta
                 (D(2026, 9, 5), ES, 10, "CLIENTE", "PEDIDOVENDA", 0, 1, 60.0),     # área sem dia: fica fora
                 (D(2026, 9, 6), ES, 1, "FUNCIONARIO", "PEDIDOVENDA", 0, 1, 10.0),  # código de outro cadastro
+                *pedidos_extras,
             ])
     con.executemany("INSERT INTO clientes VALUES (?, ?, ?)", clientes)
     if rede:
@@ -194,6 +197,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
         con.executemany("INSERT INTO carteira_retratos VALUES (?, ?, ?, ?, ?)", list(retratos))
     if brindes and linhas_brindes:
         con.executemany("INSERT INTO brindes_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?, ?)", list(linhas_brindes))
+    if pedidos_detalhe and linhas_pedidos_detalhe:
+        con.executemany(f"INSERT INTO pedidos_venda_detalhe VALUES ({', '.join('?' * 18)})", list(linhas_pedidos_detalhe))
     if comissao and linhas_comissao:
         con.executemany("INSERT INTO comissoes_vendas VALUES (?, ?, ?, ?, ?, ?)", list(linhas_comissao))
     if comissao and percentuais:

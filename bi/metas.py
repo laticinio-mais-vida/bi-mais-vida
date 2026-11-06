@@ -209,6 +209,37 @@ class Calculadora:
             por_dia[d][p] -= valor
         return por_vendedor, por_dia
 
+    def movimento_diario(self, regras: Regras, ids: list[int], inicio: dt.date, fim: dt.date) -> dict[int, dict]:
+        """Faturamento, mussarela e outras linhas de cada vendedor em cada dia entre inicio e fim, com as regras de
+        _movimento (a venda pelo vendedor e pela data da nota, a devolução que desconta pela data de ENTRADA, os
+        produtos "não conta" fora): {vendedor: {dia: {"fat", "mus", "out"}}}. É o realizado da página Metas dia a dia
+        (o painel de desempenho da Gestão soma o período e o mês com ele)."""
+        saida: dict[int, dict] = defaultdict(lambda: defaultdict(lambda: {"fat": 0.0, "mus": 0.0, "out": 0.0}))
+        if not ids:
+            return {}
+        marcas = ",".join("?" * len(ids))
+        filtro = f"WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas})"
+
+        def somar(d, vid, pid, valor):
+            grupo = regras.grupo_produto(regras.produto(pid))
+            if grupo == "fora":
+                return
+            dia = saida[vid][d]
+            dia["fat"] += valor
+            dia["mus" if grupo == "mussarela" else "out"] += valor
+
+        for d, vid, pid, valor in self.cache.consulta(
+                f"SELECT data, id_vendedor, id_produto, SUM(valor) FROM vendas_itens {filtro} GROUP BY 1, 2, 3",
+                [inicio, fim, *ids]):
+            somar(d, vid, pid, valor)
+        for d, vid, pid, motivo, cancelada, valor in self.cache.consulta(
+                f"SELECT data, id_vendedor, id_produto, id_motivo, cancelada, SUM(valor) FROM devolucoes_itens {filtro} "
+                f"GROUP BY 1, 2, 3, 4, 5", [inicio, fim, *ids]):
+            if motivo not in regras.motivos or (cancelada and regras.ignorar_canceladas):
+                continue
+            somar(d, vid, pid, -valor)
+        return {vid: dict(dias) for vid, dias in saida.items()}
+
     def _clientes(self, ids: list[int], meses: list[dt.date]) -> tuple[dict[int, int], int]:
         """Clientes distintos de cada mês, somados nos meses (a meta de clientes é mensal)."""
         if not ids:
