@@ -47,6 +47,7 @@ from .banco import hora
 from .calendario import Calendario
 from .configuracao import Regras
 from .conversas import NaoEncontrada, id_valido, novo_id
+from .desempenho import PERIODOS as PERIODOS_DESEMPENHO, Painel, periodo as periodo_desempenho
 from .indicadores import (ABERTURAS, BASES, BASES_COM_PRODUTO, COMBINACOES, COMPARAR, FILTROS, FILTROS_PRODUTO,
                           FORMAS, MAX_PRODUTOS_PRECO, MEDIDAS, META_EM, PERIODOS_BASE, TIPOS, _marcas, _redondo, alvos_do_vendedor,
                           calcular, calendario_periodo, da_base, descritor, filtros_aceitos, janela_base, janela_fechada, medir,
@@ -1430,6 +1431,47 @@ class Gestao:
                                    "acoes": lista, "em_vigor": len(lista)})
             vendedores.sort(key=lambda v: _chave(v["nome"]))
             saida["vendedores"] = vendedores
+        return saida
+
+    def desempenho(self, usuario: dict, escopo, regiao: str | None = None, periodo: str | None = None) -> dict:
+        """O painel de desempenho da região (bi/desempenho.py): o período escolhido (último dia fechado, a semana
+        anterior ou hoje) e o mês de cada vendedor da equipe do mês, só os do acesso de quem vê."""
+        saida = {"regiao": None, "regioes": [], "hoje": self.hoje().isoformat(),
+                 "data_ref": self.calc.cache.info.get("data_ref"), "copia": self.calc.cache.info.get("banco_copia"),
+                 "periodos": [{"chave": c, "rotulo": r} for c, r in PERIODOS_DESEMPENHO.items()],
+                 "aviso": None, "vendedores": [], "avisos": []}
+        try:
+            k = self._contas()
+        except SemDados as e:
+            saida["aviso"] = str(e)
+            return saida
+        with k:
+            ids = self.ids(escopo)
+            regioes = self.regioes(k, ids)
+            saida["regioes"] = regioes
+            if not regioes:
+                saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
+                return saida
+            regiao = str(regiao or "").strip().upper() or regioes[0]
+            if regiao not in REGIOES:
+                raise ValueError(f"região desconhecida: {regiao!r} (use ES ou BA)")
+            if regiao not in regioes:
+                raise PermissionError(f"seu acesso na Gestão não inclui vendedores da região {regiao}")
+            saida["regiao"] = regiao
+            per = periodo_desempenho(periodo, self.hoje(), k.cal, regiao)
+            mes = per["fim"].replace(day=1)
+            time = self._time(k, regiao, {mes}) or self._time_padrao(k, regiao)
+            time = sorted(vid for vid in time if ids is None or vid in ids)
+            areas = self._areas()
+            nomes = {v["id"]: v["nome"] for v in self._catalogo(k)}
+            faltam = [vid for vid in time if vid not in nomes]
+            nomes.update({vid: n for vid, (n, _) in k.nomes(faltam).items()})
+            chave = ("desempenho", regiao, per["chave"], per["inicio"], per["fim"], tuple(time),
+                     json.dumps(sorted(areas.items())))
+            painel = k.memo(chave, lambda: Painel(self.calc, k, areas, regiao, EQUIPES_REGIAO[regiao])
+                            .montar(per, time, nomes))
+            saida.update(painel)
+            saida["vendedores"] = sorted(painel["vendedores"], key=lambda v: _chave(v["nome"]))
         return saida
 
     def _info_vendedor(self, k: _Contas, vid: int) -> dict:

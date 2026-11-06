@@ -13,7 +13,10 @@
 // faixas, as mesmas para todos): o detalhe mostra a faixa de cada um (a prevista enquanto corre) e o total em R$. No topo fica a agenda de quem está vendo (agenda.js):
 // as atividades dela e as tarefas de que participa, com os próprios eventos: os daqui ignoram o que acontece dentro
 // dela (#g-agenda); #/gestao?dia=<AAAA-MM-DD> abre a agenda nesse dia.
-// Cada parte da página (a agenda, os objetivos, as campanhas e a equipe) minimiza no − do cabeçalho: fica só o título,
+// Abaixo da equipe, o painel de desempenho (bi/desempenho.py, desenhado em desempenho.js): o destaque do período, o
+// quadro com uma coluna por vendedor e, ao clicar num vendedor, a ficha dele; o período (último dia fechado, a semana
+// anterior ou hoje) fica guardado neste navegador.
+// Cada parte da página (a agenda, os objetivos, as campanhas, a equipe e o desempenho) minimiza no − do cabeçalho: fica só o título,
 // até o +. O Minimizar tudo, na barra de cima, minimiza (ou mostra) todas de uma vez. A escolha vale para ES e BA e
 // fica guardada neste navegador (a da agenda, agenda.js guarda).
 import { abrirNaAgenda, abrirTarefaNaAgenda, agendaMinimizada, agendaTemAlteracoes, minimizarAgenda, montarAgenda,
@@ -24,6 +27,8 @@ import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, SOBRE_PREMIA
          textoAlvo, textoBase, textoFaixas, textoFalta, textoFiltros, textoGanho, textoPeriodoBase, textoPremiacao, textoPremio,
          textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
+import { avisosDesempenho, fichaDesempenho, filtroPeriodo, heroDesempenho, legendaDesempenho, quadroDesempenho,
+         textoPeriodo } from "./desempenho.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
 const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
@@ -31,7 +36,7 @@ const CLASSE = { ok: "Meta batida", mid: "Melhorou sobre a base", bad: "Abaixo d
 const SITUACAO = { planejada: "Planejada", em_vigor: "Em vigor", encerrada: "Encerrada" };
 const ROTULO_TAXA = { no_ritmo: "Na meta", abaixo: "Abaixo da meta" };
 const DESCARTAR = "Descartar o que foi preenchido nesta campanha?";
-const SECOES = { objetivos: "os objetivos", campanhas: "as campanhas", equipe: "a equipe" }; // as que minimizam aqui
+const SECOES = { objetivos: "os objetivos", campanhas: "as campanhas", equipe: "a equipe", desempenho: "o desempenho" }; // as que minimizam aqui
 const CHAVE_MINIMIZADAS = "mv-gestao-minimizadas";
 const FORMAS_PREMIO = { nenhuma: "Sem premiação", unica: "Prêmio único", faixas: "Por faixas" };
 const MAX_FAIXAS = 10; // bi/gestao.py MAX_FAIXAS
@@ -43,6 +48,8 @@ const estado = {
   vista: "grade", vendedor: null, historico: null, acao: null, detalhe: null, abrir: null, // o que o corpo mostra
   selecao: null, form: null, // lançando (ou editando) uma campanha: os vendedores marcados e o formulário em linha
   recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
+  // o painel de desempenho (abaixo da equipe): o período do filtro, os dados, o vendedor da ficha e os ⓘ abertos
+  dsp: { periodo: ler("mv-gestao-periodo", "ultimo_dia"), dados: null, vendedor: null, pedido: 0, abertos: new Set() },
 };
 let dlg = null, formObj = null;
 
@@ -151,6 +158,7 @@ export function recarregarGestao() {
   estado.catalogo = null;
   carregar(true);
   if (estado.vista !== "grade") carregarVista({ silencioso: true });
+  if (estado.dsp.dados) carregarDesempenho({ silencioso: true });
 }
 
 export function montarGestao(container, contexto) {
@@ -173,6 +181,7 @@ export function montarGestao(container, contexto) {
     <section class="ge-secao ${classeMinimizada("objetivos")}" id="g-objetivos"><div class="esqueleto" style="height:96px"></div></section>
     <section class="ge-secao ${classeMinimizada("campanhas")}" id="g-acoes"><div class="esqueleto" style="height:118px"></div></section>
     <section class="ge-secao" id="g-corpo">${esqueletoEquipe()}</section>
+    <section class="ge-secao ${classeMinimizada("desempenho")}" id="g-desempenho" aria-label="Desempenho da equipe">${esqueletoDesempenho()}</section>
   </div>`;
   raiz = container.querySelector("#g-raiz");
   raiz.addEventListener("click", aoClicar);
@@ -249,6 +258,8 @@ async function carregar(silencioso = false) {
     if (d.data_ref) ctx.subtitulo({ data_ref: d.data_ref });
     atualizarUrl();
     desenharTudo();
+    if (!d.regiao) raiz.querySelector("#g-desempenho").innerHTML = "";
+    else if (estado.dsp.dados?.regiao !== d.regiao) carregarDesempenho({ silencioso });
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (e.status === 403 && estado.regiao) { // a região guardada não está mais no acesso: a primeira que estiver
@@ -257,7 +268,7 @@ async function carregar(silencioso = false) {
       return carregar(silencioso);
     }
     raiz.querySelector("#g-avisos").innerHTML = `<div class="cartao secao vazio">${icone("alerta")}<p>Não foi possível carregar a Gestão: ${esc(e.message)}</p></div>`;
-    ["#g-objetivos", "#g-acoes"].forEach((s) => { raiz.querySelector(s).innerHTML = ""; });
+    ["#g-objetivos", "#g-acoes", "#g-desempenho"].forEach((s) => { raiz.querySelector(s).innerHTML = ""; });
     if (estado.vista === "grade") raiz.querySelector("#g-corpo").innerHTML = "";
     if (!silencioso) toast(e.message, "erro");
   } finally {
@@ -1693,6 +1704,79 @@ const minimizada = (secao) => estado.minimizadas.has(secao);
 const classeMinimizada = (secao) => (minimizada(secao) ? "ge-minimizada" : "");
 // O esqueleto do quadro enquanto ele carrega; com a equipe minimizada, nenhum (ela vai mostrar só o cabeçalho).
 const esqueletoEquipe = () => (minimizada("equipe") ? "" : `<div class="esqueleto" style="height:320px"></div>`);
+const esqueletoDesempenho = () => (minimizada("desempenho") ? "" : `<div class="esqueleto" style="height:280px"></div>`);
+
+// ---------- desempenho (bi/desempenho.py; o desenho em desempenho.js) ----------
+async function carregarDesempenho({ silencioso = false } = {}) {
+  const el = raiz?.querySelector("#g-desempenho");
+  if (!el || !estado.regiao) return;
+  const pedido = ++estado.dsp.pedido;
+  if (estado.dsp.dados) el.classList.add("recarregando");
+  try {
+    const d = await api(`/api/gestao/desempenho?regiao=${encodeURIComponent(estado.regiao)}&periodo=${encodeURIComponent(estado.dsp.periodo)}`);
+    if (pedido !== estado.dsp.pedido) return;
+    estado.dsp.dados = d;
+    if (d.periodo?.chave && d.periodo.chave !== estado.dsp.periodo) estado.dsp.periodo = d.periodo.chave;
+    if (estado.dsp.vendedor && !(d.vendedores || []).some((v) => v.id === estado.dsp.vendedor)) estado.dsp.vendedor = null;
+    desenharDesempenho();
+  } catch (e) {
+    if (pedido !== estado.dsp.pedido) return;
+    estado.dsp.dados = null;
+    el.innerHTML = `${cabecalho("desempenho", `${icone("grafico")}Desempenho da equipe`, "")}
+      <div class="cartao secao vazio">${icone("alerta")}<p>Não foi possível carregar o desempenho: ${esc(e.message)}</p></div>`;
+    if (!silencioso) toast(e.message, "erro");
+  } finally {
+    if (pedido === estado.dsp.pedido) el.classList.remove("recarregando");
+  }
+  atualizarMinimizarTudo();
+}
+
+// O destaque e o quadro da equipe, ou a ficha do vendedor escolhido no quadro.
+function desenharDesempenho() {
+  const el = raiz.querySelector("#g-desempenho"), d = estado.dsp.dados;
+  if (!el || !d) return;
+  el.classList.toggle("ge-minimizada", minimizada("desempenho"));
+  const vend = d.vendedores || [];
+  const v = estado.dsp.vendedor ? vend.find((x) => x.id === estado.dsp.vendedor) : null;
+  const corpo = !d.regiao ? "" : v ? fichaDesempenho(d, v, estado.dsp.abertos) : `${heroDesempenho(d)}${quadroDesempenho(d)}`;
+  el.innerHTML = `${cabecalho("desempenho", `${icone("grafico")}Desempenho da equipe${d.regiao ? ` ${d.regiao}` : ""}`,
+    `<span>${esc(textoPeriodo(d))}</span>`)}
+    ${d.regiao ? `<div class="dsp-filtros">${filtroPeriodo(d, estado.dsp.periodo)}</div>` : ""}
+    ${avisosDesempenho(d)}
+    ${corpo}
+    ${d.regiao && vend.length ? legendaDesempenho() : ""}`;
+  atualizarMinimizarTudo();
+}
+
+function trocarPeriodo(p) {
+  if (p === estado.dsp.periodo) return;
+  estado.dsp.periodo = p;
+  guardar("mv-gestao-periodo", p);
+  carregarDesempenho();
+}
+
+function abrirFicha(id) {
+  estado.dsp.vendedor = id;
+  desenharDesempenho();
+  raiz.querySelector("#g-desempenho").scrollIntoView({ behavior: "smooth", block: "start" });
+  raiz.querySelector("[data-dsp-voltar]")?.focus({ preventScroll: true });
+}
+
+function fecharFicha() {
+  const id = estado.dsp.vendedor;
+  estado.dsp.vendedor = null;
+  desenharDesempenho();
+  raiz.querySelector(`[data-dsp-vendedor="${id}"]`)?.focus();
+}
+
+// O ⓘ de um cartão da ficha: mostra (ou esconde) como ele é calculado. A escolha vale para os outros vendedores.
+function alternarComo(btn) {
+  const chave = btn.dataset.dspInfo, aberto = !estado.dsp.abertos.has(chave);
+  if (aberto) estado.dsp.abertos.add(chave); else estado.dsp.abertos.delete(chave);
+  btn.setAttribute("aria-expanded", String(aberto));
+  const p = btn.closest(".dsp-cartao")?.querySelector(".dsp-como");
+  if (p) p.hidden = !aberto;
+}
 
 // O cabeçalho de uma parte da página: o título, o resumo (à direita) e o botão de minimizar (minimizavel: false, sem
 // ele).
@@ -1739,8 +1823,8 @@ function atualizarMinimizarTudo() {
   if (!b) return;
   const sim = tudoMinimizado(), texto = sim ? "Mostrar tudo" : "Minimizar tudo";
   b.innerHTML = `${icone(sim ? "expandir" : "recolher")}<span>${texto}</span>`;
-  b.title = sim ? "Mostrar a agenda, os objetivos, as campanhas e a equipe"
-    : "Minimizar a agenda, os objetivos, as campanhas e a equipe: fica só o título de cada um";
+  b.title = sim ? "Mostrar a agenda, os objetivos, as campanhas, a equipe e o desempenho"
+    : "Minimizar a agenda, os objetivos, as campanhas, a equipe e o desempenho: fica só o título de cada um";
   b.setAttribute("aria-label", texto);
 }
 
@@ -1752,7 +1836,9 @@ function trocarRegiao(r) {
   estado.regiao = r;
   estado.vista = "grade";
   estado.historico = estado.detalhe = null;
+  estado.dsp.dados = estado.dsp.vendedor = null;
   raiz.querySelector("#g-corpo").innerHTML = esqueletoEquipe();
+  raiz.querySelector("#g-desempenho").innerHTML = esqueletoDesempenho();
   atualizarUrl();
   carregar();
 }
@@ -1765,9 +1851,14 @@ function aoClicar(e) {
   const t = e.target.closest("[data-regiao],[data-nova],[data-objetivo],[data-acao-para],[data-acao],[data-vendedor],[data-voltar]," +
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
-    "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]");
+    "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]," +
+    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.dspPeriodo) return trocarPeriodo(ds.dspPeriodo);
+  if (ds.dspVendedor) return abrirFicha(Number(ds.dspVendedor));
+  if ("dspVoltar" in ds) return fecharFicha();
+  if (ds.dspInfo) return alternarComo(t);
   if (ds.premioForma) return trocarFormaPremio(ds.premioForma);
   if ("premioMais" in ds) return maisFaixa();
   if (ds.premioTirar) return tirarFaixa(Number(ds.premioTirar));

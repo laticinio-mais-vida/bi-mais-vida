@@ -620,7 +620,9 @@ separada por região (**ES** e **BA**; o Edir é da BA, com o calendário dela):
 - primeiro, os **objetivos do período** da região;
 - abaixo, as **campanhas**, com duas barras: o tempo que falta (aviso quando faltam 5 dias ou menos) e o andamento
   contra a meta (nas encerradas, o resultado final e quantos vendedores ficaram na meta);
-- e um **quadrado por vendedor** da equipe, com uma etiqueta por campanha em vigor e o % da meta dele até agora.
+- um **quadrado por vendedor** da equipe, com uma etiqueta por campanha em vigor e o % da meta dele até agora;
+- e, abaixo da equipe, o **painel de desempenho** do dia (ou da semana) e do mês de cada vendedor (veja
+  [Painel de desempenho](#painel-de-desempenho)).
 
 As cores do andamento seguem o % da meta, sem olhar o prazo, num degradê contínuo: vermelho até 50%, passando pelo
 laranja até o amarelo em 80% e pelo verde-amarelado até o verde em 100%; acima disso, o verde fica cada vez mais
@@ -633,7 +635,7 @@ meta (base aguardando os dados) fica de fora.
 A equipe é quem tem meta no mês na planilha METAS, como na página Metas: contas da casa (venda interna, funcionário,
 produtor) ficam fora. Quem está numa campanha em vigor aparece mesmo sem meta.
 
-Cada parte da página (a agenda, os objetivos, as campanhas e a equipe) tem o botão **−** no cabeçalho, que a minimiza:
+Cada parte da página (a agenda, os objetivos, as campanhas, a equipe e o desempenho) tem o botão **−** no cabeçalho, que a minimiza:
 fica só o título, até o **+**. **Minimizar tudo**, na barra de cima, minimiza todas de uma vez; com todas minimizadas,
 ele vira **Mostrar tudo**. A escolha vale para ES e BA e fica guardada no navegador. Com o formulário de uma campanha
 aberto, a equipe aparece mesmo minimizada, porque é nela que se marcam os vendedores.
@@ -749,6 +751,56 @@ N de M vendedores".
 Clicar num vendedor abre o histórico dele, como uma conversa: cada campanha lançada (com a base e a meta dele), as
 parciais de cada semana, o resultado com as barras de base, meta e resultado, e as **observações** (combinados,
 conversas) que o administrador escreve no campo de baixo. É só controle interno: o vendedor não vê.
+
+### Painel de desempenho
+
+Veio do Painel Comercial (repositório `painel-mais-vida`), com as contas do bi-mais-vida. Fica abaixo da equipe, na
+região escolhida, e mostra os vendedores com meta no mês (só os do acesso de quem vê).
+
+- **Período**, nos atalhos do topo: **Último dia fechado** (o padrão: o último dia útil antes de hoje, pelo calendário
+  da região), **Última semana** (a semana anterior, de segunda a domingo) ou **Hoje** (até a última cópia do banco,
+  com o horário dela). Os números do período somam os dias dele; os do mês vão do dia 1º até o fim do período. A
+  escolha fica guardada no navegador.
+- **Destaque**: o faturamento do período da equipe contra a meta do período, o acumulado do mês contra a meta do mês e
+  os dias úteis que restam.
+- **Quadro**: uma coluna por vendedor (arrasta para o lado quando não cabe), com a **nota geral** (a média dos
+  atingimentos, cada um no máximo 150%; na troca, o quanto do teto sobrou) e 9 linhas, cada uma com realizado, meta,
+  % e barra. Passar o mouse numa linha mostra como ela é calculada.
+- **Ficha**: clicar no nome de um vendedor abre os 9 cartões dele; o ⓘ de cada cartão explica a conta.
+- **Cores**: verde a partir de 100% da meta, amarelo de 90% a 99%, vermelho abaixo de 90%. No % de troca, quanto menor
+  melhor: verde até 1,0%, amarelo até 1,5% (o teto). Sem meta no período (dia sem cliente programado, mês sem
+  planilha), a linha fica cinza com "sem meta".
+
+| Indicador | Conta | De quem |
+|---|---|---|
+| Faturamento, mussarela e outras linhas (do período) | o realizado da página Metas (venda − devolução que desconta); a meta é a expectativa diária (abaixo) e, em mussarela e outras, a parte delas na meta do mês | vendedor da nota |
+| Atendimentos (do período) | clientes com pedido no dia da rota ÷ clientes esperados no dia: semanal sempre, quinzenal sem compra nos 7 dias antes, mensal sem compra nos 21 dias antes (os dias de atendimento das áreas) | carteira |
+| Efetividade acumulada do mês | a das campanhas: a média da efetividade de cada dia (pedidos na rota ÷ visitas esperadas); meta de 100% | carteira |
+| Frequência do mês | a das campanhas: semanas com compra ÷ clientes que compraram; meta: a média das compras esperadas desses clientes no mês inteiro, atendidos dentro da periodicidade e partindo da última compra antes do mês (o semanal que comprou no pedaço da semana que ficou no mês anterior não espera na primeira semana) | vendedor da nota |
+| Positivação | clientes distintos com nota no mês × META CLIENTE (como na página Metas) | vendedor da nota |
+| Ticket médio | a venda média da página Metas: faturamento ÷ clientes × meta de faturamento ÷ META CLIENTE | vendedor da nota |
+| % Troca | devoluções e brindes de vencido e danificado (pelo nome do motivo; os de PERDA ficam fora) ÷ faturamento bruto da carteira | dono do cliente |
+
+No **BA**, onde a planilha não separa mussarela e outras em R$, a meta de cada uma é o volume da METAS PRODUTOS × o
+preço médio do próprio vendedor no mês anterior (faturamento bruto ÷ volume; sem venda dele do produto, o preço da
+região), ajustada para as duas somarem a meta de faturamento (a da planilha ou a aprovada).
+
+**Expectativa diária** (a meta de venda do dia):
+
+1. **Potencial do cliente**: a média do que ele comprou nos 2 meses fechados antes do mês (venda − devolução que
+   desconta, de qualquer vendedor). Entram os clientes ativos da carteira atual do vendedor.
+2. O potencial de cada cliente é dividido igualmente entre os dias de atendimento dele no mês (os dias da área, menos
+   os feriados). O **potencial do dia** é a soma do que cai nele.
+3. **Saldo** = meta do mês − faturado no mês até a véspera − **pedidos de venda em aberto** (feitos no mês, há menos de
+   8 dias, sem nota e não cancelados; vêm dos [pedidos um a um](#pedidos-de-venda-no-cache)).
+4. Com saldo, a meta do dia é a parte dele no saldo (pelo potencial do dia entre os dias que restam), **nunca abaixo
+   do potencial normal do dia**. Com a meta do mês batida, a meta do dia volta a ser o potencial normal (não cobra
+   venda acima da meta). Dia sem cliente programado: zero. Sem dia de atendimento pela frente e ainda com saldo: o
+   saldo dividido pelos dias úteis que restam.
+
+A conta é refeita a cada cópia nova do banco. Na semana, a meta é a soma da meta de cada dia, cada uma com o saldo
+daquele dia. Os pedidos em aberto são os de agora: para um dia que já passou, o pedido que estava em aberto naquele
+dia e já virou nota não entra (o cache ainda não guarda a data da nota de cada pedido).
 
 ### Quem vê o quê
 
@@ -1411,6 +1463,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
+| `bi/desempenho.py` | o painel de desempenho da Gestão: o período, os 9 indicadores de cada vendedor, a meta de mussarela e outras do BA pelo volume e a expectativa diária (`web/js/desempenho.js` desenha) |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, a situação de cada tarefa e subtarefa e o kanban (as tarefas pelo vencimento) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas, marcar como lidas e excluir (no PostgreSQL) |
