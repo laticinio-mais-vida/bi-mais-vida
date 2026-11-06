@@ -139,7 +139,10 @@ Em cada aba:
   Feriados aparecem marcados. É o antigo quadro "Dias úteis", agora calculado sozinho. Com vários meses vira
   **Ritmo do período**, com um bloco por mês.
 - **Indicadores:** realizado contra a meta, situação (meta batida, no ritmo, atenção ou abaixo), projeção
-  do mês e quanto falta por dia útil.
+  do mês e quanto falta. No mês de hoje, faturamento, mussarela e outras linhas mostram a **meta de venda de hoje**
+  (a expectativa diária do [painel de desempenho](#painel-de-desempenho), no primeiro dia útil a partir de hoje; no
+  total, a soma dos vendedores) no lugar do "necessário por dia útil". Os clientes e os outros meses seguem com o
+  necessário por dia útil (o que falta ÷ os dias úteis restantes).
 - **Corrida da meta:** acumulado do mês contra o ritmo esperado de cada dia, com a projeção.
 - **Ranking** dos vendedores. Clicar num vendedor filtra a página por ele.
 - **Detalhamento por vendedor** no mesmo formato das matrizes do Power BI: indicadores nas linhas,
@@ -766,6 +769,11 @@ região escolhida, e mostra os vendedores com meta no mês (só os do acesso de 
 - **Quadro**: uma coluna por vendedor (arrasta para o lado quando não cabe), com a **nota geral** (a média dos
   atingimentos, cada um no máximo 150%; na troca, o quanto do teto sobrou) e 9 linhas, cada uma com realizado, meta,
   % e barra. Passar o mouse numa linha mostra como ela é calculada.
+- **Meta de venda diária por vendedor**, abaixo do quadro: uma barra por vendedor com o % da meta do período (de 0 a
+  150%; o traço é a meta) ou, no botão **Ver tabela**, a venda, a meta, o atingido, os atendimentos sobre os
+  clientes esperados, o ticket médio do período (venda ÷ clientes com nota, contra a meta do período ÷ os clientes
+  esperados), o % de troca do mês e a situação. Passar o mouse na barra ou na meta mostra de onde ela veio: o saldo
+  do mês, o potencial do dia e os pedidos em aberto. A escolha entre barras e tabela fica guardada no navegador.
 - **Ficha**: clicar no nome de um vendedor abre os 9 cartões dele; o ⓘ de cada cartão explica a conta.
 - **Cores**: verde a partir de 100% da meta, amarelo de 90% a 99%, vermelho abaixo de 90%. No % de troca, quanto menor
   melhor: verde até 1,0%, amarelo até 1,5% (o teto). Sem meta no período (dia sem cliente programado, mês sem
@@ -801,6 +809,27 @@ região), ajustada para as duas somarem a meta de faturamento (a da planilha ou 
 A conta é refeita a cada cópia nova do banco. Na semana, a meta é a soma da meta de cada dia, cada uma com o saldo
 daquele dia. Os pedidos em aberto são os de agora: para um dia que já passou, o pedido que estava em aberto naquele
 dia e já virou nota não entra (o cache ainda não guarda a data da nota de cada pedido).
+
+#### Simular a meta diária de um vendedor
+
+Para conferir a conta à mão, o terminal monta a meta de cada dia do mês de um vendedor, com a meta que se quiser:
+
+```
+python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
+```
+
+- **Antes de hoje**, com o realizado de verdade; **de hoje em diante**, a projeção: o vendedor vende exatamente a
+  meta de cada dia, então o saldo de hoje se distribui pelos dias que restam.
+- O vendedor vai pelo código ou por pedaços do nome (o da planilha e o do ERP, como "ricardo eu"); com mais de um
+  achado, a resposta lista os códigos.
+- **Opções:** `--meta` (sem ela, a da planilha ou a aprovada), `--mes AAAA-MM`, `--hoje AAAA-MM-DD` e `--faturado`
+  (o faturado no mês até ontem, para os cenários "e se ele tivesse vendido X").
+- A planilha tem três abas: **Resumo**, **Dias** (clientes programados, potencial, faturado antes, pedidos em aberto,
+  saldo, meta do dia e realizado) e **Clientes** (potencial, representatividade, dias de atendimento e potencial por
+  dia).
+- No VPS: `docker compose exec bi python app.py --simular ... --planilha dados/simulacao.xlsx` (a pasta do sistema é
+  montada no container: a planilha aparece em `dados/` no próprio VPS).
+- Só lê: não grava nada no banco nem no cache, e pode rodar com o painel aberto.
 
 ### Quem vê o quê
 
@@ -1463,7 +1492,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
-| `bi/desempenho.py` | o painel de desempenho da Gestão: o período, os 9 indicadores de cada vendedor, a meta de mussarela e outras do BA pelo volume e a expectativa diária (`web/js/desempenho.js` desenha) |
+| `bi/desempenho.py` | o painel de desempenho da Gestão: o período, os 9 indicadores de cada vendedor, a meta de mussarela e outras do BA pelo volume e a expectativa diária (também a meta de venda de hoje da página Metas e a simulação; `web/js/desempenho.js` desenha) |
+| `bi/simulacao.py` | o texto e a planilha .xlsx da simulação da meta diária (`python app.py --simular`) |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, a situação de cada tarefa e subtarefa e o kanban (as tarefas pelo vencimento) (no PostgreSQL) |
 | `bi/notificacoes.py` | as notificações do sino: gravar (na transação de quem avisa), listar, contar as não lidas, marcar como lidas e excluir (no PostgreSQL) |

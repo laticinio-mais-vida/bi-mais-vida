@@ -42,8 +42,9 @@ import json
 import math
 import re
 from collections import defaultdict
+from types import SimpleNamespace
 
-from .banco import hora
+from .banco import BancoForaDoAr, hora
 from .calendario import Calendario
 from .configuracao import Regras
 from .conversas import NaoEncontrada, id_valido, novo_id
@@ -1473,6 +1474,89 @@ class Gestao:
             saida.update(painel)
             saida["vendedores"] = sorted(painel["vendedores"], key=lambda v: _chave(v["nome"]))
         return saida
+
+    def _dia_util(self, k, regiao: str, de: dt.date) -> dt.date | None:
+        """O primeiro dia útil da região a partir de de, no mesmo mês (None se o mês acabou)."""
+        d = de
+        while d.month == de.month:
+            if k.cal.dia(d, regiao)["peso"] > 0:
+                return d
+            d += dt.timedelta(days=1)
+        return None
+
+    def expectativa_do_dia(self, ids, meses) -> dict | None:
+        """A meta de venda do dia (a expectativa do painel de desempenho) de cada vendedor, para a página Metas, no
+        lugar do "necessário por dia útil": a do primeiro dia útil a partir de hoje, quando o mês de hoje está entre os
+        escolhidos. None quando não se aplica (outro mês) ou não dá para calcular agora (sem o detalhe por cliente, sem
+        o banco): a página fica com a conta antiga. {vendedor: {"dia", "meta", "meta_mus", "meta_out", ...}}"""
+        hoje = self.hoje()
+        cache = self.calc.cache
+        if hoje.replace(day=1) not in set(meses) or not ids or not cache.pronto() or cache.sem_detalhe:
+            return None
+        try:
+            areas = self._areas()
+        except BancoForaDoAr:
+            return None
+        # Só o cache, as regras e o calendário: a página Metas não espera o recorte da Gestão ser montado.
+        regras = self.calc.regras()
+        k = SimpleNamespace(cur=None, regras=regras, cal=self.calc.calendario(regras))
+        por_regiao: dict[str, list[int]] = defaultdict(list)
+        for vid in ids:
+            regiao = regiao_do_grupo(regras.grupo_vendedor(vid))
+            if regiao:
+                por_regiao[regiao].append(vid)
+        saida: dict = {}
+        for regiao, vids in por_regiao.items():
+            dia = self._dia_util(k, regiao, hoje)
+            if dia is not None:
+                saida.update(Painel(self.calc, k, areas, regiao, EQUIPES_REGIAO[regiao]).expectativa_do_dia(vids, dia))
+        return saida
+
+    def _achar_vendedor(self, k: _Contas, vendedor) -> tuple[int, str]:
+        """O vendedor pelo código ou por pedaços do nome ("ricardo eu"): (código, nome)."""
+        texto = str(vendedor or "").strip()
+        if not texto:
+            raise ValueError("diga o vendedor: o código ou o nome")
+        catalogo = {v["id"]: v["nome"] for v in self._catalogo(k)}
+        for m in self.calc.metas.dados():
+            catalogo.setdefault(m["id_vendedor"], m["vendedor"])
+        if texto.isdigit():
+            vid = int(texto)
+            nome = catalogo.get(vid) or k.nomes([vid]).get(vid, (None,))[0]
+            if not nome:
+                raise ValueError(f"nenhum vendedor com o código {vid}")
+            return vid, nome
+        # procura no nome da página e no do ERP ("Ricardo" e "RICARDO - EU"): "ricardo eu" acha os dois juntos
+        erp = dict(self.calc.cache.consulta("SELECT id, nome FROM vendedores"))
+        partes = _chave(texto).replace("-", " ").split()
+
+        def palavras(vid, nome):
+            return _chave(f"{nome} {erp.get(vid) or ''}").replace("-", " ").split()
+
+        achados = [(vid, nome) for vid, nome in catalogo.items()
+                   if all(any(w.startswith(p) for w in palavras(vid, nome)) for p in partes)]
+        if not achados:
+            raise ValueError(f"nenhum vendedor com {texto!r} no nome")
+        if len(achados) > 1:
+            lista = "; ".join(f"{vid} {nome}" for vid, nome in sorted(achados))
+            raise ValueError(f"mais de um vendedor com {texto!r} no nome: {lista}. Use o código")
+        return achados[0]
+
+    def simular(self, vendedor, meta: float | None = None, mes: dt.date | None = None, hoje: dt.date | None = None,
+                faturado: float | None = None) -> dict:
+        """A simulação da expectativa diária de um vendedor no mês (bi/desempenho.py Painel.simular), para conferir à
+        mão: python app.py --simular VENDEDOR --meta 100000."""
+        hoje = hoje or self.hoje()
+        mes = (mes or hoje).replace(day=1)
+        with self._contas() as k:
+            vid, nome = self._achar_vendedor(k, vendedor)
+            regiao = regiao_do_grupo(k.regras.grupo_vendedor(vid))
+            if not regiao:
+                raise ValueError(f"o vendedor {nome} não é do ES nem da BA nas Configurações das metas")
+            areas = self._areas()
+            r = Painel(self.calc, k, areas, regiao, EQUIPES_REGIAO[regiao]).simular(vid, mes, hoje, meta, faturado)
+        r["vendedor"].update(nome=nome, regiao=regiao)
+        return r
 
     def _info_vendedor(self, k: _Contas, vid: int) -> dict:
         por_id = {v["id"]: v for v in self._catalogo(k)}

@@ -54,7 +54,7 @@ from bi.carteira import Carteira  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
-from bi.gestao import PRORROGAR, Gestao  # noqa: E402
+from bi.gestao import PRORROGAR, Gestao, SemDados  # noqa: E402
 from bi.google_agenda import GoogleAgenda  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
@@ -166,6 +166,8 @@ class Aplicacao:
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas, reanalises=self.reanalises)
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
+        # Na página Metas, a meta de venda do dia (a expectativa diária da Gestão) no lugar do "necessário por dia útil"
+        self.calc.expectativa = self.gestao.expectativa_do_dia
         self.config_sugestao = ConfigSugestao(self.banco)
         # Os faturamentos das áreas do BA saem dos dias de atendimento que a Gestão guarda; os ajustes de volume da
         # página ficam no banco (e mudam junto a meta aprovada).
@@ -1247,6 +1249,33 @@ def definir_senha(ini: configparser.ConfigParser, login: str) -> None:
     print("Pronto. As sessões abertas desse usuário foram encerradas." if existe else "Administrador criado.")
 
 
+def simular(ini: configparser.ConfigParser, args) -> None:
+    """Uso pelo terminal: a meta de venda de cada dia do mês de um vendedor (a expectativa diária do painel de
+    desempenho), com os dados do cache, para conferir a conta à mão. No VPS: docker compose exec bi python app.py
+    --simular ... (a planilha fica dentro do container; use uma pasta montada, como dados/)."""
+    from bi.simulacao import gravar_planilha, texto
+
+    try:
+        mes = dt.date.fromisoformat(f"{args.mes}-01") if args.mes else None
+        hoje = dt.date.fromisoformat(args.hoje) if args.hoje else None
+    except ValueError:
+        sys.exit("Use --mes AAAA-MM e --hoje AAAA-MM-DD.")
+    app = Aplicacao(ini)
+    try:
+        if not app.cache.pronto():
+            sys.exit("Os dados ainda não foram preparados: abra o painel uma vez (ou espere a atualização) e rode de novo.")
+        r = app.gestao.simular(args.simular, args.meta, mes, hoje, args.faturado)
+        print(texto(r))
+        if args.planilha:
+            print(f"\nPlanilha gravada em {gravar_planilha(r, args.planilha)}")
+    except (ValueError, SemDados) as e:
+        sys.exit(f"Não foi possível: {e}.")
+    except BancoForaDoAr as e:
+        sys.exit(f"Não foi possível: {e.aviso}.")
+    finally:
+        app.banco.fechar()
+
+
 def enderecos_na_rede() -> list[str]:
     try:
         return sorted({ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if not ip.startswith("127.")})
@@ -1261,6 +1290,13 @@ def main() -> None:
     ap.add_argument("--sem-navegador", action="store_true")
     ap.add_argument("--senha", metavar="LOGIN", help="define a senha do usuário (cria um administrador se não existir)")
     ap.add_argument("--gerar-chave", action="store_true", help="gera uma chave para [publicacao] no config.ini")
+    ap.add_argument("--simular", metavar="VENDEDOR", help="simula a meta de venda de cada dia do mês de um vendedor "
+                                                           "(código ou nome) e sai")
+    ap.add_argument("--meta", type=float, help="com --simular: a meta do mês em R$ (sem ela, a da planilha)")
+    ap.add_argument("--mes", help="com --simular: o mês, AAAA-MM (sem ele, o de hoje)")
+    ap.add_argument("--hoje", help="com --simular: o dia de hoje da simulação, AAAA-MM-DD (sem ele, hoje)")
+    ap.add_argument("--faturado", type=float, help="com --simular: o faturado no mês até ontem (sem ele, o real)")
+    ap.add_argument("--planilha", help="com --simular: grava também a simulação neste arquivo .xlsx")
     args = ap.parse_args()
     if args.gerar_chave:
         return print(f"Coloque esta linha em [publicacao] no config.ini do PC e do VPS:\nchave = {gerar_chave()}\n"
@@ -1272,6 +1308,8 @@ def main() -> None:
     ini.read([RAIZ / "config.exemplo.ini", RAIZ / "config.ini"], encoding="utf-8")
     if args.senha:
         return definir_senha(ini, args.senha)
+    if args.simular:
+        return simular(ini, args)
     porta = args.porta or ini.getint("servidor", "porta", fallback=8050)
     endereco = args.endereco or ini.get("servidor", "endereco", fallback="127.0.0.1")
 

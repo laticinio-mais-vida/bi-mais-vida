@@ -57,7 +57,6 @@ MAX_VOLTA = 31                                  # dias para trás à procura do 
 LINHAS = (("mes", "positivacao"), ("dia", "atendimentos"), ("dia", "faturamento"), ("dia", "mussarela"),
           ("dia", "outras"), ("mes", "ticket"), ("mes", "frequencia"), ("mes", "efetividade"), ("mes", "troca"))
 _FREQUENCIA = {"metrica": "frequencia", "parametros": {"clientes": "todos"}, "filtros": {}}
-_VISITAVEL = ("NOT COALESCE(inativo, false) AND NOT contains(upper(COALESCE(cliente, '')), 'PEDIDO BLOQUEADO')")
 
 
 def _mes(d: dt.date) -> dt.date:
@@ -219,31 +218,40 @@ class Painel:
 
     def potenciais(self, mes: dt.date) -> dict[int, float]:
         """O potencial mensal de cada cliente: a média dos 2 meses fechados antes do mês (venda − devolução que
-        desconta, sem os produtos "não conta", de qualquer vendedor)."""
+        desconta, sem os produtos "não conta", de qualquer vendedor). Lido do cache, com as regras da página Metas
+        (a página Metas usa sem montar o recorte da Gestão)."""
         if mes not in self._potenciais:
             ini = mes
             for _ in range(MESES_POTENCIAL):
                 ini = _mes_anterior(ini)
             fim = mes - UM_DIA
-            linhas = self.cur.execute(
-                "WITH v AS (SELECT x.id_cadastro AS c, SUM(x.valor) AS s FROM _vendas x LEFT JOIN produtos p "
-                "USING (id_produto) WHERE x.id_cadastro IS NOT NULL AND x.data BETWEEN ? AND ? "
-                "AND COALESCE(p.grupo, 'outras') <> 'fora' GROUP BY 1), "
-                "d AS (SELECT x.id_cadastro AS c, SUM(x.valor) AS s FROM _devolucoes x LEFT JOIN produtos p "
-                "USING (id_produto) WHERE x.id_cadastro IS NOT NULL AND x.desconta AND x.data BETWEEN ? AND ? "
-                "AND COALESCE(p.grupo, 'outras') <> 'fora' GROUP BY 1) "
-                "SELECT COALESCE(v.c, d.c), COALESCE(v.s, 0) - COALESCE(d.s, 0) FROM v FULL JOIN d ON d.c = v.c",
-                [ini, fim, ini, fim]).fetchall()
-            self._potenciais[mes] = {int(c): max(0.0, float(s)) / MESES_POTENCIAL for c, s in linhas}
+            somas: dict[int, float] = defaultdict(float)
+
+            def conta(pid) -> bool:
+                return self.regras.grupo_produto(self.regras.produto(pid)) != "fora"
+
+            for c, pid, valor in self.cache.consulta(
+                    "SELECT id_cliente, id_produto, SUM(valor) FROM vendas_clientes_itens WHERE tipocliente = 'CLIENTE' "
+                    "AND data BETWEEN ? AND ? GROUP BY 1, 2", [ini, fim]):
+                if conta(pid):
+                    somas[int(c)] += float(valor or 0)
+            for c, pid, motivo, cancelada, valor in self.cache.consulta(
+                    "SELECT id_cliente, id_produto, id_motivo, cancelada, SUM(valor) FROM devolucoes_clientes_itens "
+                    "WHERE tipocliente = 'CLIENTE' AND data BETWEEN ? AND ? GROUP BY 1, 2, 3, 4", [ini, fim]):
+                if motivo in self.regras.motivos and not (cancelada and self.regras.ignorar_canceladas) and conta(pid):
+                    somas[int(c)] -= float(valor or 0)
+            self._potenciais[mes] = {c: max(0.0, s) / MESES_POTENCIAL for c, s in somas.items()}
         return self._potenciais[mes]
 
     def carteira(self) -> dict[int, list[tuple[int, int | None]]]:
-        """Os clientes visitáveis da carteira de cada vendedor (ativos, sem "PEDIDO BLOQUEADO"): {vendedor: [(cliente,
-        área)]}."""
+        """Os clientes visitáveis da carteira de hoje de cada vendedor (ativos, sem "PEDIDO BLOQUEADO" no nome, como
+        na efetividade): {vendedor: [(cliente, área)]}."""
         if self._carteira is None:
             saida = defaultdict(list)
-            for v, c, a in self.cur.execute(f"SELECT id_vendedor_carteira, id_cliente, id_area FROM clientes "
-                                            f"WHERE id_vendedor_carteira IS NOT NULL AND {_VISITAVEL}").fetchall():
+            for v, c, a in self.cache.consulta(
+                    "SELECT c.id_vendedor, c.id, d.id_area FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id "
+                    "WHERE COALESCE(c.id_vendedor, 0) <> 0 AND COALESCE(d.inativo, 0) = 0 "
+                    "AND NOT contains(upper(COALESCE(c.nome, '')), 'PEDIDO BLOQUEADO')"):
                 saida[int(v)].append((int(c), _int(a)))
             self._carteira = dict(saida)
         return self._carteira
@@ -429,6 +437,124 @@ class Painel:
                     trocas[v] += float(s or 0)
         return {vid: (trocas.get(vid, 0.0), float(bruto.get(vid) or 0)) for vid in ids}
 
+    # --- a expectativa de um dia -------------------------------------------------------------
+    def _abertos_em(self, abertos: dict, vid: int, d: dt.date) -> float:
+        """Os pedidos em aberto do vendedor no começo do dia d: feitos no mês, há menos de 8 dias."""
+        desde = max(_mes(d), d - dt.timedelta(days=DIAS_PEDIDO_ABERTO - 1))
+        return sum(t for dd, t in abertos.get(vid, {}).items() if desde <= dd < d)
+
+    def _dia(self, vid: int, d: dt.date, mov: dict, abertos: dict, metas: dict, linhas: dict,
+             faturado: float | None = None, em_aberto: float | None = None) -> dict:
+        """A expectativa do vendedor no dia d (expectativa()), com a parte de mussarela e de outras e o realizado do
+        dia. mov: o realizado de cada dia (movimento_diario) desde o 1º do mês de d; abertos: os pedidos em aberto por
+        dia; metas: {mês: metas do mês}; linhas: {mês: (meta de mussarela, meta de outras, regime)} do vendedor.
+        faturado e em_aberto: no lugar dos reais (a projeção da simulação)."""
+        md = _mes(d)
+        mt = metas[md].get(vid)
+        plano = self.plano(vid, md)
+        meu = mov.get(vid, {})
+        if faturado is None:
+            faturado = sum(x["fat"] for dd, x in meu.items() if md <= dd < d)
+        if em_aberto is None:
+            em_aberto = self._abertos_em(abertos, vid, d)
+        fat_m = mt["fat"] if mt else 0.0
+        e = expectativa(fat_m, faturado, em_aberto, plano["potencial"], plano["uteis"], d)
+        mus_m, out_m, _ = linhas.get(md, (0.0, 0.0, "sem_meta"))
+        separa = e["meta"] is not None and fat_m and (mus_m or out_m)
+        e["meta_mus"] = e["meta"] * mus_m / fat_m if separa else None
+        e["meta_out"] = e["meta"] * out_m / fat_m if separa else None
+        e["real"] = meu.get(d, {"fat": 0.0, "mus": 0.0, "out": 0.0})
+        return e
+
+    def expectativa_do_dia(self, ids: list[int], dia: dt.date) -> dict[int, dict]:
+        """A meta de venda do dia (a expectativa) de cada vendedor com meta no mês: a página Metas mostra no lugar do
+        "necessário por dia útil". {vendedor: {"dia", "meta", "meta_mus", "meta_out", "saldo", "potencial",
+        "faturado", "abertos", "modo"}}."""
+        mes = _mes(dia)
+        metas = {mes: self.calc._metas(self.regras, {mes}, list(self.equipes))}
+        ids = sorted(v for v in ids if v in metas[mes])
+        if not ids:
+            return {}
+        mov = self.calc.movimento_diario(self.regras, ids, mes, dia)
+        abertos = self.abertos(ids, mes, dia)
+        saida = {}
+        for vid in ids:
+            e = self._dia(vid, dia, mov, abertos, metas, {mes: self.metas_linhas(mes, vid, metas[mes][vid])})
+            saida[vid] = {"dia": dia.isoformat(), **{k: e.get(k) for k in (
+                "meta", "meta_mus", "meta_out", "saldo", "potencial", "faturado", "abertos", "modo")}}
+        return saida
+
+    def simular(self, vid: int, mes: dt.date, hoje: dt.date, meta: float | None = None,
+                faturado: float | None = None) -> dict:
+        """A expectativa de cada dia do mês de um vendedor, para conferir a conta à mão (python app.py --simular).
+        Antes de hoje, com o realizado de verdade. De hoje em diante, a projeção: o vendedor vende exatamente a
+        expectativa de cada dia, então o saldo de hoje se distribui pelos dias que restam (pelo potencial; com o caminho
+        B, nunca abaixo do potencial normal). meta: no lugar da meta do mês (a de mussarela e de outras da planilha
+        acompanham a proporção); faturado: no lugar do faturado no mês até ontem (os cenários "e se ele tivesse vendido
+        X"). Os pedidos em aberto da projeção são os de hoje."""
+        planilha = self.calc._metas(self.regras, {mes}, list(self.equipes)).get(vid)
+        base = dict(planilha) if planilha else {"nome": "", "fat": 0.0, "mus": 0.0, "out": 0.0, "cli": 0.0}
+        if meta is not None:
+            fator = meta / base["fat"] if base["fat"] else 0.0
+            base.update(fat=float(meta), mus=base["mus"] * fator, out=base["out"] * fator)
+        metas = {mes: {vid: base}}
+        mus_meta, out_meta, regime = self.metas_linhas(mes, vid, base)
+        linhas = {mes: (mus_meta, out_meta, regime)}
+        fim = _fim_do_mes(mes)
+        mov = self.calc.movimento_diario(self.regras, [vid], mes, fim)
+        abertos = self.abertos([vid], mes, fim)
+        plano = self.plano(vid, mes)
+        pots = self.potenciais(mes)
+        info = {int(c): (n, a) for c, n, a in self.cache.consulta(
+            "SELECT c.id, c.nome, d.area FROM clientes c LEFT JOIN clientes_detalhes d ON d.id = c.id "
+            "WHERE c.id_vendedor = ?", [vid])}
+        clientes = []
+        for cli, area in self.carteira().get(vid, []):
+            dias = self.dias_da_area(area, mes)
+            p = pots.get(cli, 0.0)
+            nome, nome_area = info.get(cli, ("", None))
+            clientes.append({"id": cli, "nome": nome or "", "area": nome_area or "", "dias": [d.isoformat() for d in dias],
+                             "potencial": _r(p), "por_dia": _r(p / len(dias)) if dias and p > 0 else 0.0})
+        total = sum(c["potencial"] for c in clientes if c["dias"])
+        for c in clientes:
+            c["representatividade"] = _r(c["potencial"] / total, 6) if total and c["dias"] else None
+        clientes.sort(key=lambda c: (-(c["potencial"] or 0), c["nome"]))
+        por_data: dict[str, int] = defaultdict(int)  # clientes programados em cada dia (com ou sem potencial)
+        for c in clientes:
+            for d in c["dias"]:
+                por_data[d] += 1
+
+        data_ref = self.cache.data_ref()
+        meu = mov.get(vid, {})
+        real_ate_hoje = sum(x["fat"] for dd, x in meu.items() if mes <= dd < hoje)
+        base_hoje = real_ate_hoje if faturado is None else float(faturado)
+        abertos_hoje = self._abertos_em(abertos, vid, hoje) if mes <= hoje <= fim else 0.0
+        dias, projetado = [], 0.0
+        for i in range((fim - mes).days + 1):
+            d = mes + i * UM_DIA
+            futuro = d >= hoje
+            e = (self._dia(vid, d, mov, abertos, metas, linhas, faturado=base_hoje + projetado, em_aberto=abertos_hoje)
+                 if futuro else self._dia(vid, d, mov, abertos, metas, linhas))
+            if futuro:
+                projetado += e["meta"] or 0.0
+            tem_real = data_ref is not None and d <= data_ref
+            dias.append({"data": d.isoformat(), "dia_semana": d.isoweekday(), "util": plano["uteis"].get(d, 0.0),
+                         "clientes": por_data.get(d.isoformat(), 0), "potencial": _r(e["potencial"]),
+                         "faturado": _r(e["faturado"]), "abertos": _r(e["abertos"]), "saldo": _r(e["saldo"]),
+                         "meta": _r(e["meta"]), "meta_mus": _r(e["meta_mus"]), "meta_out": _r(e["meta_out"]),
+                         "modo": e["modo"], "projecao": futuro,
+                         "real": _r(e["real"]["fat"]) if tem_real else None})
+        return {
+            "vendedor": {"id": vid, "nome": base.get("nome") or "", "regime": regime},
+            "mes": mes.isoformat(), "hoje": hoje.isoformat(), "data_ref": data_ref.isoformat() if data_ref else None,
+            "meta": _r(base["fat"]), "meta_planilha": _r(planilha["fat"]) if planilha else None,
+            "meta_mus": _r(mus_meta), "meta_out": _r(out_meta),
+            "faturado_ate_hoje": _r(base_hoje), "faturado_real": _r(real_ate_hoje), "abertos_hoje": _r(abertos_hoje),
+            "saldo_hoje": _r(base["fat"] - base_hoje - abertos_hoje) if base["fat"] else None,
+            "potencial_mes": _r(plano["potencial_mes"]), "clientes_programados": plano["clientes"],
+            "sem_programacao": plano["sem_programacao"], "clientes": clientes, "dias": dias, "avisos": self.avisos,
+        }
+
     # --- o painel --------------------------------------------------------------------------
     def montar(self, per: dict, time: list[int], nomes: dict[int, str]) -> dict:
         inicio, fim = per["inicio"], per["fim"]
@@ -453,8 +579,8 @@ class Painel:
         efet = self._efetividade(ids, mes, fim, distintos=False)
         freq = self.frequencia(ids, mes, fim)
         pos = self.positivacao(ids, mes, fim)
+        pos_periodo = self.positivacao(ids, inicio, fim)
         troca = self.troca(ids, mes, fim)
-        zero = {"fat": 0.0, "mus": 0.0, "out": 0.0}
         totais = {"faturamento_periodo": 0.0, "meta_periodo": 0.0, "faturamento_mes": 0.0, "meta_mes": 0.0}
 
         for vid in ids:
@@ -466,37 +592,33 @@ class Painel:
             exp, soma = [], {"fat": 0.0, "mus": 0.0, "out": 0.0, "meta": 0.0, "meta_mus": 0.0, "meta_out": 0.0}
             tem_meta = False
             for d in dias:
-                md = _mes(d)
-                mt = metas[md].get(vid)
-                plano = self.plano(vid, md)
-                faturado = sum(x["fat"] for dd, x in meu.items() if md <= dd < d)
-                desde = max(md, d - dt.timedelta(days=DIAS_PEDIDO_ABERTO - 1))
-                em_aberto = sum(t for dd, t in abertos.get(vid, {}).items() if desde <= dd < d)
-                e = expectativa(mt["fat"] if mt else 0.0, faturado, em_aberto, plano["potencial"], plano["uteis"], d)
-                real = meu.get(d, zero)
-                mus_m, out_m, _ = linhas.get(md, (0.0, 0.0, "sem_meta"))
-                fat_m = mt["fat"] if mt else 0.0
-                meta_mus = e["meta"] * mus_m / fat_m if e["meta"] is not None and fat_m and (mus_m or out_m) else None
-                meta_out = e["meta"] * out_m / fat_m if e["meta"] is not None and fat_m and (mus_m or out_m) else None
-                for chave, valor in (("fat", real["fat"]), ("mus", real["mus"]), ("out", real["out"])):
-                    soma[chave] += valor
+                e = self._dia(vid, d, mov, abertos, metas, linhas)
+                real = e["real"]
+                for chave in ("fat", "mus", "out"):
+                    soma[chave] += real[chave]
                 if e["meta"] is not None:
                     tem_meta = True
                     soma["meta"] += e["meta"]
-                    soma["meta_mus"] += meta_mus or 0.0
-                    soma["meta_out"] += meta_out or 0.0
+                    soma["meta_mus"] += e["meta_mus"] or 0.0
+                    soma["meta_out"] += e["meta_out"] or 0.0
                 exp.append({"data": d.isoformat(), "real": _r(real["fat"]), "meta": _r(e["meta"]),
                             "saldo": _r(e["saldo"]), "potencial": _r(e["potencial"]), "faturado": _r(e["faturado"]),
                             "abertos": _r(e["abertos"]), "modo": e["modo"], "parte": _r(e.get("parte")),
-                            "meta_mus": _r(meta_mus), "meta_out": _r(meta_out)})
+                            "meta_mus": _r(e["meta_mus"]), "meta_out": _r(e["meta_out"])})
             separa = tem_meta and any(x["meta_mus"] is not None for x in exp)
             a = (atend or {}).get(vid) if atend is not None else None
+            clientes_periodo = pos_periodo.get(vid, 0)
+            esperados = int(a["den"]) if a else 0
             dia = {
                 "faturamento": bloco(_r(soma["fat"]), _r(soma["meta"]) if tem_meta else None),
                 "mussarela": bloco(_r(soma["mus"]), _r(soma["meta_mus"]) if separa else None),
                 "outras": bloco(_r(soma["out"]), _r(soma["meta_out"]) if separa else None),
                 "atendimentos": (bloco(None, None) if atend is None else
-                                 bloco(int(a["num"]) if a else 0, int(a["den"]) if a else 0)),
+                                 bloco(int(a["num"]) if a else 0, esperados)),
+                # ticket do período (a venda média da página Metas no período) × meta do período ÷ clientes esperados
+                "ticket": bloco(_r(soma["fat"] / clientes_periodo) if clientes_periodo else None,
+                                _r(soma["meta"] / esperados) if tem_meta and esperados else None,
+                                clientes=clientes_periodo, esperados=esperados),
             }
             # o mês, do dia 1º até o fim do período
             no_mes = [x for dd, x in meu.items() if mes <= dd <= fim]
