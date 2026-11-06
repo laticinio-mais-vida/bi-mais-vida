@@ -122,6 +122,10 @@ class Calculadora:
         self.metas = metas
         self.metas_produtos = metas_produtos
         self.configuracao = configuracao
+        # A meta de venda do dia (a expectativa diária do painel de desempenho, Gestao.expectativa_do_dia): (vendedores,
+        # meses) -> {vendedor: {"dia", "meta", "meta_mus", "meta_out", ...}} ou None (não se aplica). Ligada pelo
+        # app.py; sem ela, as visões ficam com o "necessário por dia útil" de antes.
+        self.expectativa = None
 
     # --- apoio ---------------------------------------------------------------------------
     def regras(self) -> Regras:
@@ -378,6 +382,7 @@ class Calculadora:
             "venda_media": {"meta": _div(tot_meta["fat"], tot_meta["cli"]), "realizado": _div(tot["fat"], cli_total),
                             "pct": _div(_div(tot["fat"], cli_total) or 0, _div(tot_meta["fat"], tot_meta["cli"]) or 0)},
         }
+        self._meta_do_dia(ids, meses, cal, linhas, indicadores)
         contagem = defaultdict(int)
         chave = "outras" if info["tipo"] == "outras" else "faturamento"
         for linha in linhas:
@@ -417,6 +422,30 @@ class Calculadora:
             "categorias": {"lista": categorias, "total": tot["cat"], "demais": tot["demais"]},
             "diario": diario,
         }
+
+    def _meta_do_dia(self, ids: list[int], meses: list[dt.date], cal: dict, linhas: list[dict], indicadores: dict) -> None:
+        """No mês de hoje (aberto), troca o "necessário por dia útil" de faturamento, mussarela e outras pela meta de
+        venda do dia (a expectativa diária): meta_dia e meta_dia_data em cada vendedor e no total (a soma dos
+        vendedores). Os clientes seguem com a conta de antes. Sem a expectativa ligada (ou sem dar para calcular),
+        nada muda."""
+        if self.expectativa is None or cal["situacao"] == "fechado" or not ids:
+            return
+        exp = self.expectativa(ids, meses)
+        if exp is None:
+            return
+        campos = (("faturamento", "meta"), ("mussarela", "meta_mus"), ("outras", "meta_out"))
+        dias = sorted({e["dia"] for e in exp.values()})
+        for linha in linhas:
+            e = exp.get(linha["id"])
+            for k, campo in campos:
+                linha[k]["falta_por_dia"] = None
+                linha[k]["meta_dia"] = e[campo] if e else None
+                linha[k]["meta_dia_data"] = e["dia"] if e else None
+        for k, campo in campos:
+            valores = [e[campo] for e in exp.values() if e[campo] is not None]
+            indicadores[k]["falta_por_dia"] = None
+            indicadores[k]["meta_dia"] = sum(valores) if valores else None
+            indicadores[k]["meta_dia_data"] = dias[0] if len(dias) == 1 else None
 
     def _visao_produtos(self, regras, info, meses, cal, filtro, permitidos):
         nomes_erp = self.nomes_erp()

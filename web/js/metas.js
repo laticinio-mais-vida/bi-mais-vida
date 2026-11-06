@@ -317,6 +317,13 @@ function renderRitmo(d, i = 0) {
 // ======================================================================================
 // Visões por vendedor (Metas ES, BA, Edir e Outras Linhas ES)
 // ======================================================================================
+// A meta de venda do dia (a expectativa diária da Gestão: o saldo do mês pelo potencial dos clientes programados), no
+// lugar do "necessário por dia útil" no mês de hoje. O dia é o primeiro dia útil a partir de hoje.
+function rotuloMetaDia(iso) {
+  const d = new Date(), hoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return !iso || iso === hoje ? "Meta de venda de hoje" : `Meta de venda de ${fmt.semana(iso)}, ${fmt.dataCurta(iso)}`;
+}
+
 function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
   const f = tipo === "moeda" ? "moedaC" : "num";
   const v = tipo === "moeda" ? fmt.moedaC : fmt.num;
@@ -325,7 +332,8 @@ function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
   if (tipo === "moeda" && ind.projecao != null && cal.situacao === "aberto") linhas.push([cal.meses.length > 1 ? "Projeção do período" : "Projeção do mês", `${v(ind.projecao)} <span style="color:var(--tinta-3)">(${fmt.pct(ind.projecao_pct, 0)})</span>`]);
   if (ind.falta != null) {
     linhas.push([ind.falta > 0 ? "Falta para a meta" : "Meta", ind.falta > 0 ? v(ind.falta) : "alcançada"]);
-    if (ind.falta_por_dia) linhas.push(["Necessário por dia útil", v(ind.falta_por_dia)]);
+    if (ind.meta_dia != null) linhas.push([rotuloMetaDia(ind.meta_dia_data), ind.meta_dia > 0 ? v(ind.meta_dia) : "sem cliente programado"]);
+    else if (ind.falta_por_dia) linhas.push(["Necessário por dia útil", v(ind.falta_por_dia)]);
   }
   return `
   <article class="cartao kpi entra" style="--i:${i};--cor:${cor}">

@@ -452,8 +452,11 @@ FERRAMENTAS = [
     {
         "name": "metas_e_realizado",
         "description": ("Metas e realizado por vendedor, exatamente como na página Metas: meta, realizado, % "
-                        "atingido, situação (batida, no ritmo, atenção, abaixo), projeção do mês e quanto falta "
-                        "por dia útil. Visões: es (Metas ES: faturamento, mussarela, outras linhas e clientes), ba "
+                        "atingido, situação (batida, no ritmo, atenção, abaixo), projeção do mês, quanto falta e, no "
+                        "mês de hoje, a meta de venda do dia em faturamento, mussarela e outras (meta_dia, do dia "
+                        "meta_dia_data: o saldo do mês distribuído pelo potencial dos clientes programados em cada dia "
+                        "que resta, nunca abaixo do potencial normal; nos outros meses e nos clientes, falta_por_dia "
+                        "= quanto falta por dia útil). Visões: es (Metas ES: faturamento, mussarela, outras linhas e clientes), ba "
                         "(Metas BA), edir (Metas Edir), outras_es (Outras Linhas ES, com as categorias), "
                         "produtos_ba (metas de volume por produto do BA), produtos_es (metas de volume por produto "
                         "do ES)."),
@@ -1006,7 +1009,8 @@ class Ferramentas:
                                                             "dias_restantes", "ritmo")},
         }
         enxuto = lambda ind: {k: _valor(ind.get(k)) for k in ("meta", "realizado", "pct", "status", "projecao",  # noqa: E731
-                                                               "falta", "falta_por_dia") if ind.get(k) is not None}
+                                                               "falta", "falta_por_dia", "meta_dia", "meta_dia_data")
+                              if ind.get(k) is not None}
         if "linhas" in d:
             chaves = ("faturamento", "mussarela", "outras", "clientes")
             resultado["total"] = {k: enxuto(d["indicadores"][k]) for k in chaves}

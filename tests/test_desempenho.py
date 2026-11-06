@@ -212,6 +212,74 @@ class TestPainel(ComCache, BaseBanco):
         self.assertEqual((pedidos["num"], pedidos["den"]), (2.0, 2.0))
         self.assertEqual((clientes["num"], clientes["den"]), (1.0, 2.0))
 
+    def test_ticket_do_periodo(self):
+        self.montar()
+        self.gestao.hoje = lambda: D(2026, 9, 4)  # o último dia fechado é a quinta 3/9, dia da rota da Thais
+        thais, = self.painel("BA")["vendedores"]
+        dia = thais["dia"]
+        # meta do dia: saldo 6000 × o potencial da quinta (2185 ÷ 4) ÷ o potencial do mês (2185) = 1500
+        self.assertEqual((dia["faturamento"]["real"], dia["faturamento"]["meta"]), (5000.0, 1500.0))
+        self.assertEqual((dia["atendimentos"]["real"], dia["atendimentos"]["meta"]), (1, 2))
+        # ticket: 5000 ÷ 1 cliente com nota, contra a meta do dia ÷ os 2 clientes esperados
+        t = dia["ticket"]
+        self.assertEqual((t["real"], t["meta"], t["clientes"], t["esperados"]), (5000.0, 750.0, 1, 2))
+        self.assertEqual(t["status"], "batida")
+
+    def test_meta_do_dia_na_pagina_metas(self):
+        self.montar()
+        self.calc.expectativa = self.gestao.expectativa_do_dia
+        self.calc.cache.info["data_ref"] = "2026-09-16"  # setembro ainda aberto
+        self.gestao.hoje = lambda: D(2026, 9, 17)        # quinta: dia da rota da Thais
+        ba = self.calc.visao("ba", [(2026, 9)])
+        thais, = ba["linhas"]
+        # saldo 6000 − 4750 = 1250 pelas duas quintas que restam (546,25 cada): 625 em 17/9
+        self.assertEqual((thais["faturamento"]["meta_dia"], thais["faturamento"]["meta_dia_data"]), (625.0, "2026-09-17"))
+        self.assertIsNone(thais["faturamento"]["falta_por_dia"])
+        self.assertEqual((thais["mussarela"]["meta_dia"], thais["outras"]["meta_dia"]), (625.0, 0.0))
+        self.assertEqual((ba["indicadores"]["faturamento"]["meta_dia"], ba["indicadores"]["faturamento"]["meta_dia_data"]),
+                         (625.0, "2026-09-17"))
+        self.assertIsNotNone(ba["indicadores"]["clientes"]["falta_por_dia"])  # clientes seguem com a conta de antes
+        self.assertNotIn("meta_dia", ba["indicadores"]["clientes"])
+        # o Rubens não atende na quinta: meta do dia zero
+        es = self.calc.visao("es", [(2026, 9)])
+        self.assertEqual(es["linhas"][0]["faturamento"]["meta_dia"], 0.0)
+        # outro mês (ou sem dar para calcular): a conta de antes
+        self.assertNotIn("meta_dia", self.calc.visao("ba", [(2026, 8)])["indicadores"]["faturamento"])
+        self.calc.expectativa = lambda ids, meses: None
+        self.assertIsNotNone(self.calc.visao("ba", [(2026, 9)])["indicadores"]["faturamento"]["falta_por_dia"])
+
+    def test_simulacao(self):
+        import tempfile
+        from pathlib import Path
+        from bi.simulacao import gravar_planilha, texto
+        self.montar()
+        r = self.gestao.simular("thais", 10000, None, D(2026, 9, 17))
+        self.assertEqual((r["vendedor"]["id"], r["vendedor"]["regiao"], r["vendedor"]["regime"]), (BA, "BA", "volume"))
+        self.assertEqual((r["meta"], r["meta_planilha"], r["faturado_ate_hoje"], r["saldo_hoje"]),
+                         (10000.0, 6000.0, 4750.0, 5250.0))
+        dias = {d["data"]: d for d in r["dias"]}
+        # antes de hoje, com o realizado: 10000 × 546,25 ÷ 2185 = 2500 em 3/9; em 10/9, 5000 pelas 3 quintas
+        self.assertEqual((dias["2026-09-03"]["meta"], dias["2026-09-03"]["projecao"]), (2500.0, False))
+        self.assertEqual(dias["2026-09-10"]["meta"], 1666.67)
+        # de hoje em diante, a projeção distribui o saldo de hoje pelas quintas que restam
+        self.assertEqual((dias["2026-09-17"]["meta"], dias["2026-09-24"]["meta"]), (2625.0, 2625.0))
+        self.assertTrue(dias["2026-09-24"]["projecao"])
+        self.assertEqual(dias["2026-09-17"]["clientes"], 2)
+        clientes = {c["id"]: c for c in r["clientes"]}
+        self.assertEqual((clientes[2]["potencial"], clientes[2]["representatividade"]), (2000.0, round(2000 / 2185, 6)))
+        self.assertEqual(len(clientes[2]["dias"]), 4)
+        self.assertIsNone(clientes[7]["representatividade"])  # sem área: fora da conta
+        # cenário: e se ela tivesse faturado 8000 até ontem?
+        r = self.gestao.simular("141", 10000, None, D(2026, 9, 17), faturado=8000)
+        dias = {d["data"]: d for d in r["dias"]}
+        self.assertEqual((r["saldo_hoje"], dias["2026-09-17"]["meta"], dias["2026-09-24"]["meta"]),
+                         (2000.0, 1000.0, 1000.0))
+        self.assertIn("Soma da projeção de hoje em diante: R$ 2.000,00", texto(r))
+        with tempfile.TemporaryDirectory() as pasta:
+            self.assertTrue(gravar_planilha(r, Path(pasta) / "sim.xlsx").exists())
+        with self.assertRaises(ValueError):
+            self.gestao.simular("ninguem")
+
     def test_acesso_e_dados_que_faltam(self):
         self.montar()
         d = self.painel(escopo=({ES}, None))

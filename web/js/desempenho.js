@@ -1,7 +1,7 @@
 // Painel de desempenho da equipe (página Gestão, abaixo da Equipe): o destaque do período, o quadro com uma coluna por
 // vendedor (nota geral e 9 indicadores) e, ao clicar num vendedor, a ficha dele com os 9 cartões. A conta é toda no
 // servidor (bi/desempenho.py); aqui só se desenha. O estado, o carregamento e os cliques ficam em gestao.js.
-import { chipStatus, corStatus, esc, fmt, icone } from "./util.js";
+import { chipStatus, corStatus, esc, fmt, icone, linhaTT } from "./util.js";
 
 const FAIXA = { batida: "Meta batida", atencao: "Atenção", abaixo: "Abaixo da meta", sem_meta: "Sem meta", sem_dados: "Sem dados" };
 const ROTULO_TROCA = { batida: "Dentro do limite", atencao: "Perto do teto", abaixo: "Acima do teto" };
@@ -204,6 +204,67 @@ export function fichaDesempenho(d, v, abertos) {
       <div><b>${esc(v.nome)}</b><small>nota geral ${v.nota == null ? "—" : fmt.pct(v.nota, 0)} · ${fmt.num(v.programacao?.clientes)} clientes com dia de atendimento${sem ? ` · ${fmt.num(sem)} sem dia (Gestão › Configurar)` : ""}</small></div>
     </div>
     <div class="dsp-cartoes">${cartoes}</div>
+  </div>`;
+}
+
+// A dica da meta do período (passar o mouse): de onde ela veio (o saldo, o potencial do dia, os pedidos em aberto).
+function dicaMeta(v, de) {
+  const b = v.dia.faturamento, exp = v.expectativa || [];
+  const linhas = [linhaTT(`Venda ${de}`, fmt.moeda2(b.real)), linhaTT(`Meta ${de}`, b.meta == null ? "sem meta" : fmt.moeda2(b.meta))];
+  if (b.pct != null) linhas.push(linhaTT("Atingido", fmt.pct(b.pct, 1)));
+  if (exp.length === 1) {
+    const e = exp[0];
+    if (e.saldo != null) linhas.push(linhaTT("Saldo do mês", fmt.moeda2(e.saldo)));
+    linhas.push(linhaTT("Potencial do dia", fmt.moeda2(e.potencial)));
+    if (e.abertos) linhas.push(linhaTT("Pedidos em aberto", fmt.moeda2(e.abertos)));
+    linhas.push(`<div class="tt-l"><span>${esc(e.modo === "saldo" && !e.meta ? "não atende neste dia" : (MODO[e.modo] || "a parte do dia no saldo do mês"))}</span></div>`);
+  } else if (exp.length) {
+    const dias = exp.filter((e) => e.meta).length, abertos = exp.reduce((s, e) => s + (e.abertos || 0), 0);
+    linhas.push(linhaTT("Dias com meta", fmt.num(dias)));
+    if (abertos) linhas.push(linhaTT("Pedidos em aberto (soma dos dias)", fmt.moeda2(abertos)));
+  }
+  return `<div class="tt-t">${esc(v.nome)}</div>${linhas.join("")}`;
+}
+
+const ponto = (st) => `<span class="dsp-ponto" style="--c:${corStatus(st)}"></span>`;
+
+// E: a meta de venda diária por vendedor, em barras (0 a 150%, o traço é a meta) ou em tabela.
+export function metaDiariaDesempenho(d, tabela) {
+  const vend = d.vendedores || [];
+  if (!vend.length) return "";
+  const de = DO_PERIODO[d.periodo.chave] || "do período";
+  const ESCALA = 1.5;
+  const corpo = tabela ? `<div class="tabela-rolagem"><table class="dados dsp-tabela">
+      <thead><tr><th>Vendedor</th><th>Venda ${de}</th><th>Meta ${de}</th><th>Atingido</th><th>Atend. / Clientes</th>
+        <th>Ticket médio</th><th>% Troca</th><th>Situação</th></tr></thead>
+      <tbody>${vend.map((v) => {
+        const b = v.dia.faturamento, a = v.dia.atendimentos, t = v.dia.ticket, tr = v.mes.troca;
+        return `<tr>
+          <td>${esc(v.nome)}</td><td>${fmt.moeda2(b.real)}</td>
+          <td><span class="dsp-dica" tabindex="0" data-tt="${esc(dicaMeta(v, de))}">${b.meta == null ? "sem meta" : fmt.moeda2(b.meta)}</span></td>
+          <td>${b.pct == null ? "—" : fmt.pct(b.pct, 1)}</td>
+          <td>${a.real == null ? "—" : `${fmt.num(a.real)} / ${a.meta == null ? 0 : fmt.num(a.meta)}`}</td>
+          <td title="${t.meta ? `meta ${fmt.moeda2(t.meta)}: a meta ${de} ÷ ${fmt.num(t.esperados)} clientes esperados` : "sem meta"}">${t.real == null ? "—" : `${ponto(t.status)}${fmt.moeda2(t.real)}${t.pct != null ? ` <small>${fmt.pct(t.pct, 0)}</small>` : ""}`}</td>
+          <td>${tr.real == null ? "—" : `${ponto(tr.status)}${fmt.pct(tr.real, 2)}`}</td>
+          <td class="esq">${ponto(b.status)}${esc(FAIXA[b.status] || FAIXA.sem_meta)}</td>
+        </tr>`;
+      }).join("")}</tbody></table></div>`
+    : `<div class="dsp-barras">${vend.map((v) => {
+        const b = v.dia.faturamento, larg = b.pct == null ? 0 : Math.min(100, (b.pct / ESCALA) * 100);
+        return `<div class="dsp-barra-linha" style="--c:${cor(b)}" tabindex="0" data-tt="${esc(dicaMeta(v, de))}">
+          <span class="dsp-barra-nome">${esc(v.nome)}</span>
+          <span class="dsp-barra-trilho"><i style="width:${larg}%"></i><b style="left:${100 / ESCALA}%" aria-hidden="true"></b></span>
+          <span class="dsp-barra-pct">${b.pct == null ? "sem meta" : fmt.pct(b.pct, 0)}</span>
+        </div>`;
+      }).join("")}
+      <div class="dsp-barra-linha dsp-escala" aria-hidden="true"><span></span><span class="dsp-barras-escala"><span style="left:0%">0%</span><span style="left:33.333%">50%</span><span style="left:66.667%">100%, a meta</span><span style="left:100%">150%</span></span><span></span></div></div>`;
+  return `<div class="dsp-meta-dia">
+    <div class="dsp-meta-dia-cab">
+      <div><h4>Meta de venda diária por vendedor</h4>
+        <p>A meta de cada dia é a expectativa: o saldo do mês (meta − faturado − pedidos em aberto) distribuído pelo potencial dos clientes programados nos dias que restam, nunca abaixo do potencial normal do dia. Passe o mouse para ver de onde ela veio.</p></div>
+      <button class="btn" type="button" data-dsp-tabela aria-pressed="${tabela}">${icone(tabela ? "grafico" : "quadro")}${tabela ? "Ver gráfico" : "Ver tabela"}</button>
+    </div>
+    ${corpo}
   </div>`;
 }
 

@@ -27,8 +27,8 @@ import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, SOBRE_PREMIA
          textoAlvo, textoBase, textoFaixas, textoFalta, textoFiltros, textoGanho, textoPeriodoBase, textoPremiacao, textoPremio,
          textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
-import { avisosDesempenho, fichaDesempenho, filtroPeriodo, heroDesempenho, legendaDesempenho, quadroDesempenho,
-         textoPeriodo } from "./desempenho.js";
+import { avisosDesempenho, fichaDesempenho, filtroPeriodo, heroDesempenho, legendaDesempenho, metaDiariaDesempenho,
+         quadroDesempenho, textoPeriodo } from "./desempenho.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
 const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
@@ -49,7 +49,8 @@ const estado = {
   selecao: null, form: null, // lançando (ou editando) uma campanha: os vendedores marcados e o formulário em linha
   recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
   // o painel de desempenho (abaixo da equipe): o período do filtro, os dados, o vendedor da ficha e os ⓘ abertos
-  dsp: { periodo: ler("mv-gestao-periodo", "ultimo_dia"), dados: null, vendedor: null, pedido: 0, abertos: new Set() },
+  dsp: { periodo: ler("mv-gestao-periodo", "ultimo_dia"), dados: null, vendedor: null, pedido: 0, abertos: new Set(),
+         tabela: ler("mv-gestao-meta-tabela", false) === true }, // a meta diária em tabela (ou em barras)
 };
 let dlg = null, formObj = null;
 
@@ -1738,14 +1739,24 @@ function desenharDesempenho() {
   el.classList.toggle("ge-minimizada", minimizada("desempenho"));
   const vend = d.vendedores || [];
   const v = estado.dsp.vendedor ? vend.find((x) => x.id === estado.dsp.vendedor) : null;
-  const corpo = !d.regiao ? "" : v ? fichaDesempenho(d, v, estado.dsp.abertos) : `${heroDesempenho(d)}${quadroDesempenho(d)}`;
+  const corpo = !d.regiao ? "" : v ? fichaDesempenho(d, v, estado.dsp.abertos)
+    : `${heroDesempenho(d)}${quadroDesempenho(d)}${metaDiariaDesempenho(d, estado.dsp.tabela)}`;
   el.innerHTML = `${cabecalho("desempenho", `${icone("grafico")}Desempenho da equipe${d.regiao ? ` ${d.regiao}` : ""}`,
     `<span>${esc(textoPeriodo(d))}</span>`)}
     ${d.regiao ? `<div class="dsp-filtros">${filtroPeriodo(d, estado.dsp.periodo)}</div>` : ""}
     ${avisosDesempenho(d)}
     ${corpo}
     ${d.regiao && vend.length ? legendaDesempenho() : ""}`;
+  ligarTooltips(el);
   atualizarMinimizarTudo();
+}
+
+// A meta de venda diária: barras ou tabela (a escolha fica guardada neste navegador).
+function alternarTabela() {
+  estado.dsp.tabela = !estado.dsp.tabela;
+  guardar("mv-gestao-meta-tabela", estado.dsp.tabela);
+  desenharDesempenho();
+  raiz.querySelector("[data-dsp-tabela]")?.focus({ preventScroll: true });
 }
 
 function trocarPeriodo(p) {
@@ -1852,9 +1863,10 @@ function aoClicar(e) {
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
     "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]," +
-    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info]");
+    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info],[data-dsp-tabela]");
   if (!t) return;
   const ds = t.dataset;
+  if ("dspTabela" in ds) return alternarTabela();
   if (ds.dspPeriodo) return trocarPeriodo(ds.dspPeriodo);
   if (ds.dspVendedor) return abrirFicha(Number(ds.dspVendedor));
   if ("dspVoltar" in ds) return fecharFicha();
