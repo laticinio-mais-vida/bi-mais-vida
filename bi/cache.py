@@ -59,6 +59,29 @@ TABELAS_PEDIDOS = {
     "pedidos_venda": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, tipopedido VARCHAR, "
                       "cancelada INTEGER, pedidos INTEGER, total DOUBLE"),
 }
+# Os pedidos um a um (PEDIDOVENDAS, de venda e de brinde, cancelados com a marca) e os produtos de cada um
+# (LISTAPEDIDOVENDA), para consultar pedido a pedido; o resumo acima continua só para a efetividade. Sem endereço,
+# coordenadas, observação ou usuários. id_venda aponta para VENDAS (pedido de venda faturado) e id_brinde para BRINDES
+# (pedido de brinde, status B): no ERP os dois ficam em PEDIDOVENDAS.ID_VENDA. nota_fiscal é o número da nota dessa venda
+# ou desse brinde (VENDAS/BRINDES.NOTAFISCAL), em texto como no ERP ("055770"); de 2024 a nov/2026 nenhum número se
+# repete, nem entre as séries 013 e 017, então ele sozinho identifica a nota. O total do pedido é a soma do total dos
+# itens. A unidade fica a do cadastro (produtos): quando o item tem uma, é a mesma (fora 6 em 936 mil itens desde 2024),
+# e nos meses recentes ela quase sempre vem vazia. Opcional como os pedidos.
+TABELAS_PEDIDOS_DETALHE = {
+    "pedidos_venda_detalhe": ("id INTEGER, data DATE, criado_em TIMESTAMP, entrega DATE, id_cliente INTEGER, "
+                              "tipocliente VARCHAR, id_vendedor INTEGER, tipopedido VARCHAR, status VARCHAR, "
+                              "status_nome VARCHAR, cancelada BOOLEAN, origem VARCHAR, id_venda INTEGER, "
+                              "id_brinde INTEGER, nota_fiscal VARCHAR, total DOUBLE, desconto DOUBLE, "
+                              "peso_liquido DOUBLE"),
+    "pedidos_venda_itens": ("id_pedido INTEGER, id_produto INTEGER, quantidade DOUBLE, preco DOUBLE, "
+                            "preco_tabela DOUBLE, desconto DOUBLE, total DOUBLE"),
+}
+# O status B (pedido de brinde que virou brinde) não está na tabela de status do ERP (STATUSPEDIDO).
+STATUS_FORA_DO_ERP = {"B": "Brinde"}
+DIAS_PEDIDOS_FUTUROS = 30  # pedido para entregar nos próximos dias entra; data mais longe é erro de digitação
+# Gravadas nesta ordem e sem índice: a consulta de um pedido ou de um período pula os blocos de fora dele tão rápido
+# quanto com índice (~1 ms), e o índice dos itens dobraria o tamanho delas no pacote que vai ao VPS (+15 MB).
+ORDEM = {"pedidos_venda_detalhe": "data, id", "pedidos_venda_itens": "id_pedido"}
 # A rede de cada cliente (CLIENTES.ID_REDE -> REDES.NOME). As redes SEMANAL, QUINZENAL e MENSAL são a frequência de
 # compra, para as visitas esperadas da efetividade. Opcional como os pedidos: sem ela, todo cliente conta como semanal.
 TABELAS_REDE = {
@@ -145,6 +168,7 @@ class Cache:
         self.antigo = False  # cache de uma versão anterior do painel (falta tabela): precisa extrair de novo
         self.sem_detalhe = False  # falta o detalhe por cliente do Assistente (Metas e Projeções funcionam)
         self.sem_pedidos = False  # faltam os pedidos de venda (só a efetividade das campanhas precisa)
+        self.sem_pedidos_detalhe = False  # faltam os pedidos um a um e os itens deles
         self.sem_rede = False  # falta a rede (frequência) dos clientes: a efetividade conta todos como semanais
         self.sem_credito = False  # faltam os títulos a receber e os limites (só a Reavaliação de Crédito precisa)
         self.sem_parcelas = False  # faltam as parcelas dos títulos: o crédito conta tudo como não pago
@@ -185,6 +209,7 @@ class Cache:
         antigo = _tabela_diferente(con) is not None
         sem_detalhe = _tabela_diferente(con, TABELAS_DETALHE) is not None
         sem_pedidos = _tabela_diferente(con, TABELAS_PEDIDOS) is not None
+        sem_pedidos_detalhe = _tabela_diferente(con, TABELAS_PEDIDOS_DETALHE) is not None
         sem_rede = _tabela_diferente(con, TABELAS_REDE) is not None
         sem_credito = _tabela_diferente(con, TABELAS_CREDITO) is not None
         sem_parcelas = _tabela_diferente(con, TABELAS_PARCELAS) is not None
@@ -199,6 +224,7 @@ class Cache:
             self.antigo = antigo
             self.sem_detalhe = sem_detalhe
             self.sem_pedidos = sem_pedidos
+            self.sem_pedidos_detalhe = sem_pedidos_detalhe
             self.sem_rede = sem_rede
             self.sem_credito = sem_credito
             self.sem_parcelas = sem_parcelas
@@ -218,12 +244,13 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos, a rede, o crédito, a carteira, os brindes e a comissão podem faltar (pacote do PC com o
-        código anterior), mas, se vierem, têm de estar no formato atual."""
+        cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes e a comissão podem faltar
+        (pacote do PC com o código anterior), mas, se vierem, têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PEDIDOS, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_PEDIDOS_DETALHE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_REDE, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_CREDITO, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True)
@@ -251,14 +278,15 @@ class Cache:
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
         redes, crédito, parcelas, a carteira, os brindes ou a comissão que não deu para ler ou registrar (pedidos_erro,
-        rede_erro, credito_erro, parcelas_erro, carteira_erro, brindes_erro, comissao_erro) esperam a próxima cópia, em
-        vez de extrair tudo de novo a cada minuto."""
+        pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro, carteira_erro, brindes_erro, comissao_erro)
+        esperam a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
             return False
         return (self._con is None or self.antigo or self.sem_detalhe
                 or (self.sem_pedidos and not self.info.get("pedidos_erro"))
+                or (self.sem_pedidos_detalhe and not self.info.get("pedidos_detalhe_erro"))
                 or (self.sem_rede and not self.info.get("rede_erro"))
                 or (self.sem_credito and not self.info.get("credito_erro"))
                 or (self.sem_parcelas and not self.info.get("parcelas_erro"))
@@ -289,8 +317,9 @@ class Cache:
                 novo.unlink()
             con = duckdb.connect(str(novo))
             # pedidos, rede, crédito, parcelas, carteira, brindes e comissão: a leitura (ou o registro) pode ter falhado
-            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_REDE, **TABELAS_CREDITO, **TABELAS_PARCELAS,
-                                           **TABELAS_CARTEIRA, **TABELAS_BRINDES, **TABELAS_COMISSAO}.items()
+            opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_PEDIDOS_DETALHE, **TABELAS_REDE,
+                                           **TABELAS_CREDITO, **TABELAS_PARCELAS, **TABELAS_CARTEIRA,
+                                           **TABELAS_BRINDES, **TABELAS_COMISSAO}.items()
                          if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
@@ -300,7 +329,8 @@ class Cache:
                     df = pd.DataFrame(linhas, columns=_colunas(colunas))
                     del linhas
                     con.register("df_tmp", df)
-                    con.execute(f"INSERT INTO {nome} SELECT * FROM df_tmp")
+                    ordem = f" ORDER BY {ORDEM[nome]}" if nome in ORDEM else ""
+                    con.execute(f"INSERT INTO {nome} SELECT * FROM df_tmp{ordem}")
                     con.unregister("df_tmp")
                     del df
             con.execute("CREATE INDEX ix_vi ON vendas_itens (data)")
@@ -468,6 +498,35 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler os pedidos de venda (a efetividade das campanhas fica sem dados): %s", e)
                 pedidos_erro = str(e)[:300]
+            # Os pedidos um a um e os itens deles, também à parte (as duas tabelas vêm juntas ou nenhuma).
+            self.estado["etapa"] = "Lendo os pedidos um a um"
+            pedidos_detalhe_erro = None
+            try:
+                ate_pedidos = dt.datetime.combine(hoje + dt.timedelta(days=DIAS_PEDIDOS_FUTUROS + 1), dt.time())
+                nomes_status = {**STATUS_FORA_DO_ERP, **dict(bd.consulta("SELECT CODIGO, NOME FROM STATUSPEDIDO"))}
+                cabecalhos = [
+                    (i, _data(d), cr, _data(en), c, t, v, tp, st, nomes_status.get(st), bool(ca), o,
+                     None if tp == "PEDIDOBRINDE" else iv, iv if tp == "PEDIDOBRINDE" else None, nf or None,
+                     float(tot or 0), float(dsc or 0), float(pl or 0))
+                    for i, d, cr, en, c, t, v, tp, st, ca, o, iv, nf, tot, dsc, pl in bd.consulta(
+                        "SELECT p.ID_PEDIDOVENDA, CAST(p.DATA AS DATE), p.DATACADASTRO, CAST(p.DATAENTREGA AS DATE), "
+                        "p.ID_CLIENTE, p.TIPOCLIENTE, COALESCE(p.ID_VENDEDOR, 0), p.TIPOPEDIDO, p.STATUS, "
+                        "COALESCE(p.CANCELADA, 0), p.ORIGEM, p.ID_VENDA, COALESCE(v.NOTAFISCAL, x.NOTAFISCAL), "
+                        "p.TOTAL, p.TOTALDESCONTO, p.PESOLIQUIDO FROM PEDIDOVENDAS p "
+                        "LEFT JOIN VENDAS v ON v.ID_VENDA = p.ID_VENDA AND p.TIPOPEDIDO <> 'PEDIDOBRINDE' "
+                        "LEFT JOIN BRINDES x ON x.ID_BRINDE = p.ID_VENDA AND p.TIPOPEDIDO = 'PEDIDOBRINDE' "
+                        "WHERE p.DATA >= ? AND p.DATA < ?", (de, ate_pedidos))]
+                itens = [
+                    (i, p, float(q or 0), float(pr or 0), float(pt or 0), float(dsc or 0), float(tot or 0))
+                    for i, p, q, pr, pt, dsc, tot in bd.consulta(
+                        "SELECT l.ID_PEDIDOVENDA, COALESCE(l.ID_ITEM, 0), l.QUANTIDADE, l.PRECO, l.PRECOTABELA, "
+                        "l.VALORDESCONTO, l.VALORTOTALITEM FROM LISTAPEDIDOVENDA l "
+                        "JOIN PEDIDOVENDAS p ON p.ID_PEDIDOVENDA = l.ID_PEDIDOVENDA "
+                        "WHERE p.DATA >= ? AND p.DATA < ?", (de, ate_pedidos))]
+                dados["pedidos_venda_detalhe"], dados["pedidos_venda_itens"] = cabecalhos, itens
+            except Exception as e:
+                log.warning("não deu para ler os pedidos um a um: %s", e)
+                pedidos_detalhe_erro = str(e)[:300]
             # A rede de cada cliente (frequência de compra da efetividade), também à parte.
             self.estado["etapa"] = "Lendo as redes dos clientes"
             rede_erro = None
@@ -558,6 +617,7 @@ class Cache:
             ("banco_copia", dt.datetime.fromtimestamp(copia_mtime).isoformat(timespec="minutes")),
             ("inicio", self.inicio.isoformat()),
             *([("pedidos_erro", pedidos_erro)] if pedidos_erro else []),
+            *([("pedidos_detalhe_erro", pedidos_detalhe_erro)] if pedidos_detalhe_erro else []),
             *([("rede_erro", rede_erro)] if rede_erro else []),
             *([("credito_erro", credito_erro)] if credito_erro else []),
             *([("parcelas_erro", parcelas_erro)] if parcelas_erro else []),

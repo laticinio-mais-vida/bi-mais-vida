@@ -60,13 +60,54 @@ O sistema copia do banco só o que as páginas usam (vendas, clientes atendidos,
 2024) para um cache local em `dados\cache.duckdb`. Por isso os filtros respondem na hora. Para o Assistente, o
 cache também guarda as vendas e devoluções por cliente e por dia, e a cidade, a UF, a área e o segmento de cada
 cliente. Para a Reavaliação de Crédito, guarda os títulos a receber de venda (de todo o histórico), as parcelas de
-cada um (quantas, quantas pagas e quanto já foi pago) e o limite de crédito e o prazo de cada cliente.
+cada um (quantas, quantas pagas e quanto já foi pago) e o limite de crédito e o prazo de cada cliente. Também guarda
+os pedidos de venda um a um, com os produtos de cada pedido (ver abaixo).
 
 - **Cópia do banco nova:** o painel percebe sozinho em até 1 minuto, mesmo sem nenhuma página aberta, e
-  atualiza o cache em segundo plano (cerca de 40 segundos). O botão **Atualizar dados** força a leitura na hora.
+  atualiza o cache em segundo plano (cerca de um minuto e meio). O botão **Atualizar dados** força a leitura na hora.
 - **Planilhas de metas:** são relidas sempre que o arquivo muda. Se estiverem abertas e bloqueadas, vale a
   última leitura boa e aparece um aviso no painel. A meta **aprovada no painel** (Sugestão de Metas › Configurar ›
   Aprovação de metas) vale no lugar das linhas das duas planilhas daquele vendedor e mês.
+
+### Pedidos de venda no cache
+
+Para quem programa no painel: duas tabelas com os pedidos da PEDIDOVENDAS (de venda e de brinde) desde o início do
+cache até 30 dias à frente, e os produtos de cada um (LISTAPEDIDOVENDA). Os cancelados vêm marcados. Não trazem
+endereço, coordenadas, observação nem usuários. A tabela `pedidos_venda` é outra: é o resumo por dia e cliente que a
+efetividade das campanhas usa.
+
+`pedidos_venda_detalhe`: um pedido por linha.
+
+| Coluna | O que é |
+|---|---|
+| `id` | número do pedido (ID_PEDIDOVENDA) |
+| `data`, `criado_em`, `entrega` | data do pedido, quando foi digitado (data e hora) e data de entrega (às vezes vazia) |
+| `id_cliente`, `tipocliente` | o código é do cadastro do `tipocliente` (CLIENTE, FUNCIONARIO, FORNECEDOR, PRODUTOR) |
+| `id_vendedor` | vendedor do pedido (0 = sem vendedor) |
+| `tipopedido` | PEDIDOVENDA ou PEDIDOBRINDE |
+| `status`, `status_nome` | V Venda, B Brinde, C Cancelado, L Liberado, S Separado, PC Pedido a confirmar, ES Em processo de separação (A não tem nome no ERP) |
+| `cancelada` | verdadeiro se o pedido foi cancelado |
+| `origem` | origem gravada pelo ERP (F, C, Magis TI, ANDROID, FV) |
+| `id_venda` | a venda gerada (VENDAS), só em pedido de venda |
+| `id_brinde` | o brinde gerado (BRINDES), só em pedido de brinde |
+| `nota_fiscal` | número da nota da venda ou do brinde gerado, em texto como no ERP ("055770"); vazio no pedido que não foi faturado. O número sozinho identifica a nota: não se repete nem entre as séries 013 e 017 |
+| `total`, `desconto`, `peso_liquido` | em R$ e kg |
+
+`pedidos_venda_itens`: um produto do pedido por linha. Junta com a de cima por `id_pedido = id` e com `produtos` por
+`id_produto` (nome, linha e unidade).
+
+| Coluna | O que é |
+|---|---|
+| `id_pedido`, `id_produto` | o pedido e o produto |
+| `quantidade` | na unidade do cadastro do produto |
+| `preco`, `preco_tabela` | preço praticado e preço da tabela (R$ por unidade) |
+| `desconto`, `total` | em R$; a soma do `total` dos itens é o `total` do pedido |
+
+Em nov/2026 eram cerca de 187 mil pedidos e 936 mil itens desde jan/2024. Casos de borda: 163 pedidos não têm nenhum
+item, e em 7 a soma dos itens difere do total do pedido em mais de 5 centavos. As tabelas são gravadas em ordem (os
+pedidos por data, os itens por pedido) e não têm índice: filtrar por data ou por pedido continua rápido (cerca de 1
+ms). Um cache sem elas (o PC ainda com o código anterior) vale para o resto do painel, e `cache.sem_pedidos_detalhe`
+avisa que faltam.
 
 ## Página Metas
 

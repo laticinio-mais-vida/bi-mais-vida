@@ -4,11 +4,13 @@ os pedidos, mas não fica tentando a cada minuto se a leitura deles falhou."""
 from __future__ import annotations
 
 import configparser
+import datetime as dt
 import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import duckdb
 
@@ -25,11 +27,41 @@ class TestPedidosNoCache(unittest.TestCase):
         self._tmp.cleanup()
 
     def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
-              brindes=True, comissao=True) -> Path:
+              brindes=True, comissao=True, pedidos_detalhe=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
-                          carteira=carteira, brindes=brindes, comissao=comissao)
+                          carteira=carteira, brindes=brindes, comissao=comissao, pedidos_detalhe=pedidos_detalhe)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
+
+    def test_pedidos_detalhe_opcionais(self):
+        # sem os pedidos um a um (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-los; se a
+        # leitura falhou, espera a próxima cópia
+        arquivo = self.cache(pedidos_detalhe=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_pedidos_detalhe, c.sem_pedidos, c.desatualizado()), (True, False, True))
+        c.info["pedidos_detalhe_erro"] = "Table unknown LISTAPEDIDOVENDA"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE pedidos_venda_itens (id_pedido INTEGER, total DOUBLE)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("pedidos_venda_itens", str(e.exception))
+        arquivo.unlink()
+        self.cache()
+        c = Cache(ini, self.pasta)
+        self.assertFalse(c.sem_pedidos_detalhe)
+        c._con.close()
 
     def test_brindes_opcionais(self):
         # sem os brindes (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-los; se a leitura
@@ -212,6 +244,104 @@ class TestPedidosNoCache(unittest.TestCase):
         arquivo = self.cache(pedidos=True)
         c = Cache(ini, self.pasta)
         self.assertFalse(c.sem_pedidos)
+        c._con.close()
+
+
+class _ErpFalso:
+    """No lugar de bi.fb.BancoSomenteLeitura: responde vazio a tudo, menos aos pedidos um a um e aos itens deles."""
+    falhar_itens = False
+    chamadas: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def consulta(self, sql, params=()):
+        type(self).chamadas.append((sql, params))
+        if "FROM STATUSPEDIDO" in sql:
+            return [("V", "Venda"), ("C", "Cancelado"), ("L", "Liberado")]
+        if sql.startswith("SELECT p.ID_PEDIDOVENDA,"):
+            # (id, data, criado em, entrega, cliente, tipo, vendedor, tipo do pedido, status, cancelada, origem,
+            #  ID_VENDA, nota fiscal, total, desconto, peso líquido)
+            return [
+                (13, dt.date(2026, 11, 9), dt.datetime(2026, 11, 6, 8, 0), None, 7, "FUNCIONARIO", 134, "PEDIDOVENDA",
+                 "A", 0, "F", None, None, 0.0, 0.0, 0.0),                                  # status fora da tabela
+                (10, dt.date(2026, 11, 5), dt.datetime(2026, 11, 3, 15, 38), dt.date(2026, 11, 5), 12892, "CLIENTE",
+                 134, "PEDIDOVENDA", "V", 0, "F", 749743, "055770", 176.5, 0.0, 13.84),
+                (11, dt.date(2026, 11, 5), dt.datetime(2026, 11, 5, 9, 0), None, 500, "CLIENTE", 0, "PEDIDOBRINDE",
+                 "B", 0, "F", 5555, "645271", 60.0, None, None),                           # brinde: ID_VENDA é BRINDES
+                (12, dt.date(2026, 11, 6), dt.datetime(2026, 11, 6, 8, 0), None, 12892, "CLIENTE", 134, "PEDIDOVENDA",
+                 "C", 1, "C", None, "", 90.0, 0.0, 1.0),                                   # cancelado, sem nota
+            ]
+        if "FROM LISTAPEDIDOVENDA" in sql:
+            if type(self).falhar_itens:
+                raise RuntimeError("Table unknown LISTAPEDIDOVENDA")
+            return [(11, 32, 2.0, 30.0, 30.0, 0.0, 60.0), (10, 32, 4.04, 37.5, 38.0, 0.0, 151.5),
+                    (10, 27, 1.0, 25.0, 25.0, None, 25.0)]  # fora de ordem: o cache grava por pedido
+        return []
+
+
+class TestPedidosUmAUm(unittest.TestCase):
+    """A extração dos pedidos um a um (Cache._extrair), sem o Firebird."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.pasta = Path(self._tmp.name)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        self.ini = configparser.ConfigParser()
+        self.ini.read_dict({"cache": {"arquivo": "cache.duckdb", "inicio": "2024-01-01"},
+                            "banco": {"arquivo": str(banco), "usuario": "SYSDBA", "senha": "x"}})
+        _ErpFalso.falhar_itens, _ErpFalso.chamadas = False, []
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def atualizar(self) -> Cache:
+        c = Cache(self.ini, self.pasta)
+        with mock.patch("bi.fb.BancoSomenteLeitura", _ErpFalso):
+            c.atualizar()
+        self.assertIsNone(c.estado["erro"])
+        return c
+
+    def test_pedidos_e_itens_no_cache(self):
+        c = self.atualizar()
+        self.assertFalse(c.sem_pedidos_detalhe)
+        pedidos = {r[0]: r for r in c.consulta(
+            "SELECT id, data, entrega, tipopedido, status, status_nome, cancelada, id_venda, id_brinde, nota_fiscal, "
+            "total, desconto, peso_liquido FROM pedidos_venda_detalhe")}
+        self.assertEqual(pedidos[10], (10, dt.date(2026, 11, 5), dt.date(2026, 11, 5), "PEDIDOVENDA", "V", "Venda",
+                                       False, 749743, None, "055770", 176.5, 0.0, 13.84))
+        # pedido de brinde: o código do ERP vai para id_brinde (a nota é a do brinde), e o status B ganha nome mesmo
+        # fora da STATUSPEDIDO; a nota fica em texto, com o zero da frente
+        self.assertEqual(pedidos[11][3:13], ("PEDIDOBRINDE", "B", "Brinde", False, None, 5555, "645271", 60.0, 0.0, 0.0))
+        self.assertEqual(pedidos[12][4:10], ("C", "Cancelado", True, None, None, None))  # sem nota: vazio vira nulo
+        self.assertEqual(pedidos[13][4:6], ("A", None))
+        itens = c.consulta("SELECT id_pedido, COUNT(*), SUM(total) FROM pedidos_venda_itens GROUP BY 1 ORDER BY 1")
+        self.assertEqual(itens, [(10, 2, 176.5), (11, 1, 60.0)])
+        # gravados em ordem (sem índice, a consulta de um pedido ou período pula o resto)
+        self.assertEqual([r[0] for r in c.consulta("SELECT id_pedido FROM pedidos_venda_itens")], [10, 10, 11])
+        self.assertEqual([r[0] for r in c.consulta("SELECT id FROM pedidos_venda_detalhe")], [10, 11, 12, 13])
+        # pedido para entregar nos próximos dias entra; mais longe, não
+        params = next(p for s, p in _ErpFalso.chamadas if s.startswith("SELECT p.ID_PEDIDOVENDA,"))
+        self.assertEqual(params[1].date(), dt.date.today() + dt.timedelta(days=31))
+        self.assertNotIn("pedidos_detalhe_erro", c.info)
+        c._con.close()
+
+    def test_falha_nos_itens_deixa_os_dois_de_fora(self):
+        _ErpFalso.falhar_itens = True
+        c = self.atualizar()
+        self.assertTrue(c.sem_pedidos_detalhe)
+        self.assertIn("LISTAPEDIDOVENDA", c.info["pedidos_detalhe_erro"])
+        nomes = {r[0] for r in c.consulta("SELECT table_name FROM information_schema.tables")}
+        self.assertFalse(nomes & {"pedidos_venda_detalhe", "pedidos_venda_itens"})
+        self.assertIn("pedidos_venda", nomes)  # o resto da extração segue
+        self.assertFalse(c.desatualizado())  # espera a próxima cópia
         c._con.close()
 
 
