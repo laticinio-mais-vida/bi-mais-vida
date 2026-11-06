@@ -141,13 +141,14 @@
 <div class="menu-usuario" id="menu-usuario" role="menu" hidden>
   <div class="menu-cab"><span class="avatar grande" id="menu-avatar"></span><div><b id="menu-nome"></b><small id="menu-papel"></small></div></div>
   <button type="button" role="menuitem" id="btn-trocar-senha"><span data-icone="chave"></span>Trocar minha senha</button>
+  <button type="button" role="menuitem" id="btn-aplicativos" hidden><span data-icone="elo"></span>Aplicativos conectados</button>
   <button type="button" role="menuitem" id="btn-sair"><span data-icone="sair"></span>Sair</button>
 </div>
 
 <dialog class="dialogo" id="dlg-senha" aria-labelledby="dlg-senha-titulo">
   <form method="dialog" id="form-senha" novalidate>
     <h2 id="dlg-senha-titulo"><span data-icone="chave"></span>Trocar minha senha</h2>
-    <p class="sub">Os outros aparelhos em que você estiver conectado vão pedir a senha nova.</p>
+    <p class="sub">Os outros aparelhos e os aplicativos conectados à sua conta vão pedir a senha nova.</p>
     <label class="campo-form"><span>Senha atual</span><input type="password" name="atual" autocomplete="current-password" required></label>
     <label class="campo-form"><span>Nova senha (mínimo 6 caracteres)</span><input type="password" name="nova" autocomplete="new-password" required></label>
     <label class="campo-form"><span>Repita a nova senha</span><input type="password" name="nova2" autocomplete="new-password" required></label>

@@ -1,4 +1,5 @@
-// Menu do usuário no topo: quem está conectado, trocar a própria senha e sair.
+// Menu do usuário no topo: quem está conectado, trocar a própria senha, os aplicativos conectados e sair.
+import { abrirAplicativos } from "./aplicativos.js";
 import { api, esc, toast } from "./util.js";
 
 export const PAPEL = { admin: "Administrador", visualizador: "Visualizador" };
@@ -15,6 +16,8 @@ export function mostrarUsuario(u) {
   document.getElementById("menu-nome").textContent = u.nome;
   document.getElementById("menu-papel").innerHTML = `${esc(PAPEL[u.papel])} · ${esc(u.login)}`;
   document.querySelectorAll("[data-admin]").forEach((el) => { el.hidden = u.papel !== "admin"; });
+  // Aplicativos conectados (API pública): só quem tem a Gestão entra por outro aplicativo.
+  document.getElementById("btn-aplicativos").hidden = !(u.papel === "admin" || (u.paginas || []).includes("gestao"));
 }
 
 export function ligarMenuUsuario() {
@@ -41,6 +44,7 @@ export function ligarMenuUsuario() {
     location.replace("/login");
   });
   document.getElementById("btn-trocar-senha").addEventListener("click", () => { fechar(); trocarSenha(); });
+  document.getElementById("btn-aplicativos").addEventListener("click", () => { fechar(); abrirAplicativos(); });
 }
 
 function trocarSenha() {

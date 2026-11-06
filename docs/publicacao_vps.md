@@ -715,6 +715,24 @@ Cada notificação do sino ganha uma lixeira, e o topo do painel ganha **Excluir
   incomodar, antes de voltar apague-as de vez (`DELETE FROM notificacoes WHERE excluida_em IS NOT NULL`); a coluna
   pode ficar.
 
+#### API pública da Gestão (migração 039)
+
+Outro aplicativo passa a ler a página Gestão pela API pública, `https://bi.maisvida.cloud/api/v1`, só para ler (veja
+[api_publica.md](api_publica.md) e o README, "Outros aplicativos (API pública)"). O menu com o nome ganha **Aplicativos
+conectados**. Na mesma versão, o catálogo da Gestão (`/api/gestao/catalogo`, usado só nos formulários) passa a ser só
+do administrador.
+
+- **Ordem:** qualquer uma: os dados que o PC manda não mudaram.
+- **A migração 039** só cria a tabela `chaves_api`; nada existente muda. Ensaie em BEGIN/ROLLBACK, como as outras.
+- **Caddy:** nada muda. O endereço `/api/v1` passa pelo mesmo `reverse_proxy`, com o cabeçalho `Authorization`.
+- **Config:** a seção `[api]` é opcional (padrões no código: ligada, chave de 90 dias). Para desligar a API sem
+  publicar código, ponha `ativa = nao` em `[api]` no `config.ini` do servidor e rode `docker compose restart`.
+- **Depois de publicar:** de fora, `curl -i https://bi.maisvida.cloud/api/v1/eu` responde 401 em JSON. Com um usuário
+  de teste, `POST /api/v1/entrar` devolve a chave, e `GET /api/v1/eu` com ela devolve 200. Depois, desconecte o
+  aplicativo de teste em Aplicativos conectados.
+- **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e as rotas `/api/v1` somem. Para apagar as
+  chaves de vez: `DROP TABLE chaves_api` e `DELETE FROM migracoes WHERE versao = '039_chaves_api'`.
+
 #### Faixa da sugestão de metas (sem migração)
 
 A Sugestão de Metas ganha a **faixa** (piso e teto) na meta de volume de cada linha, as colunas **Variação** e **Faixa** na

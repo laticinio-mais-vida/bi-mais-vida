@@ -1276,6 +1276,24 @@ O painel roda num VPS com HTTPS, e o banco do ERP continua na empresa. Este comp
 VPS só ele e as planilhas (uns 10 MB compactados), sozinho, depois de cada cópia nova do banco. O passo a passo
 está em [docs/publicacao_vps.md](docs/publicacao_vps.md).
 
+### Outros aplicativos (API pública)
+
+Outro aplicativo pode mostrar a página **Gestão** pela API pública (`https://bi.maisvida.cloud/api/v1`). Ela só lê: o
+quadro de cada região, o detalhe das campanhas e dos objetivos e o histórico interno dos vendedores. Agenda, tarefas e
+notificações ficam de fora.
+
+- A pessoa entra no outro aplicativo com o usuário e a senha do BI. O aplicativo recebe uma chave dela e passa a ver a
+  Gestão como ela vê no site, com o mesmo papel e os mesmos vendedores e regiões. Só quem tem a página Gestão consegue
+  entrar.
+- No menu com o nome, **Aplicativos conectados** mostra os aplicativos em que a pessoa entrou, com a data do último uso
+  e a validade. **Desconectar** apaga a chave, e o aplicativo pede o login de novo.
+- A chave vale 90 dias. Trocar a senha, ou o administrador desativar a pessoa, desconecta todos os aplicativos dela.
+- O BI guarda só uma "impressão digital" de cada chave (o hash), nunca a chave em si.
+- Para desligar a API sem publicar código, use `ativa = nao` em `[api]` no `config.ini` e reinicie o painel.
+
+O guia para quem programa o outro aplicativo (rotas, respostas, erros e limites) está em
+[docs/api_publica.md](docs/api_publica.md).
+
 ### Esqueci a senha do administrador
 
 No computador do painel, abra um terminal na pasta do projeto e rode:

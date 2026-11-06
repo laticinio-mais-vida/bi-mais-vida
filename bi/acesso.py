@@ -4,6 +4,9 @@
 - Sessão: cookie assinado (HMAC, com o segredo da tabela parametros) com o id do usuário, a validade e o contador de
   sessão do usuário. Trocar a senha, desativar ou excluir o usuário muda o contador (ou apaga o id) e derruba as
   sessões abertas em outros aparelhos. Um login excluído e recriado ganha outro id: os cookies antigos não servem.
+- Chave da API pública (docs/api_publica.md, tabela chaves_api): outro aplicativo entra com o usuário e a senha da
+  pessoa e recebe uma chave dela, uma por aplicativo. O banco guarda só o hash; a chave vale até vencer, até a pessoa
+  desconectar o aplicativo e só com o mesmo contador de sessão do login (a mesma regra que derruba os cookies).
 - Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
   liberadas em Usuários. O que ele vê dentro de cada página fica na configuração da página: em Metas, as visões
   (abas) marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores (os totais também); em
@@ -23,6 +26,7 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 
 from .banco import Banco, hora
 from .configuracao import VISOES
@@ -44,6 +48,13 @@ TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastr
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
 _COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, escopo_projecoes, "
             "escopo_assistente, escopo_gestao, criado_em, ultimo_acesso")
+_COLUNAS_U = ", ".join("u." + c.strip() for c in _COLUNAS.split(","))  # as mesmas, numa consulta com outra tabela
+_N_COLUNAS = len(_COLUNAS.split(","))
+# API pública: "bimv_" + secrets.token_urlsafe(32) (43 caracteres). O formato é conferido antes de ir ao banco.
+PREFIXO_CHAVE = "bimv_"
+_CHAVE_VALIDA = re.compile(r"^bimv_[A-Za-z0-9_-]{43}$")
+MAX_CHAVES = 10       # aplicativos conectados por pessoa; o 11º desconecta o mais antigo
+MAX_APLICATIVO = 60   # o nome que o outro aplicativo manda (aparece em "Aplicativos conectados")
 
 
 # --- senhas ---------------------------------------------------------------------------------
@@ -70,6 +81,23 @@ def _valida_senha(senha: str) -> str:
     if not isinstance(senha, str) or len(senha) < SENHA_MINIMA:
         raise ValueError(f"a senha precisa ter pelo menos {SENHA_MINIMA} caracteres")
     return senha
+
+
+def _hash_chave(chave: str) -> str:
+    """O que o banco guarda da chave da API: dá para conferir uma chave recebida, não para descobrir a chave. A chave
+    tem 256 bits aleatórios, então um SHA-256 simples basta (a conta demorada é para senhas, que se adivinham)."""
+    return hashlib.sha256(chave.encode()).hexdigest()
+
+
+def _valida_aplicativo(nome) -> str:
+    """O nome do outro aplicativo, que aparece no menu "Aplicativos conectados" da pessoa: até 60 caracteres, sem
+    caracteres invisíveis ou de controle (espaços repetidos viram um)."""
+    nome = " ".join(nome.split()) if isinstance(nome, str) else ""
+    if not nome or len(nome) > MAX_APLICATIVO:
+        raise ValueError(f"informe o nome do aplicativo, com até {MAX_APLICATIVO} caracteres")
+    if any(unicodedata.category(c).startswith("C") for c in nome):
+        raise ValueError("o nome do aplicativo tem caracteres inválidos")
+    return nome
 
 
 def _b64(dados: bytes) -> str:
@@ -154,11 +182,19 @@ class Usuarios:
         return publico(u) if u else None
 
     # --- login e sessão --------------------------------------------------------------------
-    def autenticar(self, login: str, senha: str) -> dict | None:
+    def _conferir(self, login: str, senha: str) -> dict | None:
+        """A linha inteira da pessoa (com o contador de sessão), se a senha confere e ela está ativa. Um login que não
+        existe demora o mesmo (_HASH_FALSO), para a resposta não revelar quais logins existem."""
         login = (login or "").strip().lower()
         u = self._um("WHERE login = %s", [login])
         # A conta da senha é demorada de propósito: fica fora da transação.
         if not confere_senha(senha or "", u["senha"] if u else _HASH_FALSO) or not u or not u["ativo"]:
+            return None
+        return u
+
+    def autenticar(self, login: str, senha: str) -> dict | None:
+        u = self._conferir(login, senha)
+        if not u:
             return None
         with self.banco.conexao() as con:
             linha = con.execute("UPDATE usuarios SET ultimo_acesso = now() WHERE id = %s RETURNING ultimo_acesso",
@@ -194,6 +230,81 @@ class Usuarios:
         if not u or not u["ativo"] or u["sessao"] != d.get("s"):
             return None
         return {**publico(u), "lembrar": bool(d.get("l"))}
+
+    # --- chaves da API pública -------------------------------------------------------------
+    def criar_chave(self, login: str, senha: str, aplicativo: str, dias: int) -> dict | None:
+        """O login de outro aplicativo (POST /api/v1/entrar): confere a senha como o login do site e devolve a chave nova
+        da pessoa nesse aplicativo ({chave, id, aplicativo, criada_em, expira_em, usuario}); a chave anterior do mesmo
+        aplicativo, se havia, para de valer. None: senha errada ou pessoa inativa. Só quem tem a página Gestão recebe
+        chave (PermissionError). A chave sai daqui uma vez: o banco guarda só o hash."""
+        aplicativo = _valida_aplicativo(aplicativo)
+        u = self._conferir(login, senha)
+        if not u:
+            return None
+        if "gestao" not in paginas_permitidas(publico(u)):
+            raise PermissionError("seu acesso não inclui a página Gestão")
+        chave = PREFIXO_CHAVE + secrets.token_urlsafe(32)
+        with self.banco.conexao() as con:
+            # A senha foi conferida com a linha lida antes da conta demorada. Se a senha mudou (ou a pessoa foi
+            # desativada) nesse meio-tempo, a chave não pode nascer com o contador novo e sobreviver à troca.
+            agora = con.execute("SELECT sessao, ativo FROM usuarios WHERE id = %s FOR UPDATE", [u["id"]]).fetchone()
+            if agora != (u["sessao"], True):
+                return None
+            con.execute("UPDATE usuarios SET ultimo_acesso = now() WHERE id = %s", [u["id"]])
+            # as chaves mortas da pessoa saem (vencidas ou de antes de uma troca de senha)
+            con.execute("DELETE FROM chaves_api WHERE usuario = %s AND (expira_em <= now() OR sessao <> %s)",
+                        [u["id"], u["sessao"]])
+            id_, criada, expira = con.execute(
+                "INSERT INTO chaves_api (usuario, aplicativo, hash, sessao, expira_em) "
+                "VALUES (%s, %s, %s, %s, now() + make_interval(days => %s)) "
+                "ON CONFLICT (usuario, aplicativo) DO UPDATE SET hash = EXCLUDED.hash, sessao = EXCLUDED.sessao, "
+                "criada_em = now(), usada_em = NULL, expira_em = EXCLUDED.expira_em RETURNING id, criada_em, expira_em",
+                [u["id"], aplicativo, _hash_chave(chave), u["sessao"], int(dias)]).fetchone()
+            con.execute("DELETE FROM chaves_api WHERE id IN (SELECT id FROM chaves_api WHERE usuario = %s "
+                        "ORDER BY criada_em DESC, id DESC OFFSET %s)", [u["id"], MAX_CHAVES])
+        return {"chave": chave, "id": id_, "aplicativo": aplicativo, "criada_em": hora(criada),
+                "expira_em": hora(expira), "usuario": {k: u[k] for k in ("id", "login", "nome", "papel")}}
+
+    def da_chave(self, chave: str | None) -> tuple[dict, dict] | None:
+        """A pessoa dona da chave, como a página a vê (publico), e a chave {id, aplicativo, criada_em, expira_em}, se a
+        chave não venceu, a pessoa está ativa e o contador de sessão dela é o mesmo do login. Chave fora do formato nem
+        chega ao banco. O "último uso" é gravado no máximo a cada 5 minutos."""
+        if not isinstance(chave, str) or not _CHAVE_VALIDA.match(chave):
+            return None
+        with self.banco.conexao() as con:
+            linha = con.execute(
+                f"SELECT {_COLUNAS_U}, c.id, c.aplicativo, c.criada_em, c.expira_em FROM chaves_api c "
+                "JOIN usuarios u ON u.id = c.usuario "
+                "WHERE c.hash = %s AND c.expira_em > now() AND c.sessao = u.sessao AND u.ativo",
+                [_hash_chave(chave)]).fetchone()
+            if not linha:
+                return None
+            id_, aplicativo, criada, expira = linha[_N_COLUNAS:]
+            con.execute("UPDATE chaves_api SET usada_em = now() WHERE id = %s AND "
+                        "(usada_em IS NULL OR usada_em < now() - interval '5 minutes')", [id_])
+        return publico(_usuario(linha[:_N_COLUNAS])), {"id": id_, "aplicativo": aplicativo, "criada_em": hora(criada),
+                                                       "expira_em": hora(expira)}
+
+    def chaves(self, id_usuario: int) -> list[dict]:
+        """Os aplicativos conectados da pessoa (as chaves que ainda valem), do mais novo para o mais antigo."""
+        with self.banco.conexao() as con:
+            linhas = con.execute(
+                "SELECT c.id, c.aplicativo, c.criada_em, c.usada_em, c.expira_em FROM chaves_api c "
+                "JOIN usuarios u ON u.id = c.usuario "
+                "WHERE c.usuario = %s AND c.expira_em > now() AND c.sessao = u.sessao "
+                "ORDER BY c.criada_em DESC, c.id DESC", [id_usuario]).fetchall()
+        return [{"id": i, "aplicativo": a, "criada_em": hora(c), "usada_em": hora(us), "expira_em": hora(e)}
+                for i, a, c, us, e in linhas]
+
+    def revogar_chave(self, id_usuario: int, id_) -> bool:
+        """Desconecta um aplicativo da pessoa (apaga a chave dele). False: não achou (já apagada ou de outra pessoa)."""
+        try:
+            id_ = int(id_)
+        except (TypeError, ValueError):
+            return False
+        with self.banco.conexao() as con:
+            return con.execute("DELETE FROM chaves_api WHERE id = %s AND usuario = %s",
+                               [id_, id_usuario]).rowcount > 0
 
     # --- cadastro --------------------------------------------------------------------------
     @contextlib.contextmanager
@@ -460,3 +571,50 @@ class LimiteTentativas:
     def acertou(self, login: str) -> None:
         with self._trava:
             self._falhas.pop(f"login:{login}", None)
+
+
+# --- limites da API pública -----------------------------------------------------------------
+class ApiOcupada(Exception):
+    """Todas as vagas da API pública ocupadas por mais tempo do que a espera: o pedido volta com "tente de novo"."""
+
+
+class LimiteApi:
+    """API pública: quantos pedidos cada chave faz por minuto e quantos pedidos da API correm ao mesmo tempo (somando
+    todas as chaves, que costumam vir do mesmo servidor), para a API não tomar as conexões do banco (5) e a memória de
+    quem usa o site. Fica na memória, como o limite de senhas."""
+
+    JANELA = 60
+    POR_MINUTO = 30
+    SIMULTANEOS = 3
+    ESPERA_VAGA = 5  # segundos esperando uma vaga antes de responder "tente de novo"
+
+    def __init__(self, por_minuto: int = POR_MINUTO, simultaneos: int = SIMULTANEOS, espera_vaga: float = ESPERA_VAGA):
+        self.por_minuto = por_minuto
+        self.espera_vaga = espera_vaga
+        # Contado pelo id da chave, depois de achá-la no banco: chave inventada não ocupa memória.
+        self._pedidos: dict[int, collections.deque] = collections.defaultdict(collections.deque)
+        self._trava = threading.Lock()
+        self._vagas = threading.BoundedSemaphore(simultaneos)
+
+    def espera(self, id_chave: int) -> int:
+        """Conta um pedido da chave. Devolve os segundos que faltam para ela poder pedir de novo, se passou do limite
+        (0 = pode seguir; o pedido recusado não conta)."""
+        agora = time.monotonic()
+        with self._trava:
+            fila = self._pedidos[id_chave]
+            while fila and fila[0] <= agora - self.JANELA:
+                fila.popleft()
+            if len(fila) >= self.por_minuto:
+                return int(fila[0] + self.JANELA - agora) + 1
+            fila.append(agora)
+            return 0
+
+    @contextlib.contextmanager
+    def vaga(self):
+        """Uma das vagas da API pelo tempo do pedido; sem vaga depois da espera, levanta ApiOcupada."""
+        if not self._vagas.acquire(timeout=self.espera_vaga):
+            raise ApiOcupada
+        try:
+            yield
+        finally:
+            self._vagas.release()

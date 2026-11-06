@@ -2527,6 +2527,18 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-g-notas { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; font-size: 12.5px; color: var(--tinta-3); }
 .ag-g-notas li { display: flex; gap: 8px; align-items: flex-start; }
 .ag-g-notas .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+/* Aplicativos conectados (menu do usuário; API pública): o mesmo jeito da janela do Google */
+.apps-janela { width: min(560px, calc(100vw - 32px)); }
+.apps-lista { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+.apps-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--linha); }
+.apps-item > div { display: grid; gap: 4px; min-width: 0; }
+.apps-item b { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14.5px; overflow-wrap: anywhere; }
+.apps-item b .ic { width: 16px; height: 16px; flex: none; color: var(--azul); }
+.apps-item small { font-size: 12.5px; color: var(--tinta-3); }
+.apps-vazio { margin: 16px 0 0; font-size: 14px; color: var(--tinta-3); }
+.apps-notas { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; font-size: 12.5px; color: var(--tinta-3); }
+.apps-notas li { display: flex; gap: 8px; align-items: flex-start; }
+.apps-notas .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
 .ag-atrasadas {
   margin-bottom: 14px; padding: 12px; border-radius: 14px;
   background: color-mix(in srgb, var(--ruim-bg) 70%, transparent); border: 1px solid color-mix(in srgb, var(--ruim-forte) 30%, var(--linha));

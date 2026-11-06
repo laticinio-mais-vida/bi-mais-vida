@@ -10,11 +10,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from bi.assistente import FERRAMENTAS, Ferramentas
 from bi.conversas import Conversas, NaoEncontrada
-from bi.gestao import (Gestao, alvo_de, andamento, calendario_periodo, classe_preco, classe_resultado, comparar,
-                       comparar_preco, equipe_preco, ganho_preco, produtos_preco,
+from bi.gestao import (Gestao, SemDados, alvo_de, andamento, calendario_periodo, classe_preco, classe_resultado,
+                       comparar, comparar_preco, equipe_preco, ganho_preco, produtos_preco,
                        pct_premiacao, prazo, premio_de, rotulo_padrao, situacao, texto_alvo, texto_premiacao,
                        total_premios, validar)
 from bi.indicadores import descritor, progresso_preco, progresso_preco_juntos
@@ -709,6 +711,31 @@ class TestValidar(ComCache, unittest.TestCase):
         self.assertEqual(len(self.validar(permitidos=frozenset({BA}), vendedores=[BA])["vendedores"]), 1)
 
 
+class TestMemoDasContas(ComCache, unittest.TestCase):
+    """As contas guardadas no recorte (_Contas.memo) com duas leituras ao mesmo tempo (o site e a API pública)."""
+
+    def setUp(self):
+        self.montar_cache()
+
+    def tearDown(self):
+        self.desmontar_cache()
+
+    def test_limpeza_no_meio_nao_da_erro(self):
+        class Esquece(dict):  # a outra leitura limpa o dicionário logo depois de esta gravar
+            def __setitem__(self, chave, valor):
+                super().__setitem__(chave, valor)
+                self.clear()
+
+        with Gestao(None, self.calc, self.assistente)._contas() as k:
+            k.recorte = SimpleNamespace(memo=Esquece())
+            self.assertEqual(k.memo(("x",), lambda: 42), 42)  # antes: KeyError, que a página mostrava como 400
+            k.recorte = SimpleNamespace(memo={})
+            chamadas = []
+            k.memo(("vazio",), lambda: chamadas.append(1))  # None também fica guardado
+            k.memo(("vazio",), lambda: chamadas.append(1))
+            self.assertEqual(chamadas, [1])
+
+
 class TestFerramentasDeAcao(ComCache, unittest.TestCase):
     """As ferramentas do Assistente que não precisam do banco: propor (não grava, só o administrador) e a recusa sem
     a página."""
@@ -1235,6 +1262,27 @@ class TestAcoesNoBanco(ComCache, BaseBanco):
                                                "metrica": "faturamento", "meta_padrao": 5000}, "objetivo")
         self.assertEqual(self.quadro()["objetivos"][0]["andamento"]["status"], "batida")
 
+    def test_detalhe_pelo_tipo_e_com_os_dados_sendo_preparados(self):
+        campanha = self.criar()
+        objetivo = self.gestao.criar(self.chefe, {"nome": "Equipe BA", "regiao": "BA", "inicio": "2026-09-01",
+                                                  "fim": "2026-09-30", "metrica": "faturamento", "meta_padrao": 6000},
+                                     "objetivo")["id"]
+        tudo = (None, None)
+        self.assertEqual(self.gestao.detalhe(self.chefe, tudo, campanha, tipo="acao")["item"]["id"], campanha)
+        self.assertEqual(self.gestao.detalhe(self.chefe, tudo, objetivo, tipo="objetivo")["item"]["id"], objetivo)
+        with self.assertRaisesRegex(NaoEncontrada, "campanha não encontrada"):  # a API tem um endereço para cada
+            self.gestao.detalhe(self.chefe, tudo, objetivo, tipo="acao")
+        with self.assertRaisesRegex(NaoEncontrada, "objetivo não encontrado"):
+            self.gestao.detalhe(self.chefe, tudo, campanha, tipo="objetivo")
+        # Sem os dados de vendas não dá para conferir quais vendedores a Ana vê: ela espera (antes, recebia a campanha
+        # com a base e o resultado de todos). Quem vê tudo recebe o item sem os números de agora.
+        with mock.patch.object(self.gestao, "_contas", side_effect=SemDados("preparando")):
+            for id_ in (campanha, objetivo):
+                with self.assertRaises(SemDados):
+                    self.gestao.detalhe(self.ana, ({BA}, None), id_)
+            d = self.gestao.detalhe(self.chefe, tudo, campanha)
+        self.assertEqual((d["item"]["id"], d["linhas"], d["aviso"]), (campanha, [], "preparando"))
+
     def test_rascunho_lanca_uma_vez_so(self):
         rascunho = "6f1c2a0e-58d4-4c47-9b1f-0d3a5e7b9c21"
         primeira = self.gestao.criar(self.chefe, self.dados(), "acao", rascunho)
@@ -1507,7 +1555,7 @@ class TestMigracao008(BaseBanco):
                                                "031_google_agenda", "032_google_login", "033_premiacoes",
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
-                                               "038_credito_serasa"])
+                                               "038_credito_serasa", "039_chaves_api"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1557,7 +1605,7 @@ class TestMigracao013(BaseBanco):
                                                "031_google_agenda", "032_google_login", "033_premiacoes",
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
-                                               "038_credito_serasa"])
+                                               "038_credito_serasa", "039_chaves_api"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1594,7 +1642,7 @@ class TestMigracao033(BaseBanco):
         self.assertEqual(self.banco.migrar(), ["033_premiacoes", "034_regras_premiacoes",
                                                "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
-                                               "038_credito_serasa"])
+                                               "038_credito_serasa", "039_chaves_api"])
         with self.banco.conexao() as con:
             premios = dict(con.execute("SELECT nome, premiacoes FROM campanhas"))
         unico = lambda sobre, premio="", valor=None: {"sobre": sobre, "faixas": [{"pct": 100, "premio": premio, "valor": valor}]}
@@ -1638,7 +1686,7 @@ class TestMigracao009(BaseBanco):
                                                "031_google_agenda", "032_google_login", "033_premiacoes",
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
-                                               "038_credito_serasa"])
+                                               "038_credito_serasa", "039_chaves_api"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()

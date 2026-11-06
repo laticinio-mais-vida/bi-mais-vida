@@ -13,6 +13,7 @@ O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões dest
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
 Usuários, regras, conversas, o uso do Assistente, as campanhas da Gestão e a Agenda ficam no PostgreSQL de [postgres]
 (bi/banco.py), no PC e no VPS; as reanálises de crédito e as agendas do Google, só no do VPS.
+Outro aplicativo lê a Gestão pela API pública (/api/v1, só leitura, com a chave da pessoa): docs/api_publica.md.
 """
 from __future__ import annotations
 
@@ -40,9 +41,9 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
-from bi.acesso import (COOKIE, PAGINAS, LimiteTentativas, Usuarios, eh_admin, escopo_assistente,  # noqa: E402
-                       escopo_gestao, escopo_premiacoes, escopo_projecoes, escopo_sugestao, paginas_permitidas,
-                       vendedores_permitidos, visoes_permitidas)
+from bi.acesso import (COOKIE, PAGINAS, ApiOcupada, LimiteApi, LimiteTentativas, Usuarios, eh_admin,  # noqa: E402
+                       escopo_assistente, escopo_gestao, escopo_premiacoes, escopo_projecoes, escopo_sugestao,
+                       paginas_permitidas, vendedores_permitidos, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.ajustes import AjustesVolume  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
@@ -73,7 +74,9 @@ mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 # O navegador fechou a conexão (recarregou a página no meio da resposta): não é erro do painel.
 CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
-# Página Gestão: quem tem a página lê; só o administrador lança e muda campanhas, objetivos e observações.
+# Página Gestão: quem tem a página lê; só o administrador lança e muda campanhas, objetivos e observações. O catálogo
+# (vendedores, produtos com a venda de 12 meses e o preço médio da empresa toda…) só serve aos formulários do
+# administrador: fica em ROTAS_ADMIN.
 ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/vendedor", "/api/gestao/acao", "/api/gestao/catalogo",
                     "/api/gestao/rascunho")
 ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gestao/acao/encerrar",
@@ -100,7 +103,14 @@ ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
                "/api/sugestao/aprovacao", "/api/sugestao/ajustes", "/api/premiacoes/config", "/api/assistente/config",
-               "/api/gestao/config", "/api/credito/config", *ROTAS_GESTAO_MUDAR}
+               "/api/gestao/config", "/api/gestao/catalogo", "/api/credito/config", *ROTAS_GESTAO_MUDAR}
+# API pública da Gestão (docs/api_publica.md): só leitura, para o servidor de outro aplicativo. Entra só com a chave que
+# /api/v1/entrar devolve (Authorization: Bearer), nunca com o cookie; as rotas do site não aceitam a chave.
+PREFIXO_API = "/api/v1/"
+ROTAS_API = {"/api/v1/entrar": "POST", "/api/v1/sair": "POST", "/api/v1/eu": "GET", "/api/v1/gestao/quadro": "GET",
+             "/api/v1/gestao/campanha": "GET", "/api/v1/gestao/objetivo": "GET", "/api/v1/gestao/vendedor": "GET"}
+MAX_CORPO_ENTRAR = 16 * 1024  # o JSON do login pela API
+ESPERA_CORPO = 15  # segundos para o corpo do login chegar inteiro
 # Cabeçalhos de proxy/túnel: com eles, a conexão não vem desta máquina mesmo chegando por 127.0.0.1.
 CABECALHOS_PROXY = ("X-Forwarded-For", "Forwarded", "X-Real-IP", "CF-Connecting-IP")
 PAGINAS_HTML = ("/", "/index.html", "/login", "/login.html")
@@ -169,7 +179,14 @@ class Aplicacao:
         self.agenda = Agenda(self.banco, self.configuracao, google=self.google)
         self.tarefas = Tarefas(self.banco, self.configuracao, google=self.google)  # as regras: o calendário
         self.notificacoes = Notificacoes(self.banco)
-        self.tentativas = LimiteTentativas()
+        self.tentativas = LimiteTentativas()  # o login do site e o da API pública contam juntos
+        # API pública ([api] no config.ini). Os padrões ficam aqui: o deploy não leva o config.exemplo.ini ao VPS.
+        self.api_ativa = ini.get("api", "ativa", fallback="sim").strip().lower() not in ("nao", "não", "false", "0",
+                                                                                          "off", "no")
+        self.validade_chave = ini.getint("api", "validade_dias", fallback=90)
+        if not 1 <= self.validade_chave <= 3650:
+            raise SystemExit(f"[api] validade_dias = {self.validade_chave} no config.ini: use de 1 a 3650 dias")
+        self.limite_api = LimiteApi()
         self.envio = None if self.vps else Envio(ini, self.cache, planilhas)
         self.recebimento = (Recebimento(ini, self.cache, {"metas": self.metas, "metas_produtos": self.metas_produtos})
                             if self.vps else None)
@@ -237,13 +254,16 @@ class Manipulador(BaseHTTPRequestHandler):
         log.debug("%s - %s", self.address_string(), fmt % args)
 
     # --- respostas -----------------------------------------------------------------------
-    def _json(self, dados, status=HTTPStatus.OK, cookie: str | None = None):
+    def _json(self, dados, status=HTTPStatus.OK, cookie: str | None = None, cabecalhos: dict | None = None):
+        """cabecalhos: os extras da API pública (WWW-Authenticate, Retry-After, Allow)."""
         corpo = json.dumps(dados, ensure_ascii=False, default=_json_padrao).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        for nome, valor in (cabecalhos or {}).items():
+            self.send_header(nome, valor)
         self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
         self.wfile.write(corpo)
@@ -255,8 +275,8 @@ class Manipulador(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _erro(self, mensagem, status=HTTPStatus.BAD_REQUEST):
-        self._json({"erro": mensagem}, status)
+    def _erro(self, mensagem, status=HTTPStatus.BAD_REQUEST, cabecalhos: dict | None = None):
+        self._json({"erro": mensagem}, status, cabecalhos=cabecalhos)
 
     def _banco_fora_do_ar(self, e: BancoForaDoAr):
         log.warning("banco de dados fora do ar em %s: %s", self.path, e)
@@ -799,9 +819,161 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._redireciona("/google.html#" + urlencode({"erro": "erro interno no login com o Google; tente "
                                                                           "de novo"}))
 
+    # --- API pública (docs/api_publica.md) -------------------------------------------------
+    def _api(self, metodo: str, url):
+        """As rotas /api/v1: só leitura da Gestão, para o servidor de outro aplicativo, com a chave da pessoa. Vem antes
+        do cookie e da conferência de origem (a API não usa cookie) e tem o próprio tratamento de erros: o erro
+        interno não leva o texto da exceção para fora."""
+        try:
+            # O corpo do POST é lido antes de qualquer resposta (e antes da vaga: quem manda devagar não segura a API).
+            # Fechar a conexão com dados por ler faz o sistema mandar um "reset", e o cliente pode perder a resposta.
+            bruto = self._corpo_api() if metodo == "POST" else b""
+            if not self.app.api_ativa:
+                return self._erro("a API pública está desligada neste servidor", HTTPStatus.SERVICE_UNAVAILABLE)
+            if self.headers.get("Origin"):  # navegador: a chave não pode ficar numa página
+                return self._erro("a API pública é só para servidores; o navegador não pode chamá-la",
+                                  HTTPStatus.FORBIDDEN)
+            esperado = ROTAS_API.get(url.path)
+            if esperado is None:
+                return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
+            if metodo != esperado:
+                return self._erro(f"use {esperado} neste endereço", HTTPStatus.METHOD_NOT_ALLOWED, {"Allow": esperado})
+            if url.path == "/api/v1/entrar":
+                corpo = self._corpo_entrar(bruto)
+                with self.app.limite_api.vaga():
+                    return self._api_entrar(corpo)
+            # keep_blank_values: abrir= (vazio) quer dizer "sem abertura"; sem o parâmetro, a abertura padrão
+            q = {k: v[-1] for k, v in parse_qs(url.query, keep_blank_values=True).items()}
+            with self.app.limite_api.vaga():
+                return self._api_com_chave(url.path, q)
+        except CONEXAO_PERDIDA:
+            return
+        except ApiOcupada:
+            log.warning("API pública: todas as vagas ocupadas; pedido de %s recusado (%s)", self._ip(), url.path)
+            return self._erro("muitos pedidos ao mesmo tempo; tente de novo em alguns segundos",
+                              HTTPStatus.SERVICE_UNAVAILABLE, {"Retry-After": "5"})
+        except BancoForaDoAr as e:
+            return self._banco_fora_do_ar(e)
+        except NaoEncontrada as e:
+            return self._erro(str(e), HTTPStatus.NOT_FOUND)
+        except PermissionError as e:  # sem a página Gestão; região fora do acesso
+            return self._erro(str(e), HTTPStatus.FORBIDDEN)
+        except RuntimeError as e:  # os dados de vendas ainda sendo preparados
+            return self._erro(str(e), HTTPStatus.SERVICE_UNAVAILABLE, {"Retry-After": "60"})
+        except ValueError as e:
+            return self._erro(str(e))
+        except KeyError as e:
+            return self._erro(f"parâmetro inválido: {e}")
+        except Exception:
+            log.error("erro na API pública em %s\n%s", url.path, traceback.format_exc())
+            return self._erro("erro interno; tente de novo mais tarde", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _corpo_api(self) -> bytes:
+        """O corpo de um POST da API, inteiro: até 16 KB, com Content-Length (sem Transfer-Encoding)."""
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("mande o corpo com Content-Length, sem Transfer-Encoding")
+        try:
+            tamanho = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("Content-Length inválido") from None
+        if not 0 <= tamanho <= MAX_CORPO_ENTRAR:
+            raise ValueError(f"o corpo do pedido passa de {MAX_CORPO_ENTRAR} bytes")
+        if not tamanho:
+            return b""
+        self.connection.settimeout(ESPERA_CORPO)
+        try:
+            bruto = self.rfile.read(tamanho)
+        except TimeoutError:
+            raise ValueError("o corpo do pedido não chegou inteiro") from None
+        if len(bruto) < tamanho:
+            raise ValueError("o corpo do pedido não chegou inteiro")
+        return bruto
+
+    def _corpo_entrar(self, bruto: bytes) -> dict:
+        """O corpo do /api/v1/entrar, conferido antes de contar qualquer tentativa (um pedido mal formado não é senha
+        errada): JSON (Content-Type: application/json), um objeto com login, senha e aplicativo em texto."""
+        tipo = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if tipo != "application/json":
+            raise ValueError("mande o corpo em JSON, com Content-Type: application/json")
+        try:
+            corpo = json.loads(bruto or b"null")
+        except ValueError:  # JSON quebrado ou texto que não é UTF-8
+            raise ValueError("o corpo não é um JSON válido") from None
+        if not isinstance(corpo, dict) or not all(isinstance(corpo.get(c), str) for c in ("login", "senha", "aplicativo")):
+            raise ValueError("mande login, senha e aplicativo, em texto")
+        return corpo
+
+    def _api_entrar(self, corpo: dict):
+        """O login do outro aplicativo: a chave da pessoa nesse aplicativo. Conta no mesmo limite de senhas erradas do
+        site (por login e por endereço); a senha e a chave nunca vão para o log."""
+        login, ip = corpo["login"].strip().lower(), self._ip()
+        espera = self.app.tentativas.espera(login, ip)
+        if espera:
+            return self._erro(f"muitas tentativas erradas; tente de novo em {math.ceil(espera / 60)} min",
+                              HTTPStatus.TOO_MANY_REQUESTS, {"Retry-After": str(espera)})
+        try:
+            r = self.app.usuarios.criar_chave(login, corpo["senha"], corpo["aplicativo"], self.app.validade_chave)
+        except PermissionError:
+            self.app.tentativas.acertou(login)  # a senha estava certa
+            log.warning("login pela API de %s recusado: sem a página Gestão (%s)", login, ip)
+            raise
+        if r is None:
+            self.app.tentativas.falhou(login, ip)
+            log.warning("login pela API recusado para %r (%s)", login, ip)
+            return self._erro("usuário ou senha incorretos", HTTPStatus.UNAUTHORIZED)
+        self.app.tentativas.acertou(login)
+        log.info("%s entrou pela API pelo aplicativo %r (chave %s, %s)", login, r["aplicativo"], r["id"], ip)
+        return self._json({"chave": r["chave"], "expira_em": r["expira_em"], "usuario": r["usuario"]})
+
+    def _chave_do_pedido(self) -> str | None:
+        """A chave do cabeçalho Authorization: Bearer. Nunca do endereço, que vai parar nos logs."""
+        tipo, _, chave = (self.headers.get("Authorization") or "").strip().partition(" ")
+        if tipo.lower() != "bearer":
+            return None
+        return chave.strip() or None
+
+    def _api_com_chave(self, caminho: str, q: dict):
+        """As rotas da API que usam a chave: a pessoa é relida a cada pedido (acesso, papel, vendedores), como o cookie."""
+        chave = self._chave_do_pedido()
+        achada = self.app.usuarios.da_chave(chave) if chave else None
+        if achada is None:
+            if chave:
+                log.warning("API pública: chave recusada (%s)", self._ip())
+            return self._erro("chave ausente, vencida ou desconectada; entre de novo pelo /api/v1/entrar",
+                              HTTPStatus.UNAUTHORIZED,
+                              {"WWW-Authenticate": 'Bearer realm="bi"' + (', error="invalid_token"' if chave else "")})
+        usuario, info = achada
+        if caminho == "/api/v1/sair":  # fora do limite por minuto: sair sempre funciona
+            self.app.usuarios.revogar_chave(usuario["id"], info["id"])
+            log.info("%s saiu pela API do aplicativo %r (chave %s)", usuario["login"], info["aplicativo"], info["id"])
+            return self._json({"ok": True})
+        espera = self.app.limite_api.espera(info["id"])
+        if espera:
+            return self._erro(f"muitos pedidos com esta chave; espere {espera} s", HTTPStatus.TOO_MANY_REQUESTS,
+                              {"Retry-After": str(espera)})
+        tem_gestao = "gestao" in paginas_permitidas(usuario)
+        if caminho == "/api/v1/eu":
+            return self._json({"usuario": {k: usuario[k] for k in ("id", "login", "nome", "papel")},
+                               "gestao": tem_gestao,
+                               "chave": {k: info[k] for k in ("aplicativo", "criada_em", "expira_em")}})
+        if not tem_gestao:
+            return self._erro("seu acesso não inclui a página Gestão", HTTPStatus.FORBIDDEN)
+        gestao, escopo = self.app.gestao, escopo_gestao(usuario)
+        if caminho == "/api/v1/gestao/quadro":
+            dados = gestao.quadro(usuario, escopo, q.get("regiao"))
+        elif caminho == "/api/v1/gestao/vendedor":
+            dados = gestao.historico(usuario, escopo, q.get("id"))
+        else:  # o mesmo detalhe da tela, só do tipo do endereço
+            tipo = "acao" if caminho == "/api/v1/gestao/campanha" else "objetivo"
+            dados = gestao.detalhe(usuario, escopo, q.get("id"), q.get("abrir", "padrao"), tipo)
+        dados.pop("pode_editar", None)  # a API não edita
+        return self._json(dados)
+
     # --- rotas ---------------------------------------------------------------------------
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path.startswith(PREFIXO_API):
+            return self._api("GET", url)
         q = {k: v[-1] for k, v in parse_qs(url.query).items()}
         try:
             if not url.path.startswith("/api/") and url.path not in PAGINAS_HTML:
@@ -902,6 +1074,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._ler_agenda(usuario, url.path, q)
             if url.path in ("/api/avisos", "/api/notificacoes"):  # o que o painel confere a cada minuto; o sino
                 return self._avisos(usuario, url.path)
+            if url.path == "/api/aplicativos":  # os aplicativos conectados pela API pública (menu do usuário)
+                return self._json({"aplicativos": self.app.usuarios.chaves(usuario["id"])})
             if url.path == "/api/config":
                 return self._json({"config": self.app.configuracao.atual(), "catalogo": self.app.calc.catalogo(),
                                    **self._visualizadores()})
@@ -931,6 +1105,8 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urlparse(self.path)
+        if url.path.startswith(PREFIXO_API):  # sem cookie: a conferência de origem é outra (_api)
+            return self._api("POST", url)
         try:
             if not self._mesma_origem():
                 return self._erro("pedido de outro site recusado", HTTPStatus.FORBIDDEN)
@@ -1009,6 +1185,12 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._salvar_config_gestao(usuario, self._corpo_json())
             if url.path in ("/api/notificacoes/lidas", "/api/notificacoes/excluir"):  # ids, ou todas
                 return self._mudar_notificacoes(usuario, url.path, self._corpo_json())
+            if url.path == "/api/aplicativos/desconectar":  # id: a chave; a resposta traz a lista como ficou
+                id_ = self._corpo_json().get("id")
+                if not self.app.usuarios.revogar_chave(usuario["id"], id_):
+                    raise NaoEncontrada("aplicativo não encontrado; ele pode já ter sido desconectado")
+                log.info("%s desconectou o aplicativo da chave %s", usuario["login"], id_)
+                return self._json({"ok": True, "aplicativos": self.app.usuarios.chaves(usuario["id"])})
             if url.path in ROTAS_AGENDA_MUDAR:
                 return self._mudar_agenda(usuario, url.path, self._corpo_json())
             if url.path == "/api/config/padrao":

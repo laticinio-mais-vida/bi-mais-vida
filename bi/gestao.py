@@ -106,6 +106,7 @@ _CAMPOS = ", ".join(f"c.{x}" for x in _COLUNAS)
 _COLUNAS_V = ("id_vendedor", "meta", "base", "base_num", "base_den", "base_em", "resultado", "resultado_num",
               "resultado_den", "parciais", "entrou_em", "base_precos", "resultado_precos", "alvos_precos",
               "base_cobertura", "resultado_cobertura")
+_FALTA = object()  # _Contas.memo: a conta ainda não guardada (None é um valor que pode ser guardado)
 
 
 class SemDados(RuntimeError):
@@ -873,13 +874,16 @@ class _Contas:
         self.cur.close()
 
     def memo(self, chave, fazer):
+        """A conta guardada no recorte, ou feita agora. Lê uma vez só e devolve o valor que tem na mão: outra leitura
+        ao mesmo tempo (o site e a API pública) pode limpar o dicionário entre a conferência e a leitura."""
         memo = self.recorte.memo
-        if chave not in memo:
+        valor = memo.get(chave, _FALTA)
+        if valor is _FALTA:
             valor = fazer()
             if len(memo) > MAX_MEMO:
                 memo.clear()
             memo[chave] = valor
-        return memo[chave]
+        return valor
 
     def areas(self, c: dict) -> tuple[dict | None, str | None]:
         """Os dias de atendimento (e a versão deles, para as contas guardadas), só para a efetividade."""
@@ -1536,16 +1540,20 @@ class Gestao:
                 "pode_editar": usuario["papel"] == "admin", "data_ref": self.calc.cache.info.get("data_ref"),
                 "hoje": hoje.isoformat()}
 
-    def detalhe(self, usuario: dict, escopo, id_, abrir: str | None = "padrao") -> dict:
+    def detalhe(self, usuario: dict, escopo, id_, abrir: str | None = "padrao", tipo: str | None = None) -> dict:
         """A campanha com cada vendedor do acesso (base, alvo, resultado e, enquanto corre, a situação pelo ritmo, a
-        abertura e a grade de preços), ou o objetivo com o andamento da equipe."""
+        abertura e a grade de preços), ou o objetivo com o andamento da equipe. tipo: só a campanha ("acao") ou só o
+        objetivo (a API pública tem um endereço para cada); None = o que o id for."""
         hoje = self.hoje()
         with self.banco.conexao() as con:
-            c = self._uma(con, id_)
+            c = self._uma(con, id_, tipo)
         nome = TIPOS_ITEM[c["tipo"]]
         try:
             k = self._contas()
         except SemDados as e:
+            vendedores, equipes = escopo
+            if vendedores is not None or equipes is not None:
+                raise  # sem os dados não dá para conferir quais vendedores a pessoa vê: ela espera, como no histórico
             return {"item": {**publica(c), "situacao": situacao(c, hoje), "prazo": prazo(c, hoje)}, "linhas": [],
                     "aviso": str(e), "pode_editar": usuario["papel"] == "admin"}
         with k:
