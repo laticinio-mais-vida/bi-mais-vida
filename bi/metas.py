@@ -213,15 +213,17 @@ class Calculadora:
             por_dia[d][p] -= valor
         return por_vendedor, por_dia
 
-    def movimento_diario(self, regras: Regras, ids: list[int], inicio: dt.date, fim: dt.date) -> dict[int, dict]:
+    def movimento_diario(self, regras: Regras, ids: list[int], inicio: dt.date, fim: dt.date,
+                         por_mes: bool = False) -> dict[int, dict]:
         """Faturamento, mussarela e outras linhas de cada vendedor em cada dia entre inicio e fim, com as regras de
         _movimento (a venda pelo vendedor e pela data da nota, a devolução que desconta pela data de ENTRADA, os
         produtos "não conta" fora): {vendedor: {dia: {"fat", "mus", "out"}}}. É o realizado da página Metas dia a dia
-        (o painel de desempenho da Gestão soma o período e o mês com ele)."""
+        (o painel de desempenho da Gestão soma o período e o mês com ele). por_mes: a chave é o 1º de cada mês."""
         saida: dict[int, dict] = defaultdict(lambda: defaultdict(lambda: {"fat": 0.0, "mus": 0.0, "out": 0.0}))
         if not ids:
             return {}
         marcas = ",".join("?" * len(ids))
+        data = "CAST(date_trunc('month', data) AS DATE)" if por_mes else "data"
         filtro = f"WHERE data BETWEEN ? AND ? AND id_vendedor IN ({marcas})"
 
         def somar(d, vid, pid, valor):
@@ -233,11 +235,11 @@ class Calculadora:
             dia["mus" if grupo == "mussarela" else "out"] += valor
 
         for d, vid, pid, valor in self.cache.consulta(
-                f"SELECT data, id_vendedor, id_produto, SUM(valor) FROM vendas_itens {filtro} GROUP BY 1, 2, 3",
+                f"SELECT {data}, id_vendedor, id_produto, SUM(valor) FROM vendas_itens {filtro} GROUP BY 1, 2, 3",
                 [inicio, fim, *ids]):
             somar(d, vid, pid, valor)
         for d, vid, pid, motivo, cancelada, valor in self.cache.consulta(
-                f"SELECT data, id_vendedor, id_produto, id_motivo, cancelada, SUM(valor) FROM devolucoes_itens {filtro} "
+                f"SELECT {data}, id_vendedor, id_produto, id_motivo, cancelada, SUM(valor) FROM devolucoes_itens {filtro} "
                 f"GROUP BY 1, 2, 3, 4, 5", [inicio, fim, *ids]):
             if motivo not in regras.motivos or (cancelada and regras.ignorar_canceladas):
                 continue

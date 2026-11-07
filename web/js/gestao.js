@@ -27,8 +27,8 @@ import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, SOBRE_PREMIA
          textoAlvo, textoBase, textoFaixas, textoFalta, textoFiltros, textoGanho, textoPeriodoBase, textoPremiacao, textoPremio,
          textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
-import { avisosDesempenho, fichaDesempenho, filtroPeriodo, heroDesempenho, legendaDesempenho, metaDiariaDesempenho,
-         quadroDesempenho, textoPeriodo } from "./desempenho.js";
+import { abasDesempenho, avisosDesempenho, evolucaoDesempenho, fichaDesempenho, filtroPeriodo, filtroVendedor,
+         heroDesempenho, legendaDesempenho, metaDiariaDesempenho, quadroDesempenho, textoPeriodo } from "./desempenho.js";
 
 const PRAZOS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 26]; // semanas
 const CORES_AVATAR = ["var(--s-fat)", "var(--s-out)", "var(--k-cli)", "var(--k-vm)", "var(--s-mus)"];
@@ -50,7 +50,9 @@ const estado = {
   recem: null, pedido: 0, pedidoVista: 0, naPagina: false,
   // o painel de desempenho (abaixo da equipe): o período do filtro, os dados, o vendedor da ficha e os ⓘ abertos
   dsp: { periodo: ler("mv-gestao-periodo", "ultimo_dia"), dados: null, vendedor: null, pedido: 0, abertos: new Set(),
-         tabela: ler("mv-gestao-meta-tabela", false) === true }, // a meta diária em tabela (ou em barras)
+         tabela: ler("mv-gestao-meta-tabela", false) === true, // a meta diária em tabela (ou em barras)
+         // a evolução mensal: a aba (dia ou mes), os dados, o vendedor escolhido (null = a equipe) e o mês da pizza
+         vista: ler("mv-gestao-vista", "dia") === "mes" ? "mes" : "dia", evo: null, evoVendedor: null, evoMes: null, pedidoEvo: 0 },
 };
 let dlg = null, formObj = null;
 
@@ -160,6 +162,7 @@ export function recarregarGestao() {
   carregar(true);
   if (estado.vista !== "grade") carregarVista({ silencioso: true });
   if (estado.dsp.dados) carregarDesempenho({ silencioso: true });
+  if (estado.dsp.evo) carregarEvolucao({ silencioso: true });
 }
 
 export function montarGestao(container, contexto) {
@@ -1720,6 +1723,7 @@ async function carregarDesempenho({ silencioso = false } = {}) {
     if (d.periodo?.chave && d.periodo.chave !== estado.dsp.periodo) estado.dsp.periodo = d.periodo.chave;
     if (estado.dsp.vendedor && !(d.vendedores || []).some((v) => v.id === estado.dsp.vendedor)) estado.dsp.vendedor = null;
     desenharDesempenho();
+    if (estado.dsp.vista === "mes" && d.regiao && estado.dsp.evo?.regiao !== d.regiao) carregarEvolucao({ silencioso });
   } catch (e) {
     if (pedido !== estado.dsp.pedido) return;
     estado.dsp.dados = null;
@@ -1738,17 +1742,51 @@ function desenharDesempenho() {
   if (!el || !d) return;
   el.classList.toggle("ge-minimizada", minimizada("desempenho"));
   const vend = d.vendedores || [];
+  const mensal = estado.dsp.vista === "mes";
   const v = estado.dsp.vendedor ? vend.find((x) => x.id === estado.dsp.vendedor) : null;
-  const corpo = !d.regiao ? "" : v ? fichaDesempenho(d, v, estado.dsp.abertos)
+  const corpo = !d.regiao ? "" : mensal ? evolucaoDesempenho(estado.dsp.evo, estado.dsp.evoMes)
+    : v ? fichaDesempenho(d, v, estado.dsp.abertos)
     : `${heroDesempenho(d)}${quadroDesempenho(d)}${metaDiariaDesempenho(d, estado.dsp.tabela)}`;
+  const filtros = mensal ? filtroVendedor(estado.dsp.evo || { regiao: d.regiao }, estado.dsp.evoVendedor)
+    : filtroPeriodo(d, estado.dsp.periodo);
   el.innerHTML = `${cabecalho("desempenho", `${icone("grafico")}Desempenho da equipe${d.regiao ? ` ${d.regiao}` : ""}`,
-    `<span>${esc(textoPeriodo(d))}</span>`)}
-    ${d.regiao ? `<div class="dsp-filtros">${filtroPeriodo(d, estado.dsp.periodo)}</div>` : ""}
-    ${avisosDesempenho(d)}
+    `<span>${mensal ? "últimos 12 meses" : esc(textoPeriodo(d))}</span>`)}
+    ${d.regiao ? `<div class="dsp-filtros">${abasDesempenho(estado.dsp.vista)}${filtros}</div>` : ""}
+    ${avisosDesempenho(mensal && estado.dsp.evo ? estado.dsp.evo : d)}
     ${corpo}
     ${d.regiao && vend.length ? legendaDesempenho() : ""}`;
   ligarTooltips(el);
   atualizarMinimizarTudo();
+}
+
+// A evolução mensal (bi/desempenho.py Painel.evolucao): carregada ao abrir a aba, para a região e o vendedor escolhido.
+async function carregarEvolucao({ silencioso = false } = {}) {
+  if (!estado.regiao) return;
+  const pedido = ++estado.dsp.pedidoEvo;
+  const el = raiz.querySelector("#g-desempenho");
+  if (estado.dsp.evo) el?.classList.add("recarregando");
+  try {
+    const q = new URLSearchParams({ regiao: estado.regiao });
+    if (estado.dsp.evoVendedor) q.set("vendedor", estado.dsp.evoVendedor);
+    const d = await api(`/api/gestao/evolucao?${q}`);
+    if (pedido !== estado.dsp.pedidoEvo) return;
+    estado.dsp.evo = d;
+    if (estado.dsp.evoMes && !(d.meses || []).some((m) => m.mes === estado.dsp.evoMes && !m.futuro)) estado.dsp.evoMes = null;
+    desenharDesempenho();
+  } catch (e) {
+    if (pedido !== estado.dsp.pedidoEvo) return;
+    if (!silencioso) toast(e.message, "erro");
+  } finally {
+    if (pedido === estado.dsp.pedidoEvo) el?.classList.remove("recarregando");
+  }
+}
+
+function trocarVista(vista) {
+  if (vista === estado.dsp.vista) return;
+  estado.dsp.vista = vista;
+  guardar("mv-gestao-vista", vista);
+  desenharDesempenho();
+  if (vista === "mes" && estado.dsp.evo?.regiao !== estado.regiao) carregarEvolucao();
 }
 
 // A meta de venda diária: barras ou tabela (a escolha fica guardada neste navegador).
@@ -1847,7 +1885,7 @@ function trocarRegiao(r) {
   estado.regiao = r;
   estado.vista = "grade";
   estado.historico = estado.detalhe = null;
-  estado.dsp.dados = estado.dsp.vendedor = null;
+  estado.dsp.dados = estado.dsp.vendedor = estado.dsp.evo = estado.dsp.evoVendedor = null;
   raiz.querySelector("#g-corpo").innerHTML = esqueletoEquipe();
   raiz.querySelector("#g-desempenho").innerHTML = esqueletoDesempenho();
   atualizarUrl();
@@ -1863,9 +1901,10 @@ function aoClicar(e) {
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
     "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]," +
-    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info],[data-dsp-tabela]");
+    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info],[data-dsp-tabela],[data-dsp-vista]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.dspVista) return trocarVista(ds.dspVista);
   if ("dspTabela" in ds) return alternarTabela();
   if (ds.dspPeriodo) return trocarPeriodo(ds.dspPeriodo);
   if (ds.dspVendedor) return abrirFicha(Number(ds.dspVendedor));
@@ -1902,6 +1941,15 @@ function aoClicar(e) {
 function aoMudarCampo(e) {
   if (daAgenda(e)) return;
   const t = e.target;
+  if (t.matches("select[data-dsp-evo-vendedor]")) { // a evolução mensal de um vendedor (vazio = a equipe)
+    estado.dsp.evoVendedor = Number(t.value) || null;
+    return carregarEvolucao();
+  }
+  if (t.matches("select[data-dsp-evo-mes]")) { // o mês da pizza de segmentos
+    estado.dsp.evoMes = t.value;
+    desenharDesempenho();
+    return raiz.querySelector("select[data-dsp-evo-mes]")?.focus();
+  }
   if (t.matches("select[data-abrir]")) {
     estado.abrir = t.value; // "" = não abrir
     return carregarVista();
