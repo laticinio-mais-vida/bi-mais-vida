@@ -48,7 +48,8 @@ from .banco import BancoForaDoAr, hora
 from .calendario import Calendario
 from .configuracao import Regras
 from .conversas import NaoEncontrada, id_valido, novo_id
-from .desempenho import PERIODOS as PERIODOS_DESEMPENHO, Painel, periodo as periodo_desempenho
+from .desempenho import (FAIXAS as FAIXAS_DESEMPENHO, MESES_EVOLUCAO, PERIODOS as PERIODOS_DESEMPENHO, SEGMENTOS,
+                         TROCA as TROCA_DESEMPENHO, Painel, periodo as periodo_desempenho)
 from .indicadores import (ABERTURAS, BASES, BASES_COM_PRODUTO, COMBINACOES, COMPARAR, FILTROS, FILTROS_PRODUTO,
                           FORMAS, MAX_PRODUTOS_PRECO, MEDIDAS, META_EM, PERIODOS_BASE, TIPOS, _marcas, _redondo, alvos_do_vendedor,
                           calcular, calendario_periodo, da_base, descritor, filtros_aceitos, janela_base, janela_fechada, medir,
@@ -1448,16 +1449,10 @@ class Gestao:
             return saida
         with k:
             ids = self.ids(escopo)
-            regioes = self.regioes(k, ids)
-            saida["regioes"] = regioes
-            if not regioes:
+            saida["regioes"], regiao = self._regiao_do_acesso(k, ids, regiao)
+            if regiao is None:
                 saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
                 return saida
-            regiao = str(regiao or "").strip().upper() or regioes[0]
-            if regiao not in REGIOES:
-                raise ValueError(f"região desconhecida: {regiao!r} (use ES ou BA)")
-            if regiao not in regioes:
-                raise PermissionError(f"seu acesso na Gestão não inclui vendedores da região {regiao}")
             saida["regiao"] = regiao
             per = periodo_desempenho(periodo, self.hoje(), k.cal, regiao)
             mes = per["fim"].replace(day=1)
@@ -1473,6 +1468,68 @@ class Gestao:
                             .montar(per, time, nomes))
             saida.update(painel)
             saida["vendedores"] = sorted(painel["vendedores"], key=lambda v: _chave(v["nome"]))
+        return saida
+
+    def _regiao_do_acesso(self, k: _Contas, ids, regiao: str | None) -> tuple[list[str], str | None]:
+        """(as regiões que a pessoa vê, a pedida ou a primeira delas); None quando ela não vê nenhuma. Levanta
+        ValueError para a região que não existe e PermissionError para a que fica fora do acesso."""
+        regioes = self.regioes(k, ids)
+        if not regioes:
+            return regioes, None
+        regiao = str(regiao or "").strip().upper() or regioes[0]
+        if regiao not in REGIOES:
+            raise ValueError(f"região desconhecida: {regiao!r} (use ES ou BA)")
+        if regiao not in regioes:
+            raise PermissionError(f"seu acesso na Gestão não inclui vendedores da região {regiao}")
+        return regioes, regiao
+
+    def evolucao(self, usuario: dict, escopo, regiao: str | None = None, vendedor=None) -> dict:
+        """A evolução mensal do painel de desempenho (bi/desempenho.py Painel.evolucao): os últimos 12 meses da equipe
+        da região (em cada mês, os vendedores com meta naquele mês, só os do acesso) ou de um vendedor."""
+        hoje = self.hoje()
+        saida = {"regiao": None, "regioes": [], "hoje": hoje.isoformat(), "data_ref": self.calc.cache.info.get("data_ref"),
+                 "aviso": None, "vendedor": None, "vendedores": [], "meses": [], "segmentos": list(SEGMENTOS),
+                 "faixas": FAIXAS_DESEMPENHO, "troca": TROCA_DESEMPENHO}
+        try:
+            k = self._contas()
+        except SemDados as e:
+            saida["aviso"] = str(e)
+            return saida
+        with k:
+            ids = self.ids(escopo)
+            saida["regioes"], regiao = self._regiao_do_acesso(k, ids, regiao)
+            if regiao is None:
+                saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
+                return saida
+            saida["regiao"] = regiao
+            atual = hoje.replace(day=1)
+            meses = [atual]
+            while len(meses) < MESES_EVOLUCAO:
+                meses.insert(0, (meses[0] - dt.timedelta(days=1)).replace(day=1))
+            no_acesso = (lambda v: ids is None or v in ids)  # noqa: E731
+            time_do_mes = {m: sorted(v for v in self._time(k, regiao, {m}) if no_acesso(v)) for m in meses}
+            time_atual = time_do_mes[atual] or sorted(v for v in self._time_padrao(k, regiao) if no_acesso(v))
+            nomes = {v["id"]: v["nome"] for v in self._catalogo(k)}
+            nomes.update({vid: n for vid, (n, _) in k.nomes([v for v in time_atual if v not in nomes]).items()})
+            saida["vendedores"] = sorted(({"id": v, "nome": nomes.get(v, f"Vendedor {v}")} for v in time_atual),
+                                         key=lambda x: _chave(x["nome"]))
+            if vendedor not in (None, ""):
+                try:
+                    vid = int(vendedor)
+                except (TypeError, ValueError):
+                    raise ValueError("vendedor deve ser o código de um vendedor") from None
+                if not no_acesso(vid):
+                    raise PermissionError("seu acesso na Gestão não inclui esse vendedor")
+                if regiao_do_grupo(k.regras.grupo_vendedor(vid)) != regiao:
+                    raise ValueError(f"o vendedor {vid} não é da região {regiao}")
+                nome = nomes.get(vid) or k.nomes([vid]).get(vid, (f"Vendedor {vid}",))[0]
+                saida["vendedor"] = {"id": vid, "nome": nome}
+                time_do_mes = {m: [vid] for m in meses}
+            chave = ("evolucao", regiao, atual, json.dumps({m.isoformat(): v for m, v in time_do_mes.items()}))
+            areas = {}  # a evolução não usa os dias de atendimento
+            painel = Painel(self.calc, k, areas, regiao, EQUIPES_REGIAO[regiao])
+            saida["meses"], saida["avisos"] = k.memo(chave, lambda: (
+                painel.evolucao(meses, time_do_mes, self.calc.cache.data_ref()), painel.avisos))
         return saida
 
     def _dia_util(self, k, regiao: str, de: dt.date) -> dt.date | None:

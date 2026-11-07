@@ -8,7 +8,8 @@ import datetime as dt
 import unittest
 
 from bi.calendario import Calendario
-from bi.desempenho import (FAIXAS, bloco, compras_esperadas, expectativa, motivos_de_troca, nota_geral, periodo)
+from bi.desempenho import (FAIXAS, bloco, compras_esperadas, expectativa, motivos_de_troca, nota_geral, periodo,
+                           segmento_do_painel)
 from bi.gestao import Gestao
 from tests.apoio import BA, ES, BaseBanco
 from tests.test_gestao import ComCache
@@ -96,6 +97,14 @@ class TestContas(unittest.TestCase):
         v["mes"]["troca"] = bloco(0.03, 0.015, invertido=True)            # teto estourado: zero, não negativo
         self.assertAlmostEqual(nota_geral(v), (1.5 + 0.5 + 0.0) / 3)
         self.assertEqual(FAIXAS, {"verde": 1.0, "amarelo": 0.9})
+
+    def test_segmento_do_painel(self):
+        casos = {"SUPERMERCADO": "REDES", "MERCADO (4 A 6 CAIXAS)": "MERCADO", "MERCEARIA (1 A 3 CAIXAS)": "MERCADO",
+                 "AÇOUGUE": "MERCADO", "ATACADO": "MERCADO", "PADARIA": "PADARIAS", "RESTAURANTE": "FOOD",
+                 "CAFETERIA E LANCHONETE": "FOOD", "HOTEL E POUSADA": "FOOD", "HOSPITAIS E PREFEITURAS": "FOOD",
+                 "FÁBRICA DE SALGADO": "FOOD", "CHURRASCARIA": "FOOD", "OUTROS": "OUTROS", "": "OUTROS", None: "OUTROS"}
+        for segmento, esperado in casos.items():
+            self.assertEqual(segmento_do_painel(segmento), esperado, segmento)
 
     def test_motivos_de_troca(self):
         motivos = [(1, "ERRO DE LANÇAMENTO"), (3, "VENCIDO"), (4, "DANIFICADO NO CLIENTE"), (16, "BRINDE - VENCIDO"),
@@ -279,6 +288,41 @@ class TestPainel(ComCache, BaseBanco):
             self.assertTrue(gravar_planilha(r, Path(pasta) / "sim.xlsx").exists())
         with self.assertRaises(ValueError):
             self.gestao.simular("ninguem")
+
+    def test_evolucao_mensal(self):
+        self.montar()
+        d = self.gestao.evolucao(self.chefe, (None, None), "ES")
+        self.assertEqual((d["regiao"], d["vendedor"], [v["id"] for v in d["vendedores"]]), ("ES", None, [ES]))
+        meses = {m["mes"]: m for m in d["meses"]}
+        self.assertEqual((len(d["meses"]), d["meses"][0]["mes"], d["meses"][-1]["mes"]), (12, "2025-11-01", "2026-10-01"))
+        s = meses["2026-09-01"]
+        self.assertEqual((s["faturamento"], s["meta"], s["atingimento"], s["vendedores"]), (1480.0, 2000.0, 0.74, 1))
+        self.assertEqual((s["clientes"], s["meta_clientes"], s["positivacao"], s["ticket"]), (3, 3.0, 1.0, 493.33))
+        self.assertEqual((s["frequencia"], s["troca_valor"], s["bruto"]), (1.0, 50.0, 1580.0))
+        # a pizza: mercado e açougue em MERCADO; a venda ao funcionário em OUTROS; soma o faturamento
+        self.assertEqual(s["segmentos"], {"FOOD": 0.0, "PADARIAS": 0.0, "REDES": 0.0, "MERCADO": 1400.0, "OUTROS": 80.0})
+        self.assertAlmostEqual(sum(s["segmentos"].values()), s["faturamento"])
+        self.assertTrue(meses["2026-10-01"]["futuro"])           # sem dados ainda
+        self.assertEqual(meses["2026-08-01"]["vendedores"], 0)   # ninguém com meta em agosto
+        # um vendedor: todos os meses dele, com ou sem meta
+        d = self.gestao.evolucao(self.chefe, (None, None), "BA", BA)
+        meses = {m["mes"]: m for m in d["meses"]}
+        self.assertEqual(d["vendedor"], {"id": BA, "nome": "Thais"})
+        self.assertEqual((meses["2026-07-01"]["faturamento"], meses["2026-07-01"]["meta"]), (370.0, None))
+        self.assertEqual(meses["2026-09-01"]["segmentos"]["PADARIAS"], 4750.0)
+        with self.assertRaises(ValueError):  # o Rubens é do ES
+            self.gestao.evolucao(self.chefe, (None, None), "BA", ES)
+        with self.assertRaises(PermissionError):
+            self.gestao.evolucao(self.chefe, ({BA}, None), "BA", 85)
+
+    def test_evolucao_projeta_o_mes_em_andamento(self):
+        self.montar()
+        self.calc.cache.info["data_ref"] = "2026-09-15"
+        self.gestao.hoje = lambda: D(2026, 9, 16)
+        s = self.gestao.evolucao(self.chefe, (None, None), "ES")["meses"][-1]
+        # 10 dos 21 dias úteis de setembro no ES: 1480 ÷ 10 × 21 = 3108
+        self.assertEqual((s["mes"], s["parcial"], s["projecao"], s["atingimento_projetado"]),
+                         ("2026-09-01", True, 3108.0, 1.554))
 
     def test_acesso_e_dados_que_faltam(self):
         self.montar()

@@ -77,8 +77,8 @@ CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError
 # Página Gestão: quem tem a página lê; só o administrador lança e muda campanhas, objetivos e observações. O catálogo
 # (vendedores, produtos com a venda de 12 meses e o preço médio da empresa toda…) só serve aos formulários do
 # administrador: fica em ROTAS_ADMIN.
-ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/desempenho", "/api/gestao/vendedor", "/api/gestao/acao",
-                    "/api/gestao/catalogo", "/api/gestao/rascunho")
+ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/desempenho", "/api/gestao/evolucao", "/api/gestao/vendedor",
+                    "/api/gestao/acao", "/api/gestao/catalogo", "/api/gestao/rascunho")
 ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gestao/acao/encerrar",
                       "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
@@ -448,6 +448,8 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(gestao.quadro(usuario, escopo, q.get("regiao")))
         if caminho == "/api/gestao/desempenho":  # o painel de desempenho; periodo: ultimo_dia, semana ou hoje
             return self._json(gestao.desempenho(usuario, escopo, q.get("regiao"), q.get("periodo")))
+        if caminho == "/api/gestao/evolucao":  # a evolução mensal do painel; vendedor: um só (vazio = a equipe)
+            return self._json(gestao.evolucao(usuario, escopo, q.get("regiao"), q.get("vendedor")))
         if caminho == "/api/gestao/vendedor":  # o histórico interno de um vendedor
             return self._json(gestao.historico(usuario, escopo, q.get("id")))
         if caminho == "/api/gestao/acao":  # campanha ou objetivo; abrir: area, segmento ou produto (vazio = nenhuma)

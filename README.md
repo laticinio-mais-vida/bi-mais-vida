@@ -758,7 +758,9 @@ conversas) que o administrador escreve no campo de baixo. É só controle intern
 ### Painel de desempenho
 
 Veio do Painel Comercial (repositório `painel-mais-vida`), com as contas do bi-mais-vida. Fica abaixo da equipe, na
-região escolhida, e mostra os vendedores com meta no mês (só os do acesso de quem vê).
+região escolhida, e mostra os vendedores com meta no mês (só os do acesso de quem vê). Tem duas abas: **Painel do
+dia** (abaixo) e **Evolução mensal** (veja [Evolução mensal](#evolução-mensal)); a aba aberta fica guardada no
+navegador.
 
 - **Período**, nos atalhos do topo: **Último dia fechado** (o padrão: o último dia útil antes de hoje, pelo calendário
   da região), **Última semana** (a semana anterior, de segunda a domingo) ou **Hoje** (até a última cópia do banco,
@@ -809,6 +811,36 @@ região), ajustada para as duas somarem a meta de faturamento (a da planilha ou 
 A conta é refeita a cada cópia nova do banco. Na semana, a meta é a soma da meta de cada dia, cada uma com o saldo
 daquele dia. Os pedidos em aberto são os de agora: para um dia que já passou, o pedido que estava em aberto naquele
 dia e já virou nota não entra (o cache ainda não guarda a data da nota de cada pedido).
+
+#### Evolução mensal
+
+Os últimos 12 meses (o de hoje é o último) da equipe da região ou, no seletor **Vendedor**, de um vendedor só. Na
+equipe, cada mês soma os vendedores com meta naquele mês (só os do acesso de quem vê); um vendedor mostra tudo o que
+ele vendeu, tenha tido meta ou não. As contas são as da página Metas, pelo vendedor da nota.
+
+- **Faturamento por segmento**: uma pizza do mês escolhido (começa no mais recente), com a lista ao lado (valor e %
+  de cada segmento e o total, que é o faturamento do mês). Passar o mouse numa fatia destaca o segmento. Vale o
+  segmento de hoje no cadastro do cliente:
+
+  | Fatia | Segmentos do cadastro |
+  |---|---|
+  | **FOOD** | restaurante, lanchonete e cafeteria, pizzaria, pastelaria, hamburgueria, churrascaria, hotel e pousada, buffet, fábricas de doce e de salgado, hospitais e prefeituras |
+  | **PADARIAS** | padaria |
+  | **REDES** | supermercado (por enquanto; um segmento "redes" no cadastro entra no lugar dele) |
+  | **MERCADO** | mercearia, mercado, atacado e açougue |
+  | **OUTROS** | o segmento "outros", o cliente sem segmento e a venda a funcionário, produtor ou fornecedor |
+
+  A classificação fica em `bi/desempenho.py` (`_SEGMENTO_POR_PALAVRA`), pelas palavras do nome do segmento.
+- **Cinco mini gráficos**, um ponto por mês (o mês sem dados quebra a linha; o do mês em andamento é o ponto vazado),
+  com o valor do mês de hoje e a cor da situação:
+  - **Atingimento da meta**: faturamento ÷ meta; o mês em andamento entra projetado pelo ritmo dos dias úteis (o
+    faturamento ÷ os dias úteis passados × os dias úteis do mês). Linha da meta em 100%.
+  - **Positivação**: clientes com nota ÷ META CLIENTE. Linha em 100%.
+  - **Frequência**: semanas com compra ÷ clientes que compraram.
+  - **% de troca**: vencido + danificado ÷ bruto da carteira, com a linha do teto (1,5%).
+  - **Ticket médio**: faturamento ÷ clientes com nota.
+
+  Passar o mouse num mês mostra o valor dele.
 
 #### Simular a meta diária de um vendedor
 
@@ -1492,7 +1524,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |
 | `bi/gestao.py` | página Gestão: ações, objetivos, histórico e dias de atendimento das áreas (no PostgreSQL), base, alvo, resultado e o quadro |
-| `bi/desempenho.py` | o painel de desempenho da Gestão: o período, os 9 indicadores de cada vendedor, a meta de mussarela e outras do BA pelo volume e a expectativa diária (também a meta de venda de hoje da página Metas e a simulação; `web/js/desempenho.js` desenha) |
+| `bi/desempenho.py` | o painel de desempenho da Gestão: o período, os 9 indicadores de cada vendedor, a meta de mussarela e outras do BA pelo volume e a expectativa diária, a evolução mensal (a pizza de segmentos e os mini gráficos), a meta de venda de hoje da página Metas e a simulação (`web/js/desempenho.js` desenha) |
 | `bi/simulacao.py` | o texto e a planilha .xlsx da simulação da meta diária (`python app.py --simular`) |
 | `bi/agenda.py` | agenda de cada pessoa, no topo da Gestão: as atividades de cada pessoa, em que dias cada repetição acontece, a conclusão com feedback e o histórico (no PostgreSQL) |
 | `bi/tarefas.py` | as tarefas da agenda: prazo, participantes com ou sem autonomia, subtarefas (e a automática, que pede para programar a execução), quem pode o quê, o que aparece em cada dia, as atrasadas, as justificativas do atraso (um histórico) e o que cada pessoa precisa justificar agora, a situação de cada tarefa e subtarefa e o kanban (as tarefas pelo vencimento) (no PostgreSQL) |

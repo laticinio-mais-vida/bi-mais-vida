@@ -268,6 +268,152 @@ export function metaDiariaDesempenho(d, tabela) {
   </div>`;
 }
 
+// ---------- a evolução mensal (bi/desempenho.py Painel.evolucao) ----------
+export function abasDesempenho(vista) {
+  const abas = [["dia", "Painel do dia"], ["mes", "Evolução mensal"]];
+  return `<div class="seg-mini dsp-vistas" role="group" aria-label="Vista">${abas.map(([k, r]) =>
+    `<button type="button" data-dsp-vista="${k}" class="${k === vista ? "ativo" : ""}" aria-pressed="${k === vista}">${r}</button>`).join("")}</div>`;
+}
+
+export function filtroVendedor(evo, selecionado) {
+  const lista = evo?.vendedores || [];
+  return `<label class="dsp-vendedor"><span>Vendedor</span>
+    <select data-dsp-evo-vendedor aria-label="Vendedor da evolução mensal">
+      <option value="">Equipe ${esc(evo?.regiao || "")}</option>
+      ${lista.map((v) => `<option value="${v.id}" ${v.id === selecionado ? "selected" : ""}>${esc(v.nome)}</option>`).join("")}
+    </select></label>`;
+}
+
+const SEG = {
+  FOOD: { nome: "FOOD", cor: "var(--seg-food)" }, PADARIAS: { nome: "PADARIAS", cor: "var(--seg-padarias)" },
+  REDES: { nome: "REDES", cor: "var(--seg-redes)" }, MERCADO: { nome: "MERCADO", cor: "var(--seg-mercado)" },
+  OUTROS: { nome: "OUTROS", cor: "var(--seg-outros)" },
+};
+const MESES_LONGOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const nomeMes = (iso) => `${MESES_LONGOS[Number(iso.slice(5, 7)) - 1]} de ${iso.slice(0, 4)}`;
+
+function fatia(cx, cy, r, a0, a1) {
+  const p = (a) => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+  const [x0, y0] = p(a0), [x1, y1] = p(a1);
+  return `M${cx},${cy} L${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z`;
+}
+
+// G: a pizza do faturamento por segmento num mês, com a lista (nome, valor e %) ao lado.
+function pizza(evo, mesSel) {
+  const meses = (evo.meses || []).filter((m) => !m.futuro);
+  if (!meses.length) return "";
+  const m = meses.find((x) => x.mes === mesSel) || meses[meses.length - 1];
+  const segs = (evo.segmentos || Object.keys(SEG)).map((k) => ({ k, v: Math.max(0, m.segmentos?.[k] || 0) }));
+  const total = segs.reduce((s, x) => s + x.v, 0);
+  let a = 0;
+  const fatias = total > 0 ? segs.filter((x) => x.v > 0).map((x) => {
+    const parte = x.v / total, a0 = a, a1 = a + parte * 2 * Math.PI;
+    a = a1;
+    const dica = `<div class="tt-t">${esc(SEG[x.k].nome)}</div>${linhaTT("Faturamento", fmt.moeda2(x.v), SEG[x.k].cor)}${linhaTT("Parte do mês", fmt.pct(parte, 1))}`;
+    return parte >= 0.9999 ? `<circle cx="110" cy="110" r="100" fill="${SEG[x.k].cor}" stroke="var(--surface)" stroke-width="2" data-tt="${esc(dica)}"/>`
+      : `<path d="${fatia(110, 110, 100, a0, a1)}" fill="${SEG[x.k].cor}" stroke="var(--surface)" stroke-width="2" stroke-linejoin="round" data-tt="${esc(dica)}"/>`;
+  }).join("") : `<circle cx="110" cy="110" r="100" fill="var(--surface-3)"/>`;
+  const opcoes = meses.slice().reverse().map((x) => `<option value="${x.mes}" ${x.mes === m.mes ? "selected" : ""}>${nomeMes(x.mes)}${x.parcial ? " (em andamento)" : ""}</option>`).join("");
+  return `<div class="dsp-evo-cartao dsp-pizza">
+    <div class="dsp-evo-cab"><div><h4>Faturamento por segmento</h4><p>O faturamento da página Metas, pelo segmento do cliente no cadastro.</p></div>
+      <label class="dsp-mes"><span>Mês</span><select data-dsp-evo-mes aria-label="Mês da pizza de segmentos">${opcoes}</select></label></div>
+    <div class="dsp-pizza-corpo">
+      <svg viewBox="0 0 220 220" role="img" aria-label="Faturamento por segmento em ${esc(nomeMes(m.mes))}">${fatias}</svg>
+      <table class="dsp-seg-lista"><tbody>${segs.map((x) => `<tr>
+        <td><span class="dsp-seg-cor" style="--c:${SEG[x.k].cor}"></span>${SEG[x.k].nome}</td>
+        <td>${fmt.moeda2(x.v)}</td><td>${total ? fmt.pct(x.v / total, 1) : "—"}</td></tr>`).join("")}
+        <tr class="total"><td>Total</td><td>${fmt.moeda2(total)}</td><td>${total ? "100%" : "—"}</td></tr></tbody></table>
+    </div>
+    <details class="dsp-como-seg"><summary>Como cada cliente é classificado</summary>
+      <p><b>REDES</b>: o segmento supermercado (por enquanto; um segmento "redes" no cadastro entra no lugar dele).
+      <b>MERCADO</b>: mercearia, mercado, atacado e açougue. <b>PADARIAS</b>: padaria. <b>FOOD</b>: restaurante,
+      lanchonete e cafeteria, pizzaria, pastelaria, hamburgueria, churrascaria, hotel e pousada, buffet, fábricas de doce
+      e de salgado, hospitais e prefeituras. <b>OUTROS</b>: o segmento "outros", o cliente sem segmento e a venda a
+      funcionário, produtor ou fornecedor. Vale o segmento de hoje no cadastro.</p>
+    </details>
+  </div>`;
+}
+
+// Uma linha de 12 meses (os vazios quebram a linha), com a linha da meta e a dica de cada mês.
+function linhaMeses(meses, valor, { meta = null, rotuloMeta = "", formato, titulo }) {
+  const W = 300, H = 128, PL = 44, PR = 10, PT = 12, PB = 22, iw = W - PL - PR, ih = H - PT - PB;
+  const vals = meses.map(valor);
+  const existentes = vals.filter((v) => v != null);
+  if (!existentes.length) return `<p class="dsp-evo-vazio">Sem dados nos últimos meses.</p>`;
+  let vMin = Math.min(...existentes, ...(meta != null ? [meta] : [])), vMax = Math.max(...existentes, ...(meta != null ? [meta] : []));
+  const folga = (vMax - vMin) * 0.2 || Math.abs(vMax) * 0.1 || 1;
+  vMin = Math.max(0, vMin - folga);
+  vMax += folga;
+  const x = (i) => PL + (meses.length < 2 ? iw / 2 : (i / (meses.length - 1)) * iw);
+  const y = (v) => PT + ih - ((v - vMin) / (vMax - vMin)) * ih;
+  let d = "", aberto = false;
+  vals.forEach((v, i) => {
+    if (v == null) { aberto = false; return; }
+    d += `${aberto ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+    aberto = true;
+  });
+  const grade = [vMin, (vMin + vMax) / 2, vMax].map((v) => `<line x1="${PL}" y1="${y(v).toFixed(1)}" x2="${W - PR}" y2="${y(v).toFixed(1)}" class="dsp-grade"/>
+    <text x="${PL - 6}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" class="dsp-eixo">${esc(formato(v, true))}</text>`).join("");
+  const linhaMeta = meta == null ? "" : `<line x1="${PL}" y1="${y(meta).toFixed(1)}" x2="${W - PR}" y2="${y(meta).toFixed(1)}" class="dsp-meta-linha"/>
+    <text x="${W - PR}" y="${(y(meta) - 5).toFixed(1)}" text-anchor="end" class="dsp-eixo dsp-meta-rotulo">${esc(rotuloMeta)}</text>`;
+  const ultimo = vals.length - 1 - [...vals].reverse().findIndex((v) => v != null);
+  const parcial = meses[ultimo]?.parcial;
+  const passo = meses.length < 2 ? iw : iw / (meses.length - 1);
+  const alvos = meses.map((m, i) => {
+    const dica = `<div class="tt-t">${esc(nomeMes(m.mes))}${m.parcial ? " (em andamento)" : ""}</div>${linhaTT(titulo, vals[i] == null ? "—" : esc(formato(vals[i])))}${meta != null ? linhaTT("Meta", esc(rotuloMeta)) : ""}`;
+    return `<rect x="${(x(i) - passo / 2).toFixed(1)}" y="${PT}" width="${passo.toFixed(1)}" height="${ih}" fill="transparent" data-tt="${esc(dica)}"/>`;
+  }).join("");
+  return `<svg class="dsp-linha-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(titulo)} mês a mês">
+    ${grade}${linhaMeta}
+    <path d="${d.trim()}" fill="none" stroke="var(--s-fat)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(ultimo).toFixed(1)}" cy="${y(vals[ultimo]).toFixed(1)}" r="4.5" fill="${parcial ? "var(--surface)" : "var(--s-fat)"}" stroke="${parcial ? "var(--s-fat)" : "var(--surface)"}" stroke-width="2"/>
+    <text x="${PL}" y="${H - 6}" class="dsp-eixo">${esc(meses[0].rotulo)}</text>
+    <text x="${W - PR}" y="${H - 6}" text-anchor="end" class="dsp-eixo">${esc(meses[meses.length - 1].rotulo)}</text>
+    ${alvos}</svg>`;
+}
+
+const pctEixo = (v, eixo) => fmt.pct(v, eixo ? 0 : 1);
+
+// H: os cinco mini gráficos (atingimento, positivação, frequência, % de troca e ticket médio).
+function minis(evo) {
+  const meses = (evo.meses || []).filter((m) => !m.futuro);
+  if (!meses.length) return "";
+  const atual = meses[meses.length - 1], faixas = evo.faixas || { verde: 1, amarelo: 0.9 }, teto = evo.troca?.teto ?? 0.015;
+  const st = (v, meta) => (v == null || !meta ? "sem_meta" : v / meta >= faixas.verde ? "batida" : v / meta >= faixas.amarelo ? "atencao" : "abaixo");
+  const stTroca = (v) => (v == null ? "sem_dados" : v <= (evo.troca?.atencao ?? 0.01) ? "batida" : v <= teto ? "atencao" : "abaixo");
+  const ating = (m) => (m.parcial ? m.atingimento_projetado : m.atingimento);
+  const cartoes = [
+    { titulo: "Atingimento da meta", sub: "Faturamento ÷ meta. O mês em andamento entra projetado pelo ritmo dos dias úteis.",
+      valor: ating, formato: pctEixo, meta: 1, rotuloMeta: "meta 100%", status: (v) => st(v, 1) },
+    { titulo: "Positivação", sub: "Clientes com nota ÷ META CLIENTE.", valor: (m) => m.positivacao, formato: pctEixo, meta: 1,
+      rotuloMeta: "meta 100%", status: (v) => st(v, 1) },
+    { titulo: "Frequência", sub: "Semanas com compra por cliente que comprou.", valor: (m) => m.frequencia,
+      formato: (v) => fmt.num(v, 2), status: () => null },
+    { titulo: "% de troca", sub: "Vencido + danificado ÷ bruto da carteira. Quanto menor, melhor.", valor: (m) => m.troca,
+      formato: (v, eixo) => fmt.pct(v, eixo ? 1 : 2), meta: teto, rotuloMeta: `teto ${fmt.pct(teto, 1)}`, status: stTroca },
+    { titulo: "Ticket médio", sub: "Faturamento ÷ clientes com nota.", valor: (m) => m.ticket,
+      formato: (v, eixo) => (eixo ? fmt.moedaC(v) : fmt.moeda2(v)), status: () => null },
+  ];
+  return `<div class="dsp-minis">${cartoes.map((c) => {
+    const v = c.valor(atual), s = c.status(v);
+    return `<div class="dsp-evo-cartao dsp-mini">
+      <div class="dsp-mini-cab"><span>${esc(c.titulo)}</span>
+        ${s ? chipStatus(s, c.titulo === "% de troca" ? ROTULO_TROCA[s] || FAIXA[s] : FAIXA[s]) : ""}</div>
+      <b class="dsp-mini-val">${v == null ? "—" : esc(c.formato(v))}</b>
+      <small class="dsp-mini-data">${esc(nomeMes(atual.mes))}${atual.parcial ? (c.titulo === "Atingimento da meta" ? " (projeção)" : " (em andamento)") : ""}</small>
+      ${linhaMeses(meses, c.valor, { meta: c.meta ?? null, rotuloMeta: c.rotuloMeta, formato: c.formato, titulo: c.titulo })}
+      <p class="dsp-mini-sub">${esc(c.sub)}</p>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+export function evolucaoDesempenho(evo, mesSel) {
+  if (!evo) return `<div class="esqueleto" style="height:420px"></div>`;
+  const alvo = evo.vendedor ? `de ${esc(evo.vendedor.nome)}` : `da equipe ${esc(evo.regiao || "")}`;
+  return `<p class="dsp-evo-nota">Os últimos 12 meses ${alvo}${evo.vendedor ? "" : " (em cada mês, os vendedores com meta naquele mês)"}.</p>
+    ${pizza(evo, mesSel)}${minis(evo)}`;
+}
+
 export function legendaDesempenho() {
   return `<div class="dsp-legenda">
     <span style="--c:var(--ok-forte)"><i></i>Verde: meta batida (100% ou mais)</span>

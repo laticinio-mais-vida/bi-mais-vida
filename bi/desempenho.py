@@ -57,6 +57,20 @@ MAX_VOLTA = 31                                  # dias para trás à procura do 
 LINHAS = (("mes", "positivacao"), ("dia", "atendimentos"), ("dia", "faturamento"), ("dia", "mussarela"),
           ("dia", "outras"), ("mes", "ticket"), ("mes", "frequencia"), ("mes", "efetividade"), ("mes", "troca"))
 _FREQUENCIA = {"metrica": "frequencia", "parametros": {"clientes": "todos"}, "filtros": {}}
+MESES_EVOLUCAO = 12                             # a evolução mensal: os últimos 12 meses, com o de hoje
+# Os segmentos da pizza, na ordem do gráfico, e as palavras do segmento do cadastro que levam a cada um. REDES é o
+# segmento SUPERMERCADO por enquanto (decisão do usuário; um segmento "redes" no ERP entra aqui depois). A ordem das
+# regras importa: SUPERMERCADO antes de MERCADO. O resto (o segmento OUTROS do ERP, cliente sem segmento, venda a
+# funcionário ou produtor) vai para OUTROS.
+SEGMENTOS = ("FOOD", "PADARIAS", "REDES", "MERCADO", "OUTROS")
+_SEGMENTO_POR_PALAVRA = (
+    ("REDES", ("SUPERMERCADO",)),
+    ("PADARIAS", ("PADARIA",)),
+    ("MERCADO", ("MERCEARIA", "MERCADO", "ACOUGUE", "ATACADO")),
+    ("FOOD", ("RESTAURANTE", "LANCHONETE", "CAFETERIA", "PIZZARIA", "PASTELARIA", "HAMBURGUERIA", "HOTEL", "POUSADA",
+              "BUFFET", "FABRICA DE DOCE", "FABRICA DE SALGADO", "HOSPITA", "PREFEITURA", "CHURRASCARIA")),
+)
+_MESES_CURTOS = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 
 
 def _mes(d: dt.date) -> dt.date:
@@ -73,6 +87,15 @@ def _mes_anterior(mes: dt.date) -> dt.date:
 
 def _sem_acento(t: str) -> str:
     return unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().upper()
+
+
+def segmento_do_painel(segmento: str | None) -> str:
+    """O segmento da pizza (FOOD, PADARIAS, REDES, MERCADO ou OUTROS) para o segmento do cadastro do cliente."""
+    s = _sem_acento(segmento or "")
+    for destino, palavras in _SEGMENTO_POR_PALAVRA:
+        if any(p in s for p in palavras):
+            return destino
+    return "OUTROS"
 
 
 def motivos_de_troca(motivos) -> set[int]:
@@ -554,6 +577,91 @@ class Painel:
             "potencial_mes": _r(plano["potencial_mes"]), "clientes_programados": plano["clientes"],
             "sem_programacao": plano["sem_programacao"], "clientes": clientes, "dias": dias, "avisos": self.avisos,
         }
+
+    # --- a evolução mensal ----------------------------------------------------------------
+    def segmentos(self, ids: list[int], inicio: dt.date, fim: dt.date) -> dict:
+        """O faturamento (a regra da página Metas) de cada vendedor em cada mês por segmento do cliente:
+        {(mês, vendedor): {segmento: valor}}. O segmento é o do cadastro de hoje; venda a funcionário, produtor e
+        fornecedor vai para OUTROS."""
+        saida: dict = defaultdict(lambda: dict.fromkeys(SEGMENTOS, 0.0))
+        if not ids:
+            return saida
+        mes = "CAST(date_trunc('month', x.data) AS DATE)"
+        junta = "LEFT JOIN clientes_detalhes d ON d.id = x.id_cliente AND x.tipocliente = 'CLIENTE'"
+        filtro = f"WHERE x.data BETWEEN ? AND ? AND x.id_vendedor IN ({_marcas(ids)})"
+        nomes: dict[str, str] = {}
+
+        def somar(m, vid, pid, seg, valor):
+            if self.regras.grupo_produto(self.regras.produto(pid)) == "fora":
+                return
+            if seg not in nomes:
+                nomes[seg] = segmento_do_painel(seg)
+            saida[(m, vid)][nomes[seg]] += float(valor or 0)
+
+        for m, vid, pid, seg, valor in self.cache.consulta(
+                f"SELECT {mes}, x.id_vendedor, x.id_produto, d.segmento, SUM(x.valor) FROM vendas_clientes_itens x "
+                f"{junta} {filtro} GROUP BY 1, 2, 3, 4", [inicio, fim, *ids]):
+            somar(m, vid, pid, seg, valor)
+        for m, vid, pid, seg, motivo, cancelada, valor in self.cache.consulta(
+                f"SELECT {mes}, x.id_vendedor, x.id_produto, d.segmento, x.id_motivo, x.cancelada, SUM(x.valor) "
+                f"FROM devolucoes_clientes_itens x {junta} {filtro} GROUP BY 1, 2, 3, 4, 5, 6", [inicio, fim, *ids]):
+            if motivo in self.regras.motivos and not (cancelada and self.regras.ignorar_canceladas):
+                somar(m, vid, pid, seg, -float(valor or 0))
+        return saida
+
+    def evolucao(self, meses: list[dt.date], time_do_mes: dict[dt.date, list[int]], data_ref: dt.date | None) -> list[dict]:
+        """Os últimos meses da equipe (ou de um vendedor), um a um, com as regras da página Metas: faturamento contra a
+        meta (o mês em andamento também projetado pelo ritmo dos dias úteis), positivação (clientes distintos com
+        nota ÷ META CLIENTE), frequência (semanas com compra ÷ clientes positivados), % de troca (vencido + danificado
+        ÷ bruto da carteira), ticket médio (faturamento ÷ clientes) e o faturamento por segmento. time_do_mes: os
+        vendedores que entram em cada mês (os com meta naquele mês; um vendedor só, todos os meses)."""
+        todos = sorted({v for ids in time_do_mes.values() for v in ids})
+        if not meses or not todos:
+            return []
+        ini, fim = meses[0], _fim_do_mes(meses[-1])
+        mov = self.calc.movimento_diario(self.regras, todos, ini, fim, por_mes=True)
+        segs = self.segmentos(todos, ini, fim)
+        saida = []
+        for m in meses:
+            ids = sorted(time_do_mes.get(m, []))
+            fim_m = _fim_do_mes(m)
+            metas = self.calc._metas(self.regras, {m}, list(self.equipes))
+            fat = sum(mov.get(v, {}).get(m, {}).get("fat", 0.0) for v in ids)
+            meta = sum(metas[v]["fat"] for v in ids if v in metas)
+            meta_cli = sum(metas[v]["cli"] for v in ids if v in metas)
+            clientes = 0
+            freq = {"num": 0.0, "den": 0.0}
+            trocas = bruto = 0.0
+            if ids:
+                clientes = int(self.cur.execute(
+                    f"SELECT COUNT(DISTINCT id_cliente) FROM _pedidos WHERE data BETWEEN ? AND ? "
+                    f"AND id_vendedor IN ({_marcas(ids)})", [m, fim_m, *ids]).fetchone()[0] or 0)
+                freq = medir(self.cur, _FREQUENCIA, ids, m, fim_m)["total"]
+                for tr, base in self.troca(ids, m, fim_m).values():
+                    trocas += tr
+                    bruto += base
+            cal = self.cal.resumo(m.year, m.month, self.regiao, data_ref or fim_m)
+            parcial = cal["situacao"] == "aberto"
+            projetado = (fat / cal["dias_decorridos"] * cal["dias_uteis"]
+                         if parcial and cal["dias_decorridos"] > 0 else fat)
+            por_seg = dict.fromkeys(SEGMENTOS, 0.0)
+            for v in ids:
+                for s, valor in segs.get((m, v), {}).items():
+                    por_seg[s] += valor
+            saida.append({
+                "mes": m.isoformat(), "rotulo": f"{_MESES_CURTOS[m.month - 1]}/{m.year % 100:02d}", "parcial": parcial,
+                "futuro": cal["situacao"] == "futuro", "vendedores": len(ids),
+                "faturamento": _r(fat), "meta": _r(meta) or None, "projecao": _r(projetado) if parcial else None,
+                "atingimento": _r(fat / meta, 4) if meta else None,
+                "atingimento_projetado": _r(projetado / meta, 4) if meta else None,
+                "clientes": clientes, "meta_clientes": meta_cli or None,
+                "positivacao": _r(clientes / meta_cli, 4) if meta_cli else None,
+                "frequencia": _r(freq["num"] / freq["den"], 3) if freq["den"] else None,
+                "troca": _r(trocas / bruto, 5) if bruto else None, "troca_valor": _r(trocas), "bruto": _r(bruto),
+                "ticket": _r(fat / clientes) if clientes else None,
+                "segmentos": {s: _r(v) for s, v in por_seg.items()},
+            })
+        return saida
 
     # --- o painel --------------------------------------------------------------------------
     def montar(self, per: dict, time: list[int], nomes: dict[int, str]) -> dict:
