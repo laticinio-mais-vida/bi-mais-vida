@@ -1,5 +1,6 @@
 // Página Configurações das metas: tudo o que no Power BI ficava escrito dentro das fórmulas DAX e, em
-// "Acesso por usuário", as abas e os vendedores de Metas que cada visualizador vê.
+// "Abas por usuário", as abas de Metas que cada visualizador vê. Os vendedores que ele vê (em todas as páginas)
+// ficam em Usuários; aqui só aparecem, para avisar da aba que ficaria sem ninguém.
 import { api, esc, fmt, icone, MESES, toast, ligarTooltips, linhaTT } from "./util.js";
 import { iniciais } from "./conta.js";
 
@@ -18,13 +19,13 @@ const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite
 let ctx = null, raiz = null;
 let orig = null, cfg = null, cat = null;
 let usuarios = [], visoes = [];          // visualizadores e abas de Metas (de /api/config)
-let origAcessos = null, acessos = null;  // login -> { ve, visoes, vendedores (null = todos das abas) }
+let nomesAcesso = {};                    // nome dos vendedores das listas de "só alguns" (de /api/config)
+let origAcessos = null, acessos = null;  // login -> { ve, visoes }
 let secao = "produtos";
 const filtro = { busca: "", grupo: "todos", linha: "" };
 let anoCal = new Date().getFullYear();
 let timerCal = null;
-let usuarioSel = null, buscaUsuario = "", buscaVend = "";
-const ultimosAlguns = {};                // login -> lista de "Só alguns" guardada ao trocar para "Todos"
+let usuarioSel = null, buscaUsuario = "";
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -49,11 +50,10 @@ export async function montarConfig(container, contexto) {
 
 function carregar(r) {
   orig = r.config; cfg = clone(r.config); cat = r.catalogo;
-  usuarios = r.usuarios; visoes = r.visoes;
+  usuarios = r.usuarios; visoes = r.visoes; nomesAcesso = r.nomes || {};
   origAcessos = Object.fromEntries(usuarios.map((u) => [u.login, {
     ve: (u.paginas || []).includes("metas"),
     visoes: [...(u.visoes || [])],
-    vendedores: u.vendedores ? [...u.vendedores].sort((a, b) => a - b) : null,
   }]));
   acessos = clone(origAcessos);
   if (!usuarios.some((u) => u.login === usuarioSel)) usuarioSel = usuarios[0]?.login ?? null;
@@ -121,7 +121,7 @@ function render() {
     <aside class="cartao config-menu entra" style="--i:0">
       ${[["produtos", "caixa", "Produtos", cat.produtos.length], ["vendedores", "pessoas", "Vendedores", cat.vendedores.length],
          ["devolucoes", "devolucao", "Devoluções", cfg.devolucoes.motivos.length], ["calendario", "calendario", "Dias úteis e feriados", cfg.calendario.extras.length],
-         ["usuarios", "escudo", "Acesso por usuário", contarVeem()]]
+         ["usuarios", "escudo", "Abas por usuário", contarVeem()]]
         .map(([id, ic, nome, n]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}<span class="cont" data-cont="${id}">${n}</span></button>`).join("")}
       <div class="dica">${icone("info")} As regras valem para todas as visões assim que você salvar. Nada é alterado no ERP nem nas planilhas.${nAlertas ? `<br><br><b style="color:var(--atencao)">${nAlertas} produto(s) com alerta</b> para revisar em Produtos.` : ""}</div>
       <button class="btn perigo" id="cfg-padrao" style="margin:6px 4px 4px">${icone("restaurar")}Restaurar padrão do Power BI</button>
@@ -173,7 +173,7 @@ async function salvar() {
   try {
     await api("/api/config", { json: corpo });
     carregar(await api("/api/config"));
-    toast(mudados.length && !corpo.produtos ? "Acessos de Metas salvos" : "Configurações salvas. As metas já usam as novas regras.");
+    toast(mudados.length && !corpo.produtos ? "Abas de Metas salvas" : "Configurações salvas. As metas já usam as novas regras.");
     ctx.aoSalvar && ctx.aoSalvar();
     render();
   } catch (e) {
@@ -184,7 +184,7 @@ async function salvar() {
 }
 
 async function restaurarPadrao() {
-  if (!confirm("Voltar todas as regras para o padrão do Power BI? As configurações atuais serão substituídas (uma cópia fica em config_metas.anterior.json). Os acessos por usuário não mudam.")) return;
+  if (!confirm("Voltar todas as regras para o padrão do Power BI? As configurações atuais serão substituídas (uma cópia fica em config_metas.anterior.json). As abas de cada pessoa não mudam.")) return;
   try {
     const r = await api("/api/config/padrao", { method: "POST" });
     orig = r.config; cfg = clone(r.config);
@@ -547,11 +547,11 @@ function previaCalendario() {
 }
 
 // ======================================================================================
-// Acesso por usuário: abas e vendedores de Metas de cada visualizador
+// Abas por usuário: as abas de Metas de cada visualizador (os vendedores dele ficam em Usuários)
 // ======================================================================================
 const contarVeem = () => usuarios.filter((u) => acessos[u.login].ve).length;
 const tituloVisao = (id) => visoes.find((v) => v.id === id)?.titulo || id;
-const nomeVendedor = (id) => cat.vendedores.find((v) => v.id === id)?.nome || `Vendedor ${id}`;
+const nomeVendedor = (id) => cat.vendedores.find((v) => v.id === id)?.nome || nomesAcesso[id] || `Vendedor ${id}`;
 const rotuloGrupo = (g) => (g === "EDIR" ? "Edir" : g);
 
 function emLista(itens) {
@@ -559,12 +559,37 @@ function emLista(itens) {
   return itens.slice(0, -1).join(", ") + " e " + itens[itens.length - 1];
 }
 
+// As equipes dos vendedores do acesso da pessoa (tela Usuários), para saber quais abas teriam alguém: null = todas
+// (vê todos os vendedores); vazio = nenhuma (ainda sem vendedores escolhidos).
+function equipesDoAcesso(u) {
+  const e = u.escopo;
+  if (!e) return new Set();
+  if (e.modo === "todos") return null;
+  if (e.modo === "equipes") return new Set(e.equipes);
+  const ids = new Set(e.vendedores);
+  return new Set(cat.vendedores.filter((v) => ids.has(v.id)).map(grupoVend));
+}
+
+function abaSemNinguem(u, v) {
+  const eq = equipesDoAcesso(u);
+  return eq !== null && !v.grupos.some((g) => eq.has(g));
+}
+
+// Os vendedores do acesso, como estão na tela Usuários (aqui só para ler).
+function textoVendedores(u) {
+  const e = u.escopo;
+  if (!e) return "ainda nenhum vendedor escolhido";
+  if (e.modo === "todos") return "todos os vendedores";
+  if (e.modo === "equipes") return `os vendedores ${e.equipes.length === 1 ? "da equipe" : "das equipes"} ${emLista(e.equipes.map(rotuloGrupo))}`;
+  const n = e.vendedores.length;
+  return n <= 3 ? `só ${emLista(e.vendedores.map(nomeVendedor))}` : `só ${n} vendedores escolhidos`;
+}
+
 function resumoCurtoAcesso(u) {
   const a = acessos[u.login];
   if (!a.ve) return "não vê a página";
   if (!a.visoes.length) return "sem abas";
-  const n = a.vendedores?.length;
-  return `${a.visoes.length} aba${a.visoes.length === 1 ? "" : "s"} · ${n ? `${n} vendedor${n === 1 ? "" : "es"}` : "todos os vendedores"}`;
+  return `${a.visoes.length} aba${a.visoes.length === 1 ? "" : "s"}`;
 }
 
 // O que falta para salvar o acesso (null = pode salvar).
@@ -572,7 +597,6 @@ function erroAcesso(u) {
   const a = acessos[u.login];
   if (!a.ve) return (u.paginas || []).some((p) => p !== "metas") ? null : "é a única página desta pessoa; libere outra em Usuários antes de tirar esta";
   if (!a.visoes.length) return "marque ao menos uma aba, ou desligue a página";
-  if (a.vendedores && !a.vendedores.length) return "marque ao menos um vendedor, ou escolha todos dessas abas";
   return null;
 }
 
@@ -590,7 +614,7 @@ function secaoUsuarios(alvo) {
   if (!usuarios.length) {
     alvo.innerHTML = `<section class="cartao usu-vazio entra" style="--i:1">
       <div class="usu-vazio-ic">${icone("escudo")}</div><h3>Ainda não há visualizadores</h3>
-      <p>Cadastre as pessoas em <b>Usuários</b>; depois, aqui você escolhe as abas e os vendedores de Metas de cada uma.</p>
+      <p>Cadastre as pessoas em <b>Usuários</b>; depois, aqui você escolhe as abas de Metas de cada uma.</p>
       <a class="btn primario" href="#/usuarios">${icone("escudo")}Abrir Usuários</a></section>`;
     return;
   }
@@ -598,11 +622,11 @@ function secaoUsuarios(alvo) {
   <div class="usuarios cp-usuarios">
     <aside class="cartao usu-lista entra" style="--i:1">
       <div class="cartao-cab"><div><h2>${icone("escudo")}Visualizadores</h2>
-        <p class="sub">Quem vê a página e quais abas e vendedores aparecem para cada um</p></div></div>
+        <p class="sub">Quem vê a página e quais abas aparecem para cada um</p></div></div>
       <label class="campo sem-seta cp-busca-u"><span class="ic-campo">${icone("busca")}</span><input id="cfg-busca-u" type="search" placeholder="Buscar pessoa" value="${esc(buscaUsuario)}"></label>
       <div class="usu-itens" id="cfg-u-itens"></div>
-      <div class="dica">${icone("info")}<span>Nome, senha e páginas ficam em <a href="#/usuarios">Usuários</a>. Administradores veem tudo.
-        Em Projeções, quem está em "Igual a Metas" segue estas abas e vendedores.</span></div>
+      <div class="dica">${icone("info")}<span>Nome, senha, páginas e os vendedores que cada pessoa vê (em todas as páginas)
+        ficam em <a href="#/usuarios">Usuários</a>. Administradores veem tudo.</span></div>
     </aside>
     <div id="cfg-u-editor"></div>
   </div>`;
@@ -625,7 +649,6 @@ function desenharItensUsuarios() {
   el.querySelectorAll(".usu-item").forEach((b) => b.addEventListener("click", () => {
     if (usuarioSel === b.dataset.login) return;
     usuarioSel = b.dataset.login;
-    buscaVend = "";
     desenharItensUsuarios();
     desenharEditorUsuario();
   }));
@@ -669,107 +692,30 @@ function aoMudarAcesso() {
 function desenharPermissoesUsuario(u) {
   const a = acessos[u.login];
   const alvo = raiz.querySelector("#cfg-u-permissoes");
-  const alguns = a.vendedores !== null;
   alvo.innerHTML = `
     <h3 class="usu-titulo">Abas que pode ver</h3>
     <div class="visoes-escolha">
       ${visoes.map((v) => {
         const on = a.visoes.includes(v.id);
+        const vazia = abaSemNinguem(u, v);
         return `<button type="button" class="visao-op ${on ? "ativo" : ""}" data-visao="${v.id}" aria-pressed="${on}">
           <span class="marca-caixa">${icone("visto")}</span>${icone(ICONE_VISAO[v.id] || "alvo")}
-          <span><b>${esc(v.titulo)}</b><small>vendedores ${esc(emLista(v.grupos.map(rotuloGrupo)))}</small></span>
+          <span><b>${esc(v.titulo)}</b><small>vendedores ${esc(emLista(v.grupos.map(rotuloGrupo)))}</small>${vazia
+            ? `<small class="aviso-nota">nenhum vendedor do acesso desta pessoa: a aba não aparece para ela</small>` : ""}</span>
         </button>`;
       }).join("")}
     </div>
-    <h3 class="usu-titulo">Vendedores</h3>
-    <div class="seletor v2 usu-modo" data-v="${alguns ? 1 : 0}"><span class="marcador"></span>
-      <button type="button" data-modo="todos" class="${alguns ? "" : "ativo"}">${icone("pessoas")}Todos dessas abas</button>
-      <button type="button" data-modo="alguns" class="${alguns ? "ativo" : ""}">${icone("usuario")}Só alguns vendedores</button>
-    </div>
-    <div id="cfg-u-vendedores"></div>`;
+    <p class="usu-nota ${u.escopo ? "" : "aviso-nota"}">${icone(u.escopo ? "pessoas" : "alerta")}<span>Dentro das abas, ${esc(u.nome)} vê
+      <b>${esc(textoVendedores(u))}</b>, como está em <a href="#/usuarios">Usuários</a> (vale para todas as páginas).</span></p>`;
   alvo.querySelectorAll(".visao-op[data-visao]").forEach((b) => b.addEventListener("click", () => {
     const marcadas = new Set(a.visoes);
     marcadas.has(b.dataset.visao) ? marcadas.delete(b.dataset.visao) : marcadas.add(b.dataset.visao);
     a.visoes = visoes.map((v) => v.id).filter((id) => marcadas.has(id));
     b.classList.toggle("ativo", marcadas.has(b.dataset.visao));
     b.setAttribute("aria-pressed", marcadas.has(b.dataset.visao));
-    desenharVendedoresUsuario(u);
-    aoMudarAcesso();
-  }));
-  alvo.querySelectorAll(".usu-modo button").forEach((b) => b.addEventListener("click", () => {
-    const querAlguns = b.dataset.modo === "alguns";
-    if (querAlguns === (a.vendedores !== null)) return;
-    if (querAlguns) a.vendedores = [...(ultimosAlguns[u.login] || origAcessos[u.login].vendedores || [])];
-    else { ultimosAlguns[u.login] = a.vendedores; a.vendedores = null; }
-    const seletor = alvo.querySelector(".usu-modo");
-    seletor.dataset.v = querAlguns ? 1 : 0;
-    seletor.querySelectorAll("button").forEach((x) => x.classList.toggle("ativo", x === b));
-    desenharVendedoresUsuario(u);
-    aoMudarAcesso();
-  }));
-  desenharVendedoresUsuario(u);
-}
-
-function desenharVendedoresUsuario(u) {
-  const a = acessos[u.login];
-  const alvo = raiz.querySelector("#cfg-u-vendedores");
-  if (a.vendedores === null) {
-    alvo.innerHTML = `<p class="usu-nota">${icone("info")}Vê todos os vendedores que aparecem nas abas marcadas, inclusive os que entrarem depois.</p>`;
     atualizarResumoUsuario(u);
-    return;
-  }
-  const grupos = new Set(visoes.filter((v) => a.visoes.includes(v.id)).flatMap((v) => v.grupos));
-  const marcados = new Set(a.vendedores);
-  const limite = new Date(); limite.setMonth(limite.getMonth() - 3);
-  const lista = cat.vendedores.filter((v) => grupos.has(grupoVend(v)) || marcados.has(v.id));
-  alvo.innerHTML = `
-    <div class="barra-ferramentas usu-busca">
-      <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span>
-        <input id="cfg-u-busca" type="search" placeholder="Buscar vendedor ou código" value="${esc(buscaVend)}"></label>
-      <span class="usu-cont" id="cfg-u-cont"></span>
-      <button class="btn" type="button" id="cfg-u-todos">Marcar os da lista</button>
-      <button class="btn" type="button" id="cfg-u-nenhum">Desmarcar todos</button>
-    </div>
-    ${grupos.size ? "" : `<p class="usu-nota">${icone("info")}Marque as abas primeiro: a lista mostra os vendedores delas.</p>`}
-    <div class="vend-escolha">
-      ${lista.map((v) => {
-        const antigo = new Date(v.ultimo_mes + "T12:00") < limite;
-        const fora = !grupos.has(grupoVend(v));
-        return `<label class="vend-op ${antigo ? "antigo" : ""}" data-busca="${esc((v.nome + " " + v.nome_erp + " " + v.id).toLowerCase())}">
-          <input type="checkbox" data-id="${v.id}" ${marcados.has(v.id) ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
-          <span class="n">${esc(v.nome)}<small>código ${v.id} · ${esc(rotuloGrupo(grupoVend(v)))}${v.supervisor ? ` · sup. ${esc(v.supervisor)}` : ""}${fora ? " · fora das abas marcadas" : ""}</small></span>
-        </label>`;
-      }).join("")}
-    </div>`;
-  const filtrar = () => {
-    const termo = buscaVend.trim().toLowerCase();
-    alvo.querySelectorAll(".vend-op").forEach((el) => { el.hidden = !!termo && !el.dataset.busca.includes(termo); });
-  };
-  const contar = () => {
-    const n = a.vendedores.length;
-    alvo.querySelector("#cfg-u-cont").textContent = n ? `${n} marcado${n === 1 ? "" : "s"}` : "nenhum marcado";
-    atualizarResumoUsuario(u);
-  };
-  const definir = (ids) => {
-    a.vendedores = [...ids].sort((x, y) => x - y);
-    alvo.querySelectorAll(".vend-op input").forEach((c) => { c.checked = ids.has(Number(c.dataset.id)); });
-    contar();
     aoMudarAcesso();
-  };
-  alvo.querySelector("#cfg-u-busca").addEventListener("input", (e) => { buscaVend = e.target.value; filtrar(); });
-  alvo.querySelectorAll(".vend-op input").forEach((c) => c.addEventListener("change", () => {
-    const ids = new Set(a.vendedores);
-    c.checked ? ids.add(Number(c.dataset.id)) : ids.delete(Number(c.dataset.id));
-    definir(ids);
   }));
-  alvo.querySelector("#cfg-u-todos").addEventListener("click", () => {
-    const ids = new Set(a.vendedores);
-    alvo.querySelectorAll(".vend-op:not([hidden]) input").forEach((c) => ids.add(Number(c.dataset.id)));
-    definir(ids);
-  });
-  alvo.querySelector("#cfg-u-nenhum").addEventListener("click", () => definir(new Set()));
-  filtrar();
-  contar();
 }
 
 function atualizarResumoUsuario(u) {
@@ -781,13 +727,11 @@ function atualizarResumoUsuario(u) {
   if (!a.ve) txt = `${quem} não vê a página Metas.`;
   else if (!a.visoes.length) txt = "Marque ao menos uma aba para esta pessoa: sem abas, a página fica vazia para ela.";
   else {
-    const abas = emLista(a.visoes.map((v) => `<b>${esc(tituloVisao(v))}</b>`));
-    let vend;
-    if (a.vendedores === null) vend = "com todos os vendedores dessas abas";
-    else if (!a.vendedores.length) vend = "mas falta marcar os vendedores";
-    else if (a.vendedores.length <= 3) vend = `só com ${emLista(a.vendedores.map((v) => `<b>${esc(nomeVendedor(v))}</b>`))}; os totais somam só ${a.vendedores.length === 1 ? "esse vendedor" : "esses vendedores"}`;
-    else vend = `só com os <b>${a.vendedores.length} vendedores</b> marcados; os totais somam só esses vendedores`;
-    txt = `${quem} vê as abas ${abas}, ${vend}.`;
+    const vistas = a.visoes.filter((id) => !abaSemNinguem(u, visoes.find((v) => v.id === id)));
+    const abas = emLista(vistas.map((v) => `<b>${esc(tituloVisao(v))}</b>`));
+    txt = vistas.length
+      ? `${quem} vê ${vistas.length === 1 ? "a aba" : "as abas"} ${abas}, com ${esc(textoVendedores(u))}; os totais somam só esses vendedores.`
+      : `${quem} não veria nenhuma aba: nenhum vendedor do acesso dela está nas abas marcadas.`;
   }
   el.innerHTML = `${icone("olho")}<span>${txt}</span>`;
 }

@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import app
-from bi.acesso import COOKIE, LimiteApi, LimiteTentativas, Usuarios, escopo_gestao
+from bi.acesso import COOKIE, LimiteApi, LimiteTentativas, Usuarios, escopo_vendedores
 from bi.conversas import NaoEncontrada
 from bi.gestao import Gestao, SemDados
 from tests.apoio import BA, EDIR, BaseBanco
@@ -63,6 +63,8 @@ class TestApiPorHttp(BaseBanco):
                                       ("ana", "visualizador", ["metas"])):
             self.usuarios.salvar({"login": login, "nome": login.title(), "papel": papel, "senha": "segredo1",
                                   "paginas": paginas})
+        self.usuarios.salvar({"login": "bia", "nome": "Bia", "papel": "visualizador", "paginas": ["gestao"],
+                              "escopo": {"modo": "equipes", "equipes": ["BA"]}}, "bia")
         self.gestao = GestaoFalsa()
         # O que o Manipulador usa da Aplicacao nas rotas /api/v1 (e nas do site que os testes chamam).
         self.app = SimpleNamespace(usuarios=self.usuarios, gestao=self.gestao, tentativas=LimiteTentativas(),
@@ -124,7 +126,8 @@ class TestApiPorHttp(BaseBanco):
                          (200, "Bia", True, "App de Testes"))
         status, q, _ = self.pedir("GET", "/api/v1/gestao/quadro?regiao=BA", chave=chave)
         self.assertEqual((status, q), (200, {"regiao": "BA", "acoes": []}))  # sem pode_editar
-        escopo = escopo_gestao(self.usuarios.obter("bia"))
+        escopo = escopo_vendedores(self.usuarios.obter("bia"))  # o acesso da tela Usuários, como na página
+        self.assertEqual(escopo, (None, {"BA"}))
         self.assertEqual(self.gestao.chamadas, [("quadro", "bia", escopo, "BA")])
         status, r, _ = self.pedir("POST", "/api/v1/sair", chave=chave)
         self.assertEqual((status, r), (200, {"ok": True}))

@@ -378,8 +378,14 @@ class Devolucoes:
         return [k for k in range(i - JANELA + 1, i + 1) if k >= self._primeiro()]
 
     @staticmethod
-    def regioes(equipes: set[str] | None) -> list[str]:
-        """As regiões que o usuário pode escolher: Terceirizados só sem limite de equipes."""
+    def regioes(equipes: set[str] | None, permitidos: set[int] | None = None, regras=None) -> list[str]:
+        """As regiões que o usuário pode escolher: as das equipes do acesso; com uma lista de vendedores (precisa das
+        regras), as deles. Terceirizados: sem limite, ou com um terceirizado (sem equipe) na lista."""
+        if permitidos is not None:
+            achadas = {regiao_do_grupo(g) for g in (regras.grupo_conhecido(v) for v in permitidos) if g != "OCULTO"}
+            if equipes is not None:
+                achadas &= set(Devolucoes.regioes(equipes))
+            return [r for r in REGIOES if r in achadas]
         if equipes is None:
             return list(REGIOES)
         return [r for r in ("BA", "ES") if any(g != "OCULTO" and regiao_do_grupo(g) == r for g in equipes)]
@@ -537,12 +543,12 @@ class Devolucoes:
         regiao = regiao or None
         if regiao and regiao not in REGIOES:
             raise ValueError(f"região desconhecida: {regiao}")
-        regioes = self.regioes(equipes)
+        regras = self.calc.regras()
+        regioes = self.regioes(equipes, permitidos, regras)
         if regiao and regiao not in regioes:
             raise PermissionError("seu acesso não inclui esta região")
         self._conferir()
         i, meses = self._escolher_mes(mes)
-        regras = self.calc.regras()
         escolhidos = set(vendedores) if vendedores else None
         da_regiao = self._filtro(regras, permitidos, equipes, regiao)
         filtro = self._filtro(regras, permitidos, equipes, regiao, escolhidos)

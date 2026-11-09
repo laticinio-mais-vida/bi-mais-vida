@@ -8,9 +8,9 @@
   pessoa e recebe uma chave dela, uma por aplicativo. O banco guarda só o hash; a chave vale até vencer, até a pessoa
   desconectar o aplicativo e só com o mesmo contador de sessão do login (a mesma regra que derruba os cookies).
 - Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
-  liberadas em Usuários. O que ele vê dentro de cada página fica na configuração da página: em Metas, as visões
-  (abas) marcadas e, se a lista de vendedores estiver preenchida, só esses vendedores (os totais também); em
-  Projeções e no Assistente, igual a Metas (padrão), todos os vendedores ou só alguns.
+  liberadas em Usuários e, em todas elas (inclusive no Assistente, na API pública e no Crédito), só os vendedores do
+  acesso dele, escolhidos também em Usuários (escopo): todos, os das equipes marcadas (inclusive os que entrarem
+  depois) ou só alguns. O que é próprio de uma página fica na configuração dela: em Metas, as abas que a pessoa vê.
 - Gravações: uma de cada vez (trava no banco), conferindo tudo antes de gravar. As da configuração de uma página
   podem entrar na transação de quem chama (con), para gravar junto com as regras da página.
 """
@@ -29,17 +29,15 @@ import time
 import unicodedata
 
 from .banco import Banco, hora
-from .configuracao import VISOES
+from .configuracao import GRUPOS_VENDEDOR, VISOES
 
 PAPEIS = ("admin", "visualizador")
 PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "sugestao": "Sugestão de Metas", "premiacoes": "Premiações",
            "devolucoes": "Devoluções", "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito"}
-# Crédito: sem escolha de vendedores (quem tem a página vê todos). Sugestão de Metas, Premiações e Devoluções: os
-# vendedores de Metas.
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
-MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
-PAGINAS_COM_ESCOPO = ("projecoes", "assistente", "gestao")  # páginas com essa escolha de vendedores na configuração
-ESCOPO_PADRAO = {"modo": "metas", "vendedores": None}
+# Os vendedores do acesso (bi/migracoes/040_acesso_vendedores.sql): todos / os das equipes marcadas / só alguns.
+MODOS_ESCOPO = ("todos", "equipes", "alguns")
+EQUIPES = tuple(g for g in GRUPOS_VENDEDOR if g != "OCULTO")  # as que dá para marcar (OCULTO só em "todos")
 COOKIE = "mv_sessao"
 DURACAO_SESSAO = 12 * 3600            # sem "manter conectado"
 DURACAO_LEMBRAR = 30 * 24 * 3600      # com "manter conectado"
@@ -47,8 +45,7 @@ ITERACOES = 600_000
 SENHA_MINIMA = 6
 TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastro não se misturam
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
-_COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, escopo_projecoes, "
-            "escopo_assistente, escopo_gestao, criado_em, ultimo_acesso")
+_COLUNAS = "id, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, criado_em, ultimo_acesso"
 _COLUNAS_U = ", ".join("u." + c.strip() for c in _COLUNAS.split(","))  # as mesmas, numa consulta com outra tabela
 _N_COLUNAS = len(_COLUNAS.split(","))
 # API pública: "bimv_" + secrets.token_urlsafe(32) (43 caracteres). O formato é conferido antes de ir ao banco.
@@ -56,6 +53,7 @@ PREFIXO_CHAVE = "bimv_"
 _CHAVE_VALIDA = re.compile(r"^bimv_[A-Za-z0-9_-]{43}$")
 MAX_CHAVES = 10       # aplicativos conectados por pessoa; o 11º desconecta o mais antigo
 MAX_APLICATIVO = 60   # o nome que o outro aplicativo manda (aparece em "Aplicativos conectados")
+_MANTEM = object()   # salvar() sem a chave "escopo": os vendedores do acesso ficam como estavam
 
 
 # --- senhas ---------------------------------------------------------------------------------
@@ -112,11 +110,40 @@ def _de_b64(texto: str) -> bytes:
 # --- usuários -------------------------------------------------------------------------------
 def _usuario(linha) -> dict:
     """Linha da tabela usuarios -> o dicionário que o resto do código usa (com a senha; para a página, publico())."""
-    (id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, vendedores, projecoes, assistente, gestao,
-     criado, ultimo) = linha
+    id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, criado, ultimo = linha
     return {"id": id_, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "senha": senha, "sessao": sessao,
-            "paginas": paginas, "visoes": visoes, "vendedores": vendedores, "projecoes": projecoes,
-            "assistente": assistente, "gestao": gestao, "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
+            "paginas": paginas, "visoes": visoes, "escopo": escopo, "criado_em": hora(criado),
+            "ultimo_acesso": hora(ultimo)}
+
+
+def _valida_escopo(escopo, nome: str) -> dict:
+    """Os vendedores que o visualizador vê em todas as páginas, como vieram da tela Usuários -> o que o banco guarda:
+    {"modo": "todos"} | {"modo": "equipes", "equipes": [...]} (na ordem de EQUIPES) | {"modo": "alguns",
+    "vendedores": [...]} (sem repetir, em ordem). Levanta ValueError com a explicação."""
+    modo = escopo.get("modo") if isinstance(escopo, dict) else None
+    if modo not in MODOS_ESCOPO:
+        raise ValueError(f"escolha quais vendedores {nome} vê")
+    if modo == "todos":
+        return {"modo": "todos"}
+    if modo == "equipes":
+        equipes = escopo.get("equipes") or []
+        if not isinstance(equipes, list) or any(e not in EQUIPES for e in equipes):
+            raise ValueError(f"equipe inválida para {nome}")
+        if not equipes:
+            raise ValueError(f"marque ao menos uma equipe para {nome}, ou escolha outra opção")
+        return {"modo": "equipes", "equipes": [e for e in EQUIPES if e in equipes]}
+    vendedores = escopo.get("vendedores") or []
+    if not isinstance(vendedores, list) or any(isinstance(v, bool) or not isinstance(v, (int, str)) for v in vendedores):
+        raise ValueError(f"vendedor inválido para {nome}")
+    try:
+        vendedores = sorted({int(v) for v in vendedores})
+    except ValueError:
+        raise ValueError(f"vendedor inválido para {nome}") from None
+    if not vendedores:
+        raise ValueError(f"marque ao menos um vendedor para {nome}, ou escolha outra opção")
+    if any(v < 0 for v in vendedores):
+        raise ValueError(f"vendedor inválido para {nome}")
+    return {"modo": "alguns", "vendedores": vendedores}
 
 
 def _paginas_de(u: dict) -> list[str]:
@@ -132,14 +159,14 @@ def _com_pagina(u: dict, pagina: str, ve: bool) -> list[str]:
 
 
 def publico(u: dict) -> dict:
-    """O que a página pode ver de um usuário (sem a senha nem o contador de sessão)."""
+    """O que a página pode ver de um usuário (sem a senha nem o contador de sessão). escopo: os vendedores do acesso
+    (None: administrador, ou visualizador ainda sem vendedores escolhidos)."""
     admin = u["papel"] == "admin"
     return {
         "id": u["id"], "login": u["login"], "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
         "visoes": None if admin else list(u.get("visoes") or []),
-        "vendedores": None if admin else u.get("vendedores"),
         "paginas": None if admin else _paginas_de(u),
-        **{p: None if admin else (u.get(p) or dict(ESCOPO_PADRAO)) for p in PAGINAS_COM_ESCOPO},
+        "escopo": None if admin else u.get("escopo"),
         "criado_em": u.get("criado_em"), "ultimo_acesso": u.get("ultimo_acesso"),
     }
 
@@ -317,9 +344,11 @@ class Usuarios:
             yield c
 
     def salvar(self, dados: dict, login_original: str | None = None, primeiro: bool = False) -> dict:
-        """Cria (login_original vazio) ou altera um usuário: nome, login, senha, papel e páginas. O que a pessoa
-        vê dentro de cada página fica como está (muda na configuração da página). primeiro: só cria se ainda não
-        existe nenhum usuário (o primeiro acesso). Levanta ValueError."""
+        """Cria (login_original vazio) ou altera um usuário: nome, login, senha, papel, páginas e os vendedores que vê
+        (escopo, só do visualizador; a tela Usuários sempre manda, e None ali é "ainda não escolheu" -> ValueError;
+        sem a chave, fica o que estava, e quem é novo fica sem vendedores). O que é próprio de uma página (as abas de
+        Metas) fica como está: muda na configuração da página. primeiro: só cria se ainda não existe nenhum usuário (o
+        primeiro acesso). Levanta ValueError."""
         login = str(dados.get("login") or "").strip().lower()
         if not _LOGIN_VALIDO.match(login):
             raise ValueError("o usuário deve ter de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado, sem espaço nem acento")
@@ -331,10 +360,13 @@ class Usuarios:
             raise ValueError("papel inválido")
         ativo = bool(dados.get("ativo", True))
         paginas = None
+        escopo = _MANTEM
         if papel != "admin":
             paginas = [p for p in PAGINAS if p in (dados.get("paginas") or [])]
             if not paginas:
                 raise ValueError("escolha ao menos uma página para o visualizador")
+            if "escopo" in dados:
+                escopo = _valida_escopo(dados["escopo"], nome)
         senha = dados.get("senha") or None
         hash_senha = gerar_hash(_valida_senha(senha)) if senha else None  # demorado: antes da trava
 
@@ -353,7 +385,11 @@ class Usuarios:
                     raise ValueError(f"já existe o usuário {login}")
                 if not senha:
                     raise ValueError("informe a senha do novo usuário")
-                u = {"sessao": 0}
+                u = {"sessao": 0, "escopo": None}
+            if papel == "admin":
+                escopo = None  # o administrador vê tudo
+            elif escopo is _MANTEM:
+                escopo = u["escopo"] if u.get("papel") == "visualizador" else None  # quem era administrador: escolher
             novo = {**u, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "paginas": paginas}
             if hash_senha:
                 novo["senha"] = hash_senha
@@ -362,22 +398,25 @@ class Usuarios:
             outros = [v for k, v in usuarios.items() if k != login_original] + [novo]
             if usuarios and not any(v["papel"] == "admin" and v["ativo"] for v in outros):
                 raise ValueError("precisa ficar pelo menos um administrador ativo")
+            escopo_json = None if escopo is None else json.dumps(escopo)
             if login_original:
                 linha = con.execute(
                     f"UPDATE usuarios SET login = %s, nome = %s, papel = %s, ativo = %s, paginas = %s::text[], "
-                    f"senha = %s, sessao = %s WHERE id = %s RETURNING {_COLUNAS}",
-                    [login, nome, papel, ativo, paginas, novo["senha"], novo["sessao"], u["id"]]).fetchone()
+                    f"escopo = %s::jsonb, senha = %s, sessao = %s WHERE id = %s RETURNING {_COLUNAS}",
+                    [login, nome, papel, ativo, paginas, escopo_json, novo["senha"], novo["sessao"],
+                     u["id"]]).fetchone()
             else:
                 # Sem abas de Metas até o administrador escolher em Metas › Configurar.
                 linha = con.execute(
-                    f"INSERT INTO usuarios (login, nome, papel, ativo, senha, paginas, visoes) "
-                    f"VALUES (%s, %s, %s, %s, %s, %s::text[], '{{}}') RETURNING {_COLUNAS}",
-                    [login, nome, papel, ativo, novo["senha"], paginas]).fetchone()
+                    f"INSERT INTO usuarios (login, nome, papel, ativo, senha, paginas, visoes, escopo) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s::text[], '{{}}', %s::jsonb) RETURNING {_COLUNAS}",
+                    [login, nome, papel, ativo, novo["senha"], paginas, escopo_json]).fetchone()
         return publico(_usuario(linha))
 
     def definir_metas(self, mudancas: dict, con=None) -> None:
-        """Pela configuração da página Metas: {login: {"ve": bool, "visoes": [ids], "vendedores": [ids] | None}}
-        (vendedores None = todos os das abas). Confere tudo antes de gravar, para não salvar só metade."""
+        """Pela configuração da página Metas: {login: {"ve": bool, "visoes": [ids]}}, as abas que a pessoa vê (os
+        vendedores dentro delas são os do acesso, da tela Usuários). Confere tudo antes de gravar, para não salvar só
+        metade."""
         with self._cadastro(con) as c:
             usuarios = {u["login"]: u for u in self._buscar(c)}
             novos = {}
@@ -388,55 +427,13 @@ class Usuarios:
                 if u["papel"] == "admin":
                     continue  # administrador vê tudo
                 visoes = [v for v in VISOES if v in (m.get("visoes") or [])]
-                vendedores = m.get("vendedores")
-                if vendedores is not None:
-                    vendedores = sorted({int(v) for v in vendedores})
                 paginas = _com_pagina(u, "metas", bool(m["ve"])) if "ve" in m else _paginas_de(u)
-                if "metas" in paginas:
-                    if not visoes:
-                        raise ValueError(f"marque ao menos uma aba para {u['nome']}, ou desligue a página")
-                    if vendedores is not None and not vendedores:
-                        raise ValueError(f"marque ao menos um vendedor para {u['nome']}, ou escolha todos das abas")
-                novos[u["id"]] = [visoes, vendedores, paginas]
-            for id_, (visoes, vendedores, paginas) in novos.items():
-                c.execute("UPDATE usuarios SET visoes = %s::text[], vendedores = %s::int[], paginas = %s::text[] "
-                          "WHERE id = %s", [visoes, vendedores, paginas, id_])
-
-    def definir_projecoes(self, mudancas: dict, con=None) -> None:
-        """Pela configuração da página Projeções: {login: {"ve": bool, "modo": ..., "vendedores": [ids]}}."""
-        self._definir_escopo("projecoes", mudancas, con)
-
-    def definir_assistente(self, mudancas: dict, con=None) -> None:
-        """Pela configuração da página Assistente, no mesmo formato de definir_projecoes."""
-        self._definir_escopo("assistente", mudancas, con)
-
-    def definir_gestao(self, mudancas: dict, con=None) -> None:
-        """Pela configuração da página Gestão (os vendedores que a pessoa pode pôr nas campanhas), no mesmo formato."""
-        self._definir_escopo("gestao", mudancas, con)
-
-    def _definir_escopo(self, pagina: str, mudancas: dict, con=None) -> None:
-        """Vendedores que cada usuário vê numa página de PAGINAS_COM_ESCOPO. Confere tudo antes de gravar, para
-        não salvar só metade."""
-        with self._cadastro(con) as c:
-            usuarios = {u["login"]: u for u in self._buscar(c)}
-            novos = {}
-            for login, m in (mudancas or {}).items():
-                u = usuarios.get(login)
-                if not u:
-                    raise ValueError(f"usuário não encontrado: {login}")
-                if u["papel"] == "admin":
-                    continue  # administrador vê tudo
-                modo = m.get("modo", "metas")
-                if modo not in MODOS_ESCOPO:
-                    raise ValueError(f"modo inválido para {login}: {modo}")
-                vendedores = sorted({int(v) for v in m.get("vendedores") or []}) if modo == "alguns" else None
-                if modo == "alguns" and not vendedores:
-                    raise ValueError(f"escolha ao menos um vendedor para {u['nome']}, ou outra opção")
-                paginas = _com_pagina(u, pagina, bool(m["ve"])) if "ve" in m else _paginas_de(u)
-                novos[u["id"]] = [json.dumps({"modo": modo, "vendedores": vendedores}), paginas]
-            for id_, (escopo, paginas) in novos.items():
-                c.execute(f"UPDATE usuarios SET escopo_{pagina} = %s::jsonb, paginas = %s::text[] WHERE id = %s",
-                          [escopo, paginas, id_])
+                if "metas" in paginas and not visoes:
+                    raise ValueError(f"marque ao menos uma aba para {u['nome']}, ou desligue a página")
+                novos[u["id"]] = [visoes, paginas]
+            for id_, (visoes, paginas) in novos.items():
+                c.execute("UPDATE usuarios SET visoes = %s::text[], paginas = %s::text[] WHERE id = %s",
+                          [visoes, paginas, id_])
 
     def excluir(self, login: str) -> None:
         """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo). As
@@ -477,68 +474,25 @@ def paginas_permitidas(usuario: dict) -> list[str]:
     return list(PAGINAS) if eh_admin(usuario) else list(usuario["paginas"])
 
 
-def equipes_permitidas(usuario: dict) -> set[str]:
-    """Equipes (grupos de vendedor) das visões liberadas: o modo "igual a Metas" de Projeções usa isto."""
-    return {g for v in visoes_permitidas(usuario) for g in VISOES[v]["grupos"]}
-
-
-def escopo_projecoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) que o usuário vê em Projeções; None = sem limite além dos vendedores da página."""
-    return _escopo(usuario, "projecoes")
-
-
-def escopo_assistente(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) cujas vendas o usuário consulta no Assistente; None = sem limite."""
-    return _escopo(usuario, "assistente")
-
-
-def escopo_gestao(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) que o usuário pode pôr nas campanhas da Gestão e ver no andamento; None = sem limite."""
-    return _escopo(usuario, "gestao")
-
-
-def escopo_sugestao(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) que o usuário vê na Sugestão de Metas: os mesmos de Metas (as equipes das abas liberadas
-    e os vendedores liberados); None = sem limite."""
+def escopo_vendedores(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) que a pessoa vê em todas as páginas, como as contas recebem: o acesso da tela Usuários.
+    None = sem limite daquele lado: "todos" -> (None, None); "equipes" -> (None, {equipes}); "alguns" -> ({ids}, None).
+    O visualizador ainda sem vendedores escolhidos não vê nenhum: (set(), None)."""
     if eh_admin(usuario):
         return None, None
-    return vendedores_permitidos(usuario), equipes_permitidas(usuario)
-
-
-def escopo_premiacoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) que o usuário vê em Premiações: os mesmos de Metas, como na Sugestão. A aba dos
-    supervisores só aparece sem lista de vendedores (ela soma a carteira inteira do estado). None = sem limite."""
-    if eh_admin(usuario):
+    e = usuario.get("escopo")
+    if not e:
+        return set(), None
+    if e["modo"] == "todos":
         return None, None
-    return vendedores_permitidos(usuario), equipes_permitidas(usuario)
-
-
-def escopo_devolucoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
-    """(vendedores, equipes) que o usuário vê em Devoluções e no Parecer: os mesmos de Metas, como nas Premiações. Os
-    terceirizados (sem equipe) só aparecem para quem não tem limite. None = sem limite."""
-    return escopo_premiacoes(usuario)
-
-
-def _escopo(usuario: dict, pagina: str) -> tuple[set[int] | None, set[str] | None]:
-    if eh_admin(usuario):
-        return None, None
-    p = usuario.get(pagina) or ESCOPO_PADRAO
-    if p["modo"] == "todos":
-        return None, None
-    if p["modo"] == "alguns":
-        return set(p.get("vendedores") or []), None
-    return vendedores_permitidos(usuario), equipes_permitidas(usuario)
+    if e["modo"] == "equipes":
+        return None, set(e["equipes"])
+    return set(e["vendedores"]), None
 
 
 def visoes_permitidas(usuario: dict) -> list[str]:
+    """As abas de Metas liberadas na configuração da página (as do administrador: todas)."""
     return list(VISOES) if eh_admin(usuario) else [v for v in VISOES if v in (usuario["visoes"] or [])]
-
-
-def vendedores_permitidos(usuario: dict) -> set[int] | None:
-    """None = todos os vendedores das visões liberadas."""
-    if eh_admin(usuario) or usuario["vendedores"] is None:
-        return None
-    return set(usuario["vendedores"])
 
 
 # --- tentativas de login --------------------------------------------------------------------

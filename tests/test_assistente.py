@@ -9,6 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from bi.assistente import ErroAssistente, Ferramentas
@@ -78,6 +79,44 @@ class TestRecorte(Base):
         a = criar_assistente(self.pasta, self.calc)
         self.assertEqual(a.ids_do_escopo({BA, EDIR}, None), frozenset({BA, EDIR}))
         self.assertIsNone(a.ids_do_escopo(None, None))
+        self.assertEqual(a.ids_do_escopo(set(), None), frozenset())  # ainda sem vendedores escolhidos em Usuários
+
+    def test_texto_do_acesso(self):
+        """O "consulta …" da página, para os modos da tela Usuários."""
+        a = criar_assistente(self.pasta, self.calc)
+        self.assertEqual(a.descrever_escopo(None, None, None), "todos os vendedores")
+        self.assertEqual(a.descrever_escopo(a.ids_do_escopo(None, {"BA", "EDIR"}), None, {"BA", "EDIR"}),
+                         "vendedores das equipes BA e Edir")
+        self.assertEqual(a.descrever_escopo(frozenset({ES}), {ES}, None), "1 vendedor: Rubens")
+        self.assertEqual(a.descrever_escopo(frozenset(), set(), None), "nenhum vendedor (fale com o administrador)")
+
+    def test_abas_de_metas_do_acesso(self):
+        """app.py: a aba de Metas sem nenhum vendedor do acesso da pessoa fica escondida (com "só alguns", só contam
+        os vendedores da planilha de metas)."""
+        import app  # noqa: PLC0415 (o painel inteiro: só este teste precisa)
+        fingido = SimpleNamespace(app=SimpleNamespace(calc=self.calc))
+        todas = ["es", "ba", "edir", "outras_es", "produtos_ba", "produtos_es"]
+        abas = lambda escopo, papel="visualizador": app.Manipulador._visoes_do_acesso(  # noqa: E731
+            fingido, {"papel": papel, "visoes": todas, "escopo": escopo})
+        self.assertEqual(abas({"modo": "equipes", "equipes": ["ES"]}), ["es", "outras_es", "produtos_es"])
+        self.assertEqual(abas({"modo": "equipes", "equipes": ["EDIR"]}), ["edir", "produtos_ba"])
+        self.assertEqual(abas({"modo": "alguns", "vendedores": [BA]}), ["ba", "produtos_ba"])
+        self.assertEqual(abas({"modo": "alguns", "vendedores": [99999]}), [])  # sem meta na planilha
+        self.assertEqual(abas({"modo": "todos"}), todas)
+        self.assertEqual(abas(None), [])  # ainda sem vendedores escolhidos
+        self.assertEqual(abas(None, "admin"), todas)
+
+    def test_catalogo_da_tela_usuarios(self):
+        """A lista do "só alguns" em Usuários: quem vendeu em 12 meses e, com com_metas, quem tem meta na planilha
+        (com_meta diz quem aparece nas abas de Metas)."""
+        a = criar_assistente(self.pasta, self.calc)
+        simples = a.catalogo_vendedores()
+        self.assertTrue(simples and all("com_meta" not in v for v in simples))
+        cat = {v["id"]: v for v in a.catalogo_vendedores(com_metas=True)}
+        self.assertLessEqual({v["id"] for v in simples}, set(cat))
+        planilha = {m["id_vendedor"] for m in self.calc.metas.dados()}
+        self.assertEqual({v for v, x in cat.items() if x["com_meta"]}, planilha & set(cat))
+        self.assertEqual((cat[ES]["equipe"], cat[EDIR]["rotulo_equipe"]), ("ES", "Edir"))
 
     def test_recorte_reaproveitado_e_refeito_quando_regra_muda(self):
         a = criar_assistente(self.pasta, self.calc)

@@ -529,9 +529,10 @@ class Sugestao:
         return indice(inicio) + 13, indice(cache.data_ref()) + 1
 
     def calcular(self, estado: str | None = None, mes: str | None = None, vendedor=None, area=None,
-                 permitidos: set[int] | None = None, equipes: set[str] | None = None) -> dict:
+                 permitidos: set[int] | None = None, equipes: set[str] | None = None, admin: bool | None = None) -> dict:
         """estado: ES ou BA (vazio = o primeiro do acesso); mes: o mês da meta, AAAA-MM (vazio = o mês dos dados);
-        vendedor/area: filtros (vazio = todos). permitidos/equipes: o que o usuário vê (None = sem limite)."""
+        vendedor/area: filtros (vazio = todos). permitidos/equipes: o que o usuário vê (None = sem limite). admin: quem
+        vê os avisos do administrador (None = quem não tem limite; um visualizador com todos os vendedores não vê)."""
         self._conferir()
         regras = self.calc.regras()
         d = self._dados(regras)
@@ -629,7 +630,8 @@ class Sugestao:
                           "em Gestão › Configurar.")
         if self.ajustes is not None and self.ajustes.aviso:
             avisos.append(self.ajustes.aviso)
-        if permitidos is None and equipes is None:  # o administrador vê os ajustes que a conta não usa mais
+        do_admin = admin if admin is not None else (permitidos is None and equipes is None)
+        if do_admin:  # o administrador vê os ajustes que a conta não usa mais
             presentes = {(ln["v"], ln["a"] or 0, ln["p"]) for ln in linhas_resumo}
             do_estado = set(todos)
             perdidos = [c for c in self._ajustes(i_meta) if c[0] in do_estado and c not in presentes]

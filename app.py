@@ -41,9 +41,8 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
-from bi.acesso import (COOKIE, PAGINAS, ApiOcupada, LimiteApi, LimiteTentativas, Usuarios, eh_admin,  # noqa: E402
-                       escopo_assistente, escopo_devolucoes, escopo_gestao, escopo_premiacoes, escopo_projecoes,
-                       escopo_sugestao, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+from bi.acesso import (COOKIE, EQUIPES, PAGINAS, ApiOcupada, LimiteApi, LimiteTentativas, Usuarios,  # noqa: E402
+                       eh_admin, escopo_vendedores, paginas_permitidas, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.ajustes import AjustesVolume  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
@@ -61,7 +60,7 @@ from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.premiacoes import ConfigPremiacoes, Premiacoes  # noqa: E402
-from bi.projecoes import ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
+from bi.projecoes import NOME_EQUIPE, ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
 from bi.reanalise import ConfigCredito, Reanalises  # noqa: E402
 from bi.serasa import DadosSerasa  # noqa: E402
@@ -407,35 +406,75 @@ class Manipulador(BaseHTTPRequestHandler):
         return self._json({"ok": True, "usuario": u, "usuarios": self.app.usuarios.listar()}, cookie=cookie)
 
     def _visualizadores(self) -> dict:
-        """Quem a configuração de uma página lista em "Acesso por usuário" (administrador vê tudo)."""
+        """Quem a configuração de Metas lista em "Abas por usuário" (as abas de cada um; o administrador vê tudo).
+        Cada um vem com os vendedores do acesso (escopo, da tela Usuários), para a tela avisar da aba sem nenhum, e
+        nomes traz o nome dos vendedores das listas de "só alguns"."""
+        usuarios = [u for u in self.app.usuarios.listar() if u["papel"] != "admin"]
+        ids = {v for u in usuarios if (u["escopo"] or {}).get("modo") == "alguns" for v in u["escopo"]["vendedores"]}
+        nomes = {}
+        if ids and self.app.cache.pronto():
+            todos = self.app.projetor._nomes_vendedores()
+            nomes = {v: todos[v] for v in ids if v in todos}
         return {
-            "usuarios": [u for u in self.app.usuarios.listar() if u["papel"] != "admin"],
+            "usuarios": usuarios,
             "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
+            "nomes": nomes,
         }
 
+    def _config_usuarios(self) -> dict:
+        """A tela Usuários: as pessoas, as páginas e, para escolher os vendedores do acesso, as equipes e a lista de
+        vendedores (sem a cópia do banco ainda, a lista vem vazia, com o aviso)."""
+        vendedores, aviso = [], None
+        if self.app.cache.pronto():
+            vendedores = self.app.assistente.catalogo_vendedores(com_metas=True)
+        else:
+            aviso = "A lista de vendedores aparece depois da primeira cópia do banco do ERP."
+        return {"usuarios": self.app.usuarios.listar(),
+                "paginas": [{"id": k, "titulo": v} for k, v in PAGINAS.items()],
+                "equipes": [{"id": e, "nome": NOME_EQUIPE.get(e, e)} for e in EQUIPES],
+                "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
+                "vendedores": vendedores, "aviso_vendedores": aviso, "data_ref": self.app.cache.info.get("data_ref")}
+
     def _config_projecoes(self) -> dict:
-        """Configuração da página Projeções: vendedores da página e o que cada visualizador vê nela."""
-        return {**self.app.projetor.catalogo(), **self._visualizadores()}
+        """Configuração da página Projeções: os vendedores da página."""
+        return self.app.projetor.catalogo()
 
     def _config_assistente(self) -> dict:
-        """Configuração da página Assistente: o que cada visualizador consulta e o uso dos últimos 30 dias."""
-        return {"vendedores": self.app.assistente.catalogo_vendedores(), "uso": self.app.assistente.uso(),
-                "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores()}
+        """Configuração da página Assistente: o uso dos últimos 30 dias."""
+        return {"uso": self.app.assistente.uso(), "data_ref": self.app.cache.info.get("data_ref")}
 
     def _config_gestao(self) -> dict:
-        """Configuração da página Gestão: os vendedores que cada visualizador acompanha (as campanhas, os objetivos e o
-        histórico deles) e os dias de atendimento das áreas comerciais (efetividade)."""
-        return {"vendedores": self.app.assistente.catalogo_vendedores(),
-                "data_ref": self.app.cache.info.get("data_ref"), **self._visualizadores(),
-                **self.app.gestao.config_areas()}
+        """Configuração da página Gestão: os dias de atendimento das áreas comerciais (efetividade)."""
+        return {"data_ref": self.app.cache.info.get("data_ref"), **self.app.gestao.config_areas()}
 
     def _salvar_config_gestao(self, usuario: dict, corpo: dict):
-        """Acessos e dias de atendimento numa transação só: ou grava tudo, ou nada."""
+        """Os dias de atendimento das áreas, numa transação só: ou grava tudo, ou nada."""
         with self.app.banco.conexao() as con:
-            self.app.usuarios.definir_gestao(corpo.get("usuarios") or {}, con)
             self.app.gestao.definir_areas(usuario, corpo.get("areas") or {}, con)
         log.info("%s salvou a configuração da Gestão", usuario["login"])
         return self._json({"ok": True, **self._config_gestao()})
+
+    def _ids(self, usuario: dict) -> frozenset[int] | None:
+        """Os vendedores do acesso (tela Usuários) como códigos, para as contas que filtram só por vendedor (Metas e
+        Crédito): os das equipes, se for o caso, saem das regras de Metas, como no Assistente e na Gestão. None = todos."""
+        vendedores, equipes = escopo_vendedores(usuario)
+        if vendedores is None and equipes is None:
+            return None
+        return self.app.assistente.ids_do_escopo(vendedores, equipes)
+
+    def _visoes_do_acesso(self, usuario: dict) -> list[str]:
+        """As abas de Metas que a pessoa vê: as liberadas na configuração da página que têm algum vendedor do acesso
+        dela (a aba sem nenhum fica escondida, em vez de aparecer vazia). Com "só alguns", contam só os vendedores da
+        planilha de metas (quem não tem meta não aparece em aba nenhuma)."""
+        visoes = visoes_permitidas(usuario)
+        vendedores, equipes = escopo_vendedores(usuario)
+        if vendedores is None and equipes is None:
+            return visoes
+        if vendedores is not None:
+            regras = self.app.calc.regras()
+            planilha = {m["id_vendedor"] for m in self.app.calc.metas.dados()}
+            equipes = {regras.grupo_vendedor(v) for v in vendedores if v in planilha}
+        return [v for v in visoes if equipes & set(VISOES[v]["grupos"])]
 
     def _pode_gestao(self, usuario: dict) -> bool:
         if "gestao" in paginas_permitidas(usuario):
@@ -446,7 +485,7 @@ class Manipulador(BaseHTTPRequestHandler):
     def _ler_gestao(self, usuario: dict, caminho: str, q: dict):
         if not self._pode_gestao(usuario):
             return
-        gestao, escopo = self.app.gestao, escopo_gestao(usuario)
+        gestao, escopo = self.app.gestao, escopo_vendedores(usuario)
         if caminho == "/api/gestao":  # o quadro de uma região (sem região: a primeira do acesso)
             return self._json(gestao.quadro(usuario, escopo, q.get("regiao")))
         if caminho == "/api/gestao/desempenho":  # o painel de desempenho; periodo: ultimo_dia, semana ou hoje
@@ -513,10 +552,11 @@ class Manipulador(BaseHTTPRequestHandler):
         a resposta traz a lista nova do cliente."""
         if not self._pode_credito(usuario):
             return
-        if caminho == "/api/credito/reanalise/excluir":
+        if caminho == "/api/credito/reanalise/excluir":  # quem registrou ou um administrador (bi/reanalise.py)
             r = self.app.reanalises.excluir(usuario, corpo.get("id"))
             log.info("%s excluiu a reanálise de crédito %s", usuario["login"], corpo.get("id"))
             return self._json({"ok": True, **r})
+        self.app.credito.conferir_cliente(corpo.get("cliente"), self._ids(usuario))
         r = self.app.reanalises.registrar(usuario, corpo)
         if not r["ja_existia"]:
             log.info("%s registrou a reanálise de crédito %s (cliente %s)", usuario["login"], r["id"], corpo.get("cliente"))
@@ -527,7 +567,7 @@ class Manipulador(BaseHTTPRequestHandler):
         (quem enviou ou um administrador); a resposta traz a lista nova do cliente."""
         if not self._pode_credito(usuario):
             return
-        if caminho == "/api/credito/serasa/excluir":
+        if caminho == "/api/credito/serasa/excluir":  # quem enviou ou um administrador (bi/serasa.py)
             corpo = self._corpo_json()
             r = self.app.serasa.excluir(usuario, corpo.get("id"))
             log.info("%s excluiu os dados do Serasa %s", usuario["login"], corpo.get("id"))
@@ -536,6 +576,7 @@ class Manipulador(BaseHTTPRequestHandler):
         if tamanho > MAX_PDF_SERASA:
             raise ValueError(f"o arquivo passou de {MAX_PDF_SERASA // (1024 * 1024)} MB")
         conteudo = self.rfile.read(tamanho) if tamanho else b""
+        self.app.credito.conferir_cliente(q.get("cliente"), self._ids(usuario))
         r = self.app.serasa.enviar(usuario, q.get("cliente"), conteudo, q.get("confirmar") == "1")
         if "confirmar" in r:
             return self._json({"ok": False, **r})
@@ -554,11 +595,11 @@ class Manipulador(BaseHTTPRequestHandler):
         1 min). O servidor lê a conversa do banco; sem conversa, começa uma nova."""
         if not self._pode_assistente(usuario):
             return
-        vendedores, equipes = escopo_assistente(usuario)
+        vendedores, equipes = escopo_vendedores(usuario)
         tem_gestao = "gestao" in paginas_permitidas(usuario)
-        gestao = self.app.gestao.contexto(usuario, escopo_gestao(usuario)) if tem_gestao else None
+        gestao = self.app.gestao.contexto(usuario, (vendedores, equipes)) if tem_gestao else None
         agenda = self.app.agenda.contexto(usuario["id"]) if tem_gestao else None  # a agenda fica na Gestão
-        sugestao = ((self.app.sugestao, *escopo_sugestao(usuario)) if "sugestao" in paginas_permitidas(usuario)
+        sugestao = ((self.app.sugestao, vendedores, equipes) if "sugestao" in paginas_permitidas(usuario)
                     else None)
         try:
             return self._json(self.app.assistente.perguntar(usuario, corpo.get("conversa"), corpo.get("pergunta"),
@@ -603,7 +644,7 @@ class Manipulador(BaseHTTPRequestHandler):
         if achado is None:
             raise NaoEncontrada("arquivo não encontrado; a conversa pode ter sido excluída")
         arquivo, texto = achado
-        vendedores, equipes = escopo_assistente(usuario)
+        vendedores, equipes = escopo_vendedores(usuario)
         try:
             conteudo, nome, tipo = self.app.assistente.arquivo(usuario, arquivo, texto, vendedores, equipes,
                                                                "credito" in paginas_permitidas(usuario))
@@ -626,8 +667,8 @@ class Manipulador(BaseHTTPRequestHandler):
         return self._json({"ok": True})
 
     def _salvar_config_metas(self, eu: dict, corpo: dict):
-        """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas e os vendedores que cada
-        visualizador vê. As duas partes vão numa transação só: ou grava tudo, ou nada."""
+        """Configuração da página Metas: as regras de cálculo e, em "usuarios", as abas que cada visualizador vê (os
+        vendedores dele ficam em Usuários). As duas partes vão numa transação só: ou grava tudo, ou nada."""
         acessos = corpo.pop("usuarios", None)
         configuracao = self.app.configuracao
         if corpo:
@@ -642,14 +683,13 @@ class Manipulador(BaseHTTPRequestHandler):
             configuracao.usar(*versao)
             log.info("%s salvou as regras de Metas (versão %s)", eu["login"], versao[0])
         if acessos:
-            log.info("%s alterou o acesso de Metas de %s", eu["login"], ", ".join(acessos))
+            log.info("%s alterou as abas de Metas de %s", eu["login"], ", ".join(acessos))
         return self._json({"ok": True, "config": configuracao.atual(), **self._visualizadores()})
 
     def _salvar_config_projecoes(self, eu: dict, corpo: dict):
-        """Configuração da página Projeções: os vendedores da página e o que cada visualizador vê, juntos."""
+        """Configuração da página Projeções: os vendedores da página (os de cada pessoa ficam em Usuários)."""
         config = self.app.config_projecoes
         with self.app.banco.conexao() as con:
-            self.app.usuarios.definir_projecoes(corpo.get("usuarios") or {}, con)
             versao = config.gravar(corpo.get("vendedores") or {}, eu, con)
         config.usar(*versao)
         log.info("%s salvou a configuração das projeções (versão %s)", eu["login"], versao[0])
@@ -967,7 +1007,7 @@ class Manipulador(BaseHTTPRequestHandler):
                                "chave": {k: info[k] for k in ("aplicativo", "criada_em", "expira_em")}})
         if not tem_gestao:
             return self._erro("seu acesso não inclui a página Gestão", HTTPStatus.FORBIDDEN)
-        gestao, escopo = self.app.gestao, escopo_gestao(usuario)
+        gestao, escopo = self.app.gestao, escopo_vendedores(usuario)
         if caminho == "/api/v1/gestao/quadro":
             dados = gestao.quadro(usuario, escopo, q.get("regiao"))
         elif caminho == "/api/v1/gestao/vendedor":
@@ -1000,7 +1040,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.estado())
             if url.path == "/api/opcoes":
                 opcoes = self.app.calc.opcoes()
-                permitidas = visoes_permitidas(usuario)
+                permitidas = self._visoes_do_acesso(usuario)
                 opcoes["visoes"] = [v for v in opcoes["visoes"] if v["id"] in permitidas]
                 return self._json(opcoes)
             lista = lambda k: [int(x) for x in q[k].split(",") if x.strip()] if q.get(k) else None  # noqa: E731
@@ -1008,15 +1048,15 @@ class Manipulador(BaseHTTPRequestHandler):
                 if "metas" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Metas", HTTPStatus.FORBIDDEN)
                 visao = q.get("visao", "es")
-                if visao not in visoes_permitidas(usuario):
+                if visao not in self._visoes_do_acesso(usuario):
                     return self._erro("seu acesso não inclui esta visão", HTTPStatus.FORBIDDEN)
                 # meses=2026-09,2026-10 (vários meses somados); vendedores=12,15 (vazio = todos do acesso)
                 meses = [tuple(int(p) for p in m.split("-")) for m in (q.get("meses") or "").split(",") if m.strip()]
-                return self._json(self.app.calc.visao(visao, meses, lista("vendedores"), vendedores_permitidos(usuario)))
+                return self._json(self.app.calc.visao(visao, meses, lista("vendedores"), self._ids(usuario)))
             if url.path == "/api/projecoes":
                 if "projecoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Projeções", HTTPStatus.FORBIDDEN)
-                permitidos, equipes = escopo_projecoes(usuario)
+                permitidos, equipes = escopo_vendedores(usuario)
                 try:
                     return self._json(self.app.projetor.calcular(lista("vendedores"), lista("produtos"),
                                                                  permitidos, equipes))
@@ -1027,7 +1067,8 @@ class Manipulador(BaseHTTPRequestHandler):
                     return self._erro("seu acesso não inclui a página Sugestão de Metas", HTTPStatus.FORBIDDEN)
                 # estado=BA&mes=2026-11 (o mês da meta; o base é o anterior)&vendedor=98&area=170 (vazios = todos)
                 return self._json(self.app.sugestao.calcular(q.get("estado"), q.get("mes"), q.get("vendedor"),
-                                                             q.get("area"), *escopo_sugestao(usuario)))
+                                                             q.get("area"), *escopo_vendedores(usuario),
+                                                             admin=eh_admin(usuario)))
             if url.path == "/api/sugestao/config":
                 return self._json(self.app.sugestao.config_dados(q.get("mes")))
             if url.path == "/api/sugestao/aprovacao":  # estado=BA&mes=2026-11
@@ -1036,13 +1077,13 @@ class Manipulador(BaseHTTPRequestHandler):
                 if "premiacoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Premiações", HTTPStatus.FORBIDDEN)
                 # aba=vendedores|supervisores|comissao&mes=2026-10 (vazio = o mês dos dados)
-                return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_premiacoes(usuario)))
+                return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_vendedores(usuario)))
             if url.path == "/api/premiacoes/config":
                 return self._json(self.app.premiacoes.config_dados(q.get("mes")))
             if url.path in ("/api/devolucoes", "/api/devolucoes/parecer"):
                 if "devolucoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Devoluções", HTTPStatus.FORBIDDEN)
-                permitidos, equipes = escopo_devolucoes(usuario)
+                permitidos, equipes = escopo_vendedores(usuario)
                 if url.path == "/api/devolucoes/parecer":
                     # tipo=vendedor|regiao|geral|todos&mes=2026-09&vendedor=98&regiao=BA: o Parecer em PDF (todos = zip)
                     conteudo, nome, tipo = self.app.devolucoes.arquivo(q.get("mes"), q.get("tipo"), q.get("vendedor"),
@@ -1057,18 +1098,24 @@ class Manipulador(BaseHTTPRequestHandler):
                             "/api/credito/serasa"):
                 if not self._pode_credito(usuario):
                     return
+                # Os vendedores do acesso: a busca só acha os clientes deles, os títulos são só deles, e cliente de
+                # fora dá 403 (o limite, o em aberto e o parecer continuam do cliente inteiro).
+                ids = self._ids(usuario)
                 if url.path == "/api/credito/busca":
-                    return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""))})
+                    return self._json({"clientes": self.app.credito.buscar(q.get("texto", ""), permitidos=ids)})
                 if url.path == "/api/credito/analise":  # cliente=12&limite=80000: o parecer de um limite total novo
-                    return self._json(self.app.credito.analisar(q.get("cliente"), q.get("limite")))
+                    return self._json(self.app.credito.analisar(q.get("cliente"), q.get("limite"), permitidos=ids))
                 if url.path == "/api/credito/reanalises":  # cliente=12: as reanálises registradas e o que o form usa
+                    self.app.credito.conferir_cliente(q.get("cliente"), ids)
                     return self._json(self.app.reanalises.listar(q.get("cliente"), usuario))
                 if url.path == "/api/credito/serasa":  # cliente=12: o último envio do Serasa e os anteriores
+                    self.app.credito.conferir_cliente(q.get("cliente"), ids)
                     return self._json(self.app.serasa.listar(q.get("cliente"), usuario))
                 # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
                 d = self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"), inteiro("vendedor"),
-                                              ordem=q.get("ordem") or None, sentido=q.get("sentido") or None)
+                                              permitidos=ids, ordem=q.get("ordem") or None,
+                                              sentido=q.get("sentido") or None)
                 try:  # as regras do crédito, para o "como calcula": a página abre mesmo com o banco fora do ar
                     d["regras"] = self.app.config_credito.atual()
                 except BancoForaDoAr:
@@ -1081,7 +1128,7 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/assistente/info":
                 if not self._pode_assistente(usuario):
                     return
-                return self._json({**self.app.assistente.info(usuario, *escopo_assistente(usuario)),
+                return self._json({**self.app.assistente.info(usuario, *escopo_vendedores(usuario)),
                                    "gestao": "gestao" in paginas_permitidas(usuario)})
             if url.path in ("/api/assistente/conversas", "/api/assistente/conversa"):
                 return self._ler_historico(usuario, url.path, q)
@@ -1105,10 +1152,7 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/calendario":
                 return self._json(self.app.calc.calendario_ano(int(q.get("ano", dt.date.today().year))))
             if url.path == "/api/usuarios":
-                return self._json({
-                    "usuarios": self.app.usuarios.listar(),
-                    "paginas": [{"id": k, "titulo": v} for k, v in PAGINAS.items()],
-                })
+                return self._json(self._config_usuarios())
             return self._erro("rota desconhecida", HTTPStatus.NOT_FOUND)
         except CONEXAO_PERDIDA:
             return
@@ -1198,10 +1242,6 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):
                 return self._mudar_historico(usuario, url.path, self._corpo_json())
-            if url.path == "/api/assistente/config":
-                self.app.usuarios.definir_assistente(self._corpo_json().get("usuarios") or {})
-                log.info("%s salvou o acesso do Assistente", usuario["login"])
-                return self._json({"ok": True, **self._config_assistente()})
             if url.path in ROTAS_GESTAO_MUDAR:
                 return self._mudar_gestao(usuario, url.path, self._corpo_json())
             if url.path == "/api/gestao/config":

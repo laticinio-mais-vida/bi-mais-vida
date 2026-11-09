@@ -238,7 +238,7 @@ class Projetor:
         escopo_k = np.array([(equipes is None or equipe_de[v] in equipes) and (permitidos is None or v in permitidos)
                              for v in vid_k], dtype=bool)
         if not escopo_k.any():
-            raise SemVendedores("Seu acesso ainda não tem vendedores nas Projeções. Fale com o administrador.")
+            raise SemVendedores("Seu acesso não tem vendedores nas Projeções. Fale com o administrador.")
 
         escopo_v = set(vid_k[escopo_k].tolist())
         sel_v = sorted(set(vendedores) & escopo_v) if vendedores else None

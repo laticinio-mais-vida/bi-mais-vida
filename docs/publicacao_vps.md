@@ -140,10 +140,10 @@ muda no outro.
 
 | Quero... | Onde fazer |
 |---|---|
-| Dar acesso a alguém, mudar o que a pessoa vê ou bloquear um acesso | No site, página **Usuários** (só administradores) |
-| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados | No site, página **Metas** › botão **Configurar** (só administradores) |
-| Escolher os vendedores das projeções e o que cada pessoa vê nelas | No site, página **Projeções** › botão **Configurar** (só administradores) |
-| Escolher quais vendedores cada pessoa consulta no assistente e ver o uso e o custo | No site, página **Assistente** › botão **Configurar** (só administradores) |
+| Dar acesso a alguém, escolher as páginas e os vendedores que a pessoa vê (em todas as páginas) ou bloquear um acesso | No site, página **Usuários** (só administradores) |
+| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados; as abas de Metas de cada pessoa | No site, página **Metas** › botão **Configurar** (só administradores) |
+| Escolher os vendedores que entram nas projeções | No site, página **Projeções** › botão **Configurar** (só administradores) |
+| Ver o uso e o custo do assistente | No site, página **Assistente** › botão **Configurar** (só administradores) |
 | Trocar a minha senha | No site, menu com o seu nome (canto superior direito) › Trocar minha senha |
 
 Os acessos do site começaram, em 15/10/2026, como cópia dos do PC (mesmos logins e senhas).
@@ -732,6 +732,23 @@ do administrador.
   aplicativo de teste em Aplicativos conectados.
 - **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e as rotas `/api/v1` somem. Para apagar as
   chaves de vez: `DROP TABLE chaves_api` e `DELETE FROM migracoes WHERE versao = '039_chaves_api'`.
+
+#### Vendedores do acesso em Usuários (migração 040)
+
+Os vendedores que cada visualizador vê saem da configuração das páginas e vão para a tela **Usuários**: todos, só as
+equipes marcadas ou só alguns, valendo para todas as páginas (Metas, Projeções, Sugestão, Premiações, Devoluções,
+Assistente, Gestão, API pública e, agora também, Reavaliação de Crédito). As abas de Metas continuam em Metas ›
+Configurar.
+
+- **A migração 040** cria `usuarios.escopo` a partir do acesso de Metas (com lista de vendedores: só eles; sem lista:
+  as equipes das abas; sem abas: o "todos" ou as listas de "só alguns" das páginas com escolha própria que a pessoa
+  tem) e apaga `vendedores`, `escopo_projecoes`, `escopo_assistente` e `escopo_gestao`. Quem fica sem vendedores sai
+  num aviso do log da migração e na tela Usuários.
+- **Antes de publicar:** compare, para cada visualizador do site, o que ele vê hoje em cada página com o que passa a
+  ver (a 040 no banco de prévia). Quem tinha uma escolha própria diferente da de Metas numa página pode passar a ver
+  menos nela; quem tem a página Crédito passa a ver só os clientes dos vendedores dele.
+- **Voltar atrás:** as colunas antigas foram apagadas: restaure o dump de antes, não só a pasta.
+- **PC:** recebe a 040 quando o código for atualizado lá (os acessos do PC são outros).
 
 #### Faixa da sugestão de metas (sem migração)
 

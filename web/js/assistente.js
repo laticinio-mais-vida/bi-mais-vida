@@ -67,7 +67,7 @@ export async function montarAssistente(container, contexto) {
       <div class="filtros">
         <button class="btn btn-limpar btn-conversas" type="button" id="a-abrir-lista" aria-controls="a-lista" aria-expanded="false" hidden>${icone("menu")}Conversas</button>
         <button class="btn btn-limpar" type="button" id="a-nova">${icone("mais")}Nova conversa</button>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/config-assistente" title="Configurações do assistente: o que cada pessoa consulta e o uso">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        ${ctx.admin ? `<a class="btn btn-config" href="#/config-assistente" title="Configurações do assistente: quanto ele foi usado">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="a-avisos"></div>

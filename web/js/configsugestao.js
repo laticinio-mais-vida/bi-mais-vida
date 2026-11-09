@@ -1,7 +1,8 @@
 // Configuração da página Sugestão de Metas (só administradores): o crescimento desejado no ano por estado, os tetos da
 // sazonalidade e do crescimento proposto, os faturamentos das áreas do BA (prazo entre o atendimento e o faturamento,
 // número fixo para as quinzenais e ajustes à mão por área e mês) e a aprovação das metas, que passam a valer no painel
-// de Metas. Quem vê a página e quais vendedores segue o acesso de Metas. Tudo vale depois de Salvar.
+// de Metas. Quem vê a página fica em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em
+// Usuários). Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const DIAS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
@@ -83,8 +84,8 @@ function render() {
         ["aprovacao", "certo", "Aprovação de metas"]]
         .map(([id, ic, nome]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}</button>`).join("")}
       <div class="dica">${icone("info")} As regras e os faturamentos valem só para a conta da sugestão, assim que você salvar.
-        A meta aprovada vai para o painel de Metas no lugar da planilha. Quem vê a página e quais vendedores segue o acesso
-        de Metas.</div>
+        A meta aprovada vai para o painel de Metas no lugar da planilha. Cada pessoa vê só os vendedores do acesso dela,
+        escolhidos em <a href="#/usuarios">Usuários</a>.</div>
     </aside>
     <div id="cs-secao"></div>
   </div>

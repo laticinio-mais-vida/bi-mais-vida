@@ -1,6 +1,6 @@
-"""Usuários no PostgreSQL (bi/acesso.py): cadastro, sessões, as chaves da API pública e o acesso por página (o modo de
-vendedores do Assistente e de Projeções). Precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados
-(menos os limites da API, que ficam na memória)."""
+"""Usuários no PostgreSQL (bi/acesso.py): cadastro, sessões, as chaves da API pública, os vendedores do acesso (um só
+para todas as páginas, na tela Usuários) e as abas de Metas. Precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem
+ele, são pulados (menos os limites da API e as contas do escopo, que não usam o banco)."""
 from __future__ import annotations
 
 import base64
@@ -12,7 +12,8 @@ import time
 import unittest
 from unittest import mock
 
-from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_assistente, escopo_gestao, escopo_projecoes
+from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_vendedores
+from bi.banco import Banco
 from tests.apoio import BaseBanco
 
 
@@ -29,50 +30,91 @@ class Base(BaseBanco):
         return self.u.obter("ana")
 
 
-class TestEscopoAssistente(Base):
-    def setUp(self):
-        super().setUp()
-        self.u.definir_metas({"ana": {"visoes": ["es"], "vendedores": None}})
+class TestEscopoDaPessoa(unittest.TestCase):
+    """escopo_vendedores: o acesso da tela Usuários na dupla (vendedores, equipes) que as contas de todas as páginas
+    recebem. Sem banco."""
 
-    def test_padrao_igual_a_metas(self):
-        self.assertEqual(self.ana()["assistente"], {"modo": "metas", "vendedores": None})
-        self.assertEqual(escopo_assistente(self.ana()), (None, {"ES"}))
-        self.assertEqual(escopo_assistente(self.u.obter("chefe")), (None, None))
+    def test_cada_modo(self):
+        vis = lambda e: {"papel": "visualizador", "escopo": e}  # noqa: E731
+        self.assertEqual(escopo_vendedores(vis({"modo": "todos"})), (None, None))
+        self.assertEqual(escopo_vendedores(vis({"modo": "equipes", "equipes": ["BA", "EDIR"]})), (None, {"BA", "EDIR"}))
+        self.assertEqual(escopo_vendedores(vis({"modo": "alguns", "vendedores": [124, 141]})), ({124, 141}, None))
+        self.assertEqual(escopo_vendedores(vis(None)), (set(), None))  # ainda sem escolha: nenhum vendedor
+        self.assertEqual(escopo_vendedores({"papel": "visualizador"}), (set(), None))
+        self.assertEqual(escopo_vendedores({"papel": "admin", "escopo": {"modo": "alguns", "vendedores": [1]}}),
+                         (None, None))  # o administrador vê tudo
 
-    def test_todos_e_alguns(self):
-        self.u.definir_assistente({"ana": {"modo": "todos"}})
-        self.assertEqual(escopo_assistente(self.ana()), (None, None))
-        self.u.definir_assistente({"ana": {"modo": "alguns", "vendedores": [141, 124, 124]}})
-        self.assertEqual(escopo_assistente(self.ana()), ({124, 141}, None))
-        self.assertEqual(self.ana()["assistente"]["vendedores"], [124, 141])
-        # Projeções continua com o seu próprio modo
-        self.assertEqual(escopo_projecoes(self.ana()), (None, {"ES"}))
 
-    def test_validacao_e_pagina(self):
+class TestVendedoresDoAcesso(Base):
+    def salvar_ana(self, escopo, **mudancas):
+        return self.u.salvar({"login": "ana", "nome": "Ana", "papel": "visualizador",
+                              "paginas": ["metas", "assistente"], "escopo": escopo, **mudancas}, "ana")
+
+    def test_novo_sem_escolha_nao_ve_ninguem(self):
+        self.assertIsNone(self.ana()["escopo"])
+        self.assertEqual(escopo_vendedores(self.ana()), (set(), None))
+        self.assertIsNone(self.u.obter("chefe")["escopo"])
+        self.assertEqual(escopo_vendedores(self.u.obter("chefe")), (None, None))
+
+    def test_grava_cada_modo(self):
+        self.assertEqual(self.salvar_ana({"modo": "equipes", "equipes": ["EDIR", "BA", "BA"]})["escopo"],
+                         {"modo": "equipes", "equipes": ["BA", "EDIR"]})  # sem repetir, na ordem das equipes
+        self.assertEqual(escopo_vendedores(self.ana()), (None, {"BA", "EDIR"}))
+        self.salvar_ana({"modo": "alguns", "vendedores": [141, 124, "124"], "equipes": ["BA"]})
+        self.assertEqual(self.ana()["escopo"], {"modo": "alguns", "vendedores": [124, 141]})
+        self.assertEqual(escopo_vendedores(self.ana()), ({124, 141}, None))
+        self.salvar_ana({"modo": "todos", "vendedores": [1]})
+        self.assertEqual(self.ana()["escopo"], {"modo": "todos"})
+        # Sem a chave "escopo" (ex.: outro caminho que salva o cadastro), os vendedores ficam como estavam.
+        self.u.salvar({"login": "ana", "nome": "Ana Maria", "papel": "visualizador", "paginas": ["metas"]}, "ana")
+        self.assertEqual((self.ana()["nome"], self.ana()["escopo"]), ("Ana Maria", {"modo": "todos"}))
+
+    def test_validacao(self):
+        self.salvar_ana({"modo": "equipes", "equipes": ["ES"]})
+        for errado in (None, {}, {"modo": "metas"}, {"modo": "qualquer"}, {"modo": "equipes", "equipes": []},
+                       {"modo": "equipes", "equipes": ["OCULTO"]}, {"modo": "equipes", "equipes": "BA"},
+                       {"modo": "alguns", "vendedores": []}, {"modo": "alguns", "vendedores": ["x"]},
+                       {"modo": "alguns", "vendedores": [True]}, {"modo": "alguns", "vendedores": [-3]}, "todos"):
+            with self.subTest(errado=errado), self.assertRaises(ValueError):
+                self.salvar_ana(errado)
+        self.assertEqual(self.ana()["escopo"], {"modo": "equipes", "equipes": ["ES"]})  # nada gravou
+
+    def test_administrador_nao_guarda_e_quem_vira_visualizador_escolhe(self):
+        self.salvar_ana({"modo": "todos"})
+        self.u.salvar({"login": "ana", "nome": "Ana", "papel": "admin", "escopo": {"modo": "alguns",
+                                                                                    "vendedores": [1]}}, "ana")
+        with self.banco.conexao() as con:
+            self.assertIsNone(con.execute("SELECT escopo FROM usuarios WHERE login = 'ana'").fetchone()[0])
+        self.assertIsNone(self.ana()["escopo"])
+        # De volta a visualizador sem escolher: fica sem vendedores (a tela Usuários pede a escolha antes).
+        self.u.salvar({"login": "ana", "nome": "Ana", "papel": "visualizador", "paginas": ["metas"]}, "ana")
+        self.assertEqual(escopo_vendedores(self.ana()), (set(), None))
+        with self.assertRaises(ValueError):  # a tela manda escopo None quando a pessoa ainda não escolheu
+            self.salvar_ana(None)
+
+    def test_criar_ja_com_os_vendedores(self):
+        bia = self.u.salvar({"login": "bia", "nome": "Bia", "papel": "visualizador", "senha": "segredo1",
+                             "paginas": ["gestao"], "escopo": {"modo": "alguns", "vendedores": [85]}})
+        self.assertEqual(bia["escopo"], {"modo": "alguns", "vendedores": [85]})
         with self.assertRaises(ValueError):
-            self.u.definir_assistente({"ana": {"modo": "alguns", "vendedores": []}})
-        with self.assertRaises(ValueError):
-            self.u.definir_assistente({"ana": {"modo": "qualquer"}})
-        self.u.definir_assistente({"ana": {"ve": False, "modo": "metas"}})
-        self.assertEqual(self.ana()["paginas"], ["metas"])
-        self.u.definir_assistente({"ana": {"ve": True, "modo": "todos"}})
-        self.assertEqual(self.ana()["paginas"], ["metas", "assistente"])
+            self.u.salvar({"login": "caio", "nome": "Caio", "papel": "visualizador", "senha": "segredo1",
+                           "paginas": ["gestao"], "escopo": None})
+        self.assertIsNone(self.u.obter("caio"))
 
-    def test_gestao_com_modo_proprio(self):
-        self.assertEqual(self.ana()["gestao"], {"modo": "metas", "vendedores": None})
-        self.assertEqual(escopo_gestao(self.ana()), (None, {"ES"}))
-        self.u.definir_gestao({"ana": {"ve": True, "modo": "alguns", "vendedores": [141]}})
-        self.assertEqual(escopo_gestao(self.ana()), ({141}, None))
-        self.assertEqual(self.ana()["paginas"], ["metas", "assistente", "gestao"])
-        self.assertEqual(escopo_assistente(self.ana()), (None, {"ES"}))  # o Assistente continua com o dele
-        self.assertIsNone(self.u.obter("chefe")["gestao"])
-
-    def test_metas_vendedores_e_tudo_ou_nada(self):
-        self.u.definir_metas({"ana": {"visoes": ["es", "ba"], "vendedores": [124, 141]}})
-        self.assertEqual((self.ana()["visoes"], self.ana()["vendedores"]), (["es", "ba"], [124, 141]))
+    def test_metas_so_as_abas_e_tudo_ou_nada(self):
+        self.salvar_ana({"modo": "alguns", "vendedores": [124]})
+        self.u.definir_metas({"ana": {"visoes": ["es", "ba"], "vendedores": [999]}})  # vendedores: não é mais daqui
+        self.assertEqual((self.ana()["visoes"], self.ana()["escopo"]),
+                         (["es", "ba"], {"modo": "alguns", "vendedores": [124]}))
         with self.assertRaises(ValueError):  # o segundo está errado: o primeiro também não grava
-            self.u.definir_metas({"ana": {"visoes": ["es"], "vendedores": None}, "ninguem": {"visoes": ["es"]}})
+            self.u.definir_metas({"ana": {"visoes": ["es"]}, "ninguem": {"visoes": ["es"]}})
         self.assertEqual(self.ana()["visoes"], ["es", "ba"])
+        with self.assertRaises(ValueError):  # com a página, ao menos uma aba
+            self.u.definir_metas({"ana": {"visoes": []}})
+        self.u.definir_metas({"ana": {"ve": False, "visoes": []}})
+        self.assertEqual(self.ana()["paginas"], ["assistente"])
+        self.u.definir_metas({"ana": {"ve": True, "visoes": ["edir"]}})
+        self.assertEqual((self.ana()["paginas"], self.ana()["visoes"]), (["metas", "assistente"], ["edir"]))
 
 
 class TestCadastroESessao(Base):
@@ -167,6 +209,75 @@ class TestCadastroESessao(Base):
         self.assertEqual(self.u.obter("socorro")["papel"], "admin")
         with self.assertRaises(ValueError):
             self.u.definir_senha("Inválido", "nova-senha")
+
+
+class TestMigracao040(BaseBanco):
+    """bi/migracoes/040_acesso_vendedores.sql: os acessos de antes (Metas com abas e lista, e o modo próprio de
+    Projeções, Assistente e Gestão) viram um só, o da tela Usuários."""
+
+    def setUp(self):
+        super().setUp()
+        todas = Banco._arquivos_migracao()
+        with mock.patch.object(Banco, "_arquivos_migracao", staticmethod(lambda: [a for a in todas if a.stem < "040"])):
+            self.banco.migrar()
+
+    def criar(self, login, papel="visualizador", paginas=("metas",), visoes=(), vendedores=None, **escopos):
+        with self.banco.conexao() as con:
+            con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas, visoes, vendedores, escopo_projecoes, "
+                        "escopo_assistente, escopo_gestao) VALUES (%s, %s, %s, 'x', %s::text[], %s::text[], %s::int[], "
+                        "%s::jsonb, %s::jsonb, %s::jsonb)",
+                        [login, login.title(), papel, None if paginas is None else list(paginas),
+                         None if visoes is None else list(visoes), vendedores,
+                         *(None if escopos.get(p) is None else json.dumps(escopos[p])
+                           for p in ("projecoes", "assistente", "gestao"))])
+
+    def test_cada_caso(self):
+        todos, so = {"modo": "todos", "vendedores": None}, lambda *v: {"modo": "alguns", "vendedores": list(v)}  # noqa: E731
+        self.criar("chefe", "admin", paginas=None, visoes=None)
+        self.criar("sup.es", visoes=["es", "outras_es"])  # como o supervisor.es do PC
+        self.criar("sup.ba", paginas=["metas", "gestao"], visoes=["ba", "produtos_ba"], gestao=todos)  # vale Metas
+        self.criar("lista", visoes=["es"], vendedores=[141, 124, 124])
+        self.criar("vazia", visoes=["es"], vendedores=[])  # hoje não vê ninguém
+        self.criar("gestor", paginas=["gestao", "assistente"], gestao=todos, assistente=so(85))
+        self.criar("somas", paginas=["assistente", "projecoes"], assistente=so(85), projecoes=so(98, 85))
+        self.criar("sem.pagina", paginas=["metas"], gestao=todos)  # o "todos" de uma página que ela não tem
+        self.criar("igual.metas", paginas=["gestao"], gestao={"modo": "metas", "vendedores": None})
+        self.criar("aba.velha", paginas=["projecoes"], visoes=["geral"], projecoes=todos)  # aba que não existe mais
+        self.criar("antigo", paginas=None, visoes=None)  # de antes da escolha de páginas: só Metas
+        self.assertEqual(self.banco.migrar(), ["040_acesso_vendedores"])
+        with self.banco.conexao() as con:
+            escopos = dict(con.execute("SELECT login, escopo FROM usuarios").fetchall())
+            colunas = {c for (c,) in con.execute("SELECT column_name FROM information_schema.columns "
+                                                  "WHERE table_schema = %s AND table_name = 'usuarios'", [self.schema])}
+        self.assertEqual(escopos, {
+            "chefe": None,
+            "sup.es": {"modo": "equipes", "equipes": ["ES"]},
+            "sup.ba": {"modo": "equipes", "equipes": ["BA", "EDIR"]},
+            "lista": {"modo": "alguns", "vendedores": [124, 141]},
+            "vazia": None,
+            "gestor": {"modo": "todos"},
+            "somas": {"modo": "alguns", "vendedores": [85, 98]},
+            "sem.pagina": None,
+            "igual.metas": None,
+            "aba.velha": {"modo": "todos"},
+            "antigo": None,
+        })
+        self.assertFalse({"vendedores", "escopo_projecoes", "escopo_assistente", "escopo_gestao"} & colunas)
+        self.assertIn("visoes", colunas)  # as abas de Metas ficam
+        # O que a migração deixou é o que o painel lê.
+        u = Usuarios(self.banco)
+        self.assertEqual(escopo_vendedores(u.obter("sup.ba")), (None, {"BA", "EDIR"}))
+        self.assertEqual(escopo_vendedores(u.obter("vazia")), (set(), None))
+
+    def test_o_banco_recusa_escopo_mal_formado(self):
+        import psycopg  # só aqui: sem o psycopg, a classe inteira é pulada
+        self.banco.migrar()
+        self.criar_usuario("ana")
+        for errado in ('{"modo": "alguns", "vendedores": []}', '{"modo": "equipes"}', '{"modo": "metas"}', '[1]',
+                       '{"modo": "alguns", "vendedores": 85}'):
+            with self.subTest(errado=errado), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.banco.conexao() as con:
+                    con.execute("UPDATE usuarios SET escopo = %s::jsonb WHERE login = 'ana'", [errado])
 
 
 class TestChavesApi(Base):

@@ -3,7 +3,8 @@
 Este guia é para quem programa **outro aplicativo** que mostra os dados da página **Gestão** do BI Mais Vida. A API é
 **só de leitura**. Cada pessoa entra no outro aplicativo com o usuário e a senha que ela já tem no BI e, pela API, vê
 exatamente o que vê na página Gestão do site. Isso inclui o papel (administrador ou visualizador) e os vendedores e as
-regiões do acesso dela.
+regiões do acesso dela (os vendedores são os escolhidos para a pessoa na tela Usuários do BI, os mesmos de todas as
+páginas).
 
 - **Endereço:** `https://bi.maisvida.cloud/api/v1`. Use só HTTPS. O painel do PC também responde em
   `http://127.0.0.1:8050/api/v1`, mas isso serve só para testes: os dados, os usuários e as chaves do PC são outros.

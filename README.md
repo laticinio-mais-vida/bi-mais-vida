@@ -232,12 +232,9 @@ O botão **Configurar** da página Projeções (só administradores) abre duas s
   cada um, a venda bruta da carteira nos últimos 12 meses, quantos clientes compraram e a última venda. Um aviso
   mostra quantos clientes estão sem vendedor no cadastro (e quanto venderam), porque ficam fora.
   Fica gravado no banco, com todas as versões anteriores (quem salvou e quando).
-- **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
-  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Metas › Configurar. Se o acesso
-    de Metas mudar, este muda junto;
-  - **Todos da página;**
-  - **Só alguns:** a lista que você marcar.
-  Os totais somam só as carteiras dos vendedores que a pessoa vê. Administradores veem todos os vendedores da página.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê, dos vendedores da página, só os do acesso dela (também
+  em Usuários). Os totais somam só as carteiras dos vendedores que a pessoa vê. Administradores veem todos os vendedores
+  da página.
 
 ### Como a projeção é calculada
 
@@ -286,8 +283,7 @@ da METAS.xlsx; no ES, a sugestão é a referência para a meta.
 - **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada
   (a aprovada no painel, com ✓, ou a da METAS.xlsx; Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
 - **Como a sugestão é calculada:** o passo a passo com os números em vigor.
-- **Acesso:** a página é liberada em Usuários; os vendedores que cada pessoa vê são os do acesso de Metas (as abas ES e BA
-  liberadas e os vendedores marcados).
+- **Acesso:** a página é liberada em Usuários; cada pessoa vê só os vendedores do acesso dela (também em Usuários).
 - **Assistente:** quem tem a página pergunta "qual a meta sugerida da Jamille para novembro?" e recebe os mesmos números.
 
 ### Como a sugestão é calculada
@@ -424,9 +420,9 @@ na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece 
   carteira de cada vendedor.
 - **Comissão:** a comissão de cada vendedor das equipes BA e ES (veja [A aba Comissão](#a-aba-comissão)).
 - **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
-- **Acesso:** a página é liberada em Usuários. Os vendedores que cada pessoa vê são os do acesso de Metas (as abas liberadas
-  e os vendedores marcados). A aba **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os
-  vendedores (sem vendedores marcados), e só os estados das abas liberadas.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em Usuários). A aba
+  **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os vendedores ou equipes inteiras
+  (não para "Só alguns vendedores"), e só os estados dessas equipes.
 
 ### Como a premiação é calculada
 
@@ -558,8 +554,9 @@ com a **média dos 6 meses anteriores**.
 - **Parecer em PDF** (no topo): o documento BA + ES, o de cada região e **Todos os PDFs (zip)**, com as pastas de antes
   (`Parecer Devoluções Setembro-2026.pdf`, `BA/… BA.pdf`, `BA/… Jamille.pdf`, …, `TERCEIRIZADOS/… Terceirizados.pdf`). O
   nome do vendedor no arquivo é o da planilha de metas. Os PDFs são montados na hora, com o acesso de quem baixa.
-- **Acesso:** a página é liberada em Usuários e segue o acesso de Metas, como as Premiações. Os terceirizados (vendedores
-  sem equipe) só aparecem para quem vê todos os vendedores; os PDFs também seguem o acesso.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela, como nas outras páginas.
+  As regiões são as desses vendedores. Os terceirizados (vendedores sem equipe) só aparecem para quem vê todos os
+  vendedores (ou tem um deles na lista de "Só alguns"); os PDFs também seguem o acesso.
 
 ### Como as devoluções são calculadas
 
@@ -677,14 +674,10 @@ o servidor monta na memória uma cópia dos dados só com essas linhas. A IA con
 arquivos, ao resto do cache ou a configurações. Pedir "ignore as regras" não adianta, porque o que está fora do
 acesso não existe para ela.
 
-O botão **Configurar** da página (só administradores) tem duas seções:
+Cada pessoa consulta só os vendedores do acesso dela, escolhidos em Usuários (os mesmos de todas as páginas).
 
-- **Acesso por usuário:** para cada visualizador, se usa o assistente e quais vendedores consulta. Os modos são:
-  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados lá;
-  - **Todos;**
-  - **Só alguns.**
-- **Uso e custo:** perguntas e custo estimado por pessoa nos últimos 30 dias, o gasto de hoje e as últimas
-  perguntas.
+O botão **Configurar** da página (só administradores) mostra o **uso e custo**: perguntas e custo estimado por pessoa
+nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
 
 ### Chave, custo e limites
 
@@ -980,9 +973,9 @@ python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
   **tarefas** são vistas por quem criou e pelos participantes (o administrador só vê as de que participa).
 - Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
-- O acesso de cada pessoa se escolhe no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou
-  **Só alguns**, como em Projeções e no Assistente.
-- Também em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
+- Os vendedores de cada pessoa são os do acesso dela, escolhidos em **Usuários** (os mesmos de todas as páginas e da
+  API pública).
+- Em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
   efetividade).
   - O ponto de partida foi a planilha "Dia de Atendimento Areas Comerciais.xlsx" do Power BI, lida pela coluna
     numérica (a de texto tinha "Terça" com acento, que o Power BI não reconhecia).
@@ -1493,33 +1486,42 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 | Papel | Vê | Pode mexer |
 |---|---|---|
 | **Administrador** | todas as páginas, abas e vendedores | Configurações, Usuários e o botão Atualizar dados |
-| **Visualizador** | só as páginas e abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
+| **Visualizador** | só as páginas marcadas e, nelas, só os vendedores do acesso | só a própria senha |
 
-Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
-dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
-abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
-Sugestão de Metas, as Premiações e as Devoluções seguem o acesso de Metas, sem escolha própria (a aba Supervisores das
-Premiações e os terceirizados das Devoluções só aparecem para quem vê todos os vendedores). A Reavaliação de Crédito não tem configuração: quem tem a
-página vê todos os clientes. Quem foi cadastrado antes de uma
-página existir não a recebe sozinho: o administrador marca a página nova.
+Em Usuários ficam os dados da pessoa (nome, usuário, senha, papel), as páginas que ela vê e os **vendedores que ela vê**,
+que valem para todas as páginas (inclusive o Assistente, a API pública e a Reavaliação de Crédito):
 
-Exemplos (em Metas › Configurar › Acesso por usuário):
+- **Todos os vendedores**, inclusive os sem equipe (terceirizados) e os que entrarem depois;
+- **Só as equipes** marcadas (BA, ES, Edir): o vendedor novo dessas equipes entra sozinho. A equipe de cada vendedor
+  fica em Metas › Configurar › Vendedores;
+- **Só alguns vendedores:** a lista que você marcar.
 
-- **Supervisor da BA:** abas Metas BA e Produtos BA e "Todos dessas abas" em Vendedores.
-- **Vendedor:** a aba dele e só ele marcado em Vendedores. Indicadores, ranking, corrida e tabelas mostram só
-  os números dele.
+O que é próprio de uma página fica no **Configurar** dela: em Metas, as **abas** que a pessoa vê ("Abas por
+usuário"); dentro delas, só os vendedores do acesso (a aba sem nenhum deles não aparece para ela). A aba Supervisores
+das Premiações só aparece com "Todos" ou "Só as equipes"; os terceirizados das Devoluções, com "Todos". Na Reavaliação
+de Crédito, a pessoa só acha os clientes da carteira dos vendedores dela (ou com títulos deles) e vê só os títulos
+desses vendedores; o limite, o em aberto e o parecer são do cliente inteiro. Quem é criado precisa ter os vendedores
+escolhidos para salvar. Quem foi cadastrado antes de uma página existir não a recebe sozinho: o administrador marca a
+página nova.
+
+Exemplos:
+
+- **Supervisor da BA:** em Usuários, "Só as equipes" BA e Edir; em Metas › Configurar, as abas Metas BA e Produtos BA.
+- **Vendedor:** em Usuários, "Só alguns vendedores" com só ele; em Metas, a aba dele. Indicadores, ranking, corrida e
+  tabelas mostram só os números dele.
 
 Quem barra é o servidor: o visualizador recebe só os números liberados, mesmo se mexer no endereço da página.
-Mudanças de abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
+Mudanças de páginas, abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
 dessa pessoa.
 
 Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
-  página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
-  pessoa tem Metas mas ainda nenhuma aba.
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito).
+- **Vendedores que vê:** todos, só as equipes ou só alguns (veja acima). Embaixo aparece o que muda de uma página
+  para outra (as abas de Metas, com o link **Configurar**, a aba Supervisores, os terceirizados, os clientes do
+  Crédito). Um aviso lembra quando a pessoa tem Metas mas ainda nenhuma aba, ou ainda não tem vendedores.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
 
 Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura
@@ -1588,10 +1590,10 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
   as devoluções canceladas são ignoradas.
 - **Dias úteis e feriados:** feriados nacionais e estaduais automáticos, peso do sábado por estado e
   exceções (feriado local, meio expediente, dia trabalhado).
-- **Acesso por usuário:** para cada visualizador, se ele vê a página Metas, quais **abas** e quais
-  **vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). O quadro azul resume
-  o que a pessoa vai ver. Fica gravado no cadastro do usuário, não nas regras, e "Restaurar padrão do Power BI"
-  não mexe nele. As regras e os acessos são salvos juntos: se uma parte não puder ser gravada, nada é gravado. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
+- **Abas por usuário:** para cada visualizador, se ele vê a página Metas e quais **abas** (os vendedores dentro
+  delas são os do acesso dele, em Usuários; a aba sem nenhum deles ganha um aviso e não aparece para ele). O quadro
+  azul resume o que a pessoa vai ver. Fica gravado no cadastro do usuário, não nas regras, e "Restaurar padrão do
+  Power BI" não mexe nele. As regras e as abas são salvas juntas: se uma parte não puder ser gravada, nada é gravado. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
   para ele) até você escolher aqui.
 
 ## Regras de cálculo (iguais ao Power BI)

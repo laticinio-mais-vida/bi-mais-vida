@@ -967,7 +967,7 @@ class Gestao:
         return self.calc.cache.inicio
 
     def ids(self, escopo) -> frozenset[int] | None:
-        """escopo: (vendedores, equipes) de bi/acesso.py escopo_gestao -> os ids (None = todos)."""
+        """escopo: (vendedores, equipes) de bi/acesso.py escopo_vendedores -> os ids (None = todos)."""
         vendedores, equipes = escopo
         if vendedores is None and equipes is None:
             return None
@@ -1339,7 +1339,7 @@ class Gestao:
             regioes = self.regioes(k, ids)
             saida["regioes"] = regioes
             if not regioes:
-                saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
+                saida["aviso"] = "nenhum vendedor no seu acesso; fale com o administrador"
                 return saida
             regiao = str(regiao or "").strip().upper() or regioes[0]
             if regiao not in REGIOES:
@@ -1451,7 +1451,7 @@ class Gestao:
             ids = self.ids(escopo)
             saida["regioes"], regiao = self._regiao_do_acesso(k, ids, regiao)
             if regiao is None:
-                saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
+                saida["aviso"] = "nenhum vendedor no seu acesso; fale com o administrador"
                 return saida
             saida["regiao"] = regiao
             per = periodo_desempenho(periodo, self.hoje(), k.cal, regiao)
@@ -1499,7 +1499,7 @@ class Gestao:
             ids = self.ids(escopo)
             saida["regioes"], regiao = self._regiao_do_acesso(k, ids, regiao)
             if regiao is None:
-                saida["aviso"] = "nenhum vendedor no seu acesso da Gestão; fale com o administrador"
+                saida["aviso"] = "nenhum vendedor no seu acesso; fale com o administrador"
                 return saida
             saida["regiao"] = regiao
             atual = hoje.replace(day=1)

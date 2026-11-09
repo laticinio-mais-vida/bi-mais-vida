@@ -1,8 +1,8 @@
 // Configuração da página Premiações (só administradores): as faixas dos vendedores; o prêmio máximo, os nomes, os pesos,
 // os mínimos e as metas dos supervisores, os produtos fora do mix e os motivos das devoluções impróprias; e a meta de
 // faturamento e de clientes de um supervisor num mês, no lugar da soma das metas dos vendedores; e os motivos dos brindes
-// que descontam da comissão. Quem vê a página e quais vendedores segue o acesso de Metas. Tudo vale depois de Salvar,
-// para todos os meses.
+// que descontam da comissão. Quem vê a página fica em Usuários, e cada pessoa vê só os vendedores do acesso dela
+// (também em Usuários). Tudo vale depois de Salvar, para todos os meses.
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const INDICADORES = [
@@ -79,7 +79,8 @@ function render() {
         ["comissao", "moeda", "Comissão"]]
         .map(([id, ic, nome]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}</button>`).join("")}
       <div class="dica">${icone("info")} As regras valem para todos os meses assim que você salvar: mudar uma faixa ou um
-        peso recalcula também os meses que já passaram. Quem vê a página e quais vendedores segue o acesso de Metas.</div>
+        peso recalcula também os meses que já passaram. Cada pessoa vê só os vendedores do acesso dela, escolhidos em
+        <a href="#/usuarios">Usuários</a> (a aba dos supervisores, só com todos os vendedores ou equipes inteiras).</div>
     </aside>
     <div id="cp-secao"></div>
   </div>

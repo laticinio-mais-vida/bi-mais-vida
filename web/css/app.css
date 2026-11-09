@@ -1365,8 +1365,12 @@ body.sem-rolagem { overflow: hidden; }
 .cp-busca-u input { width: 100%; }
 .cp-modo { max-width: 620px; }
 .cp-modo button { padding: 9px 8px; font-size: 13px; }
+.seletor[data-v="-1"] .marcador { opacity: 0; }  /* nada escolhido ainda (ex.: os vendedores de um acesso novo) */
 .aviso-nota { color: var(--atencao); font-weight: 600; }
+.visao-op small.aviso-nota, .usu-item small .aviso-nota { color: var(--atencao); font-weight: 600; }
 .usu-nota a { color: var(--acento-tinta); font-weight: 700; }
+.usu-titulo small { margin-left: 6px; font-size: 12.5px; font-weight: 500; color: var(--tinta-3); }
+.equipes-escolha { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); max-width: 620px; }
 
 /* ---------- responsivo ---------- */
 @media (max-width: 1180px) {

@@ -432,6 +432,17 @@ class TestAcessoEFiltros(Base):
         with self.assertRaises(PermissionError):
             self.d.calcular("resumo", SET, regiao="TERC", equipes={"ES"})
 
+    def test_acesso_so_com_lista(self):
+        """O "só alguns" da tela Usuários chega só com os vendedores (sem equipes): as regiões são as deles."""
+        r = self.d.calcular("resumo", SET, permitidos={ES})
+        self.assertEqual((r["cartoes"]["atual"]["total"], [x["id"] for x in r["regioes"]]), (335.0, ["ES"]))
+        with self.assertRaises(PermissionError):  # sem terceirizado na lista, a região não aparece
+            self.d.calcular("resumo", SET, regiao="TERC", permitidos={ES})
+        r = self.d.calcular("resumo", SET, permitidos={ES, TERC})
+        self.assertEqual([x["id"] for x in r["regioes"]], ["ES", "TERC"])
+        r = self.d.calcular("resumo", SET, permitidos=set())  # sem vendedores escolhidos: nada
+        self.assertEqual((r["regioes"], r["cartoes"]["atual"]["total"]), ([], 0.0))
+
     def test_filtros(self):
         r = self.d.calcular("entrega", SET, regiao="TERC")
         self.assertEqual(([n["numero"] for n in r["notas"]], [v["id"] for v in r["vendedores_filtro"]]),
@@ -535,11 +546,12 @@ class TestRotas(Base):
         nulo = logging.NullHandler()  # o registro de quem baixou o PDF não suja a saída dos testes
         logging.getLogger("bi").addHandler(nulo)
         self.addCleanup(logging.getLogger("bi").removeHandler, nulo)
-        pessoa = lambda id_, papel, paginas, visoes: {"id": id_, "login": f"p{id_}", "nome": f"P{id_}",  # noqa: E731
-                                                     "papel": papel, "paginas": paginas, "visoes": visoes,
-                                                     "vendedores": None}
-        pessoas = {"chefe": pessoa(1, "admin", [], []), "es": pessoa(2, "visualizador", ["devolucoes"], ["es"]),
-                   "ana": pessoa(3, "visualizador", ["metas"], ["es", "ba"])}
+        pessoa = lambda id_, papel, paginas, escopo: {"id": id_, "login": f"p{id_}", "nome": f"P{id_}",  # noqa: E731
+                                                     "papel": papel, "paginas": paginas, "visoes": [],
+                                                     "escopo": escopo}
+        pessoas = {"chefe": pessoa(1, "admin", [], None),
+                   "es": pessoa(2, "visualizador", ["devolucoes"], {"modo": "equipes", "equipes": ["ES"]}),
+                   "ana": pessoa(3, "visualizador", ["metas"], {"modo": "todos"})}
         self.app = SimpleNamespace(usuarios=UsuariosFalsos(pessoas), devolucoes=self.d, vps=False)
         manipulador = type("ManipuladorDoTeste", (app.Manipulador,), {"app": self.app})  # sem mexer no global
         self.servidor = ThreadingHTTPServer(("127.0.0.1", 0), manipulador)

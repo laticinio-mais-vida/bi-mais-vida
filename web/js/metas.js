@@ -24,7 +24,7 @@ export function montarMetas(container, contexto) {
   ctx = contexto;
   const op = ctx.opcoes;
   if (!op.visoes.length) {
-    container.innerHTML = `<div class="cartao secao vazio">${icone("cadeado")}<p>Seu acesso ainda não tem nenhuma aba de Metas liberada. Fale com o administrador.</p></div>`;
+    container.innerHTML = `<div class="cartao secao vazio">${icone("cadeado")}<p>Seu acesso ainda não tem nenhuma aba de Metas com vendedores liberada. Fale com o administrador.</p></div>`;
     document.getElementById("subtitulo-pagina").innerHTML = "<span>Nenhuma aba liberada</span>";
     return;
   }
@@ -55,7 +55,7 @@ export function montarMetas(container, contexto) {
         <div id="f-vendedores"></div>
         <div id="f-meses"></div>
         <div id="f-anos"></div>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/configuracoes" title="Configurações das metas: produtos, vendedores, devoluções, dias úteis e acesso por usuário">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        ${ctx.admin ? `<a class="btn btn-config" href="#/configuracoes" title="Configurações das metas: produtos, vendedores, devoluções, dias úteis e as abas de cada pessoa">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="m-avisos"></div>

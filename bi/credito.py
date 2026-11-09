@@ -178,24 +178,61 @@ class Credito:
                 "COALESCE(p.pago, CASE WHEN t.quitado = 1 THEN t.total ELSE 0 END)", "COALESCE(p.parcelas, 1)",
                 "COALESCE(p.pagas, t.quitado)")
 
+    # --- o acesso -------------------------------------------------------------------------
+    @staticmethod
+    def _do_acesso(permitidos) -> tuple[str, list]:
+        """(condição SQL sobre o cliente c, parâmetros): o cliente é da carteira de um dos vendedores do acesso ou tem
+        algum título de um deles. Sem vendedores: nenhum cliente."""
+        if not permitidos:
+            return "FALSE", []
+        ids = sorted(permitidos)
+        return (f"(c.id_vendedor IN ({_marcas(ids)}) OR EXISTS (SELECT 1 FROM titulos_receber ta "
+                f"WHERE ta.id_cliente = c.id AND ta.id_vendedor IN ({_marcas(ids)})))", ids + ids)
+
+    def no_acesso(self, cliente: int, permitidos: set[int] | frozenset[int] | None) -> bool:
+        """O cliente é dos vendedores do acesso (da carteira de um deles ou com algum título de um deles)? None =
+        acesso a todos os vendedores."""
+        if permitidos is None:
+            return True
+        condicao, params = self._do_acesso(permitidos)
+        return bool(self.cache.consulta(f"SELECT EXISTS (SELECT 1 FROM clientes c WHERE c.id = ? AND {condicao})",
+                                        [cliente, *params])[0][0])
+
+    def conferir_cliente(self, cliente, permitidos: set[int] | frozenset[int] | None) -> None:
+        """Para as rotas de um cliente (reanálises, Serasa): cliente fora do acesso -> PermissionError. Código que não é
+        número fica para quem trata o pedido (ValueError lá)."""
+        if permitidos is None:
+            return
+        try:
+            cliente = int(cliente)
+        except (TypeError, ValueError):
+            return
+        self._conferir()
+        if not self.no_acesso(cliente, permitidos):
+            raise PermissionError(f"o cliente {cliente} não é dos vendedores do seu acesso")
+
     # --- busca de cliente ---------------------------------------------------------------
-    def buscar(self, texto: str, limite: int = MAX_BUSCA) -> list[dict]:
+    def buscar(self, texto: str, limite: int = MAX_BUSCA, permitidos: set[int] | frozenset[int] | None = None
+               ) -> list[dict]:
         """Clientes pelo nome (sem acento nem caixa) ou pelo código: o código exato primeiro, depois quem começa com o
-        texto e, entre esses, quem tem títulos."""
+        texto e, entre esses, quem tem títulos. permitidos: os vendedores do acesso (só os clientes deles; None =
+        todos)."""
         self._conferir()
         texto = (texto or "").strip()
         if not texto:
             return []
         codigo = int(texto) if texto.isdigit() else -1
         nomes = self.nomes_vendedores()
+        acesso, params_acesso = ("TRUE", []) if permitidos is None else self._do_acesso(permitidos)
         linhas = self.cache.consulta(
             "WITH b AS (SELECT strip_accents(lower(?)) AS q), "
             "achados AS (SELECT c.id, c.nome, c.id_vendedor, starts_with(strip_accents(lower(c.nome)), b.q) AS comeca "
-            "  FROM clientes c, b WHERE c.id = ? OR strip_accents(lower(c.nome)) LIKE '%' || b.q || '%') "
+            "  FROM clientes c, b WHERE (c.id = ? OR strip_accents(lower(c.nome)) LIKE '%' || b.q || '%') "
+            f"  AND {acesso}) "
             "SELECT a.id, a.nome, a.id_vendedor, COUNT(t.id) AS n FROM achados a "
             "LEFT JOIN titulos_receber t ON t.id_cliente = a.id GROUP BY a.id, a.nome, a.id_vendedor, a.comeca "
             "ORDER BY a.id <> ?, NOT a.comeca, n = 0, a.nome LIMIT ?",
-            [texto, codigo, codigo, max(1, min(limite, MAX_BUSCA))])
+            [texto, codigo, *params_acesso, codigo, max(1, min(limite, MAX_BUSCA))])
         return [{"id": i, "nome": n, "carteira": nomes.get(v) if v else None, "titulos": t} for i, n, v, t in linhas]
 
     # --- a página -----------------------------------------------------------------------
@@ -203,14 +240,18 @@ class Credito:
                  vendedor: int | None = None, permitidos: set[int] | None = None, ordem: str | None = None,
                  sentido: str | None = None) -> dict:
         """Cartões e títulos do filtro. clientes: um ou mais códigos (os limites somam); None ou vazio = todos.
-        permitidos: vendedores cujos títulos contam (o acesso do Assistente); None = todos. ordem e sentido: a coluna
-        da tabela de títulos (ORDENS) e "asc" ou "desc"; sem ordem, da emissão mais recente para a mais antiga.
-        Parâmetro inválido -> ValueError."""
+        permitidos: os vendedores do acesso, cujos títulos contam (o limite e o em aberto do cliente continuam do
+        cliente inteiro); None = todos. Cliente escolhido que não é deles -> PermissionError. ordem e sentido: a
+        coluna da tabela de títulos (ORDENS) e "asc" ou "desc"; sem ordem, da emissão mais recente para a mais
+        antiga. Parâmetro inválido -> ValueError."""
         self._conferir()
         hoje = self.hoje()
         clientes = list(dict.fromkeys(clientes or []))  # sem repetir, na ordem em que foram escolhidos
         if len(clientes) > MAX_CLIENTES:
             raise ValueError(f"escolha no máximo {MAX_CLIENTES} clientes")
+        for c in clientes if permitidos is not None else ():
+            if not self.no_acesso(c, permitidos):
+                raise PermissionError(f"o cliente {c} não é dos vendedores do seu acesso")
         if mes is not None and not 1 <= mes <= 12:
             raise ValueError(f"mês inválido: {mes}")
         if ano is not None and not 1900 <= ano <= hoje.year + 1:
@@ -492,17 +533,20 @@ class Credito:
         return {"parecer": "nao_indicado" if "bloqueio" in status else "ressalvas" if "atencao" in status else "indicado",
                 "criterios": criterios, "limite_sugerido": sugerido, "vezes": vezes}
 
-    def analisar(self, cliente: int | str, limite_pedido: float | str) -> dict:
+    def analisar(self, cliente: int | str, limite_pedido: float | str,
+                 permitidos: set[int] | frozenset[int] | None = None) -> dict:
         """Parecer sobre o limite total novo de um cliente, pela regra do topo do módulo. Cada critério sai "ok",
         "atencao" ou "bloqueio": qualquer bloqueio dá "nao_indicado"; qualquer atenção, "ressalvas". Vale o histórico
         inteiro do cliente (de qualquer vendedor, sem mês nem ano); a janela de JANELA dias termina hoje (a extração).
         Cliente ou limite pedido que não são números (vêm do endereço), limite sem valor positivo ou cliente que não
-        existe -> ValueError."""
+        existe -> ValueError. permitidos: os vendedores do acesso; cliente que não é deles -> PermissionError."""
         self._conferir()
         try:
             cliente = int(cliente)
         except (TypeError, ValueError):
             raise ValueError("escolha um cliente para analisar") from None
+        if permitidos is not None and not self.no_acesso(cliente, permitidos):
+            raise PermissionError(f"o cliente {cliente} não é dos vendedores do seu acesso")
         try:
             pedido = float(limite_pedido)
         except (TypeError, ValueError):

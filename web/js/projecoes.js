@@ -44,7 +44,7 @@ export function montarProjecoes(container, contexto) {
         <div id="f-p-vendedores"></div>
         <div id="f-p-produtos"></div>
         <button class="btn btn-limpar" type="button" id="f-p-limpar" hidden>${icone("x")}Limpar filtros</button>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/config-projecoes" title="Configurações das projeções: vendedores da página e o que cada pessoa vê">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        ${ctx.admin ? `<a class="btn btn-config" href="#/config-projecoes" title="Configurações das projeções: os vendedores que entram na página">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="p-avisos"></div>

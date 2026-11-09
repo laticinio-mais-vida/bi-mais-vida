@@ -114,8 +114,26 @@ class TestCartoes(Base):
         self.assertEqual(d["cartoes"]["valor"], 200.0)
         self.assertEqual(d["clientes"][0]["restante"], 3850.0)  # o limite é do cliente inteiro
         self.assertEqual([v["id"] for v in d["opcoes"]["vendedores"]], [BA])
-        d = self.credito.calcular([1], permitidos=set())
+        d = self.credito.calcular(permitidos=set())  # sem vendedores no acesso: nenhum título
         self.assertEqual((d["cartoes"]["quantidade"], d["cartoes"]["ticket"], d["titulos"]["linhas"]), (0, None, []))
+        with self.assertRaises(PermissionError):  # nem cliente
+            self.credito.calcular([1], permitidos=set())
+
+    def test_cliente_fora_do_acesso(self):
+        """O cliente é do acesso se é da carteira de um dos vendedores ou tem título de um deles (o 1 é da carteira
+        do ES e tem o título 104 da BA)."""
+        self.assertEqual([c for c in (1, 2, 3, 4, 7) if self.credito.no_acesso(c, {BA})], [1, 2, 7])
+        self.assertTrue(self.credito.no_acesso(3, None))
+        with self.assertRaises(PermissionError):
+            self.credito.calcular([2, 3], permitidos={BA})
+        with self.assertRaises(PermissionError):
+            self.credito.analisar(3, 1000, permitidos={BA})
+        self.assertEqual(self.credito.analisar(2, 1000, permitidos={BA})["cliente"]["id"], 2)
+        with self.assertRaises(PermissionError):
+            self.credito.conferir_cliente("3", {BA})
+        self.credito.conferir_cliente("2", {BA})
+        self.credito.conferir_cliente("3", None)
+        self.credito.conferir_cliente("abc", {BA})  # código inválido: quem trata o pedido responde
 
 
 class TestTitulos(Base):
@@ -427,6 +445,14 @@ class TestBusca(Base):
         self.assertEqual(self.credito.buscar("  "), [])
         c = self.credito.buscar("joao")[0]
         self.assertEqual((c["nome"], c["carteira"], c["titulos"]), ("MERCADO DO JOAO", "Rubens", 6))
+
+    def test_busca_so_os_clientes_do_acesso(self):
+        self.assertEqual([c["id"] for c in self.credito.buscar("merc", permitidos={BA})], [1])  # o título 104
+        self.assertEqual([c["id"] for c in self.credito.buscar("merc", permitidos={EDIR})], [4])
+        self.assertEqual([c["id"] for c in self.credito.buscar("o", permitidos={ES})], [1, 3])
+        self.assertEqual(self.credito.buscar("3", permitidos={BA}), [])  # o código exato também precisa ser do acesso
+        self.assertEqual(self.credito.buscar("merc", permitidos=set()), [])
+        self.assertEqual([c["id"] for c in self.credito.buscar("merc", permitidos=None)], [1, 4])
 
 
 class TestSemParcelas(Base):

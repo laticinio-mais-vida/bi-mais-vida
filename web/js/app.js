@@ -45,7 +45,7 @@ const PAGINAS = {
   },
   configuracoes: {
     titulo: "Configurações das metas",
-    fixo: "Produtos, vendedores, devoluções e dias úteis usados nos cálculos, e o que cada pessoa vê na página",
+    fixo: "Produtos, vendedores, devoluções e dias úteis usados nos cálculos, e as abas que cada pessoa vê",
     pai: "metas",
     admin: true,
     sempreMonta: true,
@@ -54,7 +54,7 @@ const PAGINAS = {
   },
   "config-projecoes": {
     titulo: "Configurações das projeções",
-    fixo: "Vendedores que entram na página e o que cada pessoa vê nela",
+    fixo: "Vendedores que entram na página",
     pai: "projecoes",
     admin: true,
     sempreMonta: true,
@@ -116,7 +116,7 @@ const PAGINAS = {
   },
   "config-assistente": {
     titulo: "Configurações do assistente",
-    fixo: "O que cada pessoa consulta no assistente e quanto ele foi usado",
+    fixo: "Quanto o assistente foi usado",
     pai: "assistente",
     admin: true,
     sempreMonta: true,
@@ -135,7 +135,7 @@ const PAGINAS = {
   },
   "config-gestao": {
     titulo: "Configurações da gestão",
-    fixo: "Os vendedores que cada pessoa acompanha e os dias de atendimento das áreas",
+    fixo: "Os dias de atendimento das áreas",
     pai: "gestao",
     admin: true,
     sempreMonta: true,
@@ -159,7 +159,7 @@ const PAGINAS = {
   },
   usuarios: {
     titulo: "Usuários e acessos",
-    fixo: "Quem entra no painel e quais páginas cada pessoa vê",
+    fixo: "Quem entra no painel, quais páginas e quais vendedores cada pessoa vê",
     admin: true,
     sempreMonta: true,
     pendente: usuariosTemAlteracoes,

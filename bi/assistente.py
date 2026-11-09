@@ -1053,6 +1053,8 @@ class Ferramentas:
                           novo_limite: float | None = None) -> dict:
         if self.credito is None:
             raise ValueError("o acesso de quem pergunta não inclui a página Reavaliação de Crédito")
+        if not self.credito.no_acesso(int(id_cliente), self.ids):  # como na página: só os clientes do acesso
+            raise ValueError(f"o cliente {int(id_cliente)} não é dos vendedores do acesso de quem pergunta")
         d = self.credito.calcular([int(id_cliente)], int(mes) if mes else None, int(ano) if ano else None, None,
                                   set(self.ids) if self.ids is not None else None)
         c, k = d["clientes"][0], d["cartoes"]
@@ -1114,7 +1116,11 @@ class Ferramentas:
         except (TypeError, ValueError):
             raise ValueError("id_cliente deve ser um código de cliente e novo_limite, um valor em R$") from None
         parecidos = parecidos is True or str(parecidos).strip().lower() in ("true", "1", "sim")
-        r = self.reanalises.para_ia(id_cliente, parecidos, novo_limite, str(mes) if mes else None)
+        if id_cliente and not self.credito.no_acesso(id_cliente, self.ids):
+            raise ValueError(f"o cliente {id_cliente} não é dos vendedores do acesso de quem pergunta")
+        # Todas e as parecidas: só as de clientes do acesso (None = todos).
+        acesso = None if self.ids is None else (lambda c: self.credito.no_acesso(c, self.ids))
+        r = self.reanalises.para_ia(id_cliente, parecidos, novo_limite, str(mes) if mes else None, acesso=acesso)
         # O texto da IA tem limite: tira as últimas até caber (o resumo continua contando todas).
         while len(r["reanalises"]) > 1 and len(json.dumps(r, ensure_ascii=False, default=str)) > MAX_RESULTADO:
             r["reanalises"] = r["reanalises"][:-1]
@@ -1595,6 +1601,8 @@ class Assistente:
     def descrever_escopo(self, ids: frozenset[int] | None, vendedores, equipes) -> str:
         if ids is None:
             return "todos os vendedores"
+        if not ids:
+            return "nenhum vendedor (fale com o administrador)"
         if vendedores is None and equipes:
             nomes = sorted(NOME_EQUIPE.get(e, e) for e in equipes)
             return ("vendedores da equipe " if len(nomes) == 1 else "vendedores das equipes ") + " e ".join(nomes)
@@ -1648,25 +1656,36 @@ class Assistente:
             **({"modelo": self.cfg.modelo, "esforco": self.cfg.esforco} if admin else {}),
         }
 
-    def catalogo_vendedores(self) -> list[dict]:
-        """Vendedores (da venda) com venda nos últimos 12 meses, para a configuração escolher "só alguns"."""
+    def catalogo_vendedores(self, com_metas: bool = False) -> list[dict]:
+        """Vendedores (da venda) com venda nos últimos 12 meses, para escolher "só alguns" (a tela Usuários). com_metas:
+        também os da planilha de metas dos últimos 3 meses sem venda nesse tempo (vendedor novo), com venda 0, e em
+        cada um se ele tem meta na planilha (com_meta: só quem tem aparece nas abas de Metas)."""
         cache = self.calc.cache
         regras = self.calc.regras()
         data_ref = cache.data_ref() or dt.date.today()
         nomes = self.nomes_vendedores()
         erp = {r[0]: r[1:] for r in cache.consulta("SELECT id, nome, inativo FROM vendedores")}
+        vendas = {vid: (venda, ultima) for vid, venda, ultima in cache.consulta(
+            "SELECT id_vendedor, SUM(valor), MAX(data) FROM vendas_itens WHERE data > ? GROUP BY 1",
+            [data_ref - dt.timedelta(days=365)])}
+        planilha = set()
+        if com_metas:  # o mês dos dados e os dois anteriores (ou depois, se a planilha já tem)
+            desde = dt.date(data_ref.year - (data_ref.month <= 2), (data_ref.month - 3) % 12 + 1, 1)
+            for m in self.calc.metas.dados():
+                planilha.add(m["id_vendedor"])
+                if m["mes"] >= desde:
+                    vendas.setdefault(m["id_vendedor"], (0.0, None))
         lista = []
-        for vid, venda, ultima in cache.consulta(
-                "SELECT id_vendedor, SUM(valor), MAX(data) FROM vendas_itens WHERE data > ? GROUP BY 1",
-                [data_ref - dt.timedelta(days=365)]):
+        for vid, (venda, ultima) in vendas.items():
             equipe = regras.grupo_vendedor(vid)
             nome_erp, inativo = erp.get(vid, ("", 1))
             lista.append({"id": vid, "nome": nomes.get(vid) or ("Sem vendedor" if vid == 0 else f"Vendedor {vid}"),
                           "nome_erp": nome_erp or "", "equipe": equipe, "rotulo_equipe": NOME_EQUIPE.get(equipe, equipe),
                           "inativo": bool(inativo), "venda_12m": round(venda or 0.0, 2),
-                          "ultima_venda": ultima.isoformat() if ultima else None})
+                          "ultima_venda": ultima.isoformat() if ultima else None,
+                          **({"com_meta": vid in planilha} if com_metas else {})})
         ordem = {e: i for i, e in enumerate(NOME_EQUIPE)}
-        lista.sort(key=lambda v: (ordem.get(v["equipe"], 9), -v["venda_12m"]))
+        lista.sort(key=lambda v: (ordem.get(v["equipe"], 9), -v["venda_12m"], v["nome"]))
         return lista
 
     # --- limites e registro ------------------------------------------------------------
