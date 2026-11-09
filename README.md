@@ -6,7 +6,8 @@ Metas Outras Linhas ES, mais a Produtos ES, que o Power BI não tinha), reunidas
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
 produto (as páginas de sugestão do Power BI). A página **Premiações** mostra o prêmio do mês de cada vendedor e de cada
-supervisor (as páginas de premiação do Power BI) e a comissão dos vendedores. A página **Assistente** responde perguntas sobre os dados com IA
+supervisor (as páginas de premiação do Power BI) e a comissão dos vendedores. A página **Devoluções** separa o que voltou na
+entrega do vencido e danificado no cliente, por causa, produto, cliente e vendedor, e monta o Parecer de Devoluções em PDF. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
@@ -108,6 +109,25 @@ item, e em 7 a soma dos itens difere do total do pedido em mais de 5 centavos. A
 pedidos por data, os itens por pedido) e não têm índice: filtrar por data ou por pedido continua rápido (cerca de 1
 ms). Um cache sem elas (o PC ainda com o código anterior) vale para o resto do painel, e `cache.sem_pedidos_detalhe`
 avisa que faltam.
+
+### Devoluções nota a nota no cache
+
+`devolucoes_notas` (página Devoluções): as devoluções da DEVOLUCOESVENDA com os produtos de cada uma
+(LISTADEVOLUCAOVENDA), uma linha por nota, produto e motivo, desde o início do cache. As canceladas vêm marcadas. Os
+totais batem com `devolucoes_itens` e `devolucoes_clientes_itens`, que agrupam as mesmas linhas por dia.
+
+| Coluna | O que é |
+|---|---|
+| `id_devolucao` | a nota de devolução no ERP: é ela que identifica a nota |
+| `nota`, `serie` | número (NUMDOCUMENTO, em texto como no ERP) e série. Na devolução na entrega a nota é a nossa (séries 013 e 017); na imprópria é a do cliente (séries 1, 2, 3…), por isso o número se repete entre clientes |
+| `emissao`, `data` | data da nota e data da entrada (a das outras tabelas de devolução) |
+| `id_vendedor`, `id_cliente`, `tipocliente` | como em `devolucoes_clientes_itens` |
+| `cancelada` | verdadeiro se a devolução foi cancelada |
+| `id_produto`, `id_motivo`, `valor`, `quantidade` | o produto, o motivo do item, em R$ e na unidade do produto |
+
+A venda de origem (ID_VENDA) fica fora: só vem preenchida desde ago/26, e quase só no vencido. Em nov/2026 eram cerca de
+18 mil linhas desde jan/2024 (1.140 notas em 2026). Um cache sem a tabela vale para o resto do painel, e
+`cache.sem_devolucoes_notas` avisa que falta: até ela chegar, a página conta cada cliente num dia como uma nota.
 
 ## Página Metas
 
@@ -504,6 +524,96 @@ Supervisores com as metas fixas do Power BI: BA R$ 4.887,54 e ES R$ 3.454,88. Co
 R$ 4.843,12 e ES R$ 3.417,62. Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11),
 de R$ 68.152,20 de comissão das vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os
 descontos de cada vendedor batem com a conta feita direto no ERP.
+
+## Página Devoluções
+
+O que voltou dos clientes, separado em dois problemas de natureza diferente, e o **Parecer de Devoluções** em PDF, no
+formato do documento que era montado à mão. A página é independente das outras: não tem meta (a de 1,5% é só da premiação
+dos supervisores) nem usa o que se configura para Metas.
+
+- **Voltou na entrega:** o pedido não ficou no cliente (erro de lançamento, recusa, cliente ausente, erro de faturamento,
+  da expedição ou da logística, falta de mercadoria). Poucas notas, de valor alto, quase sempre a nota inteira: a página
+  lista nota a nota. Em 12 meses (nov/25 a out/26), R$ 757 mil, 75% do total, em 485 notas.
+- **Vencido e danificado no cliente:** o produto foi entregue, ficou na loja e voltou vencido ou danificado, pela
+  devolução imprópria ou pela troca por brinde. É mercadoria que não volta para a venda. Muitos casos pequenos, todo mês: a página mede o índice sobre a venda por produto, segmento, frequência de
+  visita e cliente.
+
+Os filtros são o mês e o ano (o padrão é o mês dos dados), a região (BA, ES ou Terceirizados) e o vendedor. Tudo se compara
+com a **média dos 6 meses anteriores**.
+
+- **Resumo:** o índice de devolução (% da venda bruta) dividido em na entrega e no cliente, a evolução de 13 meses (em % ou
+  em R$), cada causa agrupada pelo responsável (comercial, operação interna, logística, fábrica, ponto de venda) e as regiões
+  lado a lado.
+- **Na entrega:** as notas devolvidas (e quantas a cada 100 entregas), o valor, os erros de lançamento e o valor médio por
+  nota; a tabela por causa; **as notas do mês**, uma a uma (número, série, cliente, vendedor, causa, itens e valor); a tabela
+  por vendedor; e os **clientes que repetem** (duas ou mais notas em 6 meses).
+- **No cliente:** o vencido e danificado e o vencido em % da venda, os clientes atingidos e os reincidentes (vencido em 3 ou mais dos 6
+  meses); os **produtos**, com o vencido em quantidade sobre o vendido, no mês e em 6 meses (em vermelho, os 50% acima da
+  média); o vencido por **segmento** e por **frequência de visita** (a rede Semanal, Quinzenal ou Mensal do cliente); a
+  **danificado por origem** (na produção, na logística, no cliente, sem origem informada), com os produtos de cada uma;
+  e os clientes, com a concentração ("95 clientes fizeram metade do vencido e danificado").
+- **Vendedores:** a tabela por região (BA → ES → Terceirizados, com subtotais), ordenável pelo cabeçalho, que vira imagem
+  para o WhatsApp. Nos terceirizados, quem vendeu sem devolução vira uma linha só ("Outros N sem devolução"). O clique num
+  vendedor abre o bloco dele como sai no Parecer, com o botão **PDF do vendedor**.
+- **Parecer em PDF** (no topo): o documento BA + ES, o de cada região e **Todos os PDFs (zip)**, com as pastas de antes
+  (`Parecer Devoluções Setembro-2026.pdf`, `BA/… BA.pdf`, `BA/… Jamille.pdf`, …, `TERCEIRIZADOS/… Terceirizados.pdf`). O
+  nome do vendedor no arquivo é o da planilha de metas. Os PDFs são montados na hora, com o acesso de quem baixa.
+- **Acesso:** a página é liberada em Usuários e segue o acesso de Metas, como as Premiações. Os terceirizados (vendedores
+  sem equipe) só aparecem para quem vê todos os vendedores; os PDFs também seguem o acesso.
+
+### Como as devoluções são calculadas
+
+1. **Devoluções:** as não canceladas de cliente do cadastro, pela data de entrada e pelo vendedor da devolução, nota a nota
+   (tabela `devolucoes_notas` do cache). Funcionário, fornecedor e produtor ficam fora. Cada produto fica com o código do
+   ERP (sem a equivalência das Configurações).
+2. **Trocas por brinde:** só os brindes de motivo vencido ou danificado (3, 4 e 10 a 16). Brinde de outro motivo
+   (transferência, retorno, degustação, doação, pagamento de contrato, perda, sem motivo) não é devolução. O ERP passou a
+   ter o motivo no brinde em abril de 2026: antes disso o vencido e danificado no cliente aparece menor, e a página
+   avisa.
+3. **Causas** (pelo código do motivo) e **responsáveis**:
+   - comercial: erro de lançamento (1) e recusa (2);
+   - operação interna: erro de faturamento (7), erro da expedição (9) e falta de mercadoria (5);
+   - logística: erro da logística (8), cliente ausente (6) e danificado na logística (11, 13);
+   - ponto de venda: vencido (3, 16) e danificado no cliente (12, 14);
+   - fábrica: danificado na produção (10, 15);
+   - danificado, sem origem informada (4).
+
+   Motivo novo no ERP entra em **Outros motivos**, com aviso. As causas ficam em `CAUSAS` (`bi/devolucoes.py`), com
+   a descrição de cada uma em `DESCRICOES`. A tela não mostra os códigos do ERP (motivo, produto, série da nota):
+   quem usa o painel vê o nome e, ao passar o mouse, a descrição.
+4. **Notas:** cada nota de devolução do ERP (`id_devolucao`) conta uma vez; uma nota com duas causas aparece nas duas.
+   Entregas são as notas de venda do mês. Sem as notas no cache (PC com o código anterior), cada cliente num dia conta como
+   uma nota, com aviso.
+5. **% da venda:** sobre a venda bruta do mesmo recorte (vendas não canceladas a cliente, pelo vendedor da venda). Nos
+   clientes, a compra é a do recorte nos 6 meses; no Parecer, o faturamento do cliente no mês, de todos os vendedores.
+6. **Comparação:** a média dos 6 meses anteriores (o % é o total dos meses sobre a venda dos meses; notas, valores e
+   clientes são a média por mês). Produto, segmento, frequência, clientes e reincidência usam os 6 meses até o escolhido.
+7. **Região:** a equipe do vendedor nas Configurações das metas ou o supervisor no ERP (BA e Edir = BA, ES = ES, sem
+   equipe = Terceirizados); o OCULTO fica fora.
+
+**O Parecer** segue as regras do documento de antes: só os vendedores com devolução, em ordem alfabética; as seções
+cliente ausente, erro de lançamento (com o nº de erros em vermelho: cada data e cliente conta um, como no documento),
+recusa, vencido, danificado e os tipos adicionais (danificado por problema na produção, imprópria danificado no cliente e na
+logística, brinde danificado no cliente, na logística e por problema na produção). Nas seções por produto, os produtos vêm
+na ordem do Parecer, com os sabores de bebida láctea somados por tamanho (a bandeja inclui o código antigo, 3643), e cada
+produto tem um **limite de volume** (15 para bebida láctea, manteiga de 200 e 500 g e requeijão; 10 para a manteiga a
+granel; 4 para coalho, minas frescal e parmesão cunha; 5 para o parmesão peça; 3 para o prato; 1 para as mussarelas e para
+produto fora da lista): o cliente abaixo do limite não aparece na tabela do produto, mas conta nos totais e nos rankings.
+No fim do vencido, os **clientes em alerta**: vencido ≥ 20% das compras do mês e volume ≥ 30, ou volume ≥ 100 (o volume
+soma quilos e unidades). Faturamento, expedição, logística e falta de mercadoria aparecem na página, mas não no Parecer.
+Todo PDF termina com os rankings por tipo (erro de lançamento, vencido, danificado e os adicionais por vendedor; recusa e
+cliente ausente por cliente). A ordem dos produtos e os limites ficam em `PRODUTOS_PARECER` (`bi/devolucoes.py`).
+
+Conferência em 09/11/2026:
+- **Setembro/26:** os rankings e os blocos batem com o Parecer feito à mão (as 19 linhas do erro de lançamento, os 23
+  vendedores do vencido, os blocos de Edir, Franquelin e Jamille). Há duas diferenças esperadas: volumes em quilos que
+  mudam na segunda casa (soma sem arredondar) e a linha "FUNCIONARIO" (um brinde a funcionário), que a página deixa fora.
+- **Outubro/26:**
+  - na entrega, R$ 52.719 em 39 notas, 0,74 a cada 100 entregas;
+  - no cliente, R$ 40.065 em 370 clientes;
+  - total R$ 92.783, 1,41% da venda, contra a média de 1,60% de abr a set/26.
+- **Notas:** as devoluções nota a nota somam o mesmo que as outras tabelas de devolução do cache (R$ 2.654.182,39 desde
+  2024).
 
 ## Página Assistente
 
@@ -1388,8 +1498,8 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
 dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
 abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
-Sugestão de Metas e as Premiações seguem o acesso de Metas, sem escolha própria (a aba Supervisores das Premiações só
-aparece para quem vê todos os vendedores). A Reavaliação de Crédito não tem configuração: quem tem a
+Sugestão de Metas, as Premiações e as Devoluções seguem o acesso de Metas, sem escolha própria (a aba Supervisores das
+Premiações e os terceirizados das Devoluções só aparecem para quem vê todos os vendedores). A Reavaliação de Crédito não tem configuração: quem tem a
 página vê todos os clientes. Quem foi cadastrado antes de uma
 página existir não a recebe sozinho: o administrador marca a página nova.
 
@@ -1407,7 +1517,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
   página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
   pessoa tem Metas mas ainda nenhuma aba.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
@@ -1515,6 +1625,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
 | `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
+| `bi/devolucoes.py` | página Devoluções: o que voltou na entrega (nota a nota) e o vencido e danificado no cliente por causa e responsável, a comparação com a média dos 6 meses anteriores, os produtos, segmentos, frequência de visita e clientes, a tabela dos vendedores e os dados do Parecer (blocos dos vendedores, limites dos produtos e rankings) |
+| `bi/parecer_pdf.py` | o Parecer de Devoluções em PDF (fpdf2), no formato do documento de antes, e o zip com as pastas BA, ES e TERCEIRIZADOS |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |
 | `bi/ajustes.py` | ajustes de volume da página Sugestão de Metas (tabela sugestao_ajustes): os em vigor, em memória, e a gravação que leva a diferença para a meta aprovada na mesma transação |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |

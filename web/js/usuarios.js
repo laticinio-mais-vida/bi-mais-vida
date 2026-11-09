@@ -4,12 +4,13 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", assistente: "conversa", gestao: "quadro", credito: "cartao" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", devolucoes: "devolucao", assistente: "conversa", gestao: "quadro", credito: "cartao" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
   sugestao: "Meta do mês seguinte sugerida por vendedor e produto",
   premiacoes: "Prêmio do mês de cada vendedor e de cada supervisor, e a comissão dos vendedores",
+  devolucoes: "O que voltou na entrega e o vencido e danificado no cliente, por causa, produto, cliente e vendedor, e o Parecer em PDF",
   assistente: "Perguntas sobre os dados, respondidas por IA",
   gestao: "Objetivos, campanhas e o histórico de cada vendedor",
   credito: "Limite, compras, pontualidade e títulos de cada cliente",
@@ -85,6 +86,11 @@ function dentroDaPagina(u, pagina) {
     if (!u.visoes?.length) return { texto: "igual a Metas, que ainda não tem abas: nenhum vendedor", aviso: true };
     return { texto: u.vendedores ? "os vendedores do acesso de Metas (sem a aba dos supervisores)"
       : "os vendedores do acesso de Metas e o supervisor de cada estado das abas" };
+  }
+  if (pagina === "devolucoes") { // os vendedores de Metas; os terceirizados só com todos os vendedores
+    if (!u.visoes?.length) return { texto: "igual a Metas, que ainda não tem abas: nenhum vendedor", aviso: true };
+    return { texto: u.vendedores ? "os vendedores do acesso de Metas e o Parecer deles"
+      : "os vendedores das abas de Metas e o Parecer deles (os terceirizados, só para o administrador)" };
   }
   if (pagina === "metas") {
     if (!u.visoes?.length) return { texto: "ainda sem abas: a página fica vazia até você escolher", aviso: true };

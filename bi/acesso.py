@@ -33,8 +33,9 @@ from .configuracao import VISOES
 
 PAPEIS = ("admin", "visualizador")
 PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "sugestao": "Sugestão de Metas", "premiacoes": "Premiações",
-           "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito"}
-# Crédito: sem escolha de vendedores (quem tem a página vê todos). Sugestão de Metas e Premiações: os vendedores de Metas.
+           "devolucoes": "Devoluções", "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito"}
+# Crédito: sem escolha de vendedores (quem tem a página vê todos). Sugestão de Metas, Premiações e Devoluções: os
+# vendedores de Metas.
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 MODOS_ESCOPO = ("metas", "todos", "alguns")  # igual ao acesso de Metas / todos os da página / só alguns
 PAGINAS_COM_ESCOPO = ("projecoes", "assistente", "gestao")  # páginas com essa escolha de vendedores na configuração
@@ -510,6 +511,12 @@ def escopo_premiacoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
     if eh_admin(usuario):
         return None, None
     return vendedores_permitidos(usuario), equipes_permitidas(usuario)
+
+
+def escopo_devolucoes(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
+    """(vendedores, equipes) que o usuário vê em Devoluções e no Parecer: os mesmos de Metas, como nas Premiações. Os
+    terceirizados (sem equipe) só aparecem para quem não tem limite. None = sem limite."""
+    return escopo_premiacoes(usuario)
 
 
 def _escopo(usuario: dict, pagina: str) -> tuple[set[int] | None, set[str] | None]:

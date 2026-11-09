@@ -42,8 +42,8 @@ RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
 from bi.acesso import (COOKIE, PAGINAS, ApiOcupada, LimiteApi, LimiteTentativas, Usuarios, eh_admin,  # noqa: E402
-                       escopo_assistente, escopo_gestao, escopo_premiacoes, escopo_projecoes, escopo_sugestao,
-                       paginas_permitidas, vendedores_permitidos, visoes_permitidas)
+                       escopo_assistente, escopo_devolucoes, escopo_gestao, escopo_premiacoes, escopo_projecoes,
+                       escopo_sugestao, paginas_permitidas, vendedores_permitidos, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.ajustes import AjustesVolume  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
@@ -54,6 +54,7 @@ from bi.carteira import Carteira  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
+from bi.devolucoes import Devolucoes  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao, SemDados  # noqa: E402
 from bi.google_agenda import GoogleAgenda  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
@@ -175,6 +176,8 @@ class Aplicacao:
                                  self.metas_aprovadas, AjustesVolume(self.banco))
         self.config_premiacoes = ConfigPremiacoes(self.banco)
         self.premiacoes = Premiacoes(self.calc, self.config_premiacoes, self.projetor._nomes_vendedores)
+        # Página Devoluções e o Parecer de Devoluções em PDF: só leem o cache (sem regras próprias no banco).
+        self.devolucoes = Devolucoes(self.calc, self.projetor._nomes_vendedores)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -1036,6 +1039,20 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_premiacoes(usuario)))
             if url.path == "/api/premiacoes/config":
                 return self._json(self.app.premiacoes.config_dados(q.get("mes")))
+            if url.path in ("/api/devolucoes", "/api/devolucoes/parecer"):
+                if "devolucoes" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página Devoluções", HTTPStatus.FORBIDDEN)
+                permitidos, equipes = escopo_devolucoes(usuario)
+                if url.path == "/api/devolucoes/parecer":
+                    # tipo=vendedor|regiao|geral|todos&mes=2026-09&vendedor=98&regiao=BA: o Parecer em PDF (todos = zip)
+                    conteudo, nome, tipo = self.app.devolucoes.arquivo(q.get("mes"), q.get("tipo"), q.get("vendedor"),
+                                                                       q.get("regiao"), permitidos, equipes)
+                    log.info("%s baixou %s (%s KB)", usuario["login"], nome, len(conteudo) // 1024)
+                    return self._baixavel(conteudo, tipo, nome)
+                # aba=resumo|entrega|cliente|vendedores&mes=2026-10&regiao=BA|ES|TERC&vendedores=98,141 (vazios = o
+                # Resumo, o mês dos dados, todas as regiões e todos os vendedores)
+                return self._json(self.app.devolucoes.calcular(q.get("aba"), q.get("mes"), q.get("regiao"),
+                                                               lista("vendedores"), permitidos, equipes))
             if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises",
                             "/api/credito/serasa"):
                 if not self._pode_credito(usuario):

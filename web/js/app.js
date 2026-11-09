@@ -12,6 +12,7 @@ import { montarSugestao, recarregarSugestao, sugestaoTemAlteracoes } from "./sug
 import { montarConfigSugestao, configSugestaoTemAlteracoes } from "./configsugestao.js";
 import { montarPremiacoes, recarregarPremiacoes } from "./premiacoes.js";
 import { montarConfigPremiacoes, configPremiacoesTemAlteracoes } from "./configpremiacoes.js";
+import { montarDevolucoes, recarregarDevolucoes } from "./devolucoes.js";
 import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
@@ -22,7 +23,7 @@ import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 import { ligarAvisos } from "./avisos.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "gestao", "credito"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "devolucoes", "gestao", "credito"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -102,6 +103,12 @@ const PAGINAS = {
     pendente: configPremiacoesTemAlteracoes,
     montar: (el) => montarConfigPremiacoes(el, { aoSalvar: () => app.remontar.add("premiacoes") }),
   },
+  devolucoes: {
+    nome: "Devoluções",
+    titulo: "Devoluções",
+    montar: (el) => montarDevolucoes(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("devolucoes", d) }),
+    recarregar: recarregarDevolucoes,
+  },
   assistente: {
     nome: "Assistente",
     titulo: "Assistente de dados",
@@ -168,6 +175,7 @@ const TEXTO_SUBTITULO = {
   projecoes: (d) => `Faturamento bruto · ${d.periodo.de} a ${d.periodo.ate}`,
   sugestao: (d) => `Meta de ${d.mes.rotulo_meta} · base ${d.mes.rotulo_base} · ${d.estado}`,
   premiacoes: (d) => `${d.mes.rotulo[0].toUpperCase()}${d.mes.rotulo.slice(1)} · ${{ supervisores: "Supervisores", comissao: "Comissão" }[d.aba] || "Vendedores"} · ${d.situacao === "final" ? "mês fechado" : "prevista"}`,
+  devolucoes: (d) => `${d.mes.rotulo[0].toUpperCase()}${d.mes.rotulo.slice(1)} · ${{ resumo: "Resumo", entrega: "Na entrega", cliente: "No cliente", vendedores: "Vendedores" }[d.aba]} · ${d.situacao === "final" ? "mês fechado" : "em andamento"}`,
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,

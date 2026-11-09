@@ -81,7 +81,7 @@ STATUS_FORA_DO_ERP = {"B": "Brinde"}
 DIAS_PEDIDOS_FUTUROS = 30  # pedido para entregar nos próximos dias entra; data mais longe é erro de digitação
 # Gravadas nesta ordem e sem índice: a consulta de um pedido ou de um período pula os blocos de fora dele tão rápido
 # quanto com índice (~1 ms), e o índice dos itens dobraria o tamanho delas no pacote que vai ao VPS (+15 MB).
-ORDEM = {"pedidos_venda_detalhe": "data, id", "pedidos_venda_itens": "id_pedido"}
+ORDEM = {"pedidos_venda_detalhe": "data, id", "pedidos_venda_itens": "id_pedido", "devolucoes_notas": "data, id_devolucao"}
 # A rede de cada cliente (CLIENTES.ID_REDE -> REDES.NOME). As redes SEMANAL, QUINZENAL e MENSAL são a frequência de
 # compra, para as visitas esperadas da efetividade. Opcional como os pedidos: sem ela, todo cliente conta como semanal.
 TABELAS_REDE = {
@@ -115,6 +115,17 @@ TABELAS_CARTEIRA = {
 TABELAS_BRINDES = {
     "brindes_clientes_itens": ("data DATE, id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, "
                                "id_produto INTEGER, id_motivo INTEGER, valor DOUBLE, quantidade DOUBLE"),
+}
+# As devoluções nota a nota (DEVOLUCOESVENDA + LISTADEVOLUCAOVENDA), para a página Devoluções contar as notas devolvidas
+# e listar cada uma. id_devolucao identifica a nota: o número (NUMDOCUMENTO) se repete entre clientes, porque a nota da
+# devolução imprópria é a do próprio cliente (séries 1, 2, 3…), e a da devolução na entrega é a nossa (013 e 017).
+# emissao é a data da nota (DATA) e data é a da entrada, a mesma de devolucoes_clientes_itens, que tem os mesmos totais.
+# A venda de origem (ID_VENDA) fica fora: só vem preenchida desde ago/26, e quase só no vencido. Opcional como os pedidos:
+# sem ela, a página conta cada cliente num dia como uma nota.
+TABELAS_DEVOLUCOES_NOTAS = {
+    "devolucoes_notas": ("id_devolucao INTEGER, nota VARCHAR, serie VARCHAR, emissao DATE, data DATE, "
+                         "id_vendedor INTEGER, id_cliente INTEGER, tipocliente VARCHAR, cancelada BOOLEAN, "
+                         "id_produto INTEGER, id_motivo INTEGER, valor DOUBLE, quantidade DOUBLE"),
 }
 # Comissão dos vendedores (aba Comissão das Premiações). O ERP grava em cada item de venda o % do vendedor para o produto
 # naquele dia e o valor da comissão (LISTAVENDA.VALORCOMISSAO = valor do item × %); a devolução não tem o valor e o
@@ -175,6 +186,7 @@ class Cache:
         self.sem_carteira = False  # falta o histórico da carteira (só a cobertura da positivação precisa)
         self.sem_brindes = False  # faltam os brindes: a premiação dos supervisores conta sem eles
         self.sem_comissao = False  # falta a comissão das vendas e os percentuais (só a aba Comissão precisa)
+        self.sem_devolucoes_notas = False  # faltam as devoluções nota a nota: a página Devoluções conta por cliente e dia
         # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
         # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
         # cache anterior.
@@ -216,6 +228,7 @@ class Cache:
         sem_carteira = _tabela_diferente(con, TABELAS_CARTEIRA) is not None
         sem_brindes = _tabela_diferente(con, TABELAS_BRINDES) is not None
         sem_comissao = _tabela_diferente(con, TABELAS_COMISSAO) is not None
+        sem_devolucoes_notas = _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -231,6 +244,7 @@ class Cache:
             self.sem_carteira = sem_carteira
             self.sem_brindes = sem_brindes
             self.sem_comissao = sem_comissao
+            self.sem_devolucoes_notas = sem_devolucoes_notas
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -249,8 +263,8 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes e a comissão podem faltar
-        (pacote do PC com o código anterior), mas, se vierem, têm de estar no formato atual."""
+        cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes, a comissão e as devoluções
+        nota a nota podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
@@ -261,7 +275,8 @@ class Cache:
                     or _tabela_diferente(con, TABELAS_PARCELAS, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_COMISSAO, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_COMISSAO, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -282,9 +297,10 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito, parcelas, a carteira, os brindes ou a comissão que não deu para ler ou registrar (pedidos_erro,
-        pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro, carteira_erro, brindes_erro, comissao_erro)
-        esperam a próxima cópia, em vez de extrair tudo de novo a cada minuto."""
+        redes, crédito, parcelas, a carteira, os brindes, a comissão ou as notas de devolução que não deu para ler ou
+        registrar (pedidos_erro, pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro, carteira_erro,
+        brindes_erro, comissao_erro, devolucoes_notas_erro) esperam a próxima cópia, em vez de extrair tudo de novo a
+        cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -298,6 +314,7 @@ class Cache:
                 or (self.sem_carteira and not self.info.get("carteira_erro"))
                 or (self.sem_brindes and not self.info.get("brindes_erro"))
                 or (self.sem_comissao and not self.info.get("comissao_erro"))
+                or (self.sem_devolucoes_notas and not self.info.get("devolucoes_notas_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -321,10 +338,11 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito, parcelas, carteira, brindes e comissão: a leitura (ou o registro) pode ter falhado
+            # pedidos, rede, crédito, parcelas, carteira, brindes, comissão e notas de devolução: a leitura (ou o
+            # registro) pode ter falhado
             opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_PEDIDOS_DETALHE, **TABELAS_REDE,
                                            **TABELAS_CREDITO, **TABELAS_PARCELAS, **TABELAS_CARTEIRA,
-                                           **TABELAS_BRINDES, **TABELAS_COMISSAO}.items()
+                                           **TABELAS_BRINDES, **TABELAS_COMISSAO, **TABELAS_DEVOLUCOES_NOTAS}.items()
                          if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
@@ -405,8 +423,12 @@ class Cache:
 
     @staticmethod
     def _conferir_detalhe(con: duckdb.DuckDBPyConnection) -> None:
-        """O detalhe por cliente agrupa as mesmas linhas do ERP de outro jeito: os totais têm de bater."""
-        for detalhe, base in (("vendas_clientes_itens", "vendas_itens"), ("devolucoes_clientes_itens", "devolucoes_itens")):
+        """O detalhe por cliente (e as devoluções nota a nota) agrupam as mesmas linhas do ERP de outro jeito: os totais
+        têm de bater."""
+        pares = [("vendas_clientes_itens", "vendas_itens"), ("devolucoes_clientes_itens", "devolucoes_itens")]
+        if con.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'devolucoes_notas'").fetchone()[0]:
+            pares.append(("devolucoes_notas", "devolucoes_itens"))
+        for detalhe, base in pares:
             a, b = (con.execute(f"SELECT COALESCE(SUM(valor), 0) FROM {t}").fetchone()[0] for t in (detalhe, base))
             if abs(a - b) > 1:
                 log.warning("o total de %s (%.2f) não bate com o de %s (%.2f)", detalhe, a, base, b)
@@ -611,6 +633,24 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler as comissões (a aba Comissão das Premiações fica sem dados): %s", e)
                 comissao_erro = str(e)[:300]
+            # As devoluções nota a nota (página Devoluções), também à parte. O número e a série vazios viram nulo.
+            self.estado["etapa"] = "Lendo as notas de devolução"
+            devolucoes_notas_erro = None
+            try:
+                dados["devolucoes_notas"] = [
+                    (i, (str(n).strip() or None) if n is not None else None,
+                     (str(s).strip() or None) if s is not None else None, _data(em), _data(d), v, c, t, bool(cc), p, m,
+                     float(val or 0), float(q or 0))
+                    for i, n, s, em, d, v, c, t, cc, p, m, val, q in bd.consulta(
+                        "SELECT d.ID_DEVOLUCAO, d.NUMDOCUMENTO, d.SERIE, CAST(d.DATA AS DATE), CAST(d.ENTRADA AS DATE), "
+                        "COALESCE(d.ID_VENDEDOR, 0), d.ID_CLIENTE, d.TIPOCLIENTE, "
+                        "CASE WHEN d.DATACANCELAMENTO IS NULL THEN 0 ELSE 1 END, COALESCE(l.ID_ITEM, 0), "
+                        "COALESCE(l.ID_MOTIVODEVOLUCAO, 0), SUM(l.VALORTOTALITEM), SUM(l.QUANTIDADE) "
+                        "FROM DEVOLUCOESVENDA d JOIN LISTADEVOLUCAOVENDA l ON l.ID_DEVOLUCAO = d.ID_DEVOLUCAO "
+                        "WHERE d.ENTRADA >= ? AND d.ENTRADA < ? GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11", (de, ate))]
+            except Exception as e:
+                log.warning("não deu para ler as notas de devolução (a página Devoluções conta por cliente e dia): %s", e)
+                devolucoes_notas_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -628,5 +668,6 @@ class Cache:
             *([("parcelas_erro", parcelas_erro)] if parcelas_erro else []),
             *([("brindes_erro", brindes_erro)] if brindes_erro else []),
             *([("comissao_erro", comissao_erro)] if comissao_erro else []),
+            *([("devolucoes_notas_erro", devolucoes_notas_erro)] if devolucoes_notas_erro else []),
         ]
         return dados

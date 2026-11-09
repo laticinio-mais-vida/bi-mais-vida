@@ -25,7 +25,8 @@ import duckdb
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
 from bi.cache import (TABELAS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_COMISSAO, TABELAS_CREDITO, TABELAS_DETALHE,
-                      TABELAS_PARCELAS, TABELAS_PEDIDOS, TABELAS_PEDIDOS_DETALHE, TABELAS_REDE, Cache)
+                      TABELAS_DEVOLUCOES_NOTAS, TABELAS_PARCELAS, TABELAS_PEDIDOS, TABELAS_PEDIDOS_DETALHE, TABELAS_REDE,
+                      Cache)
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -89,7 +90,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                parcelas: bool = True, carteira: bool = True, vigencias=(), retratos=(),
                metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=(), comissao: bool = True,
                linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True, linhas_pedidos_detalhe=(),
-               pedidos_extras=()) -> Calculadora:
+               pedidos_extras=(), devolucoes_notas: bool = True) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -100,13 +101,15 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     valor, quantidade). comissao: False = cache sem as tabelas da comissão; linhas_comissao: as vendas com a comissão
     gravada (data, vendedor, tipo, produto, valor, comissão); percentuais: a tabela (vendedor, produto, %).
     pedidos_detalhe: False = cache sem os pedidos um a um e os itens deles; linhas_pedidos_detalhe: os cabeçalhos
-    (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá."""
+    (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá.
+    devolucoes_notas: False = cache sem as devoluções nota a nota (com ela, cada devolução abaixo é uma nota)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
                           **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
                           **(TABELAS_PARCELAS if credito and parcelas else {}), **(TABELAS_CARTEIRA if carteira else {}),
                           **(TABELAS_BRINDES if brindes else {}), **(TABELAS_COMISSAO if comissao else {}),
-                          **(TABELAS_PEDIDOS_DETALHE if pedidos_detalhe else {})}.items():
+                          **(TABELAS_PEDIDOS_DETALHE if pedidos_detalhe else {}),
+                          **(TABELAS_DEVOLUCOES_NOTAS if devolucoes_notas else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -145,6 +148,10 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     con.executemany("INSERT INTO devolucoes_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", devolucoes)
     con.execute("INSERT INTO devolucoes_itens SELECT data, id_vendedor, id_produto, id_motivo, cancelada, SUM(valor), "
                 "SUM(quantidade) FROM devolucoes_clientes_itens GROUP BY ALL")
+    if devolucoes_notas:  # (nota, número, série, emissão, entrada, vendedor, cliente, tipo, cancelada, produto, motivo, …)
+        con.executemany(f"INSERT INTO devolucoes_notas VALUES ({', '.join('?' * 13)})", [
+            (k, f"{640000 + k:06d}", "013", d, d, v, c, t, cc, p, m, val, q)
+            for k, (d, v, c, t, p, m, cc, val, q) in enumerate(devolucoes, 1)])
     con.executemany("INSERT INTO produtos VALUES (?, ?, ?, ?, ?, ?)", [
         (32, "QUEIJO MUSSARELA 4KG", 1, "MUSSARELA", "KG", 0), (27, "MANTEIGA 200G", 2, "MANTEIGA", "UN", 0),
         (11469, "BEBIDA LACTEA 500G", 3, "BEBIDAS", "UN", 0), (3643, "BEBIDA LACTEA 540G", 3, "BEBIDAS", "UN", 1),

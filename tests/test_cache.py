@@ -27,9 +27,10 @@ class TestPedidosNoCache(unittest.TestCase):
         self._tmp.cleanup()
 
     def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
-              brindes=True, comissao=True, pedidos_detalhe=True) -> Path:
+              brindes=True, comissao=True, pedidos_detalhe=True, devolucoes_notas=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
-                          carteira=carteira, brindes=brindes, comissao=comissao, pedidos_detalhe=pedidos_detalhe)
+                          carteira=carteira, brindes=brindes, comissao=comissao, pedidos_detalhe=pedidos_detalhe,
+                          devolucoes_notas=devolucoes_notas)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -112,6 +113,36 @@ class TestPedidosNoCache(unittest.TestCase):
         with self.assertRaises(ValueError) as e:
             Cache.conferir(arquivo)
         self.assertIn("comissoes_percentuais", str(e.exception))
+
+    def test_devolucoes_notas_opcionais(self):
+        # sem as devoluções nota a nota (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-las;
+        # se a leitura falhou, espera a próxima cópia
+        arquivo = self.cache(devolucoes_notas=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_devolucoes_notas, c.sem_brindes, c.desatualizado()), (True, False, True))
+        c.info["devolucoes_notas_erro"] = "Column unknown NUMDOCUMENTO"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE devolucoes_notas (id_devolucao INTEGER, valor DOUBLE)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("devolucoes_notas", str(e.exception))
+        arquivo.unlink()
+        self.cache()
+        c = Cache(ini, self.pasta)
+        self.assertFalse(c.sem_devolucoes_notas)
+        c._con.close()
 
     def test_carteira_opcional(self):
         # sem o histórico da carteira (PC com o código anterior): vale, e o PC extrai de novo uma vez para registrá-la;
@@ -248,8 +279,10 @@ class TestPedidosNoCache(unittest.TestCase):
 
 
 class _ErpFalso:
-    """No lugar de bi.fb.BancoSomenteLeitura: responde vazio a tudo, menos aos pedidos um a um e aos itens deles."""
+    """No lugar de bi.fb.BancoSomenteLeitura: responde vazio a tudo, menos aos pedidos um a um e aos itens deles e às
+    devoluções nota a nota."""
     falhar_itens = False
+    falhar_notas = False
     chamadas: list = []
 
     def __init__(self, *a, **k):
@@ -278,6 +311,17 @@ class _ErpFalso:
                 (12, dt.date(2026, 11, 6), dt.datetime(2026, 11, 6, 8, 0), None, 12892, "CLIENTE", 134, "PEDIDOVENDA",
                  "C", 1, "C", None, "", 90.0, 0.0, 1.0),                                   # cancelado, sem nota
             ]
+        if sql.startswith("SELECT d.ID_DEVOLUCAO,"):
+            if type(self).falhar_notas:
+                raise RuntimeError("Column unknown NUMDOCUMENTO")
+            # (id, número, série, emissão, entrada, vendedor, cliente, tipo, cancelada, produto, motivo, valor, qtd)
+            return [
+                (15790, "643997", "013", dt.datetime(2026, 10, 27), dt.datetime(2026, 10, 27), 120, 12270, "CLIENTE", 0,
+                 32, 1, 12992.79, 300.0),
+                (15741, " 001329 ", "3", dt.date(2026, 9, 25), dt.date(2026, 10, 15), 98, 500, "CLIENTE", 0, 11469, 3,
+                 1239.25, 400.0),                                                          # nota do cliente, mais antiga
+                (15700, "", "013", dt.date(2026, 10, 2), dt.date(2026, 10, 2), 98, 500, "CLIENTE", 1, 27, 2, 50.0, 2.0),
+            ]
         if "FROM LISTAPEDIDOVENDA" in sql:
             if type(self).falhar_itens:
                 raise RuntimeError("Table unknown LISTAPEDIDOVENDA")
@@ -297,7 +341,7 @@ class TestPedidosUmAUm(unittest.TestCase):
         self.ini = configparser.ConfigParser()
         self.ini.read_dict({"cache": {"arquivo": "cache.duckdb", "inicio": "2024-01-01"},
                             "banco": {"arquivo": str(banco), "usuario": "SYSDBA", "senha": "x"}})
-        _ErpFalso.falhar_itens, _ErpFalso.chamadas = False, []
+        _ErpFalso.falhar_itens, _ErpFalso.falhar_notas, _ErpFalso.chamadas = False, False, []
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -344,6 +388,33 @@ class TestPedidosUmAUm(unittest.TestCase):
         self.assertFalse(c.desatualizado())  # espera a próxima cópia
         c._con.close()
 
+
+    def test_devolucoes_nota_a_nota(self):
+        c = self.atualizar()
+        self.assertFalse(c.sem_devolucoes_notas)
+        notas = {r[0]: r for r in c.consulta(
+            "SELECT id_devolucao, nota, serie, emissao, data, id_vendedor, id_cliente, tipocliente, cancelada, id_produto, "
+            "id_motivo, valor, quantidade FROM devolucoes_notas")}
+        # o número fica em texto, com o zero da frente e sem espaços; a emissão pode ser bem antes da entrada
+        self.assertEqual(notas[15741][1:5], ("001329", "3", dt.date(2026, 9, 25), dt.date(2026, 10, 15)))
+        self.assertEqual(notas[15790][1:3] + notas[15790][4:5], ("643997", "013", dt.date(2026, 10, 27)))
+        self.assertEqual(notas[15700][1], None)  # sem número: vazio vira nulo
+        self.assertEqual(notas[15700][8], True)  # cancelada, com a marca
+        # gravadas por entrada (sem índice, como os pedidos)
+        self.assertEqual([r[0] for r in c.consulta("SELECT id_devolucao FROM devolucoes_notas")], [15700, 15741, 15790])
+        self.assertNotIn("devolucoes_notas_erro", c.info)
+        c._con.close()
+
+    def test_falha_nas_notas_de_devolucao(self):
+        _ErpFalso.falhar_notas = True
+        c = self.atualizar()
+        self.assertTrue(c.sem_devolucoes_notas)
+        self.assertIn("NUMDOCUMENTO", c.info["devolucoes_notas_erro"])
+        nomes = {r[0] for r in c.consulta("SELECT table_name FROM information_schema.tables")}
+        self.assertNotIn("devolucoes_notas", nomes)
+        self.assertIn("devolucoes_clientes_itens", nomes)  # o resto da extração segue
+        self.assertFalse(c.desatualizado())  # espera a próxima cópia
+        c._con.close()
 
 if __name__ == "__main__":
     unittest.main()
