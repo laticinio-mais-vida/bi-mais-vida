@@ -269,10 +269,11 @@ function renderRitmo(d, i = 0) {
   const c = d.calendario;
   const varios = variosMeses(d);
   const feriados = c.dias.filter((x) => x.tipo === "feriado" || x.tipo === "meio");
+  // O ritmo conta até o último dia útil antes da cópia do banco: a da manhã ainda não tem as vendas do dia.
   const textos = {
-    aberto: `Hoje cada meta${varios ? " do período" : ""} precisa estar em pelo menos <b>${fmt.pct(c.ritmo)}</b> para estar no ritmo.`,
+    aberto: `Hoje cada meta${varios ? " do período" : ""} precisa estar em pelo menos <b>${fmt.pct(c.ritmo)}</b> para estar no ritmo (dias úteis até ${fmt.semana(c.ritmo_ate)}, ${fmt.dataCurta(c.ritmo_ate)}).`,
     fechado: `${varios ? "Período encerrado" : "Mês encerrado"}: o ritmo esperado agora é 100% da meta.`,
-    futuro: varios ? "Este período ainda não começou." : "Este mês ainda não começou.",
+    futuro: varios ? "Nenhum dia útil do período fechou ainda." : "Nenhum dia útil do mês fechou ainda.",
   };
   const MAX_FERIADOS = 4;
   const chipsFeriados = feriados.slice(0, MAX_FERIADOS).map((f) => `<span class="chip laranja">★ ${fmt.dataCurta(f.data)} · ${esc(f.motivo)}</span>`).join("") +
@@ -293,7 +294,7 @@ function renderRitmo(d, i = 0) {
         const dia = Number(x.data.slice(8));
         const dow = new Date(x.data + "T12:00").getDay();
         const sem = SEMANA[dow];
-        const classes = [x.tipo, x.passou ? "passou" : "", x.data === d.data_ref ? "hoje" : ""].join(" ");
+        const classes = [x.tipo, x.passou ? "passou" : "", x.data === c.ritmo_ate ? "hoje" : ""].join(" ");
         const col = n === 0 ? `;--col:${((dow + 6) % 7) + 1}` : "";
         const tt = `<div class='tt-t'>${fmt.dataCurta(x.data)} · ${fmt.semana(x.data)}</div>` +
           linhaTT("Situação", x.motivo ? esc(x.motivo) : "Dia útil") +
@@ -328,7 +329,7 @@ function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
   const f = tipo === "moeda" ? "moedaC" : "num";
   const v = tipo === "moeda" ? fmt.moedaC : fmt.num;
   const linhas = [];
-  if (ind.meta && cal.situacao === "aberto") linhas.push(["Esperado até hoje", v(ind.esperado)]);
+  if (ind.meta && cal.situacao === "aberto") linhas.push([`Esperado até ${fmt.dataCurta(cal.ritmo_ate)}`, v(ind.esperado)]);
   if (tipo === "moeda" && ind.projecao != null && cal.situacao === "aberto") linhas.push([cal.meses.length > 1 ? "Projeção do período" : "Projeção do mês", `${v(ind.projecao)} <span style="color:var(--tinta-3)">(${fmt.pct(ind.projecao_pct, 0)})</span>`]);
   if (ind.falta != null) {
     linhas.push([ind.falta > 0 ? "Falta para a meta" : "Meta", ind.falta > 0 ? v(ind.falta) : "alcançada"]);
@@ -592,7 +593,7 @@ function renderBullets(d, i) {
       const escala = Math.max(1.15, (c.pct || 0) * 1.05);
       const larg = c.meta ? (Math.min(c.pct || 0, escala) / escala) * 100 : 100;
       const tt = `<div class='tt-t'>${esc(p.nome)}</div>` + linhaTT("Meta", `${fmt.num(c.meta, 1)} ${esc(p.unidade)}`) +
-        linhaTT("Vendido", `${fmt.num(c.realizado, 1)} ${esc(p.unidade)}`) + linhaTT("Atingido", fmt.pct(c.pct)) + linhaTT("Esperado hoje", `${fmt.num(c.esperado, 1)} ${esc(p.unidade)}`);
+        linhaTT("Vendido", `${fmt.num(c.realizado, 1)} ${esc(p.unidade)}`) + linhaTT("Atingido", fmt.pct(c.pct)) + linhaTT(`Esperado até ${fmt.dataCurta(cal.ritmo_ate)}`, `${fmt.num(c.esperado, 1)} ${esc(p.unidade)}`);
       return `<div class="bullet" data-tt="${esc(tt)}">
         <div class="nome">${esc(p.nome)}<small>${c.meta ? `meta ${fmt.num(c.meta, 0)} ${esc(p.unidade)}` : "sem meta"}</small></div>
         <div class="trilho">

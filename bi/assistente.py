@@ -1006,7 +1006,7 @@ class Ferramentas:
         resultado = {
             "visao": d["visao"]["titulo"], "periodo": d["periodo"]["rotulo"], "dados_ate": d["data_ref"],
             "calendario": {k: _valor(cal.get(k)) for k in ("situacao", "dias_uteis", "dias_decorridos",
-                                                            "dias_restantes", "ritmo")},
+                                                            "dias_restantes", "ritmo", "ritmo_ate")},
         }
         enxuto = lambda ind: {k: _valor(ind.get(k)) for k in ("meta", "realizado", "pct", "status", "projecao",  # noqa: E731
                                                                "falta", "falta_por_dia", "meta_dia", "meta_dia_data")

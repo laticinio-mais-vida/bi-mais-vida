@@ -7,7 +7,9 @@ Regras (as mesmas do Power BI, com os parâmetros vindos da página Configuraç�
   ENTRADA da devolução;
 - faturamento = mussarela + outras linhas (produtos marcados como "não conta" ficam fora de tudo);
 - clientes = clientes distintos com venda válida no mês (o total não repete cliente atendido por dois vendedores);
-- ritmo esperado = dias úteis já passados / dias úteis do mês, até o último dia com venda na cópia do banco.
+- ritmo esperado = dias úteis já passados / dias úteis do mês, contando até o último dia útil antes do dia da cópia
+  do banco (a cópia da manhã ainda não tem as vendas do dia, ou só as primeiras notas), sem passar do último dia com
+  venda. As vendas do dia da cópia entram no realizado, mas o dia só conta no ritmo na cópia do dia seguinte.
 
 Com vários meses escolhidos no filtro, metas e realizados somam os meses (como uma segmentação do Power BI),
 clientes somam os atendidos de cada mês (a meta de clientes é mensal) e o ritmo junta os dias úteis de todos.
@@ -263,6 +265,11 @@ class Calculadora:
             [*params, *ids]))
         return dict(por_vendedor), total
 
+    def dia_do_ritmo(self, cal_obj: Calendario, regiao: str) -> dt.date:
+        """Até que dia o ritmo conta: o último dia útil antes do dia da cópia do banco (na segunda de manhã, a sexta),
+        sem passar do último dia com venda."""
+        return min(self.cache.data_ref(), cal_obj.dia_util_antes(self.cache.dia_da_copia(), regiao))
+
     def _calendario_periodo(self, cal_obj: Calendario, meses: list[dt.date], regiao: str, data_ref: dt.date) -> dict:
         """Calendário dos meses escolhidos: dias úteis somados e ritmo = dias passados ÷ dias úteis de todos."""
         resumos = [cal_obj.resumo(m.year, m.month, regiao, data_ref) for m in meses]
@@ -301,7 +308,9 @@ class Calculadora:
         regras = self.regras()
         cal_obj = self.calendario(regras)
         data_ref = self.cache.data_ref()
-        cal = self._calendario_periodo(cal_obj, meses, info["regiao"], data_ref)
+        ritmo_ate = self.dia_do_ritmo(cal_obj, info["regiao"])
+        cal = self._calendario_periodo(cal_obj, meses, info["regiao"], ritmo_ate)
+        cal["ritmo_ate"] = ritmo_ate.isoformat()
         fim = _fim_do_mes(meses[-1])
         arquivo = meses[0].strftime("%Y-%m") + ("" if len(meses) == 1 else "-a-" + meses[-1].strftime("%Y-%m"))
         base = {

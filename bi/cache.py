@@ -236,6 +236,11 @@ class Cache:
         v = self.info.get("data_ref")
         return dt.date.fromisoformat(v) if v else None
 
+    def dia_da_copia(self) -> dt.date:
+        """O dia da cópia do banco do ERP de onde vieram os dados (sem ela, o da extração; sem nenhum, hoje)."""
+        v = self.info.get("banco_copia") or self.info.get("extraido_em")
+        return dt.datetime.fromisoformat(v).date() if v else dt.date.today()
+
     def conteudo(self) -> bytes:
         """O arquivo do cache inteiro (para enviar ao VPS), lido sem deixar uma troca acontecer no meio."""
         with self._trava:
