@@ -675,6 +675,25 @@ cada venda, menos as devoluções e os brindes danificados e vencidos.
 - **As regras:** a seção nova `comissao` (os motivos dos brindes) entra com o padrão nas versões já salvas. O código
   anterior ignora essa seção.
 
+#### Premiações – supervisores pelos regulamentos de nov/2026 (sem migração)
+
+A aba **Supervisores** deixa a conta do Power BI (cinco indicadores × R$ 5.000) e passa a seguir os regulamentos: Marcos
+(BA) e Ronaldo (ES) com variável de R$ 6.000, Valdirene (ES) com R$ 9.000 e o prêmio da inadimplência (veja o README,
+"Como a premiação é calculada"). Vale para todos os meses.
+
+- **Ordem:** qualquer uma; não há migração e os dados que o PC manda não mudaram (a conta usa tabelas que o cache já
+  traz: vendas, devoluções, brindes, `clientes_detalhes.data_cadastro` e títulos).
+- **As regras salvas** (`regras`, nome `premiacoes`) da versão 1 são convertidas ao abrir: ficam os nomes, a meta do mix,
+  os produtos fora do mix, os dias da inadimplência e as metas trocadas em cada mês (as do ES valem para o Ronaldo e a
+  Valdirene); o resto vem do padrão. Nada é gravado até alguém salvar no Configurar. Antes de publicar, leia a última
+  versão salva (SELECT só de leitura) e ensaie a conversão com ela.
+- **Depois de publicar:** confira em Configurar › Supervisores o variável da Valdirene (R$ 9.000 é "para fins de exemplo"
+  no regulamento) e as metas de todo mês de clientes novos (40) e de reativação (20). As abas Vendedores e Comissão não
+  mudam. Peça a quem estava com a página aberta para recarregá-la.
+- **Voltar atrás:** o código anterior abre uma versão salva no formato novo com os padrões dele (as chaves novas não têm
+  os nomes das antigas), mas perde as metas trocadas em cada mês. Para recuperá-las, grave de novo a última versão 1
+  (está na tabela `regras`, com o id de antes).
+
 #### Subtarefa automática na agenda (migração 035)
 
 Quem entra numa tarefa com autonomia (que passa a vir marcada) ganha a subtarefa automática "Crie as suas subtarefas

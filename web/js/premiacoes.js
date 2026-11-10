@@ -1,7 +1,8 @@
-// Página Premiações: as páginas "Premiacao Vendedores" e "Premiacao Supervisores" do Power BI numa só, com uma aba para
-// cada uma, como as abas da página de Metas, e a aba Comissão (a comissão dos vendedores das equipes BA e ES). A conta
-// fica no servidor (bi/premiacoes.py); aqui é a apresentação: os cartões, as tabelas dos vendedores e da comissão (que
-// viram imagem para o WhatsApp), os quadros dos supervisores, a comissão por produto e o passo a passo.
+// Página Premiações: os vendedores (a página "Premiacao Vendedores" do Power BI), os supervisores (os regulamentos de
+// nov/2026: um quadro por supervisor, com as parcelas, a trava, o bônus e o desconto) e a Comissão (a comissão dos
+// vendedores das equipes BA e ES), uma aba para cada, como as abas da página de Metas. A conta fica no servidor
+// (bi/premiacoes.py); aqui é a apresentação: os cartões, as tabelas dos vendedores e da comissão (que viram imagem para
+// o WhatsApp), os quadros dos supervisores, a comissão por produto e o passo a passo.
 import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
 import { ligarCaptura } from "./relatorio.js";
 
@@ -32,7 +33,7 @@ export function montarPremiacoes(container, contexto) {
       <div class="filtros">
         <label class="campo" title="Mês"><span class="ic-campo">${icone("calendario")}</span><select id="p-mes" aria-label="Mês"></select></label>
         <label class="campo" title="Ano"><span class="ic-campo">${icone("funil")}</span><select id="p-ano" aria-label="Ano"></select></label>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/config-premiacoes" title="Faixas dos vendedores, pesos e metas dos supervisores">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        ${ctx.admin ? `<a class="btn btn-config" href="#/config-premiacoes" title="Faixas dos vendedores, regras e metas dos supervisores, brindes da comissão">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="p-avisos"></div>
@@ -318,129 +319,252 @@ function comoVendedores(d, i) {
 
 // ---------- supervisores ----------
 const FORMATO = {
-  receita: (v) => fmt.moeda(v), mix: (v) => fmt.pct(v), inadimplencia: (v) => fmt.pct(v, 2),
-  positivacao: (v) => fmt.num(v), devolucoes: (v) => fmt.pct(v, 2),
+  faturamento: (v) => fmt.moeda(v), mix: (v) => fmt.pct(v), positivacao: (v) => fmt.num(v),
+  novos: (v) => fmt.num(v), reativacao: (v) => fmt.num(v),
 };
+
+// O alcance arredondado para baixo: 89,96% aparece como 89,9%, não como 90,0% ao lado de uma parcela zerada.
+const pctBaixo = (v, casas = 1) => (v == null ? "—"
+  : fmt.pct(Math.floor(v * 100 * 10 ** casas + 1e-6) / (100 * 10 ** casas), casas));
+
+// "DEVOLUÇÃO IMPRÓPRIA - VENCIDO" -> "Devolução imprópria - vencido"; "QUEIJO MUSSARELA 4KG" -> "Queijo mussarela 4kg"
+const nomeLegivel = (nome) => { const s = String(nome || "").toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); };
+// "DEVOLUÇÃO - ERRO DE LANÇAMENTO" -> "erro de lançamento"
+const motivoDaMeta = (nome) => String(nome || "").replace(/^DEVOLU\S*\s*-\s*/i, "").toLowerCase();
+const emLista = (itens) => (itens.length <= 1 ? itens.join("") : `${itens.slice(0, -1).join(", ")} e ${itens[itens.length - 1]}`);
+const plural = (n, um, varios) => `${fmt.num(n)} ${n === 1 ? um : varios}`;
 
 function renderSupervisores(d) {
   const cartoes = d.supervisores.map((s, k) => cartaoSupervisor(d, s, k + 1)).join("");
   return `<section class="pr-sups secao">${cartoes}</section>${comoSupervisores(d, d.supervisores.length + 2)}`;
 }
 
-function linhaIndicador(d, s, x) {
+function chipFaixa(x) {
+  const cls = !x.pct ? "zero" : x.pct < 1 ? "parcial" : x.pct > 1 ? "acima" : "cheia";
+  return `<span class="pr-faixa ${cls}">${x.pct ? pctFaixa(x.pct) : "0%"}</span>`;
+}
+
+function textoProxima(x) {
+  const p = x.proxima;
+  if (!p) return "";
+  const falta = x.id === "faturamento" ? fmt.moeda(p.falta) : plural(p.falta, "cliente", "clientes");
+  return `<small>faltam ${falta} para ${pctFaixa(p.min)}</small>`;
+}
+
+function linhaIndicador(x) {
   const f = FORMATO[x.id];
-  let alcance, regra;
-  if ("dentro" in x) {
-    alcance = x.realizado == null
-      ? `<span class="fraco">${x.sem_dados ? "sem dados" : "sem base"}</span>`
-      : `<span class="pr-teto ${x.dentro ? "sim" : "nao"}">${icone(x.dentro ? "certo" : "x")}${x.dentro ? "dentro" : "acima"}</span>`;
-    regra = `até ${f(x.meta)}: ${fmt.pct(x.peso, 0)}`;
-  } else {
-    const cor = x.alcance == null || x.alcance + 1e-9 < x.minimo ? "var(--ruim-forte)" : x.alcance + 1e-9 >= 1 ? "var(--ok-forte)" : "var(--atencao-forte)";
-    alcance = barraPct(x.alcance, cor);
-    regra = `mín. ${fmt.pct(x.minimo, 0)} · até ${fmt.pct(x.peso, 0)}`;
-  }
-  const meta = x.ajustada
-    ? `<span data-tt="${esc(`<div class='tt-t'>Meta ajustada à mão</div>A soma das metas dos vendedores seria ${f(x.meta_auto)}`)}">${f(x.meta)} <small class="pr-aj">ajustada</small></span>`
-    : f(x.meta);
+  const meta = x.sem_meta
+    ? `<span class="fraco" data-tt="${esc("<div class='tt-t'>Sem meta</div>Sem meta no mês, a parcela fica em R$ 0. As metas ficam em Premiações › Configurar.")}">sem meta</span>`
+    : x.ajustada
+      ? `<span data-tt="${esc(`<div class='tt-t'>Meta trocada neste mês</div>Sem a troca, seria ${x.id === "faturamento" || x.id === "positivacao" ? "a soma das metas dos vendedores" : "a meta de todo mês"}: ${x.meta_auto == null ? "sem meta" : f(x.meta_auto)}`)}">${f(x.meta)} <small class="pr-aj">ajustada</small></span>`
+      : f(x.meta);
+  const cor = !x.pct ? "var(--ruim-forte)" : x.pct < 1 ? "var(--atencao-forte)" : "var(--ok-forte)";
+  const largura = Math.max(0, Math.min(1, x.alcance || 0)) * 100;
+  const alcance = x.alcance == null ? `<span class="fraco">—</span>`
+    : `<span class="pct-cel"><span class="mini"><i style="--c:${cor};width:0" data-largura="${largura}%"></i></span><b>${pctBaixo(x.alcance)}</b></span>${textoProxima(x)}`;
+  const sub = x.so_trava ? "não tem peso: só move a trava e o bônus" : `peso ${pctFaixa(x.peso)} · ${fmt.moeda2(x.referencia)}`;
   return `<tr>
-    <td class="esq"><b>${esc(x.titulo)}</b><small>${regra}</small></td>
+    <td class="esq"><b>${esc(x.titulo)}</b><small>${sub}</small></td>
     <td>${f(x.realizado)}</td>
     <td>${meta}</td>
-    <td>${alcance}</td>
-    <td class="pr-pontos">${fmt.pct(x.pontos, 1)}</td></tr>`;
+    <td class="pr-alc">${alcance}</td>
+    <td class="centro">${x.so_trava ? "—" : chipFaixa(x)}</td>
+    <td class="pr-pontos">${x.so_trava ? "—" : fmt.moeda2(x.parcela)}</td></tr>`;
+}
+
+function contaSupervisor(d, s) {
+  const t = s.trava, b = s.bonus, dv = s.devolucao, ad = s.adicional;
+  const passo = (rotulo, efeito, valor, cls = "") => `<div class="passo ${cls}"><span>${rotulo}</span><em>${efeito}</em><b>${valor}</b></div>`;
+  const alc = t.alcance == null ? "sem meta de faturamento" : `faturamento a ${pctBaixo(t.alcance)} da meta`;
+  const trava = t.pct >= 1 ? "mantém 100%" : t.pct > 0 ? `paga ${pctFaixa(t.pct)}` : "zera o prêmio";
+  const bonus = b.pct ? `+${pctFaixa(b.pct)}` : t.pct <= 0 ? "—" : "só acima de 100%";
+  const vencido = dv.indice == null ? "vencido sem vendas no mês" : `vencido em ${fmt.pct(dv.indice, 2)} das vendas`;
+  const mantido = dv.pct >= 1 ? "sem desconto" : `mantém ${pctFaixa(dv.pct)}`;
+  let adicional = "";
+  if (ad) {
+    const limite = fmt.pct(ad.limite, 2);
+    const efeito = ad.pago ? `até ${limite}: paga` : { trava: "a trava zerou", sem_dados: "sem dados", acima: `acima de ${limite}` }[ad.motivo] || "não paga";
+    const indice = ad.indice == null ? "sem dados" : `em ${fmt.pct(ad.indice, 2)}`;
+    adicional = passo(`Prêmio da inadimplência · ${indice}`, efeito, `+ ${fmt.moeda2(ad.valor)}`, ad.pago ? "" : "zero");
+  }
+  return `<div class="pr-conta">
+    <h4>A conta</h4>
+    ${passo("Parcelas conquistadas", "", fmt.moeda2(s.conquistado))}
+    ${passo(`Trava · ${alc}`, trava, fmt.moeda2(t.valor), t.pct <= 0 ? "zero" : "")}
+    ${passo("Bônus de superação", bonus, fmt.moeda2(b.total))}
+    ${passo(`Desconto · ${vencido}`, mantido, fmt.moeda2(dv.total))}
+    ${adicional}
+    ${passo("A receber", "", fmt.moeda2(s.premio), "total")}
+  </div>`;
+}
+
+function listaClientes(d, s) {
+  const novos = s.clientes.novos, reat = s.clientes.reativacoes;
+  const linhasNovos = novos.map((c) => `<tr><td class="esq">${esc(c.nome)}${c.inativo ? ' <small class="pr-aj">inativo hoje</small>' : ""}</td>
+      <td class="esq">${esc(c.cidade || "—")}</td><td class="esq">${esc(c.vendedor)}</td>
+      <td>${fmt.data(c.cadastro)}</td><td>${fmt.data(c.compra)}</td></tr>`).join("");
+  const linhasReat = reat.map((c) => `<tr><td class="esq">${esc(c.nome)}</td>
+      <td class="esq">${esc(c.cidade || "—")}</td><td class="esq">${esc(c.vendedor)}</td>
+      <td${c.antes_das_vendas ? ` data-tt="${esc("<div class='tt-t'>Pelo título de venda</div>Antes das vendas do painel, a última compra é a do último título de venda do ERP.")}"` : ""}>${fmt.data(c.anterior)}</td>
+      <td>${fmt.data(c.data)}</td><td>${plural(c.dias, "dia", "dias")}</td></tr>`).join("");
+  return `<div class="pr-clientes">
+    <div>
+      <h4 class="pr-det-tit">Clientes novos <small class="fraco">${plural(novos.length, "cadastrado e com compra no mês", "cadastrados e com compra no mês")}</small></h4>
+      <div class="tabela-rolagem pr-vend-rolagem"><table class="dados">
+        <thead><tr><th>Cliente</th><th>Cidade</th><th>Vendedor</th><th>Cadastro</th><th>1ª compra</th></tr></thead>
+        <tbody>${linhasNovos || `<tr><td class="esq" colspan="5">Nenhum cliente cadastrado e com compra no mês.</td></tr>`}</tbody>
+      </table></div>
+    </div>
+    <div>
+      <h4 class="pr-det-tit">Reativações <small class="fraco">${plural(reat.length, "cliente", "clientes")} com compra depois de ${plural(d.dias_sem_compra, "dia", "dias")} ou mais sem comprar</small></h4>
+      <div class="tabela-rolagem pr-vend-rolagem"><table class="dados">
+        <thead><tr><th>Cliente</th><th>Cidade</th><th>Vendedor</th><th>Compra anterior</th><th>Voltou em</th><th>Sem comprar</th></tr></thead>
+        <tbody>${linhasReat || `<tr><td class="esq" colspan="6">Nenhuma reativação no mês.</td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
 }
 
 function cartaoSupervisor(d, s, i) {
   const c = s.contas;
-  const id = `sup-${s.estado}`;
+  const id = `sup-${s.id}`;
   const aberto = estado.abertos.has(id);
   const contas = [
-    ["Faturamento bruto do mês", fmt.moeda2(c.bruto)],
-    ["− Devoluções (todos os motivos, sem as canceladas)", fmt.moeda2(c.devolucoes)],
-    ["− Brindes", d.sem_brindes ? "ainda sem dados" : fmt.moeda2(c.brindes)],
+    ["Vendas do mês", fmt.moeda2(c.vendas)],
+    ["− Devoluções que descontam na meta", fmt.moeda2(c.devolucoes)],
     ["= Faturamento líquido", fmt.moeda2(c.liquido)],
-    [`Líquido sem ${d.produtos_fora_mix.map((p) => p.id).join(", ")} (mix)`, fmt.moeda2(c.liquido_mix)],
-    [`Faturamento líquido de ${esc(d.janela.rotulo)}`, fmt.moeda2(c.liquido_6m)],
-    [`Em aberto, vencido até ${fmt.data(d.corte_vencimento)}`, fmt.moeda2(c.inadimplente)],
-    ["Devoluções impróprias", fmt.moeda2(c.improprias_devolucoes)],
-    ["Brindes impróprios", d.sem_brindes ? "ainda sem dados" : fmt.moeda2(c.improprias_brindes)],
+    ...(s.usa_mix ? [["Líquido sem mussarela (mix)", `${fmt.moeda2(c.liquido_mix)} · ${fmt.pct(c.pct_mix)}`]] : []),
+    ["Vencido: devoluções", fmt.moeda2(c.dev_vencido)],
+    ["Vencido: brindes", d.sem_brindes ? "ainda sem dados" : fmt.moeda2(c.brindes_vencido)],
+    ["Vencido ÷ vendas", fmt.pct(c.indice_vencido, 2)],
+    ...(s.usa_inadimplencia ? [
+      [`Faturamento líquido de ${esc(d.janela.rotulo)}`, fmt.moeda2(c.liquido_6m)],
+      [`Em aberto, vencido até ${fmt.data(d.corte_vencimento)}`, fmt.moeda2(c.inadimplente)],
+      ["Inadimplência", d.sem_credito ? "ainda sem dados" : fmt.pct(c.indice_inadimplencia, 2)]] : []),
   ];
   const vendedores = s.vendedores.map((v) => `<tr>
-      <td class="esq">${esc(v.nome)}</td><td>${fmt.moeda(v.liquido)}</td><td>${fmt.pct(v.pct_mix)}</td>
-      <td>${fmt.num(v.positivacao)}</td><td>${fmt.moeda(v.inadimplente)}</td><td>${fmt.moeda(v.improprias)}</td></tr>`).join("");
+      <td class="esq">${esc(v.nome)}</td><td>${fmt.moeda(v.liquido)}</td>${s.usa_mix ? `<td>${fmt.pct(v.pct_mix)}</td>` : ""}
+      <td>${fmt.num(v.positivacao)}</td><td>${fmt.num(v.novos)}</td><td>${fmt.num(v.reativacoes)}</td>
+      <td>${fmt.moeda(v.vencido)}</td>${s.usa_inadimplencia ? `<td>${fmt.moeda(v.inadimplente)}</td>` : ""}</tr>`).join("");
+  const colunas = 6 + (s.usa_mix ? 1 : 0) + (s.usa_inadimplencia ? 1 : 0);
+  const fracao = s.variavel ? s.premio / s.variavel : 0;
   return `
   <article class="cartao pr-sup entra" style="--i:${i}">
     <div class="pr-sup-cab">
       <div><span class="pr-estado">${esc(s.estado)}</span><h3>${esc(s.nome)}</h3>
-        <small>${s.vendedores.length} vendedor${s.vendedores.length === 1 ? "" : "es"} com movimento na carteira · ${esc(d.mes.rotulo)}</small></div>
+        <small>Variável de ${fmt.moeda2(s.variavel)} · ${esc(d.mes.rotulo)}</small></div>
       <div class="pr-sup-valor">${seloSituacao(d)}<b data-contar="${s.premio}" data-fmt="moeda2">${fmt.moeda2(0)}</b>
-        <small>${fmt.pct(s.pct, 1)} de ${fmt.moeda2(d.maximo)}</small></div>
+        <small>${fmt.pct(fracao, 1)} do variável</small></div>
     </div>
-    <div class="pr-sup-barra"><i style="width:0" data-largura="${Math.min(1, s.pct) * 100}%"></i></div>
-    <div class="tabela-rolagem pr-ind-rolagem">
-      <table class="dados pr-ind">
-        <thead><tr><th>Indicador</th><th>Realizado</th><th>Meta</th><th>Alcance</th><th>Pontos</th></tr></thead>
-        <tbody>${s.indicadores.map((x) => linhaIndicador(d, s, x)).join("")}</tbody>
-        <tfoot><tr><td>Total</td><td></td><td></td><td></td><td class="pr-pontos">${fmt.pct(s.pct, 1)}</td></tr></tfoot>
-      </table>
+    <div class="pr-sup-barra"><i style="width:0" data-largura="${Math.min(1, Math.max(0, fracao)) * 100}%"></i></div>
+    <div class="pr-sup-corpo">
+      <div class="tabela-rolagem pr-ind-rolagem">
+        <table class="dados pr-ind">
+          <thead><tr><th>Indicador</th><th>Realizado</th><th>Meta</th><th>Alcance</th><th>Faixa</th><th>Parcela</th></tr></thead>
+          <tbody>${s.indicadores.map(linhaIndicador).join("")}</tbody>
+          <tfoot><tr><td class="esq" colspan="5">Parcelas conquistadas</td><td class="pr-pontos">${fmt.moeda2(s.conquistado)}</td></tr></tfoot>
+        </table>
+      </div>
+      ${contaSupervisor(d, s)}
     </div>
     <div class="pr-sup-acoes">
       <button class="btn" type="button" data-abrir="${id}" data-rotulo="Ver as contas" aria-expanded="${aberto}">${icone("recibo")}<span class="rot">${aberto ? "Esconder" : "Ver as contas"}</span></button>
     </div>
     <div class="pr-det" id="p-det-${id}"${aberto ? "" : " hidden"}>
-      <div class="pr-contas">${contas.map(([a, b]) => `<div class="linha-r"><span>${a}</span><b>${b}</b></div>`).join("")}</div>
-      <div class="tabela-rolagem pr-vend-rolagem">
-        <table class="dados">
-          <thead><tr><th>Carteira de</th><th>Líquido</th><th>Mix</th><th>Positivação</th><th>Inadimplente</th><th>Impróprias</th></tr></thead>
-          <tbody>${vendedores || `<tr><td class="esq" colspan="6">Nenhum movimento na carteira.</td></tr>`}</tbody>
-        </table>
+      <div class="pr-det-topo">
+        <div class="pr-contas">${contas.map(([a, b]) => `<div class="linha-r"><span>${a}</span><b>${b}</b></div>`).join("")}</div>
+        <div class="tabela-rolagem pr-vend-rolagem">
+          <table class="dados">
+            <thead><tr><th>Carteira de</th><th>Líquido</th>${s.usa_mix ? "<th>Mix</th>" : ""}<th>Positivação</th><th>Novos</th>
+              <th>Reativações</th><th>Vencido</th>${s.usa_inadimplencia ? "<th>Inadimplente</th>" : ""}</tr></thead>
+            <tbody>${vendedores || `<tr><td class="esq" colspan="${colunas}">Nenhum movimento na carteira.</td></tr>`}</tbody>
+          </table>
+        </div>
       </div>
+      ${listaClientes(d, s)}
     </div>
   </article>`;
 }
 
+function textoEscala(faixas) {
+  return faixas.map((f) => `a partir de ${pctFaixa(f.min)} da meta, ${pctFaixa(f.pct)}`).join("; ");
+}
+
 function comoSupervisores(d, i) {
-  const s = d.supervisores[0];
-  const peso = (k) => fmt.pct(s.indicadores.find((x) => x.id === k).peso, 0);
-  const minimo = (k) => fmt.pct(s.indicadores.find((x) => x.id === k).minimo, 0);
-  const metas = (k, casas) => d.supervisores.map((x) => `${fmt.pct(x.indicadores.find((y) => y.id === k).meta, casas)} no ${x.estado}`).join(" e ");
+  const e = d.escalas;
+  const sups = d.supervisores;
+  const titulos = [["faturamento", "Faturamento líquido"], ["mix", "Mix (exceto mussarela)"], ["positivacao", "Positivação"],
+    ["novos", "Ativação de clientes novos"], ["reativacao", "Reativação de clientes"]];
+  const usados = titulos.filter(([k]) => sups.some((s) => s.indicadores.some((x) => x.id === k && !x.so_trava)));
+  const celula = (s, k) => {
+    const x = s.indicadores.find((y) => y.id === k);
+    return x && !x.so_trava ? `${pctFaixa(x.peso)} = ${fmt.moeda2(x.referencia)}` : "—";
+  };
+  const pesos = `<div class="tabela-rolagem"><table class="dados pr-pesos">
+      <thead><tr><th>Indicador</th>${sups.map((s) => `<th>${esc(s.nome)} (${esc(s.estado)})</th>`).join("")}</tr></thead>
+      <tbody>${usados.map(([k, t]) => `<tr><td class="esq">${t}</td>${sups.map((s) => `<td>${celula(s, k)}</td>`).join("")}</tr>`).join("")}</tbody>
+      <tfoot><tr><td class="esq">Variável</td>${sups.map((s) => `<td>${fmt.moeda2(s.variavel)}</td>`).join("")}</tr></tfoot>
+    </table></div>`;
+  const motivosMeta = d.motivos_meta.map((m) => esc(motivoDaMeta(m.nome)));
+  const vencido = d.motivos_vencido.map((m) => `"${esc(nomeLegivel(m.nome))}"`);
+  const mussarela = d.produtos_fora_mix.map((p) => esc(nomeLegivel(p.nome)));
+  const devolucao = [...e.devolucao.faixas.map((f) => `até ${fmt.pct(f.ate, 1)}, ${f.pct >= 1 ? "sem desconto" : `mantém ${pctFaixa(f.pct)}`}`),
+    `acima disso, mantém ${pctFaixa(e.devolucao.acima)}`].join("; ");
+  const comAdicional = sups.filter((s) => s.adicional);
+  const adicional = comAdicional.map((s) => `<li><b>Prêmio da inadimplência (${esc(s.nome)}):</b> ${fmt.moeda2(s.adicional.valor_regra)}
+      com a inadimplência em até ${fmt.pct(s.adicional.limite, 2)}: títulos de venda a cliente emitidos de ${esc(d.janela.rotulo)},
+      vencidos há ${d.dias_atraso} dias ou mais (até ${fmt.data(d.corte_vencimento)}) e ainda em aberto na data dos dados, ÷ o
+      faturamento líquido desses 6 meses. Entra depois de todos os passos, fora da trava, do bônus e do desconto, e não é
+      pago quando a trava zera o prêmio. Conta o que está em aberto hoje: o mês fechado muda quando um cliente paga depois.</li>`).join("");
   return `
   <section class="cartao secao entra metodo" style="--i:${i}">
     <details>
       <summary>
         <h3>${icone("info")}Como a premiação dos supervisores é calculada</h3>
-        <span class="sub">A conta da página "Premiacao Supervisores" do Power BI, com as regras em vigor</span>
+        <span class="sub">Os regulamentos dos supervisores, com as regras em vigor em Premiações › Configurar</span>
       </summary>
       <div class="metodo-corpo">
         <ol class="metodo-passos">
           <li><b>Carteira de hoje:</b> entram os clientes cujo vendedor no cadastro é do estado (pelas Configurações das
             metas ou pelo supervisor no ERP). Terceiros, o Edir e contas internas ficam fora. Só vendas, devoluções e
-            brindes de cliente (sem funcionário, fornecedor ou produtor).</li>
-          <li><b>Faturamento líquido (${peso("receita")}):</b> vendas do mês − devoluções não canceladas (todos os motivos,
-            pela data de entrada) − brindes, sobre a meta. A meta é a soma das METAS FATURAMENTO dos vendedores do estado
-            no mês, ou o valor ajustado à mão em Configurar. Abaixo de ${minimo("receita")} da meta, nada; acima,
-            ${peso("receita")} × o alcance, no máximo ${peso("receita")}.</li>
-          <li><b>Mix (${peso("mix")}):</b> o líquido sem ${d.produtos_fora_mix.map((p) => `${esc(p.nome)} (${p.id})`).join(", ")}
-            ÷ o líquido, sobre a meta (${metas("mix", 0)}). Mínimo de ${minimo("mix")} de alcance.</li>
-          <li><b>Inadimplência (${peso("inadimplencia")}):</b> títulos de venda a cliente emitidos de ${esc(d.janela.rotulo)},
-            vencidos há ${d.dias_atraso} dias ou mais (até ${fmt.data(d.corte_vencimento)}) e ainda em aberto na data dos
-            dados, ÷ o faturamento líquido desses 6 meses. Até a meta (${metas("inadimplencia", 2)}), ${peso("inadimplencia")};
-            acima, nada. Como no Power BI, conta o que está em aberto hoje: o mês fechado muda quando um cliente paga depois.</li>
-          <li><b>Positivação (${peso("positivacao")}):</b> clientes da carteira com venda no mês, sobre a soma das METAS
-            CLIENTE dos vendedores do estado (ou o valor ajustado). Mínimo de ${minimo("positivacao")}.</li>
-          <li><b>Devoluções impróprias (${peso("devolucoes")}):</b> devoluções e brindes com motivo
-            ${d.motivos_improprios.map((m) => `<span title="${esc(m.nome)}">${m.id}</span>`).join(", ")} ÷ o faturamento
-            bruto do mês. Até a meta (${metas("devolucoes", 1)}), ${peso("devolucoes")}; acima, nada.</li>
-          <li><b>Prêmio:</b> a soma dos pontos × ${fmt.moeda2(d.maximo)}.</li>
+            brindes de cliente (sem funcionário, fornecedor ou produtor), sem os produtos que ficam fora das metas. Os
+            supervisores do mesmo estado usam os mesmos números.</li>
+          <li><b>Parcelas:</b> cada indicador tem um peso; a parcela de referência é o peso × o variável:${pesos}</li>
+          <li><b>Faturamento líquido:</b> vendas do mês − as devoluções que descontam na meta (${emLista(motivosMeta)}${d.canceladas_descontam ? ", com as canceladas" : ", sem as canceladas"}),
+            como na página de Metas. Brindes não descontam, porque a meta também não desconta. Meta: a soma das METAS
+            FATURAMENTO dos vendedores do estado no mês, ou o valor trocado em Configurar.</li>
+          ${usados.some(([k]) => k === "mix") ? `<li><b>Mix (exceto mussarela):</b> o faturamento líquido sem ${emLista(mussarela)}
+            ÷ o faturamento líquido, comparado com a meta do mix.</li>` : ""}
+          <li><b>Positivação:</b> clientes da carteira com venda no mês, sobre a soma das METAS CLIENTE dos vendedores do
+            estado (ou o valor trocado).</li>
+          <li><b>Ativação de clientes novos:</b> clientes da carteira com cadastro no ERP dentro do mês e que já
+            compraram no mesmo mês. Quem é cadastrado no fim do mês e só compra no seguinte não conta.</li>
+          <li><b>Reativação de clientes:</b> clientes da carteira com uma compra no mês feita depois de
+            ${plural(d.dias_sem_compra, "dia", "dias")} ou mais sem comprar, contados da compra anterior até essa. Só
+            conta quem já tinha comprado: as vendas do painel começam em ${fmt.data(d.inicio_dados).slice(3)}; para quem não
+            comprou desde então, a compra anterior é a do último título de venda do ERP. Quem nunca comprou não conta. Cada
+            cliente conta uma vez no mês.</li>
+          <li><b>Faixas</b> (sem interpolação): faturamento e mix: ${textoEscala(e.escala_faturamento)}; positivação,
+            novos e reativação: ${textoEscala(e.escala_clientes)}. Abaixo da primeira faixa, a parcela fica em R$ 0. As
+            metas de novos e de reativação ficam em Configurar.</li>
+          <li><b>Trava</b> pelo % da meta de faturamento, sobre a soma das parcelas: ${e.trava.map((f) => `a partir de ${pctFaixa(f.min)}, paga ${pctFaixa(f.pct)}`).join("; ")};
+            abaixo de ${pctFaixa(e.trava[0].min)}, nada.</li>
+          <li><b>Bônus de superação</b>, só com o faturamento acima de 100% da meta, sobre o valor depois da trava:
+            ${e.bonus.map((f) => `a partir de ${pctFaixa(f.min)}${f.min <= 1 ? " (acima de 100%)" : ""}, +${pctFaixa(f.pct)}`).join("; ")}.</li>
+          <li><b>Desconto pelo vencido</b>, por último: devoluções não canceladas e brindes com motivo ${emLista(vencido)}
+            ÷ as vendas do mês. ${devolucao.charAt(0).toUpperCase() + devolucao.slice(1)}.</li>
+          ${adicional}
         </ol>
-        <h4>Diferenças em relação ao Power BI</h4>
+        <h4>Exemplo do regulamento</h4>
         <ul class="metodo-passos">
-          <li>As metas de faturamento e de positivação são a soma das metas dos vendedores do mês. No Power BI elas eram
-            fixas (as de setembro/26: R$ 2.252.568 e 967 no BA, R$ 2.075.000 e 983 no ES).</li>
-          <li>Só vendas a cliente: o Power BI ligava venda a funcionário ou fornecedor pelo código, que pode coincidir com o
-            de um cliente.</li>
-          <li>Os vendedores de cada estado vêm das Configurações das metas e do ERP, não de uma lista fixa de nomes.</li>
+          <li>Parcelas de R$ 6.000 (100% de todas), faturamento a 105% da meta e vencido em 0,7%: a trava mantém R$ 6.000,
+            o bônus de 2% leva a R$ 6.120 e o desconto (mantém 95%) deixa R$ 5.814.</li>
+        </ul>
+        <h4>Bom saber</h4>
+        <ul class="metodo-passos">
+          <li>Com as faixas de 150%, as parcelas conquistadas podem passar do variável.</li>
+          <li>Enquanto o mês está em andamento, o prêmio aparece como previsto.</li>
+          <li>As regras valem para todos os meses: mudar uma regra em Configurar recalcula também os meses que já passaram.</li>
         </ul>
       </div>
     </details>

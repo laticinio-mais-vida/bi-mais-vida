@@ -1,28 +1,37 @@
-"""Premiações (página Premiações): quanto cada vendedor e cada supervisor ganha no mês, como nas páginas "Premiacao
-Vendedores" e "Premiacao Supervisores" do Power BI (ocultas lá). As regras ficam na tabela regras (nome "premiacoes"),
-editáveis em Premiações › Configurar, e valem para todos os meses (mudar uma regra recalcula o histórico).
+"""Premiações (página Premiações): quanto cada vendedor e cada supervisor ganha no mês. As regras ficam na tabela regras
+(nome "premiacoes"), editáveis em Premiações › Configurar, e valem para todos os meses (mudar uma regra recalcula o
+histórico).
 
-Vendedores (uma linha por vendedor com META CLIENTE > 0 no mês, da METAS.xlsx ou aprovada no painel):
+Vendedores (como a página "Premiacao Vendedores" do Power BI; uma linha por vendedor com META CLIENTE > 0 no mês, da
+METAS.xlsx ou aprovada no painel):
 - atendidos = clientes distintos com venda válida no mês, pelo vendedor da venda (a mesma conta da página de Metas);
 - % = atendidos ÷ META CLIENTE; o prêmio é o da maior faixa atingida (padrão do Power BI: 91% → R$ 200, 96% → R$ 250,
   100% → R$ 350; abaixo de 91%, nada). O total é a soma dos prêmios (o Power BI aplicava a faixa ao % do total).
 
-Supervisores (um por estado; a carteira é a de HOJE: os clientes cujo vendedor no cadastro é do estado pelas
-Configurações das metas ou, sem configuração, pelo supervisor do ERP; terceiros, o Edir e contas internas ficam fora,
-como nas listas fixas de nomes do Power BI). Só vendas, devoluções e brindes de tipo CLIENTE (o Power BI ligava venda a
-funcionário ou fornecedor pelo código, que pode coincidir com o de um cliente). Cinco indicadores, com peso:
-- receita: faturamento líquido do mês (vendas − devoluções não canceladas de todos os motivos − brindes) ÷ meta. Abaixo
-  do mínimo (80%), nada; senão peso × alcance, no máximo o peso;
-- mix: líquido sem os produtos "fora do mix" (32, 12551, 12552) ÷ líquido, sobre a meta (55%). Mínimo 85% de alcance;
-- inadimplência: títulos de venda a cliente emitidos de 7 a 2 meses antes do mês (para outubro, março a agosto),
-  vencidos há 30 dias ou mais na data dos dados e ainda em aberto, ÷ o faturamento líquido desses 6 meses. Dentro da
-  meta (0,42% BA, 0,5% ES), o peso inteiro; acima, nada. A data é a de hoje, como no Power BI: o mês fechado muda quando
-  um cliente paga depois;
-- positivação: clientes distintos da carteira com venda no mês ÷ meta. Mínimo 80%;
-- devoluções impróprias: devoluções e brindes com motivo impróprio (3, 4, 10 a 16) ÷ faturamento bruto. Dentro da meta
-  (1,5%), o peso inteiro.
-Prêmio = soma dos pontos × o máximo (R$ 5.000). As metas de faturamento e de clientes são a soma das metas dos
-vendedores do estado no mês (no Power BI ficavam fixas, as de setembro/26); o administrador pode trocá-las num mês.
+Supervisores (os regulamentos de nov/2026): Marcos (BA) e Ronaldo (ES) pela "segunda versão", com variável de R$ 6.000;
+Valdirene (ES, a mesma carteira do Ronaldo) pela "nova estrutura", com R$ 9.000 e um adicional pela inadimplência. A
+carteira é a de HOJE: os clientes cujo vendedor no cadastro é do estado pelas Configurações das metas ou, sem
+configuração, pelo supervisor do ERP; terceiros, o Edir e contas internas ficam fora. Só vendas, devoluções e brindes
+de tipo CLIENTE, sem os produtos que ficam fora das metas. Os números são do estado: os dois supervisores do ES usam os
+mesmos. Cada indicador tem um peso (a parcela de referência = peso × variável) e paga um % dela pela faixa atingida,
+sem interpolação:
+- faturamento líquido: vendas − devoluções dos motivos que descontam na meta (Metas › Configurar, com as canceladas como
+  lá); brindes não descontam, porque a meta também não desconta. Meta: a soma das METAS FATURAMENTO dos vendedores do
+  estado no mês (ou o ajuste do mês);
+- mix (exceto mussarela): o líquido sem os produtos de fora do mix ÷ o líquido, sobre a meta (55%);
+- positivação: clientes distintos da carteira com venda no mês, sobre a soma das METAS CLIENTE (ou o ajuste);
+- ativação de clientes novos: clientes da carteira cadastrados no ERP no mês que compraram no mesmo mês (meta 40);
+- reativação: clientes da carteira com uma compra no mês feita depois de 60 dias ou mais sem comprar, contados da compra
+  anterior até essa (meta 20). Só conta quem já tinha comprado: a compra anterior é a última venda do cache ou, sem
+  nenhuma, o último título de venda do ERP de antes do início das vendas do cache (os títulos vão até 2012).
+Faturamento e mix: 90% da meta → 30% da parcela, 100% → 100%. Os outros: 80% → 40%, 100% → 100%, 120% → 150%. Sobre a
+soma das parcelas, nesta ordem: a trava pelo % da meta de faturamento (abaixo de 90%, nada; de 90% a 95%, metade), o
+bônus de superação (acima de 100%: +2%; 110%: +5%; 120%: +7%; 150%: +10%) e o desconto pelo vencido (devoluções não
+canceladas e brindes de motivo vencido ÷ vendas: até 0,5%, nada; até 1%, 5%; acima, 10%). Só a Valdirene: mais R$ 450
+com a inadimplência em até 0,45% (títulos de venda a cliente emitidos de 7 a 2 meses antes do mês, vencidos há 30 dias
+ou mais na data dos dados e ainda em aberto, ÷ o faturamento líquido desses 6 meses), fora da trava, do bônus e do
+desconto; não é pago quando a trava zera. A inadimplência é a de hoje: o mês fechado muda quando um cliente paga depois.
+As regras salvas antes desses regulamentos (versão 1: cinco indicadores × um prêmio máximo) são convertidas ao abrir.
 
 Comissão (não vem do Power BI; só as equipes BA e ES, que no ERP ganham comissão sobre a venda; o Edir e os terceiros
 ganham sobre o recebimento e ficam fora). O % é do vendedor para cada produto (CONFIGCOMISSAOVENDEDOR no ERP):
@@ -37,6 +46,8 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import math
+import re
+from collections import Counter
 
 from .configuracao import RegrasNoBanco
 from .metas import Calculadora, nome_bonito
@@ -44,34 +55,57 @@ from .sugestao import curto_mes, indice, ler_mes, rotulo_mes, texto_mes
 
 ESTADOS = ("BA", "ES")
 ABAS = ("vendedores", "supervisores", "comissao")
-INDICADORES = ("receita", "mix", "inadimplencia", "positivacao", "devolucoes")
-TITULOS = {"receita": "Faturamento líquido", "mix": "Mix", "inadimplencia": "Inadimplência",
-           "positivacao": "Positivação", "devolucoes": "Devoluções impróprias"}
-COM_MINIMO = ("receita", "mix", "positivacao")      # peso × alcance, a partir do mínimo
-COM_TETO = ("inadimplencia", "devolucoes")           # o peso inteiro dentro da meta (% abaixo dela)
+SUPERVISORES = ("marcos", "ronaldo", "valdirene")
+INDICADORES = ("faturamento", "mix", "positivacao", "novos", "reativacao")
+TITULOS = {"faturamento": "Faturamento líquido", "mix": "Mix (exceto mussarela)", "positivacao": "Positivação",
+           "novos": "Ativação de clientes novos", "reativacao": "Reativação de clientes"}
+ESCALA = {"faturamento": "escala_faturamento", "mix": "escala_faturamento", "positivacao": "escala_clientes",
+          "novos": "escala_clientes", "reativacao": "escala_clientes"}
+METAS_MES = ("fat", "cli", "novos", "reativacao")  # as metas de um supervisor que dá para trocar num mês
+META_DO_INDICADOR = {"faturamento": "fat", "positivacao": "cli", "novos": "novos", "reativacao": "reativacao"}
+ROTULOS_META = {"fat": "faturamento", "cli": "clientes (positivação)", "novos": "clientes novos",
+                "reativacao": "reativação"}
 MAX_FAIXAS = 10
 JANELA_DE, JANELA_ATE = 7, 2  # inadimplência: meses de emissão, contados para trás a partir do mês escolhido
 _EPS = 1e-9
 
 
 # --- regras da página -----------------------------------------------------------------------
+def _supervisor_padrao(id_: str, nome: str, estado: str, variavel: float, pesos: dict,
+                       inadimplencia: dict | None = None) -> dict:
+    return {"id": id_, "nome": nome, "estado": estado, "variavel": variavel, "pesos": pesos, "meta_mix": 0.55,
+            "inadimplencia": inadimplencia, "metas_padrao": {"novos": 40, "reativacao": 20}}
+
+
 def padrao() -> dict:
-    """O que o Power BI fazia (medidas das páginas de premiação e da tabela "Medidas Premiacao Supervisor")."""
+    """Vendedores e comissão como no Power BI; supervisores como nos regulamentos de nov/2026."""
+    segunda_versao = {"faturamento": 0.30, "mix": 0.0, "positivacao": 0.25, "novos": 0.25, "reativacao": 0.20}
     return {
-        "versao": 1,
+        "versao": 2,
         "vendedores": {"faixas": [{"min": 0.91, "valor": 200.0}, {"min": 0.96, "valor": 250.0},
                                   {"min": 1.0, "valor": 350.0}]},
         "supervisores": {
-            "maximo": 5000.0,
-            "nomes": {"BA": "Marcos", "ES": "Ronaldo"},
-            "produtos_fora_mix": [32, 12551, 12552],
-            "motivos_improprios": [3, 4, 10, 11, 12, 13, 14, 15, 16],
-            "receita": {"peso": 0.25, "minimo": 0.80},
-            "mix": {"peso": 0.15, "minimo": 0.85, "meta": {"BA": 0.55, "ES": 0.55}},
-            "inadimplencia": {"peso": 0.10, "meta": {"BA": 0.0042, "ES": 0.005}, "dias": 30},
-            "positivacao": {"peso": 0.25, "minimo": 0.80},
-            "devolucoes": {"peso": 0.25, "meta": {"BA": 0.015, "ES": 0.015}},
-            "ajustes": {},
+            "lista": [
+                _supervisor_padrao("marcos", "Marcos", "BA", 6000.0, dict(segunda_versao)),
+                _supervisor_padrao("ronaldo", "Ronaldo", "ES", 6000.0, dict(segunda_versao)),
+                _supervisor_padrao("valdirene", "Valdirene", "ES", 9000.0,
+                                   {"faturamento": 0.35, "mix": 0.20, "positivacao": 0.15, "novos": 0.15,
+                                    "reativacao": 0.15},
+                                   {"valor": 450.0, "limite": 0.0045}),
+            ],
+            # % da meta a partir do qual a faixa vale -> % da parcela pago (não há interpolação)
+            "escala_faturamento": [{"min": 0.90, "pct": 0.30}, {"min": 1.0, "pct": 1.0}],
+            "escala_clientes": [{"min": 0.80, "pct": 0.40}, {"min": 1.0, "pct": 1.0}, {"min": 1.20, "pct": 1.50}],
+            "trava": [{"min": 0.90, "pct": 0.50}, {"min": 0.95, "pct": 1.0}],
+            "bonus": [{"min": 1.0, "pct": 0.02}, {"min": 1.10, "pct": 0.05}, {"min": 1.20, "pct": 0.07},
+                      {"min": 1.50, "pct": 0.10}],
+            # vencido ÷ vendas até "ate" -> % do variável mantido; acima da última faixa, "acima"
+            "devolucao": {"faixas": [{"ate": 0.005, "pct": 1.0}, {"ate": 0.01, "pct": 0.95}], "acima": 0.90},
+            "motivos_vencido": [3, 16],  # "DEVOLUÇÃO IMPRÓPRIA - VENCIDO" e "BRINDE - VENCIDO"
+            "produtos_fora_mix": [32, 12551, 12552],  # a mussarela
+            "dias_sem_compra": 60,
+            "dias_inadimplencia": 30,
+            "metas_mes": {},
         },
         # Os brindes que descontam da comissão: "BRINDE - DANIFICADO, PROBLEMA NA PRODUÇÃO", "... NA LOGÍSTICA",
         # "... NO CLIENTE" e "BRINDE - VENCIDO". As devoluções descontam todas.
@@ -85,9 +119,16 @@ def _numero(valor, nome: str, minimo: float = 0.0, maximo: float | None = None) 
     except (TypeError, ValueError):
         raise ValueError(f"{nome}: use um número") from None
     if math.isnan(x) or x < minimo or (maximo is not None and x > maximo):
-        faixa = f"de {minimo:g} a {maximo:g}" if maximo is not None else f"a partir de {minimo:g}"
-        raise ValueError(f"{nome}: use um valor {faixa}")
+        faixa_ = f"de {minimo:g} a {maximo:g}" if maximo is not None else f"a partir de {minimo:g}"
+        raise ValueError(f"{nome}: use um valor {faixa_}")
     return x
+
+
+def _inteiro(valor, nome: str, minimo: float = 0.0, maximo: float | None = None) -> int:
+    n = _numero(valor, nome, minimo, maximo)
+    if n != int(n):
+        raise ValueError(f"{nome}: use um número inteiro")
+    return int(n)
 
 
 def _fracao(valor, nome: str, maximo: float = 1.0) -> float:
@@ -105,6 +146,122 @@ def _inteiros(valores, nome: str) -> list[int]:
         return sorted({int(v) for v in valores or []})
     except (TypeError, ValueError):
         raise ValueError(f"{nome}: use códigos inteiros") from None
+
+
+def _faixas(lista, nome: str, pct_max: float, menor: float = 0.0) -> list[dict]:
+    """Uma escala {min, pct}: o % da meta a partir do qual a faixa vale e o % pago. Devolve em ordem."""
+    saida = []
+    for f in lista or []:
+        f = f or {}
+        saida.append({"min": _fracao(f.get("min"), f"% da meta de uma faixa {nome}", 5.0),
+                      "pct": _fracao(f.get("pct"), f"% pago numa faixa {nome}", pct_max)})
+    if not saida:
+        raise ValueError(f"use ao menos uma faixa {nome}")
+    if len(saida) > MAX_FAIXAS:
+        raise ValueError(f"use no máximo {MAX_FAIXAS} faixas {nome}")
+    saida.sort(key=lambda f: f["min"])
+    if len({f["min"] for f in saida}) != len(saida):
+        raise ValueError(f"há duas faixas {nome} com o mesmo % da meta")
+    if any(f["min"] <= 0 for f in saida):
+        raise ValueError(f"o % da meta de cada faixa {nome} precisa ser maior que 0%")
+    if any(f["min"] + _EPS < menor for f in saida):
+        raise ValueError(f"o % da meta de cada faixa {nome} precisa ser de pelo menos {menor * 100:g}%")
+    return saida
+
+
+def _regra_devolucao(d: dict | None, base: dict) -> dict:
+    d = d or {}
+    faixas = []
+    for f in d.get("faixas", base["faixas"]) or []:
+        f = f or {}
+        faixas.append({"ate": _fracao(f.get("ate"), "% de vencido de uma faixa do desconto"),
+                       "pct": _fracao(f.get("pct"), "% mantido numa faixa do desconto")})
+    if len(faixas) > MAX_FAIXAS:
+        raise ValueError(f"use no máximo {MAX_FAIXAS} faixas no desconto pelo vencido")
+    faixas.sort(key=lambda f: f["ate"])
+    if len({f["ate"] for f in faixas}) != len(faixas):
+        raise ValueError("há duas faixas do desconto pelo vencido com o mesmo %")
+    if any(f["ate"] <= 0 for f in faixas):
+        raise ValueError("o % de vencido de cada faixa do desconto precisa ser maior que 0%")
+    return {"faixas": faixas,
+            "acima": _fracao(d.get("acima", base["acima"]), "% mantido acima da última faixa do desconto")}
+
+
+def _supervisor(entrada: dict, base: dict) -> dict:
+    """Um supervisor da lista; o que não veio fica com o padrão. O estado é sempre o do padrão."""
+    nome = " ".join(str(entrada.get("nome", base["nome"]) or "").split())
+    if not nome or len(nome) > 60:
+        raise ValueError(f"nome do supervisor ({base['nome']}): use de 1 a 60 letras")
+    s = {"id": base["id"], "nome": nome, "estado": base["estado"],
+         "variavel": round(_numero(entrada.get("variavel", base["variavel"]), f"variável de {nome}", 0, 1e6), 2)}
+    pesos = entrada.get("pesos") or {}
+    s["pesos"] = {k: _fracao(pesos.get(k, base["pesos"][k]), f"peso de {TITULOS[k].lower()} de {nome}")
+                  for k in INDICADORES}
+    soma = sum(s["pesos"].values())
+    if abs(soma - 1) > 1e-6:
+        raise ValueError(f"os pesos de {nome} somam {soma * 100:.4g}%; precisam somar 100%")
+    s["meta_mix"] = _fracao(entrada.get("meta_mix", base["meta_mix"]), f"meta do mix de {nome}")
+    inad = entrada["inadimplencia"] if "inadimplencia" in entrada else base["inadimplencia"]
+    s["inadimplencia"] = None if not inad else {
+        "valor": round(_numero(inad.get("valor"), f"prêmio da inadimplência de {nome}", 0, 1e6), 2),
+        "limite": _fracao(inad.get("limite"), f"limite da inadimplência de {nome}")}
+    metas = entrada.get("metas_padrao") or {}
+    s["metas_padrao"] = {}
+    for k in ("novos", "reativacao"):
+        v = metas.get(k, base["metas_padrao"][k]) if isinstance(metas, dict) else base["metas_padrao"][k]
+        s["metas_padrao"][k] = None if v in (None, "") else _inteiro(v, f"meta de {ROTULOS_META[k]} de {nome}")
+    return s
+
+
+def _metas_mes(dados: dict | None, nomes: dict[str, str]) -> dict:
+    """{AAAA-MM: {supervisor: {fat, cli, novos, reativacao}}}: as metas trocadas à mão num mês (0 = sem meta)."""
+    saida = {}
+    for mes, por_sup in (dados or {}).items():
+        m = texto_mes(ler_mes(mes))
+        lista = {}
+        for sid, v in (por_sup or {}).items():
+            if sid not in nomes:
+                raise ValueError(f"supervisor desconhecido nas metas de {m}: {sid}")
+            x = {}
+            for k in METAS_MES:
+                valor = (v or {}).get(k)
+                if valor in (None, ""):
+                    continue
+                rotulo = f"meta de {ROTULOS_META[k]} de {nomes[sid]} em {m}"
+                x[k] = round(_numero(valor, rotulo), 2) if k == "fat" else _inteiro(valor, rotulo)
+            if x:
+                lista[sid] = x
+        if lista:
+            saida[m] = lista
+    return dict(sorted(saida.items()))
+
+
+def _de_v1(antigo: dict) -> dict:
+    """As regras dos supervisores salvas antes dos regulamentos de nov/2026 (versão 1: um supervisor por estado, cinco
+    indicadores × um prêmio máximo) no formato novo. Ficam os nomes (BA → Marcos, ES → Ronaldo), a meta do mix, os
+    produtos fora do mix, os dias de atraso da inadimplência e as metas trocadas em cada mês (as do ES valem para os
+    dois supervisores do estado); o resto vem do padrão."""
+    novo = padrao()["supervisores"]
+    antigo = antigo if isinstance(antigo, dict) else {}
+    nomes = antigo.get("nomes") or {}
+    meta_mix = (antigo.get("mix") or {}).get("meta") or {}
+    for s in novo["lista"]:
+        if s["id"] != "valdirene" and str(nomes.get(s["estado"]) or "").strip():
+            s["nome"] = nomes[s["estado"]]
+        if meta_mix.get(s["estado"]) is not None:
+            s["meta_mix"] = meta_mix[s["estado"]]
+    if antigo.get("produtos_fora_mix") is not None:
+        novo["produtos_fora_mix"] = antigo["produtos_fora_mix"]
+    dias = (antigo.get("inadimplencia") or {}).get("dias")
+    if dias is not None:
+        novo["dias_inadimplencia"] = dias
+    for mes, por_estado in (antigo.get("ajustes") or {}).items():
+        for estado, v in (por_estado or {}).items():
+            metas = {k: v[k] for k in ("fat", "cli") if isinstance(v, dict) and v.get(k) not in (None, "")}
+            for s in novo["lista"]:
+                if s["estado"] == estado and metas:
+                    novo["metas_mes"].setdefault(mes, {})[s["id"]] = dict(metas)
+    return novo
 
 
 def _valida(cfg: dict) -> dict:
@@ -126,58 +283,40 @@ def _valida(cfg: dict) -> dict:
         raise ValueError("o % mínimo de cada faixa dos vendedores precisa ser maior que 0%")
 
     sup_in = cfg.get("supervisores") or {}
+    if "lista" not in sup_in:  # salvas antes dos regulamentos de nov/2026 (ou sem a seção)
+        sup_in = _de_v1(sup_in)
     sb = base["supervisores"]
-    sup = {"maximo": round(_numero(sup_in.get("maximo", sb["maximo"]), "prêmio máximo do supervisor"), 2)}
-    nomes = {}
-    for e in ESTADOS:
-        nome = " ".join(str((sup_in.get("nomes") or {}).get(e, sb["nomes"][e]) or "").split())
-        if not nome or len(nome) > 60:
-            raise ValueError(f"nome do supervisor do {e}: use de 1 a 60 letras")
-        nomes[e] = nome
-    sup["nomes"] = nomes
-    sup["produtos_fora_mix"] = _inteiros(sup_in.get("produtos_fora_mix", sb["produtos_fora_mix"]), "produtos fora do mix")
-    sup["motivos_improprios"] = _inteiros(sup_in.get("motivos_improprios", sb["motivos_improprios"]),
-                                          "motivos das devoluções impróprias")
-    for k in INDICADORES:
-        ind_in, ind_b = sup_in.get(k) or {}, sb[k]
-        ind = {"peso": _fracao(ind_in.get("peso", ind_b["peso"]), f"peso de {TITULOS[k].lower()}")}
-        if "minimo" in ind_b:
-            ind["minimo"] = _fracao(ind_in.get("minimo", ind_b["minimo"]), f"mínimo de {TITULOS[k].lower()}")
-        if "meta" in ind_b:
-            metas = ind_in.get("meta") or {}
-            ind["meta"] = {e: _fracao(metas.get(e, ind_b["meta"][e]), f"meta de {TITULOS[k].lower()} do {e}")
-                           for e in ESTADOS}
-        if "dias" in ind_b:
-            ind["dias"] = int(_numero(ind_in.get("dias", ind_b["dias"]), "dias de atraso da inadimplência", 0, 365))
-        sup[k] = ind
-    soma = sum(sup[k]["peso"] for k in INDICADORES)
-    if abs(soma - 1) > 1e-6:
-        raise ValueError(f"os pesos dos indicadores do supervisor somam {soma * 100:.4g}%; precisam somar 100%")
-    ajustes = {}
-    for mes, por_estado in (sup_in.get("ajustes") or {}).items():
-        m = texto_mes(ler_mes(mes))
-        lista = {}
-        for e, v in (por_estado or {}).items():
-            if e not in ESTADOS:
-                raise ValueError(f"estado inválido nos ajustes de {m}: {e}")
-            x = {}
-            if (v or {}).get("fat") not in (None, ""):
-                x["fat"] = round(_numero(v["fat"], f"meta de faturamento do {e} em {m}"), 2)
-            if (v or {}).get("cli") not in (None, ""):
-                n = _numero(v["cli"], f"meta de clientes do {e} em {m}")
-                if n != int(n):
-                    raise ValueError(f"meta de clientes do {e} em {m}: use um número inteiro")
-                x["cli"] = int(n)
-            if x:
-                lista[e] = x
-        if lista:
-            ajustes[m] = lista
-    sup["ajustes"] = dict(sorted(ajustes.items()))
+    entradas = {}
+    for s in sup_in.get("lista") or []:
+        sid = (s or {}).get("id")
+        if sid not in SUPERVISORES:
+            raise ValueError(f"supervisor desconhecido: {sid}")
+        if sid in entradas:
+            raise ValueError(f"supervisor repetido: {sid}")
+        entradas[sid] = s
+    lista = [_supervisor(entradas.get(b["id"]) or {}, b) for b in sb["lista"]]
+    sup = {
+        "lista": lista,
+        "escala_faturamento": _faixas(sup_in.get("escala_faturamento", sb["escala_faturamento"]),
+                                      "da escala do faturamento e do mix", 5.0),
+        "escala_clientes": _faixas(sup_in.get("escala_clientes", sb["escala_clientes"]),
+                                   "da escala de positivação, novos e reativação", 5.0),
+        "trava": _faixas(sup_in.get("trava", sb["trava"]), "da trava", 1.0),
+        "bonus": _faixas(sup_in.get("bonus", sb["bonus"]), "do bônus", 1.0, menor=1.0),
+        "devolucao": _regra_devolucao(sup_in.get("devolucao"), sb["devolucao"]),
+        "motivos_vencido": _inteiros(sup_in.get("motivos_vencido", sb["motivos_vencido"]), "motivos do vencido"),
+        "produtos_fora_mix": _inteiros(sup_in.get("produtos_fora_mix", sb["produtos_fora_mix"]), "produtos fora do mix"),
+        "dias_sem_compra": _inteiro(sup_in.get("dias_sem_compra", sb["dias_sem_compra"]),
+                                    "dias sem comprar da reativação", 1, 730),
+        "dias_inadimplencia": _inteiro(sup_in.get("dias_inadimplencia", sb["dias_inadimplencia"]),
+                                       "dias de atraso da inadimplência", 0, 365),
+        "metas_mes": _metas_mes(sup_in.get("metas_mes"), {s["id"]: s["nome"] for s in lista}),
+    }
     # As versões salvas antes da aba Comissão não têm a seção: ficam com o padrão.
     com_in = cfg.get("comissao") or {}
     comissao = {"motivos_brindes": _inteiros(com_in.get("motivos_brindes", base["comissao"]["motivos_brindes"]),
                                              "motivos dos brindes da comissão")}
-    return {"versao": 1, "vendedores": {"faixas": faixas}, "supervisores": sup, "comissao": comissao}
+    return {"versao": 2, "vendedores": {"faixas": faixas}, "supervisores": sup, "comissao": comissao}
 
 
 class ConfigPremiacoes(RegrasNoBanco):
@@ -195,10 +334,13 @@ def _div(a: float, b: float) -> float | None:
     return a / b if b else None
 
 
-def faixa_vendedor(pct: float | None, faixas: list[dict]) -> dict | None:
-    """A maior faixa atingida (as faixas não se somam); None = nenhuma."""
+def faixa(pct: float | None, faixas: list[dict]) -> dict | None:
+    """A maior faixa atingida (pct ≥ min; as faixas não se somam); None = nenhuma."""
     atingidas = [f for f in faixas if pct is not None and pct + _EPS >= f["min"]]
     return max(atingidas, key=lambda f: f["min"]) if atingidas else None
+
+
+faixa_vendedor = faixa
 
 
 def proxima_faixa(pct: float | None, faixas: list[dict]) -> dict | None:
@@ -211,16 +353,83 @@ def clientes_para(meta: float, minimo: float) -> int:
     return math.ceil(meta * minimo - _EPS)
 
 
-def pontos_alcance(alcance: float | None, peso: float, minimo: float) -> float:
-    """Receita, mix e positivação: abaixo do mínimo, nada; senão o peso × o alcance, no máximo o peso."""
-    if alcance is None or alcance + _EPS < minimo:
+def alcance(realizado: float | None, meta: float | None) -> float | None:
+    """Realizado ÷ meta; None sem meta (ou meta zero)."""
+    if realizado is None or not meta or meta <= 0:
+        return None
+    return realizado / meta
+
+
+def pct_faixa(alcance_: float | None, faixas: list[dict]) -> float:
+    """O % pago pela faixa atingida (escalas e trava); abaixo da primeira, 0."""
+    f = faixa(alcance_, faixas)
+    return f["pct"] if f else 0.0
+
+
+def pct_bonus(alcance_fat: float | None, faixas: list[dict]) -> float:
+    """O bônus de superação: só com o faturamento ACIMA de 100% da meta (100% exato não tem)."""
+    if alcance_fat is None or alcance_fat <= 1 + _EPS:
         return 0.0
-    return peso * min(alcance, 1.0)
+    return pct_faixa(alcance_fat, faixas)
 
 
-def pontos_teto(pct: float | None, meta: float, peso: float) -> float:
-    """Inadimplência e devoluções: o % até a meta ganha o peso inteiro; acima, nada (no Power BI, 2 − % ÷ meta ≥ 1)."""
-    return peso if pct is not None and pct <= meta + _EPS else 0.0
+def pct_devolucao(indice_: float | None, regra: dict) -> float:
+    """O % do variável mantido pelo índice de vencido: o da primeira faixa com o índice até o limite dela (0,5% exato
+    fica na faixa de até 0,5%); acima de todas, "acima". Sem índice (vencido sem vendas), "acima"."""
+    if indice_ is None:
+        return regra["acima"]
+    for f in sorted(regra["faixas"], key=lambda f: f["ate"]):
+        if indice_ <= f["ate"] + _EPS:
+            return f["pct"]
+    return regra["acima"]
+
+
+def adicional_inadimplencia(regra: dict | None, indice_: float | None, trava: float) -> float:
+    """O prêmio extra da inadimplência: pago com o índice até o limite, desde que a trava não tenha zerado o variável."""
+    if not regra or trava <= 0 or indice_ is None:
+        return 0.0
+    return regra["valor"] if indice_ <= regra["limite"] + _EPS else 0.0
+
+
+def conta_supervisor(parcelas: list[float], alcance_fat: float | None, indice_vencido: float | None, regras: dict,
+                     adicional: dict | None = None, indice_inad: float | None = None) -> dict:
+    """Do conquistado (a soma das parcelas) ao prêmio, na ordem dos regulamentos: trava, bônus, desconto pelo vencido e,
+    por fora, o adicional da inadimplência. Cada passo é arredondado ao centavo e o seguinte usa o valor arredondado,
+    para a conta mostrada fechar. regras: a seção "supervisores" das regras."""
+    conquistado = round(sum(parcelas), 2)
+    trava = pct_faixa(alcance_fat, regras["trava"])
+    apos_trava = round(conquistado * trava, 2)
+    bonus = pct_bonus(alcance_fat, regras["bonus"]) if trava > 0 else 0.0
+    apos_bonus = round(apos_trava * (1 + bonus), 2)
+    mantido = pct_devolucao(indice_vencido, regras["devolucao"])
+    variavel = round(apos_bonus * mantido, 2)
+    extra = adicional_inadimplencia(adicional, indice_inad, trava)
+    ad = None
+    if adicional:
+        motivo = ("pago" if extra else "trava" if trava <= 0 else "sem_dados" if indice_inad is None else "acima")
+        ad = {"valor_regra": adicional["valor"], "limite": adicional["limite"], "indice": indice_inad,
+              "pago": bool(extra), "valor": round(extra, 2), "motivo": motivo}
+    return {
+        "conquistado": conquistado,
+        "trava": {"alcance": alcance_fat, "pct": trava, "valor": apos_trava},
+        "bonus": {"pct": bonus, "valor": round(apos_bonus - apos_trava, 2), "total": apos_bonus},
+        "devolucao": {"indice": indice_vencido, "pct": mantido, "valor": round(variavel - apos_bonus, 2),
+                      "total": variavel},
+        "adicional": ad,
+        "premio": round(variavel + extra, 2),
+    }
+
+
+def proxima(realizado: float | None, meta: float | None, faixas: list[dict], inteiro: bool) -> dict | None:
+    """A faixa seguinte da escala e quanto falta para ela (clientes inteiros ou R$); None na última ou sem meta."""
+    a = alcance(realizado, meta)
+    if a is None:
+        return None
+    f = proxima_faixa(a, faixas)
+    if not f:
+        return None
+    falta = clientes_para(meta, f["min"]) - realizado if inteiro else round(meta * f["min"] - realizado, 2)
+    return {**f, "falta": max(falta, 1) if inteiro else max(falta, 0.01)}
 
 
 def janela(i: int) -> tuple[int, int]:
@@ -239,6 +448,19 @@ def _fim(i: int) -> dt.date:
 
 def _mes(i: int) -> dict:
     return {"valor": texto_mes(i), "rotulo": rotulo_mes(i), "curto": curto_mes(i)}
+
+
+def _limpar(texto) -> str:
+    return " ".join(str(texto or "").replace("\xa0", " ").split())
+
+
+_CODIGO_CLIENTE = re.compile(r"\s*\(\s*CLIENTE\s+[\d.,/-]+\s*\)", re.I)
+
+
+def nome_cliente(nome) -> str:
+    """O nome do cadastro sem o código que o ERP põe nele ("BAR DO ZE (CLIENTE 5959)" -> "BAR DO ZE"): quem vê a página
+    não usa o código."""
+    return _limpar(_CODIGO_CLIENTE.sub(" ", str(nome or ""))) or "Cliente sem nome"
 
 
 # --- a página -----------------------------------------------------------------------------
@@ -264,7 +486,7 @@ class Premiacoes:
 
     @staticmethod
     def estados_supervisor(permitidos: set[int] | None, equipes: set[str] | None) -> list[str]:
-        """Os estados cuja premiação do supervisor o usuário vê: ela soma a carteira inteira do estado, então só quem
+        """Os estados cuja premiação dos supervisores o usuário vê: ela soma a carteira inteira do estado, então só quem
         vê todos os vendedores (sem lista de vendedores) e tem a equipe do estado."""
         if permitidos is not None:
             return []
@@ -349,13 +571,13 @@ class Premiacoes:
         for vid, x in metas.items():
             real = atendidos.get(vid, 0)
             pct = _div(real, x["meta"])
-            faixa = faixa_vendedor(pct, faixas)
+            f = faixa_vendedor(pct, faixas)
             prox = proxima_faixa(pct, faixas)
             linhas.append({
                 "id": vid, "nome": nome_bonito(x["nome"]), "equipe": x["grupo"],
                 "estado": "ES" if x["grupo"] == "ES" else "BA", "aprovada": x["aprovada"],
                 "meta": x["meta"], "atendidos": real, "pct": pct,
-                "faixa": faixa, "premio": faixa["valor"] if faixa else 0.0,
+                "faixa": f, "premio": f["valor"] if f else 0.0,
                 "proxima": {**prox, "faltam": max(clientes_para(x["meta"], prox["min"]) - real, 1)} if prox else None,
             })
         linhas.sort(key=lambda v: v["nome"].upper())
@@ -381,79 +603,212 @@ class Premiacoes:
         return saida
 
     def _por_vendedor(self, sql: str, ids: list[int], params: list) -> list[tuple]:
-        """Roda `sql` (com {ids} no lugar da lista de vendedores da carteira) e devolve as linhas."""
+        """Roda `sql` (com {ids} no lugar da lista de vendedores da carteira, depois dos outros parâmetros) e devolve as
+        linhas."""
         if not ids:
             return []
         return self.calc.cache.consulta(sql.format(ids=",".join("?" * len(ids))), [*params, *ids])
 
     def _movimento(self, regras, ids: list[int], de: dt.date, ate: dt.date, fora_mix: set[int],
-                   improprios: set[int]) -> dict[int, dict]:
-        """Por vendedor da carteira: bruto, devoluções e brindes (o total, o que fica fora do mix e os impróprios)."""
+                   vencido: set[int], com_brindes: bool = True) -> dict[int, dict]:
+        """Por vendedor da carteira, só de cliente e sem os produtos que ficam fora das metas: as vendas, as devoluções
+        que descontam na meta (os motivos e as canceladas de Metas › Configurar), a parte de cada uma que fica fora do
+        mix (com as equivalências) e o vencido (devoluções não canceladas e brindes com os motivos de `vencido`)."""
         cache = self.calc.cache
         mov: dict[int, dict] = {}
 
         def x(vid):
-            return mov.setdefault(vid, {"bruto": 0.0, "bruto_fora": 0.0, "dev": 0.0, "dev_fora": 0.0, "dev_imp": 0.0,
-                                        "brindes": 0.0, "brindes_fora": 0.0, "brindes_imp": 0.0})
+            return mov.setdefault(vid, {"vendas": 0.0, "vendas_fora_mix": 0.0, "dev": 0.0, "dev_fora_mix": 0.0,
+                                        "dev_vencido": 0.0, "brindes_vencido": 0.0})
 
         junta = ("FROM {tabela} x JOIN clientes c ON c.id = x.id_cliente WHERE x.tipocliente = 'CLIENTE' "
                  "AND x.data BETWEEN ? AND ? AND c.id_vendedor IN ({{ids}})")
         for vid, pid, valor in self._por_vendedor(
                 "SELECT c.id_vendedor, x.id_produto, SUM(x.valor) " + junta.format(tabela="vendas_clientes_itens")
                 + " GROUP BY 1, 2", ids, [de, ate]):
-            x(vid)["bruto"] += valor
-            if regras.produto(pid) in fora_mix:
-                x(vid)["bruto_fora"] += valor
-        tabelas = [("dev", "devolucoes_clientes_itens", " AND NOT x.cancelada")]
-        if not cache.sem_brindes:
-            tabelas.append(("brindes", "brindes_clientes_itens", ""))
-        for chave, tabela, extra in tabelas:
+            p = regras.produto(pid)
+            if regras.grupo_produto(p) == "fora":
+                continue
+            x(vid)["vendas"] += valor
+            if p in fora_mix:
+                x(vid)["vendas_fora_mix"] += valor
+        for vid, pid, motivo, cancelada, valor in self._por_vendedor(
+                "SELECT c.id_vendedor, x.id_produto, x.id_motivo, x.cancelada, SUM(x.valor) "
+                + junta.format(tabela="devolucoes_clientes_itens") + " GROUP BY 1, 2, 3, 4", ids, [de, ate]):
+            p = regras.produto(pid)
+            if regras.grupo_produto(p) == "fora":
+                continue
+            if motivo in regras.motivos and not (cancelada and regras.ignorar_canceladas):
+                x(vid)["dev"] += valor
+                if p in fora_mix:
+                    x(vid)["dev_fora_mix"] += valor
+            if motivo in vencido and not cancelada:
+                x(vid)["dev_vencido"] += valor
+        if com_brindes and vencido and not cache.sem_brindes:
             for vid, pid, motivo, valor in self._por_vendedor(
-                    "SELECT c.id_vendedor, x.id_produto, x.id_motivo, SUM(x.valor) " + junta.format(tabela=tabela)
-                    + extra + " GROUP BY 1, 2, 3", ids, [de, ate]):
-                x(vid)[chave] += valor
-                if regras.produto(pid) in fora_mix:
-                    x(vid)[chave + "_fora"] += valor
-                if motivo in improprios:
-                    x(vid)[chave + "_imp"] += valor
+                    "SELECT c.id_vendedor, x.id_produto, x.id_motivo, SUM(x.valor) "
+                    + junta.format(tabela="brindes_clientes_itens") + " GROUP BY 1, 2, 3", ids, [de, ate]):
+                if motivo in vencido and regras.grupo_produto(regras.produto(pid)) != "fora":
+                    x(vid)["brindes_vencido"] += valor
         return mov
 
-    def _liquido(self, ids: list[int], de: dt.date, ate: dt.date) -> dict[int, float]:
-        """Faturamento líquido por vendedor da carteira num período (a base da inadimplência)."""
-        cache = self.calc.cache
-        saida: dict[int, float] = {}
-        junta = ("FROM {tabela} x JOIN clientes c ON c.id = x.id_cliente WHERE x.tipocliente = 'CLIENTE' "
-                 "AND x.data BETWEEN ? AND ? AND c.id_vendedor IN ({{ids}})")
-        partes = [("vendas_clientes_itens", "", 1), ("devolucoes_clientes_itens", " AND NOT x.cancelada", -1)]
-        if not cache.sem_brindes:
-            partes.append(("brindes_clientes_itens", "", -1))
-        for tabela, extra, sinal in partes:
-            for vid, valor in self._por_vendedor("SELECT c.id_vendedor, SUM(x.valor) " + junta.format(tabela=tabela)
-                                                 + extra + " GROUP BY 1", ids, [de, ate]):
-                saida[vid] = saida.get(vid, 0.0) + sinal * valor
-        return saida
+    def _novos(self, ids: list[int], de: dt.date, ate: dt.date) -> list[tuple]:
+        """Os clientes da carteira (pelo vendedor de hoje) cadastrados no ERP no período que compraram no mesmo
+        período: (vendedor, cliente, nome, cidade, cadastro, primeira compra, inativo hoje)."""
+        return self._por_vendedor(
+            "SELECT c.id_vendedor, c.id, c.nome, d.cidade, d.data_cadastro, MIN(v.data), MAX(d.inativo) "
+            "FROM clientes c JOIN clientes_detalhes d ON d.id = c.id "
+            "JOIN vendas_clientes v ON v.id_cliente = c.id AND v.tipocliente = 'CLIENTE' AND v.data BETWEEN ? AND ? "
+            "WHERE d.data_cadastro BETWEEN ? AND ? AND c.id_vendedor IN ({ids}) GROUP BY 1, 2, 3, 4, 5",
+            ids, [de, ate, de, ate])
 
-    def metas_supervisor(self, regras, i: int, cfg: dict | None = None) -> dict[str, dict]:
-        """{estado: {"fat", "cli", "fat_auto", "cli_auto", "ajustada"}}: a soma das metas dos vendedores do estado no mês
-        (o Edir é outro grupo: fica fora do BA) e o ajuste à mão do mês, se houver."""
+    def _reativacoes(self, ids: list[int], de: dt.date, ate: dt.date, dias: int) -> list[tuple]:
+        """Os clientes da carteira (pelo vendedor de hoje) com uma compra no período feita depois de `dias` dias ou mais
+        sem comprar, contados da compra anterior até essa. Só conta quem já tinha comprado: a compra anterior é a última
+        venda do cache ou, sem nenhuma, o último título de venda do ERP de antes do início das vendas do cache (os
+        títulos vão até 2012). Quem nunca comprou não é reativação. (vendedor, cliente, nome, cidade, data da compra,
+        dias sem comprar, data da compra anterior)."""
+        cache = self.calc.cache
+        inicio = dt.date.fromisoformat(cache.info.get("inicio") or "2024-01-01")
+        # Sem os títulos no cache (código anterior no computador da empresa), só as vendas do cache contam.
+        com_titulos = not cache.sem_credito
+        anterior = "COALESCE(g.anterior, a.ultima)" if com_titulos else "g.anterior"
+        titulos = ("LEFT JOIN (SELECT id_cliente, MAX(emissao) AS ultima FROM titulos_receber WHERE emissao < ? "
+                   "GROUP BY 1) a ON a.id_cliente = g.id_cliente " if com_titulos else "")
+        sql = ("WITH v AS (SELECT DISTINCT id_cliente, data FROM vendas_clientes WHERE tipocliente = 'CLIENTE' "
+               "AND data <= ? AND id_cliente IN (SELECT id_cliente FROM vendas_clientes "
+               "WHERE tipocliente = 'CLIENTE' AND data BETWEEN ? AND ?)), "
+               "g AS (SELECT id_cliente, data, lag(data) OVER (PARTITION BY id_cliente ORDER BY data) AS anterior "
+               "FROM v) "
+               f"SELECT c.id_vendedor, c.id, c.nome, d.cidade, MIN(g.data), MAX(g.data - {anterior}), MAX({anterior}) "
+               "FROM g JOIN clientes c ON c.id = g.id_cliente LEFT JOIN clientes_detalhes d ON d.id = c.id "
+               + titulos +
+               f"WHERE g.data BETWEEN ? AND ? AND g.data - {anterior} >= ? "
+               "AND c.id_vendedor IN ({ids}) GROUP BY 1, 2, 3, 4")
+        return self._por_vendedor(sql, ids, [ate, de, ate, *([inicio] if com_titulos else []), de, ate, dias])
+
+    def metas_supervisores(self, regras, i: int, cfg: dict | None = None) -> dict[str, dict]:
+        """{supervisor: {fat, cli, novos, reativacao, "auto": {...}, "ajustada": {...}}}: faturamento e clientes pela
+        soma das metas dos vendedores do estado no mês (o Edir é outro grupo: fica fora do BA), novos e reativação pela
+        meta padrão do supervisor, e o ajuste à mão do mês por cima (0 = sem meta)."""
         cfg = cfg or self.config.atual()
         m = _inicio(i)
-        auto = {e: {"fat": 0.0, "cli": 0.0} for e in ESTADOS}
+        soma = {e: {"fat": 0.0, "cli": 0.0} for e in ESTADOS}
         for r in self.calc.metas.dados():
             if r["mes"] != m:
                 continue
             estado = regras.grupo_vendedor(r["id_vendedor"])
-            if estado in auto:
-                auto[estado]["fat"] += r.get("meta_fat") or 0
-                auto[estado]["cli"] += r.get("meta_cli") or 0
-        ajustes = cfg["supervisores"]["ajustes"].get(texto_mes(i), {})
+            if estado in soma:
+                soma[estado]["fat"] += r.get("meta_fat") or 0
+                soma[estado]["cli"] += r.get("meta_cli") or 0
+        sup = cfg["supervisores"]
+        ajustes = sup["metas_mes"].get(texto_mes(i), {})
         saida = {}
-        for e in ESTADOS:
-            aj = ajustes.get(e, {})
-            saida[e] = {"fat": aj.get("fat", auto[e]["fat"]), "cli": aj.get("cli", auto[e]["cli"]),
-                        "fat_auto": auto[e]["fat"], "cli_auto": auto[e]["cli"],
-                        "ajustada": {k: k in aj for k in ("fat", "cli")}}
+        for s in sup["lista"]:
+            auto = {**soma[s["estado"]], **s["metas_padrao"]}
+            aj = ajustes.get(s["id"], {})
+            saida[s["id"]] = {**{k: aj.get(k, auto[k]) for k in METAS_MES}, "auto": auto,
+                              "ajustada": {k: k in aj for k in METAS_MES}}
         return saida
+
+    def _numeros_estado(self, vids: list[int], dados: dict, nomes: dict[int, str]) -> dict:
+        """Os números de um estado (a soma dos vendedores da carteira dele): os mesmos para os supervisores do estado."""
+        mov, positivados = dados["mov"], dados["positivados"]
+        inadimplente, liquido_6m = dados["inadimplente"], dados["liquido_6m"]
+        doestado = set(vids)
+        novos = [n for n in dados["novos"] if n[0] in doestado]
+        reativados = [r for r in dados["reativados"] if r[0] in doestado]
+        soma = lambda k: sum(mov.get(v, {}).get(k, 0.0) for v in vids)  # noqa: E731
+        vendas, dev = soma("vendas"), soma("dev")
+        liquido = vendas - dev
+        liquido_mix = (vendas - soma("vendas_fora_mix")) - (dev - soma("dev_fora_mix"))
+        dev_vencido, brindes_vencido = soma("dev_vencido"), soma("brindes_vencido")
+        vencido = dev_vencido + brindes_vencido
+        liq6 = sum(liquido_6m.get(v, 0.0) for v in vids)
+        inad = sum(inadimplente.get(v, 0.0) for v in vids)
+        n_novos, n_reat = Counter(n[0] for n in novos), Counter(r[0] for r in reativados)
+        por_vendedor = []
+        for v in vids:
+            mv = mov.get(v, {})
+            if not (mv or positivados.get(v) or n_novos[v] or n_reat[v] or inadimplente.get(v)):
+                continue
+            liq_v = mv.get("vendas", 0.0) - mv.get("dev", 0.0)
+            liq_mix_v = liq_v - (mv.get("vendas_fora_mix", 0.0) - mv.get("dev_fora_mix", 0.0))
+            por_vendedor.append({
+                "id": v, "nome": nomes.get(v) or f"Vendedor {v}", "liquido": liq_v, "pct_mix": _div(liq_mix_v, liq_v),
+                "positivacao": positivados.get(v, 0), "novos": n_novos[v], "reativacoes": n_reat[v],
+                "vencido": mv.get("dev_vencido", 0.0) + mv.get("brindes_vencido", 0.0),
+                "inadimplente": inadimplente.get(v, 0.0),
+            })
+        por_vendedor.sort(key=lambda r: -r["liquido"])
+        lista_novos = sorted(({"nome": nome_cliente(nome), "cidade": _limpar(cidade) or None,
+                               "vendedor": nomes.get(vid) or f"Vendedor {vid}", "cadastro": cad.isoformat(),
+                               "compra": compra.isoformat(), "inativo": bool(inativo)}
+                              for vid, _, nome, cidade, cad, compra, inativo in novos),
+                             key=lambda c: (c["cadastro"], c["nome"]))
+        lista_reat = sorted(({"nome": nome_cliente(nome), "cidade": _limpar(cidade) or None,
+                              "vendedor": nomes.get(vid) or f"Vendedor {vid}", "data": compra.isoformat(),
+                              "dias": int(dias), "anterior": anterior.isoformat(),
+                              "antes_das_vendas": anterior < dados["inicio"]}
+                             for vid, _, nome, cidade, compra, dias, anterior in reativados),
+                            key=lambda c: (c["data"], c["nome"]))
+        return {
+            "vendas": vendas, "devolucoes": dev, "liquido": liquido, "liquido_mix": liquido_mix,
+            "pct_mix": _div(liquido_mix, liquido) if liquido > 0 else None,
+            "dev_vencido": dev_vencido, "brindes_vencido": brindes_vencido, "vencido": vencido,
+            "indice_vencido": _div(vencido, vendas) if vendas > 0 else (0.0 if not vencido else None),
+            "positivacao": sum(positivados.get(v, 0) for v in vids),
+            "novos": len(lista_novos), "reativacoes": len(lista_reat),
+            "liquido_6m": liq6, "inadimplente": inad,
+            "indice_inadimplencia": (None if dados["sem_credito"]
+                                     else _div(inad, liq6) if liq6 > 0 else (0.0 if not inad else None)),
+            "por_vendedor": por_vendedor, "lista_novos": lista_novos, "lista_reativacoes": lista_reat,
+        }
+
+    @staticmethod
+    def _cartao(s: dict, n: dict, metas: dict, cfg: dict) -> dict:
+        """O quadro de um supervisor: as parcelas de cada indicador que ele usa (o faturamento sempre, porque move a
+        trava e o bônus) e a conta até o prêmio."""
+        realizado = {"faturamento": n["liquido"], "mix": n["pct_mix"], "positivacao": n["positivacao"],
+                     "novos": n["novos"], "reativacao": n["reativacoes"]}
+        alvo = {"faturamento": metas["fat"], "mix": s["meta_mix"], "positivacao": metas["cli"],
+                "novos": metas["novos"], "reativacao": metas["reativacao"]}
+        indicadores, parcelas = [], []
+        for k in INDICADORES:
+            peso = s["pesos"][k]
+            if peso <= 0 and k != "faturamento":
+                continue
+            escala = cfg[ESCALA[k]]
+            a = alcance(realizado[k], alvo[k])
+            f = faixa(a, escala)
+            referencia = round(s["variavel"] * peso, 2)
+            parcela = round(referencia * (f["pct"] if f else 0.0), 2)
+            parcelas.append(parcela)
+            ind = {"id": k, "titulo": TITULOS[k], "peso": peso, "referencia": referencia, "realizado": realizado[k],
+                   "meta": alvo[k], "alcance": a, "faixa": f, "pct": f["pct"] if f else 0.0, "parcela": parcela,
+                   "sem_meta": not alvo[k], "so_trava": peso <= 0,
+                   "proxima": None if k == "mix" else proxima(realizado[k], alvo[k], escala, k != "faturamento")}
+            if k in META_DO_INDICADOR:
+                chave = META_DO_INDICADOR[k]
+                ind.update(meta_auto=metas["auto"][chave], ajustada=metas["ajustada"][chave])
+            indicadores.append(ind)
+        conta = conta_supervisor(parcelas, indicadores[0]["alcance"], n["indice_vencido"], cfg, s["inadimplencia"],
+                                 n["indice_inadimplencia"])
+        usa_mix, usa_inad = s["pesos"]["mix"] > 0, bool(s["inadimplencia"])
+        contas = {k: n[k] for k in ("vendas", "devolucoes", "liquido", "dev_vencido", "brindes_vencido", "vencido",
+                                    "indice_vencido", "positivacao", "novos", "reativacoes")}
+        if usa_mix:
+            contas.update(liquido_mix=n["liquido_mix"], pct_mix=n["pct_mix"])
+        if usa_inad:
+            contas.update(liquido_6m=n["liquido_6m"], inadimplente=n["inadimplente"],
+                          indice_inadimplencia=n["indice_inadimplencia"])
+        return {
+            "id": s["id"], "nome": s["nome"], "estado": s["estado"], "variavel": s["variavel"],
+            "usa_mix": usa_mix, "usa_inadimplencia": usa_inad,
+            "indicadores": indicadores, **conta, "contas": contas,
+            "vendedores": n["por_vendedor"],
+            "clientes": {"novos": n["lista_novos"], "reativacoes": n["lista_reativacoes"]},
+        }
 
     def supervisores(self, mes: str | None = None, permitidos: set[int] | None = None,
                      equipes: set[str] | None = None) -> dict:
@@ -467,113 +822,77 @@ class Premiacoes:
         regras = self.calc.regras()
         cfg_total = self.config.atual()
         cfg = cfg_total["supervisores"]
-        fora_mix = set(cfg["produtos_fora_mix"])
-        fora_mix |= {antigo for antigo, novo in regras.equivalentes.items() if novo in fora_mix}
-        improprios = set(cfg["motivos_improprios"])
+        lista = [s for s in cfg["lista"] if s["estado"] in estados]
+        fora_mix = set(cfg["produtos_fora_mix"]) | {regras.produto(p) for p in cfg["produtos_fora_mix"]}
+        vencido = set(cfg["motivos_vencido"])
         carteiras = self._carteiras(regras)
         ids = sorted(v for v, e in carteiras.items() if e in estados)
         de, ate = _inicio(i), _fim(i)
         j_de, j_ate = janela(i)
-        hoje = self.hoje()
-        corte = hoje - dt.timedelta(days=cfg["inadimplencia"]["dias"])
+        corte = self.hoje() - dt.timedelta(days=cfg["dias_inadimplencia"])
+        inicio = dt.date.fromisoformat(cache.info.get("inicio") or "2024-01-01")  # das vendas do cache
 
-        mov = self._movimento(regras, ids, de, ate, fora_mix, improprios)
-        positivados = dict(self._por_vendedor(
-            "SELECT c.id_vendedor, COUNT(DISTINCT x.id_cliente) FROM vendas_clientes x JOIN clientes c "
-            "ON c.id = x.id_cliente WHERE x.tipocliente = 'CLIENTE' AND x.data BETWEEN ? AND ? "
-            "AND c.id_vendedor IN ({ids}) GROUP BY 1", ids, [de, ate]))
-        liquido_6m = self._liquido(ids, _inicio(j_de), _fim(j_ate))
+        # A inadimplência só é calculada para os estados de quem tem o adicional.
+        estados_inad = {s["estado"] for s in lista if s["inadimplencia"]}
+        ids_inad = [v for v in ids if carteiras[v] in estados_inad]
         inadimplente = {} if cache.sem_credito else dict(self._por_vendedor(
             "SELECT c.id_vendedor, SUM(t.total) FROM titulos_receber t JOIN clientes c ON c.id = t.id_cliente "
             "WHERE t.quitado = 0 AND t.vencimento <= ? AND t.emissao BETWEEN ? AND ? AND c.id_vendedor IN ({ids}) "
-            "GROUP BY 1", ids, [corte, _inicio(j_de), _fim(j_ate)]))
-        metas = self.metas_supervisor(regras, i, cfg_total)
+            "GROUP BY 1", ids_inad, [corte, _inicio(j_de), _fim(j_ate)]))
+        liquido_6m = {vid: m["vendas"] - m["dev"] for vid, m in self._movimento(
+            regras, ids_inad, _inicio(j_de), _fim(j_ate), set(), set(), com_brindes=False).items()}
+        dados = {
+            "mov": self._movimento(regras, ids, de, ate, fora_mix, vencido),
+            "positivados": dict(self._por_vendedor(
+                "SELECT c.id_vendedor, COUNT(DISTINCT x.id_cliente) FROM vendas_clientes x JOIN clientes c "
+                "ON c.id = x.id_cliente WHERE x.tipocliente = 'CLIENTE' AND x.data BETWEEN ? AND ? "
+                "AND c.id_vendedor IN ({ids}) GROUP BY 1", ids, [de, ate])),
+            "novos": self._novos(ids, de, ate),
+            "reativados": self._reativacoes(ids, de, ate, cfg["dias_sem_compra"]),
+            "inadimplente": inadimplente, "liquido_6m": liquido_6m, "sem_credito": bool(cache.sem_credito),
+            "inicio": inicio,
+        }
         nomes = self.nomes()
+        numeros = {e: self._numeros_estado([v for v in ids if carteiras[v] == e], dados, nomes) for e in estados}
+        metas = self.metas_supervisores(regras, i, cfg_total)
+        cartoes = [self._cartao(s, numeros[s["estado"]], metas[s["id"]], cfg) for s in lista]
 
-        cartoes = []
-        for e in estados:
-            vids = [v for v in ids if carteiras[v] == e]
-            soma = lambda k: sum(mov.get(v, {}).get(k, 0.0) for v in vids)  # noqa: E731
-            bruto, dev, brindes = soma("bruto"), soma("dev"), soma("brindes")
-            liquido = bruto - dev - brindes
-            liquido_mix = (bruto - soma("bruto_fora")) - (dev - soma("dev_fora")) - (brindes - soma("brindes_fora"))
-            improprias = soma("dev_imp") + soma("brindes_imp")
-            liq6 = sum(liquido_6m.get(v, 0.0) for v in vids)
-            inad = sum(inadimplente.get(v, 0.0) for v in vids)
-            positivacao = sum(positivados.get(v, 0) for v in vids)
-            meta = metas[e]
-            pct_mix = _div(liquido_mix, liquido)
-            pct_inad = None if cache.sem_credito else (_div(inad, liq6) if liq6 else (0.0 if not inad else None))
-            pct_dev = _div(improprias, bruto) if bruto else (0.0 if not improprias else None)
-
-            def alcance(k, realizado, alvo):
-                ind = cfg[k]
-                a = _div(realizado, alvo) if realizado is not None else None
-                return {"id": k, "titulo": TITULOS[k], "realizado": realizado, "meta": alvo, "alcance": a,
-                        "peso": ind["peso"], "minimo": ind["minimo"],
-                        "pontos": pontos_alcance(a, ind["peso"], ind["minimo"])}
-
-            def teto(k, realizado, alvo):
-                ind = cfg[k]
-                return {"id": k, "titulo": TITULOS[k], "realizado": realizado, "meta": alvo,
-                        "dentro": realizado is not None and realizado <= alvo + _EPS, "peso": ind["peso"],
-                        "pontos": pontos_teto(realizado, alvo, ind["peso"])}
-
-            indicadores = [
-                {**alcance("receita", liquido, meta["fat"]), "ajustada": meta["ajustada"]["fat"],
-                 "meta_auto": meta["fat_auto"]},
-                alcance("mix", pct_mix, cfg["mix"]["meta"][e]),
-                {**teto("inadimplencia", pct_inad, cfg["inadimplencia"]["meta"][e]),
-                 "sem_dados": bool(cache.sem_credito)},
-                {**alcance("positivacao", positivacao, meta["cli"]), "ajustada": meta["ajustada"]["cli"],
-                 "meta_auto": meta["cli_auto"]},
-                teto("devolucoes", pct_dev, cfg["devolucoes"]["meta"][e]),
-            ]
-            pct = sum(x["pontos"] for x in indicadores)
-            por_vendedor = []
-            for v in vids:
-                mv = mov.get(v, {})
-                liq_v = mv.get("bruto", 0.0) - mv.get("dev", 0.0) - mv.get("brindes", 0.0)
-                liq_mix_v = liq_v - (mv.get("bruto_fora", 0.0) - mv.get("dev_fora", 0.0) - mv.get("brindes_fora", 0.0))
-                if not (mv or positivados.get(v) or inadimplente.get(v)):
-                    continue
-                por_vendedor.append({
-                    "id": v, "nome": nomes.get(v) or f"Vendedor {v}", "liquido": liq_v, "pct_mix": _div(liq_mix_v, liq_v),
-                    "positivacao": positivados.get(v, 0), "inadimplente": inadimplente.get(v, 0.0),
-                    "liquido_6m": liquido_6m.get(v, 0.0), "improprias": mv.get("dev_imp", 0.0) + mv.get("brindes_imp", 0.0),
-                    "bruto": mv.get("bruto", 0.0),
-                })
-            por_vendedor.sort(key=lambda r: -r["liquido"])
-            cartoes.append({
-                "estado": e, "nome": cfg["nomes"][e], "indicadores": indicadores,
-                "pct": pct, "premio": round(pct * cfg["maximo"], 2),
-                "contas": {"bruto": bruto, "devolucoes": dev, "brindes": brindes, "liquido": liquido,
-                           "liquido_mix": liquido_mix, "improprias": improprias,
-                           "improprias_devolucoes": soma("dev_imp"), "improprias_brindes": soma("brindes_imp"),
-                           "liquido_6m": liq6, "inadimplente": inad},
-                "vendedores": por_vendedor,
-            })
         avisos = []
+        for c in cartoes:
+            if c["indicadores"][0]["sem_meta"]:
+                avisos.append(f"{c['nome']}: sem meta de faturamento em {curto_mes(i)}; sem ela, a trava zera o prêmio.")
+            outros = [x["titulo"].lower() for x in c["indicadores"][1:] if x["sem_meta"]]
+            if outros:
+                quais = outros[0] if len(outros) == 1 else f"{', '.join(outros[:-1])} e {outros[-1]}"
+                avisos.append(f"{c['nome']}: sem meta de {quais} em {curto_mes(i)}; a parcela fica em R$ 0 (as metas "
+                              "ficam em Premiações › Configurar).")
         if cache.sem_brindes:
-            avisos.append("Os brindes ainda não chegaram do computador da empresa: o faturamento líquido e as devoluções "
-                          "impróprias estão sem eles até a próxima atualização.")
-        if cache.sem_credito:
-            avisos.append("Os títulos a receber ainda não chegaram do computador da empresa: a inadimplência fica sem "
-                          "dados (sem os pontos dela).")
-        inicio = dt.date.fromisoformat(cache.info.get("inicio") or "2024-01-01")
-        if _inicio(j_de) < inicio:
+            avisos.append("Os brindes ainda não chegaram do computador da empresa: o vencido conta só as devoluções até a "
+                          "próxima atualização.")
+        if estados_inad and cache.sem_credito:
+            avisos.append("Os títulos a receber ainda não chegaram do computador da empresa: o prêmio da inadimplência "
+                          "não é pago até a próxima atualização.")
+        if cache.sem_credito and any(s["pesos"]["reativacao"] > 0 for s in lista):
+            avisos.append("Os títulos a receber ainda não chegaram do computador da empresa: na reativação, quem não "
+                          f"compra desde antes de {inicio.strftime('%m/%Y')} não aparece até a próxima atualização.")
+        if estados_inad and _inicio(j_de) < inicio:
             avisos.append(f"A janela da inadimplência começa em {curto_mes(j_de)}, antes do início dos dados "
                           f"({inicio.strftime('%m/%Y')}): o faturamento dos 6 meses fica menor que o real.")
         return {
             **self._base("supervisores", i, meses, permitidos, equipes),
             "supervisores": cartoes,
-            "maximo": cfg["maximo"],
+            "escalas": {k: cfg[k] for k in ("escala_faturamento", "escala_clientes", "trava", "bonus", "devolucao")},
             "janela": {"de": texto_mes(j_de), "ate": texto_mes(j_ate), "rotulo": f"{curto_mes(j_de)} a {curto_mes(j_ate)}"},
             "corte_vencimento": corte.isoformat(),
-            "dias_atraso": cfg["inadimplencia"]["dias"],
+            "dias_atraso": cfg["dias_inadimplencia"],
+            "dias_sem_compra": cfg["dias_sem_compra"],
+            "inicio_dados": inicio.isoformat(),
             "produtos_fora_mix": self._nomes_produtos(cfg["produtos_fora_mix"]),
-            "motivos_improprios": self._nomes_motivos(cfg["motivos_improprios"]),
+            "motivos_vencido": self._nomes_motivos(cfg["motivos_vencido"]),
+            "motivos_meta": self._nomes_motivos(sorted(regras.motivos)),
+            "canceladas_descontam": not regras.ignorar_canceladas,
             "sem_brindes": bool(cache.sem_brindes),
+            "sem_credito": bool(cache.sem_credito),
             "avisos": self.calc.avisos() + avisos,
         }
 
@@ -701,7 +1020,7 @@ class Premiacoes:
 
     def config_dados(self, mes: str | None = None) -> dict:
         """Para Configurar: as regras, o padrão, os motivos de devolução, os produtos vendidos no último ano (para
-        escolher os de fora do mix) e as metas automáticas dos supervisores no mês escolhido."""
+        escolher os de fora do mix) e as metas automáticas de faturamento e clientes de cada supervisor no mês."""
         self._conferir()
         i, meses = self._escolher_mes(mes)
         regras = self.calc.regras()
@@ -714,10 +1033,10 @@ class Premiacoes:
                         "ON p.id = v.id_produto WHERE v.data >= ? GROUP BY 1, 2, 3 ORDER BY 4 DESC", [desde])]
         citados = {p["id"] for p in produtos}
         produtos += [x for x in self._nomes_produtos(cfg["supervisores"]["produtos_fora_mix"]) if x["id"] not in citados]
-        metas = self.metas_supervisor(regras, i, cfg)
+        metas = self.metas_supervisores(regras, i, cfg)
         return {
             "config": cfg, "padrao": padrao(), "mes": _mes(i), "meses": [_mes(m) for m in meses],
             "motivos": [{"id": m, "nome": n} for m, n in sorted(cache.consulta("SELECT id, nome FROM motivos"))],
             "produtos": produtos,
-            "automatico": {e: {"fat": metas[e]["fat_auto"], "cli": metas[e]["cli_auto"]} for e in ESTADOS},
+            "automatico": {sid: {"fat": m["auto"]["fat"], "cli": m["auto"]["cli"]} for sid, m in metas.items()},
         }

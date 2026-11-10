@@ -2955,7 +2955,11 @@ table.sug-aprov-mini tfoot td { position: static; font-weight: 700; border-botto
 .relatorio-tabela.pr-tabela td.esq { text-align: left; min-width: 210px; }
 .relatorio-tabela.pr-tabela tbody tr:nth-child(even) td { background: var(--rel-real); }
 .relatorio-tabela.pr-tabela tfoot td { background: var(--rel-meta); font-weight: 800; }
-.pr-sups { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; }
+.pr-sups { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.pr-sup-corpo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
+.pr-det-topo { display: grid; grid-template-columns: minmax(280px, 400px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.pr-clientes { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; align-items: start; }
+.pr-clientes > div { display: grid; gap: 8px; min-width: 0; }
 .pr-sup { display: grid; gap: 12px; align-content: start; }
 .pr-sup-cab { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .pr-sup-cab h3 { margin: 4px 0 2px; font-size: 20px; }
@@ -2968,7 +2972,7 @@ table.sug-aprov-mini tfoot td { position: static; font-weight: 700; border-botto
 .pr-sup table.dados th:last-child, .pr-sup table.dados td:last-child { padding-right: 12px; }
 .pr-sup-barra { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .pr-sup-barra i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--acento), var(--ok-forte)); transition: width .9s var(--suave); }
-.pr-ind-rolagem, .pr-vend-rolagem { max-height: none; }
+.pr-ind-rolagem, .pr-vend-rolagem, .pr-metas-rolagem { max-height: none; }
 table.dados.pr-ind td.esq, table.dados td.esq { text-align: left; white-space: normal; }
 table.dados.pr-ind td.esq small { display: block; color: var(--tinta-3); font-size: 11.5px; font-weight: 500; }
 table.dados.pr-ind .pr-pontos { font-weight: 800; }
@@ -3001,6 +3005,34 @@ table.dados.pr-metas .sug-num input { width: 140px; }
 .pr-config-motivos { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 14px; font-size: 13px; }
 .pr-config-motivos label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .pr-config-motivos input { accent-color: var(--laranja); }
+/* Supervisores (regulamentos de nov/2026): a faixa de cada parcela, a conta até o prêmio e as listas de clientes. */
+.pr-faixa { display: inline-block; min-width: 44px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+.pr-faixa.zero { background: var(--ruim-bg); color: var(--ruim); }
+.pr-faixa.parcial { background: var(--atencao-bg); color: var(--atencao); }
+.pr-faixa.cheia { background: var(--ok-bg); color: var(--ok); }
+.pr-faixa.acima { background: var(--ok-bg); color: var(--ok); box-shadow: inset 0 0 0 1.5px var(--ok-forte); }
+table.dados.pr-ind td.pr-alc small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 11px; font-weight: 500; white-space: nowrap; }
+table.dados.pr-ind td.centro { text-align: center; }
+.pr-conta { display: grid; padding: 10px 14px 12px; border-radius: 14px; background: var(--surface-2); font-size: 13px; }
+.pr-conta h4 { margin: 0 0 4px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--tinta-3); }
+.pr-conta .passo { display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: 12px; padding: 5px 0; border-top: 1px dashed var(--linha); color: var(--tinta-2); }
+.pr-conta h4 + .passo { border-top: 0; }
+.pr-conta .passo em { font-style: normal; font-weight: 700; color: var(--tinta-3); white-space: nowrap; }
+.pr-conta .passo b { min-width: 104px; text-align: right; color: var(--tinta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-conta .passo.zero em { color: var(--ruim); }
+.pr-conta .passo.total { margin-top: 2px; padding-top: 8px; border-top: 1.5px solid var(--linha-forte); color: var(--tinta); font-weight: 800; }
+.pr-conta .passo.total b { font-size: 15px; }
+.pr-det-tit { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 4px 0 0; font-size: 14px; }
+.pr-det-tit small { font-size: 12px; font-weight: 500; }
+table.dados.pr-pesos { margin-top: 8px; font-size: 13px; }
+table.dados.pr-pesos tfoot td { font-weight: 800; }
+.pr-config-sup h4 { display: flex; align-items: center; gap: 8px; }
+.pr-config-ind label.texto { grid-template-columns: 1fr 170px auto; }
+.pr-config-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 6px; font-size: 12.5px; font-weight: 700; color: var(--tinta-2); }
+.pr-config-sub small { font-weight: 500; }
+.pr-config-ind label.pr-config-check { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-weight: 600; color: var(--tinta); cursor: pointer; }
+.pr-config-check input { accent-color: var(--laranja); }
+table.dados.pr-metas tr.pr-metas-sup td { background: var(--surface-2); font-weight: 800; text-align: left; }
 /* Comissão: os descontos em tom de devolução, o a pagar negativo em vermelho, a linha do vendedor leva ao detalhe. */
 .relatorio-tabela.pr-com td, .relatorio-tabela.pr-com th { white-space: nowrap; }
 .relatorio-tabela.pr-com tbody tr[data-vendedor] { cursor: pointer; }
@@ -3018,6 +3050,15 @@ table.dados.pr-com-prod tfoot td { font-weight: 800; }
   .kpis.pr-kpis { grid-template-columns: 1fr; }
   .pr-sups { grid-template-columns: 1fr; }
   .pr-config-faixa { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 1180px) {
+  .pr-sup-corpo, .pr-det-topo { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .pr-clientes { grid-template-columns: 1fr; }
+  .pr-conta .passo { grid-template-columns: 1fr auto; }
+  .pr-conta .passo em { grid-column: 1; grid-row: 2; }
+  .pr-conta .passo b { grid-row: 1 / span 2; align-self: center; min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

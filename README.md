@@ -6,7 +6,7 @@ Metas Outras Linhas ES, mais a Produtos ES, que o Power BI não tinha), reunidas
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
 produto (as páginas de sugestão do Power BI). A página **Premiações** mostra o prêmio do mês de cada vendedor e de cada
-supervisor (as páginas de premiação do Power BI) e a comissão dos vendedores. A página **Devoluções** separa o que voltou na
+supervisor (a dos vendedores, como no Power BI; a dos supervisores, pelos regulamentos de nov/2026) e a comissão dos vendedores. A página **Devoluções** separa o que voltou na
 entrega do vencido e danificado no cliente, por causa, produto, cliente e vendedor, e monta o Parecer de Devoluções em PDF. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
@@ -407,17 +407,20 @@ maior parte dos outros é da Thais e do Ricardo - EU, que tiveram clientes repas
 
 ## Página Premiações
 
-As páginas **Premiacao Vendedores** e **Premiacao Supervisores** do Power BI (ocultas lá), numa página só, com uma aba para
-cada uma, como as abas de Metas, e uma terceira aba, **Comissão**. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os meses com META CLIENTE
-na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**; depois, como **final**.
+A premiação do mês, numa página só, com uma aba para cada parte, como as abas de Metas: **Vendedores** (a página
+"Premiacao Vendedores" do Power BI, oculta lá), **Supervisores** (os regulamentos de nov/2026, que substituíram a página
+"Premiacao Supervisores" do Power BI) e **Comissão**. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os
+meses com META CLIENTE na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**;
+depois, como **final**.
 
 - **Vendedores:** um por linha, os que têm META CLIENTE maior que zero no mês (planilha METAS.xlsx ou meta aprovada no
   painel, com ✓), de todos os estados. Mostra a meta de clientes, os atendidos, o % da meta, a faixa atingida, o prêmio e
   quantos clientes faltam para a faixa seguinte. Os cartões trazem o total a pagar, os atendidos, as faixas e quem está a
   até 3 clientes da próxima faixa. A tabela vira imagem para o WhatsApp (Copiar imagem).
-- **Supervisores:** um quadro por estado (Marcos no BA e Ronaldo no ES; os nomes mudam no Configurar), com os cinco
-  indicadores, o realizado, a meta, o alcance, os pontos e o prêmio. "Ver as contas" mostra de onde sai cada número e a
-  carteira de cada vendedor.
+- **Supervisores:** um quadro por supervisor: Marcos (BA), Ronaldo (ES) e Valdirene (ES, a mesma carteira do Ronaldo,
+  pelo regulamento dela). Cada quadro mostra os indicadores (realizado, meta, alcance, a faixa atingida e a parcela) e
+  **A conta**, do conquistado ao valor a receber. "Ver as contas" mostra de onde sai cada número, a carteira de cada
+  vendedor e as listas dos clientes novos e das reativações.
 - **Comissão:** a comissão de cada vendedor das equipes BA e ES (veja [A aba Comissão](#a-aba-comissão)).
 - **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
 - **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em Usuários). A aba
@@ -434,25 +437,57 @@ na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece 
 3. **Prêmio:** o da maior faixa atingida (as faixas não se somam). Padrão do Power BI: 91% → R$ 200, 96% → R$ 250 e 100% →
    R$ 350. Abaixo de 91%, nada.
 
-**Supervisores:** a carteira é a de **hoje**. Entram os clientes cujo vendedor no cadastro é do estado, pelas Configurações
-das metas ou, sem configuração, pelo supervisor no ERP; terceiros, o Edir e as contas internas ficam fora. Só entram vendas,
-devoluções e brindes de cliente (sem funcionário, fornecedor ou produtor).
+**Supervisores** (os regulamentos de nov/2026: o "segunda versão" do Ronaldo, que vale também para o Marcos, e a "nova
+estrutura" da Valdirene). A carteira é a de **hoje**. Entram os clientes cujo vendedor no cadastro é do estado, pelas
+Configurações das metas ou, sem configuração, pelo supervisor no ERP; terceiros, o Edir e as contas internas ficam fora.
+Só entram vendas, devoluções e brindes de cliente (sem funcionário, fornecedor ou produtor), sem os produtos que ficam
+fora das metas. O Ronaldo e a Valdirene usam os mesmos números do ES.
 
-| Indicador | Conta | Meta (padrão) | Pontos |
-|---|---|---|---|
-| Faturamento líquido (25%) | vendas do mês − devoluções não canceladas de todos os motivos (pela data de entrada) − brindes | soma das METAS FATURAMENTO dos vendedores do estado no mês | abaixo de 80% da meta, nada; acima, 25% × alcance, no máximo 25% |
-| Mix (15%) | líquido sem os produtos 32, 12551 e 12552 (a mussarela) ÷ líquido | 55% | mínimo de 85% de alcance; 15% × alcance, no máximo 15% |
-| Inadimplência (10%) | títulos de venda a cliente emitidos de 7 a 2 meses antes (para outubro, março a agosto), vencidos há 30 dias ou mais na data dos dados e ainda em aberto, ÷ o faturamento líquido desses 6 meses | 0,42% no BA e 0,5% no ES | até a meta, 10%; acima, nada |
-| Positivação (25%) | clientes da carteira com venda no mês | soma das METAS CLIENTE dos vendedores do estado no mês | mínimo de 80%; 25% × alcance, no máximo 25% |
-| Devoluções impróprias (25%) | devoluções e brindes com motivo 3, 4 ou 10 a 16 ÷ faturamento bruto | 1,5% | até a meta, 25%; acima, nada |
+Cada indicador tem um peso; a **parcela** de referência é o peso × o variável:
 
-**Prêmio = soma dos pontos × R$ 5.000.** No BA, a meta não inclui o Edir, que é outro grupo.
+| Indicador | Marcos e Ronaldo (R$ 6.000) | Valdirene (R$ 9.000) | Conta | Meta |
+|---|---|---|---|---|
+| Faturamento líquido | 30% | 35% | vendas do mês − as devoluções que descontam na meta (Metas › Configurar: erro de lançamento, recusa, falta de mercadoria, cliente ausente e os erros de faturamento, logística e expedição, sem as canceladas). Brindes não descontam, como na meta | soma das METAS FATURAMENTO dos vendedores do estado no mês (sem o Edir no BA) |
+| Mix (exceto mussarela) | — | 20% | líquido sem a mussarela (32, 12551 e 12552, editável) ÷ líquido | 55% |
+| Positivação | 25% | 15% | clientes da carteira com venda no mês | soma das METAS CLIENTE dos vendedores do estado no mês |
+| Ativação de clientes novos | 25% | 15% | clientes da carteira cadastrados no ERP no mês **e** com compra no mesmo mês | 40 por mês |
+| Reativação de clientes | 20% | 15% | clientes da carteira com uma compra no mês feita depois de **60 dias ou mais sem comprar**, contados da compra anterior até essa. **Só conta quem já tinha comprado:** a compra anterior é a última venda do painel (desde jan/24) ou, sem nenhuma, o último título de venda do ERP (os títulos vão até 2012) | 20 por mês |
 
-A inadimplência conta o que está em aberto **hoje** (o dia da extração dos dados), como no Power BI: o prêmio de um mês já
-fechado muda quando um cliente paga depois.
+As metas de novos e de reativação não existem na planilha nem nas aprovadas: ficam no Configurar (um número por
+supervisor para todo mês). Qualquer meta pode ser trocada num mês específico.
 
-Os brindes vêm de uma tabela nova do cache (`brindes_clientes_itens`). Enquanto o computador da empresa não manda os dados
-com ela (código anterior), a aba avisa e conta sem os brindes.
+**Faixas** (% da meta → % da parcela pago, sem interpolação):
+- faturamento e mix: a partir de 90%, 30%; a partir de 100%, 100%;
+- positivação, novos e reativação: a partir de 80%, 40%; a partir de 100%, 100%; a partir de 120%, 150%.
+
+**A conta**, nesta ordem (cada passo arredondado ao centavo):
+1. **Conquistado** = a soma das parcelas (pode passar do variável, por causa das faixas de 150%).
+2. **Trava** pelo % da meta de faturamento: abaixo de 90%, nada; de 90% até abaixo de 95%, metade; a partir de 95%, tudo.
+3. **Bônus de superação**, sobre o valor depois da trava, só com o faturamento **acima** de 100% da meta: +2% (até abaixo
+   de 110%), +5% (a partir de 110%), +7% (a partir de 120%) e +10% (a partir de 150%). Com 100% exato, sem bônus.
+4. **Desconto pelo vencido**, por último: devoluções não canceladas e brindes com motivo "Devolução imprópria - vencido" ou
+   "Brinde - vencido" ÷ as vendas do mês. Até 0,5%, sem desconto; acima de 0,5% até 1%, mantém 95%; acima de 1%, mantém 90%.
+5. **Só a Valdirene: prêmio da inadimplência** de R$ 450 com a inadimplência em até 0,45%: títulos de venda a cliente
+   emitidos de 7 a 2 meses antes (para outubro, março a agosto), vencidos há 30 dias ou mais na data dos dados e ainda em
+   aberto, ÷ o faturamento líquido desses 6 meses. Entra depois de tudo, fora da trava, do bônus e do desconto, e **não é
+   pago quando a trava zera** o prêmio (faturamento abaixo de 90%).
+
+Exemplo do regulamento: parcelas de R$ 6.000 (100% de todas), faturamento a 105% da meta e vencido em 0,7%: a trava mantém
+R$ 6.000, o bônus de 2% leva a R$ 6.120 e o desconto (mantém 95%) deixa R$ 5.814.
+
+Casos de borda:
+- Cadastrado em 30/09 e com a primeira compra em 01/10: não conta em nenhum dos dois meses como cliente novo.
+- Voltou a comprar duas vezes no mesmo mês: uma reativação. Exatamente 60 dias sem comprar: conta.
+- Cliente que nunca tinha comprado (nenhuma venda nem título de venda) e compra agora: nem novo, se o cadastro é de
+  outro mês, nem reativado, porque não é compra "de novo". Em out/26, no BA, um cliente cadastrado em 2010 ficou fora por
+  isso; outros dois, sem compra desde 2020 e 2021 (pelos títulos), contaram.
+- O alcance aparece arredondado para baixo (89,96% vira 89,9%), para não mostrar 90% ao lado de uma parcela zerada.
+- A inadimplência conta o que está em aberto **hoje** (o dia da extração dos dados): o prêmio de um mês já fechado muda
+  quando um cliente paga depois.
+- Os nomes dos clientes aparecem sem o código que o ERP põe no fim ("(CLIENTE 5959)").
+
+Os brindes vêm de uma tabela do cache (`brindes_clientes_itens`). Sem ela (código anterior no computador da empresa), o
+vencido conta só as devoluções, com aviso.
 
 ### A aba Comissão
 
@@ -491,35 +526,44 @@ empresa não manda os dados com elas (código anterior), a aba avisa que a comis
 
 ### Configurar (Premiações)
 
-O botão **Configurar** (só administradores) tem quatro seções. As regras ficam no banco, com versões, como as de Metas, e
+O botão **Configurar** (só administradores) tem cinco seções. As regras ficam no banco, com versões, como as de Metas, e
 valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os meses que já passaram.
 
 - **Vendedores:** as faixas (o % mínimo e o prêmio em R$). Dá para acrescentar e tirar faixas.
-- **Supervisores:** o prêmio máximo, o nome de cada supervisor, o peso, o mínimo e a meta de cada indicador (a soma dos pesos
-  precisa dar 100%), os dias de atraso da inadimplência, os produtos fora do mix e os motivos das devoluções impróprias, com
-  "Restaurar padrão do Power BI".
-- **Metas dos supervisores:** para o mês escolhido, a soma automática das metas dos vendedores e um campo para trocar a meta
-  de faturamento ou de clientes daquele mês (apagar volta à soma). A meta trocada aparece marcada como "ajustada" no quadro.
+- **Supervisores:** de cada um, o nome, o variável, os pesos dos cinco indicadores (0 = não entra; a soma precisa dar
+  100%), a meta do mix, o prêmio da inadimplência (liga/desliga, valor e limite) e as metas de todo mês de clientes novos
+  e de reativação. O estado de cada um é fixo: ele diz a carteira.
+- **Regras dos supervisores:** as faixas do faturamento e do mix e as da positivação, dos novos e da reativação, a trava,
+  o bônus, o desconto pelo vencido (dá para acrescentar e tirar faixas), os motivos do vencido, os produtos fora do mix e
+  os dias (sem comprar, da reativação; de atraso, da inadimplência). "Restaurar o padrão" mantém as metas trocadas em
+  cada mês.
+- **Metas dos supervisores:** para o mês escolhido e cada supervisor, a meta automática de faturamento, de clientes, de
+  novos e de reativação e um campo para trocá-la naquele mês (0 = sem meta; apagar volta à automática). A meta trocada
+  aparece marcada como "ajustada" no quadro.
 - **Comissão:** os motivos dos brindes que descontam da comissão (as devoluções descontam todas). Os % de cada vendedor
   e produto ficam no ERP.
 
+As regras salvas antes dos regulamentos de nov/2026 (cinco indicadores × R$ 5.000) são convertidas ao abrir: ficam os
+nomes, a meta do mix, os produtos fora do mix, os dias da inadimplência e as metas trocadas em cada mês (as do ES valem
+para o Ronaldo e a Valdirene).
+
 ### Diferenças em relação ao Power BI (premiações)
 
-1. **Metas dos supervisores:** a soma das metas dos vendedores do mês. No Power BI elas ficavam fixas no DAX e eram as de
-   setembro/26: no BA, R$ 2.252.568 e 967 clientes, a soma de setembro sem o Edir; no ES, R$ 2.075.000, e os 983 clientes
-   ficam a 1 de 1.049 − Adriana.
-2. **Total dos vendedores:** a soma dos prêmios. O Power BI aplicava a faixa ao % do total, o que não servia para pagar.
-3. **Só vendas a cliente** na conta do supervisor: o Power BI ligava venda a funcionário ou fornecedor pelo código, que pode
-   coincidir com o de um cliente.
-4. **Vendedores de cada supervisor:** pelas Configurações das metas e pelo supervisor do ERP, não por uma lista fixa de nomes.
-   Hoje dá os mesmos 9 do BA e 12 do ES do Power BI.
-5. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
+1. **Total dos vendedores:** a soma dos prêmios. O Power BI aplicava a faixa ao % do total, o que não servia para pagar.
+2. **Supervisores:** a conta do Power BI (cinco indicadores × R$ 5.000, um supervisor por estado) foi trocada pelos
+   regulamentos de nov/2026, para todos os meses. Ficaram dela a carteira (pelas Configurações das metas e pelo supervisor
+   do ERP, não por uma lista fixa de nomes; só vendas a cliente), o mix e a inadimplência.
+3. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
 
 Conferência em 30/10/2026 (outubro até 29/10, com os brindes lidos do ERP): vendedores R$ 2.700 (11 de 21 com prêmio).
-Supervisores com as metas fixas do Power BI: BA R$ 4.887,54 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
-R$ 4.843,12 e ES R$ 3.417,62. Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11),
-de R$ 68.152,20 de comissão das vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os
-descontos de cada vendedor batem com a conta feita direto no ERP.
+Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11), de R$ 68.152,20 de comissão das
+vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os descontos de cada vendedor batem com
+a conta feita direto no ERP.
+
+Conferência dos supervisores em 10/11/2026 (outubro, cache do PC, metas padrão de 40 novos e 20 reativações): Marcos
+R$ 4.284,00 (faturamento a 104,37% da meta, bônus de 2%), Ronaldo R$ 1.396,50 e Valdirene R$ 1.667,25 (os dois com o faturamento a
+94,0%: trava de 50%; vencido em 0,80%: mantém 95%; inadimplência em 0,49%: sem o adicional). Os números (líquido, clientes,
+novos, reativações, vencido e inadimplência) batem com as consultas feitas à parte, direto no cache.
 
 ## Página Devoluções
 
@@ -1626,7 +1670,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
-| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
+| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (os regulamentos de nov/2026: parcelas por indicador, trava, bônus e desconto pelo vencido), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
 | `bi/devolucoes.py` | página Devoluções: o que voltou na entrega (nota a nota) e o vencido e danificado no cliente por causa e responsável, a comparação com a média dos 6 meses anteriores, os produtos, segmentos, frequência de visita e clientes, a tabela dos vendedores e os dados do Parecer (blocos dos vendedores, limites dos produtos e rankings) |
 | `bi/parecer_pdf.py` | o Parecer de Devoluções em PDF (fpdf2), no formato do documento de antes, e o zip com as pastas BA, ES e TERCEIRIZADOS |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |

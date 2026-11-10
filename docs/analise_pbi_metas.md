@@ -256,7 +256,9 @@ dois tiveram mudança de carteira). No painel, ver a página Sugestão de Metas 
 ## 11. Páginas de premiação (analisadas em 30/10/2026)
 
 Páginas ocultas **Premiacao Vendedores** e **Premiacao Supervisores**, com filtros de Ano e Mês (salvos em 2026 / outubro).
-No painel viraram a página Premiações (`bi/premiacoes.py`), com as diferenças descritas no README.
+No painel viraram a página Premiações (`bi/premiacoes.py`), com as diferenças descritas no README. Em 10/11/2026 a aba
+Supervisores passou a seguir os regulamentos de nov/2026 (Marcos, Ronaldo e Valdirene), e a conta abaixo ficou só como
+registro do Power BI.
 
 **Premiacao Vendedores:** matriz com uma linha por `dMetas[VENDEDOR]`, filtrada por Σ META CLIENTE > 0, com Meta Cliente,
 Meta Realizada Clientes, % Meta Clientes Realizada e a medida `Premiação`:
