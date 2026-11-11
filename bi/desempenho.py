@@ -394,10 +394,10 @@ class Painel:
             return None
         # Os atendimentos (distintos, de um dia ou uma semana) contam o atendido no dia do pedido; a efetividade do
         # mês, como nas campanhas, conta a semana da área de vários dias num dia só (o último marcado).
+        # Os avisos da conta (clientes em área sem dia de atendimento, clientes sem frequência no cadastro) não vão
+        # para o painel (decisão do usuário, 11/11/2026); nas campanhas, continuam.
         r = _efetividade(self.cur, {"filtros": {}}, ids, inicio, fim, self.areas, distintos=distintos,
                          atendido_no_dia=distintos)
-        for a in r["avisos"]:
-            self._aviso(a)
         return r["vend"]
 
     def frequencia(self, ids: list[int], mes: dt.date, fim: dt.date) -> dict[int, dict]:

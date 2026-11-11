@@ -981,6 +981,8 @@ navegador.
   esperados), o % de troca do mês e a situação. Passar o mouse na barra ou na meta mostra de onde ela veio: o saldo
   do mês, o potencial do dia e os pedidos em aberto. A escolha entre barras e tabela fica guardada no navegador.
 - **Ficha**: clicar no nome de um vendedor abre os 9 cartões dele; o ⓘ de cada cartão explica a conta.
+- **Sem avisos de cadastro** (decisão de 11/11/2026): o painel não mostra os avisos de clientes em área sem dia de
+  atendimento nem de clientes sem frequência de compra no cadastro. As campanhas continuam avisando.
 - **Cores**: verde a partir de 100% da meta, amarelo de 90% a 99%, vermelho abaixo de 90%. No % de troca, quanto menor
   melhor: verde até 1,0%, amarelo até 1,5% (o teto). Sem meta no período (dia sem cliente programado, mês sem
   planilha), a linha fica cinza com "sem meta".

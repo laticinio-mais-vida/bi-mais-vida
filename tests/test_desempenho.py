@@ -204,6 +204,17 @@ class TestPainel(ComCache, BaseBanco):
         self.assertEqual((thais["mes"]["mussarela"]["meta"], thais["mes"]["outras"]["meta"]), (6000.0, None))
         self.assertEqual(thais["mes"]["mussarela"]["real"], 4750.0)  # 5000 − 250 (o 999 é "não conta")
 
+    def test_sem_avisos_de_dia_e_de_frequencia(self):
+        # na BA, o cliente 7 está sem área (sem dia de atendimento) e o 2 e o 12, sem frequência no cadastro: a conta
+        # avisa (como nas campanhas), mas o painel não mostra esses avisos (decisão do usuário, 11/11/2026)
+        from bi.indicadores import _efetividade
+        self.montar(redes={c: "SEMANAL" for c in (1, 3, 4, 7, 10, 11, 13, 14)})
+        conta = _efetividade(self.cur, {"filtros": {}}, [BA], D(2026, 9, 1), D(2026, 9, 30), {1: [3], 2: [4], 3: [5]})
+        self.assertEqual(len(conta["avisos"]), 2)
+        d = self.painel("BA")
+        self.assertFalse([a for a in d["avisos"] if "sem dia de atendimento" in a or "frequência de compra" in a])
+        self.assertIsNotNone(d["vendedores"][0]["mes"]["efetividade"]["real"])
+
     def test_hoje_e_sem_meta_no_mes(self):
         self.montar()
         d = self.painel(periodo="hoje")
