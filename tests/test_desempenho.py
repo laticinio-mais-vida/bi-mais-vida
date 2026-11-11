@@ -45,6 +45,9 @@ class TestContas(unittest.TestCase):
         self.assertEqual(compras_esperadas(semanas(1, 8, 15, 22, 29), 1, D(2026, 11, 27)), 5)  # sexta: outra semana
         # área de dois dias (segunda e terça): uma visita por semana
         self.assertEqual(compras_esperadas(semanas(7, 8, 14, 15), 1, None), 2)
+        # quinzenal numa área de terça e quarta, com a última compra na terça 24/11: 8 e 22/12 (com um dia de cada
+        # vez, a quarta voltava oito dias depois: 2, 15 e 23/12)
+        self.assertEqual(compras_esperadas(semanas(1, 2, 8, 9, 15, 16, 22, 23, 29, 30), 2, D(2026, 11, 24)), 2)
         # quinzenal: comprou em 30/11 -> 14 e 28/12; em 16/11 -> 7 e 21/12; sem compra -> 7 e 21/12
         self.assertEqual(compras_esperadas(segundas, 2, D(2026, 11, 30)), 2)
         self.assertEqual(compras_esperadas(segundas, 2, D(2026, 11, 16)), 2)

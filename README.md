@@ -895,8 +895,32 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
   - Diferente do Power BI, que divide todos os pedidos do período pelas visitas do período: lá, os pedidos fora de
     rota e os de sábado e domingo entram sem visita, e numa campanha curta isso distorce a conta.
   - Os pedidos vêm do ERP (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA).
-  - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada dia de atendimento dela que cai no
+  - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada semana com dia de atendimento dela no
     período. Feriados contam, como no Power BI.
+  - **Área com mais de um dia** (decisão de 11/11/2026): os dias marcados são os dias em que o vendedor **pode**
+    atender, não os que deve. A semana da área (de domingo a sábado) conta como **um dia só**, o último marcado:
+    - o cliente tem uma visita na semana, que vale com o pedido em qualquer um dos dias marcados (contam os pedidos
+      do primeiro; os dos outros dias da mesma semana não contam de novo);
+    - quem não comprou em nenhum dos dias conta a visita sem pedido;
+    - o quinzenal e o mensal olham a compra nos 7 ou 21 dias antes do primeiro dia marcado da semana.
+
+    Exemplo: área de segunda a sexta, com 10 clientes semanais. Na semana, 6 compram na segunda, 3 na
+    quarta e 1 não compra:
+
+    | Dia | Pedidos | Visitas | Efetividade |
+    |---|---|---|---|
+    | Segunda a quinta | — | — | (fora da média) |
+    | Sexta (o último dia marcado) | 9 | 10 | 90% |
+
+    Se cada um contasse no dia em que comprou, e quem não comprou na sexta, a média dos dias daria 66,7%: segunda
+    100%, quarta 100% e sexta 0%. O vendedor que não atende a área na sexta teria sempre uma sexta perto de 0%.
+  - A semana entra inteira no período em que termina:
+    - na campanha que começa numa quinta, a semana que fecha na sexta entra com os pedidos de segunda a quarta;
+    - na que termina numa quinta, a última semana fica fora;
+    - a semana em andamento só entra quando chega o último dia marcado.
+  - Área de um dia só: a conta é a mesma de antes.
+  - No painel de desempenho, os **atendimentos** do dia contam o cliente atendido no dia do pedido, e quem não foi
+    atendido na semana, no último dia marcado. Assim, o painel de um dia mostra quem o vendedor atendeu nele.
   - Os dias de cada área ficam em **Configurar › Dias de atendimento**. Clientes em área sem dia ficam fora da conta
     (pedidos e visitas), e o andamento avisa quantos são. Diferente do Power BI, que contava os pedidos deles e não
     as visitas.
@@ -964,9 +988,9 @@ navegador.
 | Indicador | Conta | De quem |
 |---|---|---|
 | Faturamento, mussarela e outras linhas (do período) | o realizado da página Metas (venda − devolução que desconta); a meta é a expectativa diária (abaixo) e, em mussarela e outras, a parte delas na meta do mês | vendedor da nota |
-| Atendimentos (do período) | clientes com pedido no dia da rota ÷ clientes esperados no dia: semanal sempre, quinzenal sem compra nos 7 dias antes, mensal sem compra nos 21 dias antes (os dias de atendimento das áreas) | carteira |
-| Efetividade acumulada do mês | a das campanhas: a média da efetividade de cada dia (pedidos na rota ÷ visitas esperadas); meta de 100% | carteira |
-| Frequência do mês | a das campanhas: semanas com compra ÷ clientes que compraram; meta: a média das compras esperadas desses clientes no mês inteiro, atendidos dentro da periodicidade e partindo da última compra antes do mês (o semanal que comprou no pedaço da semana que ficou no mês anterior não espera na primeira semana) | vendedor da nota |
+| Atendimentos (do período) | clientes com pedido no dia da rota ÷ clientes esperados no dia: semanal sempre, quinzenal sem compra nos 7 dias antes, mensal sem compra nos 21 dias antes (os dias de atendimento das áreas; na área com mais de um dia, uma visita por semana, que conta no dia do pedido ou, sem pedido, no último dia marcado) | carteira |
+| Efetividade acumulada do mês | a das campanhas: a média da efetividade de cada dia (pedidos na rota ÷ visitas esperadas; a área de vários dias vale um dia por semana, o último marcado); meta de 100% | carteira |
+| Frequência do mês | a das campanhas: semanas com compra ÷ clientes que compraram; meta: a média das compras esperadas desses clientes no mês inteiro, atendidos dentro da periodicidade e partindo da última compra antes do mês (o semanal que comprou no pedaço da semana que ficou no mês anterior não espera na primeira semana; na área com mais de um dia, uma compra por semana, contando do primeiro dia marcado dela) | vendedor da nota |
 | Positivação | clientes distintos com nota no mês × META CLIENTE (como na página Metas) | vendedor da nota |
 | Ticket médio | a venda média da página Metas: faturamento ÷ clientes × meta de faturamento ÷ META CLIENTE | vendedor da nota |
 | % Troca | devoluções e brindes de vencido e danificado (pelo nome do motivo; os de PERDA ficam fora) ÷ faturamento bruto da carteira | dono do cliente |
@@ -1054,11 +1078,14 @@ python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
   API pública).
 - Em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
   efetividade).
+  - São os dias em que o vendedor pode atender a área, um ou mais (veja a efetividade, acima).
   - O ponto de partida foi a planilha "Dia de Atendimento Areas Comerciais.xlsx" do Power BI, lida pela coluna
     numérica (a de texto tinha "Terça" com acento, que o Power BI não reconhecia).
   - Cada área pode ficar com dias, como **não atendida** (fora da conta, sem aviso) ou **pendente** (fora da conta,
-    com aviso).
-  - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)".
+    com aviso). Desmarcar todos os dias volta a área para pendente.
+  - A área mexida continua na lista até trocar o filtro ou a busca, ou salvar, para dar para marcar vários dias.
+  - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)", ou os dias, como em
+    "EUNÁPOLIS CENTRAL (SEGUNDA E TERÇA)".
 
 ### Minha agenda
 

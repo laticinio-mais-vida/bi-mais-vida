@@ -14,9 +14,10 @@ Indicadores de cada vendedor:
   é o volume da METAS PRODUTOS × o preço médio do próprio vendedor no mês anterior (faturamento bruto ÷ volume; sem
   venda dele do produto nesse mês, o preço da região), ajustada para as duas somarem a meta de faturamento.
 - atendimentos: clientes com pedido na rota do dia ÷ visitas esperadas no dia, com a regra da efetividade (semanal
-  sempre; quinzenal sem compra nos 7 dias antes; mensal sem compra nos 21 dias antes), pelo vendedor da carteira.
-- efetividade acumulada do mês: a das campanhas (indicadores._efetividade: a média da efetividade de cada dia), meta
-  de 100%.
+  sempre; quinzenal sem compra nos 7 dias antes; mensal sem compra nos 21 dias antes; na área de vários dias, uma
+  visita por semana, que conta no dia do pedido ou, sem pedido, no último dia marcado), pelo vendedor da carteira.
+- efetividade acumulada do mês: a das campanhas (indicadores._efetividade: a média da efetividade de cada dia; na
+  área de vários dias, a semana conta num dia só, o último marcado), meta de 100%.
 - frequência: a das campanhas (semanas com compra ÷ clientes positivados, pelo vendedor da nota). A meta: as compras
   esperadas de cada um desses clientes no mês inteiro, atendido dentro da periodicidade (compras_esperadas), em média.
 - positivação: clientes distintos com nota no mês, pelo vendedor da nota (a da página Metas) × META CLIENTE.
@@ -134,13 +135,19 @@ def compras_esperadas(dias: list[dt.date], semanas: int, ultima: dt.date | None)
     """Quantas compras se esperam nos dias de atendimento (em ordem) se o vendedor atende o cliente dentro da
     periodicidade, partindo da última compra antes deles. Semanal (semanas = 1): uma por semana, de domingo a sábado;
     se ele já comprou no pedaço da semana que ficou no mês anterior, a primeira semana não espera. Quinzenal (2) e
-    mensal (4): espera no dia de atendimento sem compra nos 7 ou 21 dias antes (a regra da efetividade). Cada compra
-    esperada conta como feita, e a próxima parte dela."""
+    mensal (4): espera na semana sem compra nos 7 ou 21 dias antes do primeiro dia de atendimento dela (a regra da
+    efetividade). Área de vários dias: são os dias em que o vendedor pode atender, e conta só o primeiro de cada
+    semana (sem isso, o quinzenal voltava oito dias depois). Cada compra esperada conta como feita, e a próxima parte
+    dela."""
     n = 0
+    vistas: set[dt.date] = set()
     for d in dias:
+        domingo = d - dt.timedelta(days=d.isoweekday() % 7)
+        if domingo in vistas:
+            continue
+        vistas.add(domingo)
         if semanas <= 1:
-            inicio_semana = d - dt.timedelta(days=d.isoweekday() % 7)  # o domingo
-            espera = ultima is None or ultima < inicio_semana
+            espera = ultima is None or ultima < domingo
         else:
             espera = ultima is None or ultima < d - dt.timedelta(days=7 * (semanas - 1))
         if espera:
@@ -385,7 +392,10 @@ class Painel:
             self._aviso("os pedidos de venda ou a frequência de compra dos clientes ainda não chegaram do computador "
                         "da empresa: atendimentos e efetividade aparecem depois da próxima atualização")
             return None
-        r = _efetividade(self.cur, {"filtros": {}}, ids, inicio, fim, self.areas, distintos=distintos)
+        # Os atendimentos (distintos, de um dia ou uma semana) contam o atendido no dia do pedido; a efetividade do
+        # mês, como nas campanhas, conta a semana da área de vários dias num dia só (o último marcado).
+        r = _efetividade(self.cur, {"filtros": {}}, ids, inicio, fim, self.areas, distintos=distintos,
+                         atendido_no_dia=distintos)
         for a in r["avisos"]:
             self._aviso(a)
         return r["vend"]

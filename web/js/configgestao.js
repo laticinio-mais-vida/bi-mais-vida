@@ -1,7 +1,8 @@
-// Configuração da página Gestão (só administradores): os dias de atendimento, em que dias da semana cada área
-// comercial é visitada. A efetividade das campanhas conta as visitas esperadas por eles (começou com a planilha do
-// Power BI). Área pendente ou não atendida fica fora da conta. Os vendedores que cada pessoa acompanha na Gestão (e na
-// API pública) são os do acesso dela, escolhidos em Usuários. Tudo vale depois de Salvar.
+// Configuração da página Gestão (só administradores): os dias de atendimento, em que dias da semana o vendedor pode
+// atender cada área comercial (um ou mais). Na efetividade das campanhas, a semana conta num dia só, o último marcado,
+// e o pedido em qualquer um dos dias vale a visita (começou com a planilha do Power BI). Área pendente
+// ou não atendida fica fora da conta. Os vendedores que cada pessoa acompanha na Gestão (e na API pública) são os do
+// acesso dela, escolhidos em Usuários. Tudo vale depois de Salvar.
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const DIAS = [[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [7, "Dom"]];
@@ -14,6 +15,9 @@ let raiz = null;
 let dados = null;          // resposta de /api/gestao/config
 let orig = null, rasc = null;
 let buscaArea = "", filtroArea = "pendentes";
+// As áreas mexidas desde a última troca de filtro ou busca: continuam na lista mesmo saindo do filtro (na lista
+// Pendentes, a área sumia no primeiro clique e não dava para marcar o segundo dia).
+let fixas = new Set();
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -35,6 +39,7 @@ function carregarDados(r) {
   dados = r;
   orig = { areas: Object.fromEntries((dados.areas || []).map((a) => [a.id, a.dias])) };  // null = pendente; [] = não atendida
   rasc = clone(orig);
+  fixas = new Set();
 }
 
 // ---------- apoio ----------
@@ -62,16 +67,22 @@ function render() {
     <button class="btn primario" id="cg-salvar">${icone("disco")}Salvar alterações</button>
   </div>`;
   raiz.querySelector("#cg-salvar").addEventListener("click", salvar);
-  raiz.querySelector("#cg-descartar").addEventListener("click", () => { rasc = clone(orig); render(); });
+  raiz.querySelector("#cg-descartar").addEventListener("click", () => { rasc = clone(orig); fixas = new Set(); render(); });
   secaoAreas(raiz.querySelector("#cg-secao"));
   atualizarBarra();
 }
+
+const textoPendentes = (n) =>
+  `${n} área${n === 1 ? "" : "s"} com clientes ativos ainda sem dia: os clientes delas ficam fora da efetividade.`;
 
 function atualizarBarra() {
   const n = contarAlteracoes();
   raiz.querySelector("#cg-barra").classList.toggle("visivel", n > 0);
   raiz.querySelector("#cg-n").textContent = n === 1 ? "1 alteração não salva" : `${n} alterações não salvas`;
-  raiz.querySelector(".config-menu .cont").textContent = pendentes();
+  const p = pendentes();
+  raiz.querySelector(".config-menu .cont").textContent = p;
+  const aviso = raiz.querySelector("#ca-pendentes");
+  if (aviso) { aviso.hidden = !p; aviso.querySelector("span").textContent = textoPendentes(p); }
 }
 
 // ======================================================================================
@@ -82,10 +93,11 @@ function secaoAreas(alvo) {
   alvo.innerHTML = `
   <section class="cartao secao entra" style="--i:1">
     <div class="cartao-cab"><div><h2>${icone("calendario")}Dias de atendimento das áreas</h2>
-      <p class="sub">A efetividade das campanhas conta uma visita esperada por cliente ativo da área em cada dia marcado.
-        Área pendente ou não atendida fica fora da conta (pedidos e visitas).</p></div></div>
+      <p class="sub">Marque os dias em que o vendedor pode atender a área (um ou mais). Na efetividade, a semana da área
+        conta como um dia só, o último marcado: cada cliente ativo tem uma visita, que vale com o pedido em qualquer um
+        dos dias. Área pendente ou não atendida fica fora da conta (pedidos e visitas).</p></div></div>
     ${dados.aviso_areas ? `<div class="aviso">${icone("alerta")}<span>${esc(dados.aviso_areas)}</span></div>` : ""}
-    ${n ? `<p class="usu-nota aviso-nota">${icone("alerta")}<span>${n} área${n === 1 ? "" : "s"} com clientes ativos ainda sem dia: os clientes delas ficam fora da efetividade.</span></p>` : ""}
+    <p class="usu-nota aviso-nota" id="ca-pendentes"${n ? "" : " hidden"}>${icone("alerta")}<span>${textoPendentes(n)}</span></p>
     <div class="barra-ferramentas usu-busca">
       <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span><input id="ca-busca" type="search" placeholder="Buscar área ou código" value="${esc(buscaArea)}"></label>
       <div class="seg-mini" role="group" aria-label="Quais áreas">${FILTROS_AREA.map((f) => `<button type="button" data-filtro="${f.id}" class="${filtroArea === f.id ? "ativo" : ""}">${f.nome}</button>`).join("")}</div>
@@ -93,15 +105,18 @@ function secaoAreas(alvo) {
     </div>
     <div class="areas-lista" id="ca-lista"></div>
   </section>`;
-  alvo.querySelector("#ca-busca").addEventListener("input", (e) => { buscaArea = e.target.value; desenharAreas(); });
+  alvo.querySelector("#ca-busca").addEventListener("input", (e) => { buscaArea = e.target.value; fixas = new Set(); desenharAreas(); });
   alvo.querySelectorAll("[data-filtro]").forEach((b) => b.addEventListener("click", () => {
     filtroArea = b.dataset.filtro;
+    fixas = new Set();
     alvo.querySelectorAll("[data-filtro]").forEach((x) => x.classList.toggle("ativo", x === b));
     desenharAreas();
   }));
   alvo.querySelector("#ca-sugestoes").addEventListener("click", () => {
     let n = 0;
-    for (const a of dados.areas) if (rasc.areas[a.id] == null && a.sugestao?.length) { rasc.areas[a.id] = [...a.sugestao]; n++; }
+    for (const a of dados.areas) {
+      if (rasc.areas[a.id] == null && a.sugestao?.length) { rasc.areas[a.id] = [...a.sugestao]; fixas.add(a.id); n++; }
+    }
     toast(n ? `${n} área${n === 1 ? "" : "s"} com o dia do nome (confira e salve)` : "Nenhuma pendente com o dia no nome", n ? "ok" : "erro");
     desenharAreas();
     atualizarBarra();
@@ -119,6 +134,7 @@ function estadoArea(a) {
 function desenharAreas() {
   const termo = buscaArea.trim().toLowerCase();
   const lista = (dados.areas || []).filter((a) => {
+    if (fixas.has(a.id)) return true;
     const st = estadoArea(a);
     if (filtroArea === "pendentes" && st !== "pendente") return false;
     if (filtroArea === "atendidas" && st !== "atendida") return false;
@@ -159,11 +175,15 @@ function aoClicarArea(e) {
     const d = Number(b.dataset.dia);
     const atual = new Set(rasc.areas[id] || []);
     atual.has(d) ? atual.delete(d) : atual.add(d);
-    rasc.areas[id] = [...atual].sort((x, y) => x - y);
+    // Sem nenhum dia marcado, a área volta a como estava ao abrir, se lá também não tinha dias (pendente ou não
+    // atendida); se tinha, fica pendente. "Não atendida" é o botão próprio.
+    const antes = orig.areas[id];
+    rasc.areas[id] = atual.size ? [...atual].sort((x, y) => x - y) : (antes && !antes.length ? [] : null);
   } else if (b.dataset.sugestao) rasc.areas[id] = [...a.sugestao];
   else if (b.dataset.nao) rasc.areas[id] = [];
   else if (b.dataset.limpar) rasc.areas[id] = null;
   else return;
+  fixas.add(id);
   desenharAreas();
   atualizarBarra();
 }

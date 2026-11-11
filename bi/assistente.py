@@ -1463,7 +1463,9 @@ de atendimento das áreas), pela carteira do vendedor. Só contam os pedidos de 
 dia: pedido de cliente de área de outro dia fica fora. As visitas esperadas seguem a frequência de compra (a rede \
 SEMANAL, QUINZENAL ou MENSAL do cliente): o semanal sempre, o quinzenal sem compra nos 7 dias antes, o mensal sem \
 compra nos 21 dias antes; quem não estava previsto e compra no dia entra nas visitas desse dia; sem frequência \
-conta como semanal. \
+conta como semanal. Na área com mais de um dia, os dias marcados são os dias em que o vendedor pode atender, e a \
+semana conta como um dia só, o último marcado: o cliente tem uma visita, que vale com o pedido em qualquer um dos \
+dias (nos atendimentos do painel de desempenho, o atendido conta no dia do pedido). \
 Dias sem visita esperada (fim de semana) ficam fora da média. \
 O numerador e o denominador que vêm junto (pedidos na rota e visitas desses dias) não dão a média se divididos: use \
 o valor que vem pronto. A meta \

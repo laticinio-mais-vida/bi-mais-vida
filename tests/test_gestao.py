@@ -330,13 +330,15 @@ class TestIndicadores(ComCache, unittest.TestCase):
         self.assertEqual(por[BA]["status"], "no_ritmo")  # aberto: na meta é "no ritmo", não "batida"
 
     def test_efetividade_media_dos_dias(self):
-        # ROTA 1 na terça e na quarta, ROTA 3 (os 2 hotéis do ES) na quarta: 2 visitas nas terças e 4 nas quartas
+        # ROTA 1 na terça e na quarta (os dias em que o vendedor pode atender: a semana conta num dia só, a quarta),
+        # ROTA 3 (os 2 hotéis do ES) na quarta. Na ROTA 1, o 1 compra na quarta 2/9 e o 3 na terça 15/9, que conta na
+        # quarta 16/9
         por, _ = self.medir("efetividade", meta=30, areas={1: [2, 3], 2: [4], 3: [3]})
         es = por[ES]
-        # 15/9 (terça): 1 ÷ 2; 2/9 (quarta): 1 ÷ 4; os outros 8 dias, zero: (0,5 + 0,25) ÷ 10 dias = 7,5%. Pedidos do
-        # período ÷ visitas do período dariam 2 ÷ 30; com o pedido do sábado (5/9, dia sem visita), 3 ÷ 30
-        self.assertEqual((es["numerador"], es["denominador"], es["dias"]), (2, 30, 10))
-        self.assertAlmostEqual(es["realizado"], 0.075, places=4)
+        # 2/9 e 16/9: um pedido em 4 visitas (o 1 e o 3, e os 2 hotéis); 9, 23 e 30/9: 0 ÷ 4: (0,25 + 0,25) ÷ 5 quartas.
+        # Com uma visita em cada dia marcado (antes de 11/11/2026), eram 30 visitas em 10 dias e 7,5%
+        self.assertEqual((es["numerador"], es["denominador"], es["dias"]), (2, 20, 5))
+        self.assertAlmostEqual(es["realizado"], 0.1, places=4)
         # só os pedidos na rota do dia: com a ROTA 3 (os hotéis) na terça e a ROTA 1 na quarta, o pedido de terça
         # 15/9 é de um cliente da ROTA 1 (fora da rota) e não conta; fica só o da quarta 2/9: 0,5 ÷ 10 dias
         por, a = self.medir("efetividade", meta=30, areas={1: [3], 2: [4], 3: [2]}, abrir="area")
@@ -348,6 +350,57 @@ class TestIndicadores(ComCache, unittest.TestCase):
         # semana sem nenhum dia de visita (sábado e domingo): sem efetividade, mesmo com pedido
         por, _ = self.medir("efetividade", meta=30, inicio=D(2026, 9, 5), fim=D(2026, 9, 6), areas={3: [3]})
         self.assertEqual((por[ES]["realizado"], por[ES]["dias"], por[ES]["status"]), (None, 0, "sem_dados"))
+
+    def test_efetividade_area_de_varios_dias(self):
+        # ROTA 1 de segunda a sexta: os dias em que o vendedor PODE atender, e a semana conta num dia só, a sexta
+        # (decisão de 11/11/2026). O 1 compra na quarta 2/9 e o 3 na terça 15/9. Sextas 4 e 18/9: um pedido em 2
+        # visitas; 11 e 25/9: 0 ÷ 2. A semana de 28/9 termina na sexta 2/10, fora do período
+        varios = {1: [1, 2, 3, 4, 5], 2: [4]}
+        por, a = self.medir("efetividade", meta=30, areas=varios, abrir="area")
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (2, 8, 4))
+        self.assertAlmostEqual(por[ES]["realizado"], 0.25, places=4)
+        self.assertEqual(por[BA]["realizado"], 0.375)  # a ROTA 2, de um dia só, não muda
+        self.assertEqual({x["nome"]: x["dias"] for x in a["abertura"]["linhas"]}, {"ROTA 1": 4, "ROTA 2": 4})
+        # a semana entra inteira no período em que termina: começando na quinta 3/9, a semana de 31/8 a 4/9 conta,
+        # com o pedido do 1 na quarta; terminando na quinta 24/9, a semana que fecha na sexta 25/9 fica fora
+        por, _ = self.medir("efetividade", meta=30, areas=varios, inicio=D(2026, 9, 3))
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (2, 8, 4))
+        por, _ = self.medir("efetividade", meta=30, areas=varios, fim=D(2026, 9, 24))
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (2, 6, 3))
+        # um segundo pedido na mesma semana (o 1 na quinta 3/9) não conta outra visita nem outro pedido
+        self.cur.execute("INSERT INTO _pedidos_venda (data, id_vendedor, id_cliente, tipo_cliente, tipopedido, "
+                         "cancelada, pedidos) VALUES ('2026-09-03', ?, 1, 'CLIENTE', 'PEDIDOVENDA', 0, 1)", [ES])
+        por, _ = self.medir("efetividade", meta=30, areas=varios)
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (2, 8, 4))
+        # os atendimentos do painel de desempenho (clientes, atendido_no_dia): o atendido conta no dia do pedido (2 e
+        # 15/9) e só a visita sem pedido fica na sexta; o mês dá o mesmo total. Do dia 3/9 em diante, o 1 (atendido na
+        # quarta 2/9) fica fora e o 3 entra sem pedido na sexta 4/9
+        from bi.indicadores import _efetividade
+
+        def atendimentos(inicio, fim):
+            r = _efetividade(self.cur, {"filtros": {}}, [ES], inicio, fim, varios, distintos=True, atendido_no_dia=True)
+            return r["vend"][ES]["num"], r["vend"][ES]["den"]
+
+        self.assertEqual(atendimentos(D(2026, 9, 1), D(2026, 9, 30)), (2, 8))
+        self.assertEqual(atendimentos(D(2026, 9, 3), D(2026, 9, 30)), (1, 7))
+        self.assertEqual(atendimentos(D(2026, 9, 2), D(2026, 9, 2)), (1, 1))  # a quarta 2/9 sozinha: o 1
+        self.assertEqual(atendimentos(D(2026, 9, 4), D(2026, 9, 4)), (0, 1))  # a sexta 4/9: o 3, sem pedido
+        # com um dia só (a quarta), a quinta 3/9 não é dia da ROTA 1 e o pedido dela fica fora, como antes
+        por, _ = self.medir("efetividade", meta=30, areas={1: [3], 2: [4]})
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"]), (1, 10))
+
+    def test_efetividade_area_de_varios_dias_pela_frequencia(self):
+        # ROTA 1 na terça e na quarta, com o 3 quinzenal: ele compra na terça 15/9 e não é esperado na semana
+        # seguinte (nem na quarta 23/9, oito dias depois, como seria com uma visita em cada dia); volta na de 29/9
+        self.desmontar_cache()
+        self.montar_cache(extras=True, redes={**{c: "SEMANAL" for c in (1, 2, 4, 7, 10, 11, 12, 13, 14)},
+                                              3: "QUINZENAL"})
+        por, a = self.medir("efetividade", meta=30, areas={1: [2, 3]})
+        # quartas (a semana num dia só): 2/9: o 1 com pedido e o 3 sem (1 ÷ 2); 9/9: 0 ÷ 2; 16/9: o 3 com o pedido
+        # da terça e o 1 sem (1 ÷ 2); 23/9: só o 1 (0 ÷ 1); 30/9: 0 ÷ 2
+        self.assertEqual((por[ES]["numerador"], por[ES]["denominador"], por[ES]["dias"]), (2, 9, 5))
+        self.assertAlmostEqual(por[ES]["realizado"], 0.2, places=4)
+        self.assertFalse(any("frequência" in x for x in a["avisos"]))
 
     def test_efetividade_pela_frequencia_do_cliente(self):
         # quinzenal: esperado só sem compra nos 7 dias antes; mensal, sem compra nos 21 dias antes (de qualquer
@@ -1528,6 +1581,37 @@ class TestIndicadoresNoBanco(ComCache, BaseBanco):
             base_num, = con.execute("SELECT base_num FROM campanha_vendedores WHERE campanha = %s", [id_]).fetchone()
         self.assertEqual((dados["base"], dados["base_pendente"], float(base_num)), (0.25, False, 1.0))
 
+    def test_migracao_042_mede_de_novo_a_base_so_com_area_de_varios_dias(self):
+        from bi.banco import MIGRACOES
+        sql = (MIGRACOES / "042_efetividade_area_varios_dias.sql").read_text(encoding="utf-8")
+        self.gestao.definir_areas(self.chefe, {1: [3], 2: [4]})
+        id_ = self.criar("efetividade", regiao="ES", vendedores=[ES], inicio="2026-09-16", fim="2026-09-30",
+                         base_periodo="quinzena")
+        self.assertEqual(self.detalhe(id_)["linhas"][0]["base"], 0.25)
+
+        def gravar_base(valor):
+            with self.banco.conexao() as con:
+                con.execute("UPDATE campanha_vendedores SET base = %s WHERE campanha = %s", [valor, id_])
+                con.execute("UPDATE gestao_eventos SET dados = dados || jsonb_build_object('base', %s::numeric) "
+                            "WHERE campanha = %s", [valor, id_])
+
+        # sem área de vários dias, a migração não mexe em nada
+        gravar_base(0.5)
+        with self.banco.conexao() as con:
+            con.execute(sql)
+        self.assertEqual(self.detalhe(id_)["linhas"][0]["base"], 0.5)
+        # com a ROTA 1 na segunda e na terça, a base (1 a 15/9) é medida de novo, com a semana num dia só (a terça):
+        # 1/9 e 8/9 sem pedido (0 ÷ 2) e 15/9 com o pedido do 3 (1 ÷ 2): 1/6. Com uma visita em cada dia, dava 0,5 ÷ 5
+        self.gestao.definir_areas(self.chefe, {1: [1, 2]})
+        gravar_base(0.1)
+        with self.banco.conexao() as con:
+            con.execute(sql)
+        self.assertAlmostEqual(self.detalhe(id_)["linhas"][0]["base"], 1 / 6, places=4)
+        with self.banco.conexao() as con:
+            dados, = con.execute("SELECT dados FROM gestao_eventos WHERE campanha = %s AND tipo = 'lancada'", [id_]).fetchone()
+        self.assertFalse(dados["base_pendente"])
+        self.assertAlmostEqual(float(dados["base"]), 1 / 6, places=4)
+
 
 class TestMigracao008(BaseBanco):
     def test_converte_as_campanhas_antigas(self):
@@ -1556,7 +1640,8 @@ class TestMigracao008(BaseBanco):
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
                                                "038_credito_serasa", "039_chaves_api",
-                                               "040_acesso_vendedores", "041_premiacoes_acesso"])
+                                               "040_acesso_vendedores", "041_premiacoes_acesso",
+                                               "042_efetividade_area_varios_dias"])
         with self.banco.conexao() as con:
             campanhas = {n: (m, p) for n, m, p in con.execute("SELECT nome, metrica, parametros FROM campanhas")}
             dias = {a: list(d) for a, d in con.execute("SELECT id_area, dias FROM areas_atendimento")}
@@ -1607,7 +1692,8 @@ class TestMigracao013(BaseBanco):
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
                                                "038_credito_serasa", "039_chaves_api",
-                                               "040_acesso_vendedores", "041_premiacoes_acesso"])
+                                               "040_acesso_vendedores", "041_premiacoes_acesso",
+                                               "042_efetividade_area_varios_dias"])
         with self.banco.conexao() as con:
             precos = {(c, v): p for c, v, p in con.execute("SELECT campanha, id_vendedor, base_precos FROM campanha_vendedores")}
             eventos = dict(con.execute("SELECT tipo, dados FROM gestao_eventos"))
@@ -1645,7 +1731,8 @@ class TestMigracao033(BaseBanco):
                                                "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
                                                "038_credito_serasa", "039_chaves_api",
-                                               "040_acesso_vendedores", "041_premiacoes_acesso"])
+                                               "040_acesso_vendedores", "041_premiacoes_acesso",
+                                               "042_efetividade_area_varios_dias"])
         with self.banco.conexao() as con:
             premios = dict(con.execute("SELECT nome, premiacoes FROM campanhas"))
         unico = lambda sobre, premio="", valor=None: {"sobre": sobre, "faixas": [{"pct": 100, "premio": premio, "valor": valor}]}
@@ -1690,7 +1777,8 @@ class TestMigracao009(BaseBanco):
                                                "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
                                                "036_notificacoes_excluidas", "037_sugestao_ajustes",
                                                "038_credito_serasa", "039_chaves_api",
-                                               "040_acesso_vendedores", "041_premiacoes_acesso"])
+                                               "040_acesso_vendedores", "041_premiacoes_acesso",
+                                               "042_efetividade_area_varios_dias"])
         with self.banco.conexao() as con:
             linha = con.execute("SELECT tipo, regiao, arquivada, versao, alvo_tipo, rotulo FROM campanhas").fetchone()
             entrou, = con.execute("SELECT entrou_em IS NOT NULL FROM campanha_vendedores").fetchone()
