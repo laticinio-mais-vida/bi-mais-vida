@@ -10,7 +10,8 @@
 - Permissões: o administrador vê tudo e mexe nas configurações e em Usuários; o visualizador vê só as páginas
   liberadas em Usuários e, em todas elas (inclusive no Assistente, na API pública e no Crédito), só os vendedores do
   acesso dele, escolhidos também em Usuários (escopo): todos, os das equipes marcadas (inclusive os que entrarem
-  depois) ou só alguns. O que é próprio de uma página fica na configuração dela: em Metas, as abas que a pessoa vê.
+  depois) ou só alguns. O que é próprio de uma página fica na configuração dela: em Metas, as abas que a pessoa vê; em
+  Premiações, as abas e os quadros de supervisor (coluna premiacoes, migração 041).
 - Gravações: uma de cada vez (trava no banco), conferindo tudo antes de gravar. As da configuração de uma página
   podem entrar na transação de quem chama (con), para gravar junto com as regras da página.
 """
@@ -45,7 +46,8 @@ ITERACOES = 600_000
 SENHA_MINIMA = 6
 TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastro não se misturam
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
-_COLUNAS = "id, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, criado_em, ultimo_acesso"
+_COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, criado_em, "
+            "ultimo_acesso")
 _COLUNAS_U = ", ".join("u." + c.strip() for c in _COLUNAS.split(","))  # as mesmas, numa consulta com outra tabela
 _N_COLUNAS = len(_COLUNAS.split(","))
 # API pública: "bimv_" + secrets.token_urlsafe(32) (43 caracteres). O formato é conferido antes de ir ao banco.
@@ -110,10 +112,10 @@ def _de_b64(texto: str) -> bytes:
 # --- usuários -------------------------------------------------------------------------------
 def _usuario(linha) -> dict:
     """Linha da tabela usuarios -> o dicionário que o resto do código usa (com a senha; para a página, publico())."""
-    id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, criado, ultimo = linha
+    id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, criado, ultimo = linha
     return {"id": id_, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "senha": senha, "sessao": sessao,
-            "paginas": paginas, "visoes": visoes, "escopo": escopo, "criado_em": hora(criado),
-            "ultimo_acesso": hora(ultimo)}
+            "paginas": paginas, "visoes": visoes, "escopo": escopo, "premiacoes": premiacoes,
+            "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
 
 
 def _valida_escopo(escopo, nome: str) -> dict:
@@ -160,13 +162,15 @@ def _com_pagina(u: dict, pagina: str, ve: bool) -> list[str]:
 
 def publico(u: dict) -> dict:
     """O que a página pode ver de um usuário (sem a senha nem o contador de sessão). escopo: os vendedores do acesso
-    (None: administrador, ou visualizador ainda sem vendedores escolhidos)."""
+    (None: administrador, ou visualizador ainda sem vendedores escolhidos). premiacoes: as abas e os supervisores da
+    página Premiações (None: administrador, ou visualizador ainda sem nada escolhido)."""
     admin = u["papel"] == "admin"
     return {
         "id": u["id"], "login": u["login"], "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
         "visoes": None if admin else list(u.get("visoes") or []),
         "paginas": None if admin else _paginas_de(u),
         "escopo": None if admin else u.get("escopo"),
+        "premiacoes": None if admin else u.get("premiacoes"),
         "criado_em": u.get("criado_em"), "ultimo_acesso": u.get("ultimo_acesso"),
     }
 
@@ -347,8 +351,8 @@ class Usuarios:
         """Cria (login_original vazio) ou altera um usuário: nome, login, senha, papel, páginas e os vendedores que vê
         (escopo, só do visualizador; a tela Usuários sempre manda, e None ali é "ainda não escolheu" -> ValueError;
         sem a chave, fica o que estava, e quem é novo fica sem vendedores). O que é próprio de uma página (as abas de
-        Metas) fica como está: muda na configuração da página. primeiro: só cria se ainda não existe nenhum usuário (o
-        primeiro acesso). Levanta ValueError."""
+        Metas, as abas e os supervisores de Premiações) fica como está: muda na configuração da página. primeiro: só
+        cria se ainda não existe nenhum usuário (o primeiro acesso). Levanta ValueError."""
         login = str(dados.get("login") or "").strip().lower()
         if not _LOGIN_VALIDO.match(login):
             raise ValueError("o usuário deve ter de 3 a 40 letras minúsculas, números, ponto, hífen ou sublinhado, sem espaço nem acento")
@@ -435,6 +439,41 @@ class Usuarios:
                 c.execute("UPDATE usuarios SET visoes = %s::text[], paginas = %s::text[] WHERE id = %s",
                           [visoes, paginas, id_])
 
+    def definir_premiacoes(self, mudancas: dict, con=None) -> None:
+        """Pela configuração da página Premiações: {login: {"ve": bool, "abas": [ids], "supervisores": [ids]}}, as abas e
+        os quadros de supervisor que a pessoa vê (os vendedores dentro deles são os do acesso, da tela Usuários). Sem a
+        aba Supervisores, a lista de supervisores fica vazia. Confere tudo antes de gravar, para não salvar só metade."""
+        from .premiacoes import ABAS, SUPERVISORES  # só aqui: o módulo das premiações traz o cache junto
+
+        if not isinstance(mudancas, dict):
+            raise ValueError("mande o acesso de cada pessoa pelo login")
+        with self._cadastro(con) as c:
+            usuarios = {u["login"]: u for u in self._buscar(c)}
+            novos = {}
+            for login, m in (mudancas or {}).items():
+                u = usuarios.get(login)
+                if not u:
+                    raise ValueError(f"usuário não encontrado: {login}")
+                if u["papel"] == "admin":
+                    continue  # administrador vê tudo
+                m = m if isinstance(m, dict) else {}
+                abas, supervisores = m.get("abas") or [], m.get("supervisores") or []
+                if not isinstance(abas, list) or any(a not in ABAS for a in abas):
+                    raise ValueError(f"aba das Premiações inválida para {u['nome']}")
+                if not isinstance(supervisores, list) or any(s not in SUPERVISORES for s in supervisores):
+                    raise ValueError(f"supervisor inválido para {u['nome']}")
+                abas = [a for a in ABAS if a in abas]
+                supervisores = [s for s in SUPERVISORES if s in supervisores] if "supervisores" in abas else []
+                paginas = _com_pagina(u, "premiacoes", bool(m["ve"])) if "ve" in m else _paginas_de(u)
+                if "premiacoes" in paginas and not abas:
+                    raise ValueError(f"marque ao menos uma aba das Premiações para {u['nome']}, ou desligue a página")
+                if "premiacoes" in paginas and "supervisores" in abas and not supervisores:
+                    raise ValueError(f"marque ao menos um supervisor para {u['nome']}, ou tire a aba Supervisores")
+                novos[u["id"]] = [json.dumps({"abas": abas, "supervisores": supervisores}), paginas]
+            for id_, (acesso, paginas) in novos.items():
+                c.execute("UPDATE usuarios SET premiacoes = %s::jsonb, paginas = %s::text[] WHERE id = %s",
+                          [acesso, paginas, id_])
+
     def excluir(self, login: str) -> None:
         """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo). As
         campanhas que ele criou na Gestão ficam, sem dono: só os administradores passam a vê-las."""
@@ -493,6 +532,15 @@ def escopo_vendedores(usuario: dict) -> tuple[set[int] | None, set[str] | None]:
 def visoes_permitidas(usuario: dict) -> list[str]:
     """As abas de Metas liberadas na configuração da página (as do administrador: todas)."""
     return list(VISOES) if eh_admin(usuario) else [v for v in VISOES if v in (usuario["visoes"] or [])]
+
+
+def premiacoes_permitidas(usuario: dict) -> tuple[list[str] | None, list[str] | None]:
+    """(abas, supervisores) da página Premiações liberados na configuração da página. None = sem limite (o
+    administrador). O visualizador ainda sem nada escolhido não vê nenhuma aba: ([], [])."""
+    if eh_admin(usuario):
+        return None, None
+    p = usuario.get("premiacoes") or {}
+    return list(p.get("abas") or []), list(p.get("supervisores") or [])
 
 
 # --- tentativas de login --------------------------------------------------------------------

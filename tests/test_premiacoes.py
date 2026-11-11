@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -15,6 +17,7 @@ from pathlib import Path
 
 import duckdb
 
+from bi import premiacoes_pdf
 from bi.configuracao import Regras, padrao as padrao_metas
 from bi.premiacoes import (ConfigPremiacoes, Premiacoes, _valida, adicional_inadimplencia, alcance, clientes_para,
                            conta_supervisor, faixa_vendedor, janela, nome_cliente, padrao, pct_bonus, pct_devolucao,
@@ -103,6 +106,16 @@ class ConfigFixa:
 
 def ind(cartao: dict, k: str) -> dict | None:
     return next((x for x in cartao["indicadores"] if x["id"] == k), None)
+
+
+TEM_PYPDF = importlib.util.find_spec("pypdf") is not None
+TEM_FPDF = importlib.util.find_spec("fpdf") is not None
+
+
+def texto_pdf(conteudo: bytes) -> str:
+    """O texto de um PDF (o pypdf é o mesmo que lê o Serasa na página de crédito)."""
+    from pypdf import PdfReader
+    return "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(conteudo)).pages)
 
 
 class TestFuncoes(unittest.TestCase):
@@ -604,6 +617,59 @@ class TestPremiacoes(unittest.TestCase):
         with self.assertRaises(PermissionError):
             p.calcular("supervisores", None, None, {"EDIR"})
 
+    def test_abas_e_supervisores_liberados_para_a_pessoa(self):
+        p = self.montar()
+        # só o quadro liberado (o Ronaldo), com os mesmos números de quando todos aparecem
+        r = p.calcular("supervisores", "2026-09", None, None, ["vendedores", "supervisores"], ["ronaldo"])
+        self.assertEqual(([c["id"] for c in r["supervisores"]], r["abas"]), (["ronaldo"], ["vendedores", "supervisores"]))
+        todos = self.cartoes()
+        self.assertEqual((r["supervisores"][0]["premio"], r["supervisores"][0]["contas"]),
+                         (todos["ronaldo"]["premio"], todos["ronaldo"]["contas"]))
+        self.assertEqual([c["id"] for c in p.calcular("supervisores", "2026-09", None, None, None,
+                                                      ["valdirene", "marcos"])["supervisores"]], ["marcos", "valdirene"])
+        # sem aba no pedido: a primeira do acesso
+        self.assertEqual(p.calcular(None, "2026-09", None, None, ["supervisores"], ["valdirene"])["aba"], "supervisores")
+        self.assertEqual(p.calcular(None, "2026-09")["aba"], "vendedores")
+        # aba fora do acesso (a comissão nem chega a ser calculada)
+        for aba in ("supervisores", "comissao"):
+            with self.subTest(aba=aba), self.assertRaises(PermissionError):
+                p.calcular(aba, "2026-09", None, None, ["vendedores"], [])
+        with self.assertRaises(PermissionError) as e:  # nada escolhido ainda
+            p.calcular(None, "2026-09", None, None, [], [])
+        self.assertIn("nenhuma aba", str(e.exception))
+        # o Marcos é da BA: com só a equipe do ES, o quadro dele não aparece, e a aba some
+        r = p.calcular("vendedores", "2026-09", None, {"ES"}, ["vendedores", "supervisores"], ["marcos"])
+        self.assertEqual(r["abas"], ["vendedores"])
+        with self.assertRaises(PermissionError) as e:
+            p.calcular("supervisores", "2026-09", None, {"ES"}, ["vendedores", "supervisores"], ["marcos"])
+        self.assertIn("aba Supervisores", str(e.exception))
+        # com só alguns vendedores, a aba dos supervisores não aparece mesmo liberada
+        with self.assertRaises(PermissionError) as e:
+            p.calcular("supervisores", "2026-09", {ES}, None, ["vendedores", "supervisores"], ["ronaldo"])
+        self.assertIn("carteira inteira do estado", str(e.exception))
+
+    @unittest.skipUnless(TEM_FPDF and TEM_PYPDF, "precisa do fpdf2 e do pypdf")
+    def test_pdf_das_tabelas(self):
+        p = self.montar()
+        conteudo, nome = p.pdf("vendedores", "2026-09")
+        self.assertEqual((conteudo[:5], nome), (b"%PDF-", "Premiação dos vendedores - Setembro de 2026.pdf"))
+        texto = texto_pdf(conteudo)
+        for trecho in ("Premiação dos vendedores · Setembro de 2026", "Mês fechado", "Rubens", "Thais", "R$ 700,00",
+                       "faixa máxima", "falta 1 cliente para R$ 200,00", "a partir de 91% da meta: R$ 200,00", "2 de 3"):
+            self.assertIn(trecho, texto)
+        # os supervisores: só os quadros liberados, com a tabela dos indicadores
+        conteudo, nome = p.pdf("supervisores", "2026-09", None, None, ["supervisores"], ["ronaldo", "marcos"])
+        texto = texto_pdf(conteudo)
+        self.assertEqual(nome, "Premiação dos supervisores - Setembro de 2026.pdf")
+        for trecho in ("Marcos · BA", "Ronaldo · ES", "Faturamento líquido", "Parcelas conquistadas", "A receber"):
+            self.assertIn(trecho, texto)
+        self.assertNotIn("Valdirene", texto)
+        # o mesmo acesso da página: aba fora dele não sai em PDF
+        with self.assertRaises(PermissionError):
+            p.pdf("supervisores", "2026-09", None, None, ["vendedores"], [])
+        # sem ninguém na tabela, o PDF diz isso
+        self.assertIn("Nenhum vendedor do seu acesso", texto_pdf(p.pdf("vendedores", "2026-09", {999})[0]))
+
     def test_regras_da_versao_1(self):
         p = self.montar(V1)  # salvas antes dos regulamentos novos: as três abas abrem
         self.assertEqual(len(p.vendedores()["vendedores"]), 3)
@@ -710,6 +776,22 @@ class TestComissao(unittest.TestCase):
         cache._abrir()
         es = next(v for v in p.comissao("2026-09")["vendedores"] if v["id"] == ES)
         self.assertEqual((es["desc_devolucoes"], es["a_pagar"]), (23.5, -10.4))  # 3,5 + 1000 × 2%; 14 − 23,5 − 0,9
+
+    @unittest.skipUnless(TEM_FPDF and TEM_PYPDF, "precisa do fpdf2 e do pypdf")
+    def test_pdf_da_comissao(self):
+        conteudo, nome = self.montar().pdf("comissao", "2026-09")
+        self.assertEqual(nome, "Comissão dos vendedores - Setembro de 2026.pdf")
+        texto = texto_pdf(conteudo)
+        for trecho in ("Comissão dos vendedores · Setembro de 2026", "Rubens", "Thais", "R$ 80,85", "R$ 71,25",
+                       "BA: 1 vendedor, R$ 71,25", "Observações", "não descontam"):
+            self.assertIn(trecho, texto)
+        self.assertNotIn("3643", texto)  # nada de código de produto
+        # os brindes que descontam, pelo nome (como na página), nunca pelo código do motivo
+        self.assertEqual(premiacoes_pdf.rotulo_brindes([{"id": 10, "nome": "BRINDE - DANIFICADO, PROBLEMA NA PRODUÇÃO"},
+                                                        {"id": 16, "nome": "BRINDE - VENCIDO"}]), "danificados e vencidos")
+        self.assertEqual(premiacoes_pdf.rotulo_brindes([{"id": 16, "nome": "BRINDE - VENCIDO"},
+                                                        {"id": 26, "nome": "BRINDE - DEGUSTAÇÃO"}]),
+                         "dos motivos vencido e degustação")
 
     def test_sem_comissao_ou_sem_brindes(self):
         with self.assertRaises(RuntimeError):

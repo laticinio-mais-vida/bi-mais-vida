@@ -27,10 +27,10 @@ class TestPedidosNoCache(unittest.TestCase):
         self._tmp.cleanup()
 
     def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
-              brindes=True, comissao=True, pedidos_detalhe=True, devolucoes_notas=True) -> Path:
+              brindes=True, comissao=True, pedidos_detalhe=True, devolucoes_notas=True, bloqueios=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
                           carteira=carteira, brindes=brindes, comissao=comissao, pedidos_detalhe=pedidos_detalhe,
-                          devolucoes_notas=devolucoes_notas)
+                          devolucoes_notas=devolucoes_notas, bloqueios=bloqueios)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -142,6 +142,36 @@ class TestPedidosNoCache(unittest.TestCase):
         self.cache()
         c = Cache(ini, self.pasta)
         self.assertFalse(c.sem_devolucoes_notas)
+        c._con.close()
+
+    def test_bloqueio_opcional(self):
+        # sem o bloqueio dos clientes (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-lo; se a
+        # leitura falhou, espera a próxima cópia. O site com o código anterior aceita o pacote com a tabela nova.
+        arquivo = self.cache(bloqueios=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_bloqueio, c.sem_credito, c.desatualizado()), (True, False, True))
+        c.info["bloqueio_erro"] = "Column unknown OBSBLOQUEADO"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE clientes_bloqueio (id INTEGER, bloqueado BOOLEAN)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("clientes_bloqueio", str(e.exception))
+        arquivo.unlink()
+        self.cache()
+        c = Cache(ini, self.pasta)
+        self.assertFalse(c.sem_bloqueio)
         c._con.close()
 
     def test_carteira_opcional(self):
@@ -279,10 +309,11 @@ class TestPedidosNoCache(unittest.TestCase):
 
 
 class _ErpFalso:
-    """No lugar de bi.fb.BancoSomenteLeitura: responde vazio a tudo, menos aos pedidos um a um e aos itens deles e às
-    devoluções nota a nota."""
+    """No lugar de bi.fb.BancoSomenteLeitura: responde vazio a tudo, menos aos pedidos um a um e aos itens deles, às
+    devoluções nota a nota e ao bloqueio dos clientes."""
     falhar_itens = False
     falhar_notas = False
+    falhar_bloqueio = False
     chamadas: list = []
 
     def __init__(self, *a, **k):
@@ -322,6 +353,17 @@ class _ErpFalso:
                  1239.25, 400.0),                                                          # nota do cliente, mais antiga
                 (15700, "", "013", dt.date(2026, 10, 2), dt.date(2026, 10, 2), 98, 500, "CLIENTE", 1, 27, 2, 50.0, 2.0),
             ]
+        if sql.startswith("SELECT ID_CLIENTE, BLOQUEADO, DATABLOQUEADO, OBSBLOQUEADO"):
+            if type(self).falhar_bloqueio:
+                raise RuntimeError("Column unknown OBSBLOQUEADO")
+            # (cliente, bloqueado, data, observação), como o ERP guarda
+            return [
+                (11734, 1, dt.datetime(2026, 11, 4), "BLOQUEADO POR PERDA DE RECEBIMENTO\r\n\r\n\r\nDA NF  617569.  "),
+                (9300, 1, dt.datetime(1899, 12, 30), None),                   # bloqueado sem data nem observação
+                (10908, 0, dt.datetime(2024, 4, 19), "RETIRADO O PRAZO."),   # desbloqueado: a observação fica
+                (5754, 0, None, "   \r\n  "),                               # só espaços: fica de fora
+                (4765, None, None, b"AUTORIZA\xc7\xc3O DO FINANCEIRO"),       # texto em bytes (cp1252)
+            ]
         if "FROM LISTAPEDIDOVENDA" in sql:
             if type(self).falhar_itens:
                 raise RuntimeError("Table unknown LISTAPEDIDOVENDA")
@@ -341,7 +383,8 @@ class TestPedidosUmAUm(unittest.TestCase):
         self.ini = configparser.ConfigParser()
         self.ini.read_dict({"cache": {"arquivo": "cache.duckdb", "inicio": "2024-01-01"},
                             "banco": {"arquivo": str(banco), "usuario": "SYSDBA", "senha": "x"}})
-        _ErpFalso.falhar_itens, _ErpFalso.falhar_notas, _ErpFalso.chamadas = False, False, []
+        _ErpFalso.falhar_itens, _ErpFalso.falhar_notas, _ErpFalso.falhar_bloqueio = False, False, False
+        _ErpFalso.chamadas = []
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -415,6 +458,31 @@ class TestPedidosUmAUm(unittest.TestCase):
         self.assertIn("devolucoes_clientes_itens", nomes)  # o resto da extração segue
         self.assertFalse(c.desatualizado())  # espera a próxima cópia
         c._con.close()
+
+    def test_bloqueio_dos_clientes(self):
+        c = self.atualizar()
+        self.assertFalse(c.sem_bloqueio)
+        linhas = {r[0]: r[1:] for r in c.consulta("SELECT id, bloqueado, data, observacao FROM clientes_bloqueio")}
+        self.assertEqual(linhas, {
+            11734: (True, dt.date(2026, 11, 4), "BLOQUEADO POR PERDA DE RECEBIMENTO\n\nDA NF 617569."),
+            9300: (True, None, None),  # o "zero" do ERP (30/12/1899) vira nulo
+            10908: (False, dt.date(2024, 4, 19), "RETIRADO O PRAZO."),
+            4765: (False, None, "AUTORIZAÇÃO DO FINANCEIRO"),
+        })  # o 5754 (só espaços, sem bloqueio) fica de fora
+        self.assertNotIn("bloqueio_erro", c.info)
+        c._con.close()
+
+    def test_falha_no_bloqueio(self):
+        _ErpFalso.falhar_bloqueio = True
+        c = self.atualizar()
+        self.assertTrue(c.sem_bloqueio)
+        self.assertIn("OBSBLOQUEADO", c.info["bloqueio_erro"])
+        nomes = {r[0] for r in c.consulta("SELECT table_name FROM information_schema.tables")}
+        self.assertNotIn("clientes_bloqueio", nomes)
+        self.assertIn("clientes_detalhes", nomes)  # o resto da extração segue
+        self.assertFalse(c.desatualizado())  # espera a próxima cópia
+        c._con.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,11 +27,13 @@ D = dt.date
 class Base(unittest.TestCase):
     credito_no_cache = True
     parcelas_no_cache = True
+    bloqueios_no_cache = True
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.pasta = Path(self._tmp.name)
-        self.calc = criar_calc(self.pasta, credito=self.credito_no_cache, parcelas=self.parcelas_no_cache)
+        self.calc = criar_calc(self.pasta, credito=self.credito_no_cache, parcelas=self.parcelas_no_cache,
+                               bloqueios=self.bloqueios_no_cache)
         self.credito = Credito(self.calc.cache, lambda: dict(NOMES))
 
     def tearDown(self):
@@ -230,7 +232,8 @@ class TestParecer(Base):
         self.assertAlmostEqual(x["compras_mes"], n * 1000 / 12)
         self.assertEqual((x["prazo_real"], x["em_aberto"], x["limite_atual"]), (14, 0.0, 3000.0))
         self.assertEqual((a["limite_sugerido"], a["pedido"], a["hoje"]), (4000, 4000.0, D(2026, 10, 1)))
-        self.assertEqual(a["cliente"], {"id": 50, "nome": "EMPORIO BOM", "carteira": "Rubens", "prazo": "14 DIAS"})
+        self.assertEqual(a["cliente"], {"id": 50, "nome": "EMPORIO BOM", "carteira": "Rubens", "prazo": "14 DIAS",
+                                        "bloqueio": {"bloqueado": False, "data": None, "observacao": None}})
         self.assertEqual((a["avisos"], a["regra"]), ([], modulo.REGRA))
         self.assertIn("2 anos e 8 meses", a["criterios"][2]["detalhe"])
 
@@ -354,7 +357,8 @@ class TestRetrato(Base):
         self.assertEqual(r["cadastro"], {
             "limite": 5000.0, "prazo": "28 DIAS", "prazo_dias": [28], "id_vendedor_carteira": ES, "carteira": "Rubens",
             "cidade": "VILA VELHA", "uf": "ES", "area": "ROTA 1", "segmento": "MERCADO", "rede": "SEMANAL",
-            "inativo": False, "data_cadastro": "2020-01-01", "meses_cadastro": 81})
+            "inativo": False, "data_cadastro": "2020-01-01", "meses_cadastro": 81, "bloqueado_no_erp": False,
+            "data_do_bloqueio_no_erp": None, "observacao_do_bloqueio_no_erp": None})
         # os cartões da página: os 6 títulos, o 106 de 2025 também
         self.assertEqual(r["historico"], {
             "compras_valor": 4000.0, "compras_qtd": 6, "ticket_medio": 666.67, "quitados": 3, "quitados_com_atraso": 1,
@@ -453,6 +457,80 @@ class TestBusca(Base):
         self.assertEqual(self.credito.buscar("3", permitidos={BA}), [])  # o código exato também precisa ser do acesso
         self.assertEqual(self.credito.buscar("merc", permitidos=set()), [])
         self.assertEqual([c["id"] for c in self.credito.buscar("merc", permitidos=None)], [1, 4])
+
+
+class TestBloqueio(Base):
+    """O bloqueio no cadastro do ERP (BLOQUEIOS de tests/apoio.py): a padaria (2) bloqueada desde 20/09/2026; o açougue (3)
+    desbloqueado, com a observação antiga. Só aparece: o parecer continua pelos números."""
+
+    BLOQUEADA = {"bloqueado": True, "data": D(2026, 9, 20), "observacao": "BLOQUEADO POR PERDA DE RECEBIMENTO DA NF 640001."}
+
+    def test_na_pagina(self):
+        d = self.credito.calcular([2])
+        self.assertEqual(d["clientes"][0]["bloqueio"], self.BLOQUEADA)
+        self.assertEqual((d["credito"]["bloqueados"], d["avisos"]), (1, []))
+        self.assertEqual(self.credito.calcular([3])["clientes"][0]["bloqueio"],
+                         {"bloqueado": False, "data": D(2024, 4, 19),
+                          "observacao": "VENDA SOMENTE A VISTA.\nAUTORIZADO PELO FINANCEIRO."})
+        self.assertEqual(self.credito.calcular([1])["clientes"][0]["bloqueio"],
+                         {"bloqueado": False, "data": None, "observacao": None})
+        d = self.credito.calcular([3, 2, 1])
+        self.assertEqual((d["credito"]["bloqueados"], [c["bloqueio"]["bloqueado"] for c in d["clientes"]]),
+                         (1, [False, True, False]))
+        self.assertEqual({c["id"]: c["bloqueado"] for c in self.credito.buscar("a")}, {1: False, 2: True, 3: False, 4: False})
+
+    def test_nao_muda_o_parecer(self):
+        a = self.credito.analisar(2, 3000)
+        self.assertEqual(a["cliente"]["bloqueio"], self.BLOQUEADA)
+        outro = tempfile.TemporaryDirectory()
+        self.addCleanup(outro.cleanup)
+        calc = criar_calc(Path(outro.name), bloqueios=False)
+        self.addCleanup(calc.cache._con.close)
+        sem = Credito(calc.cache, lambda: dict(NOMES)).analisar(2, 3000)
+        self.assertIsNone(sem["cliente"]["bloqueio"])
+        tira = lambda x: {k: v for k, v in x.items() if k != "cliente"}  # noqa: E731
+        self.assertEqual(tira(a), tira(sem))
+
+    def test_no_retrato_da_reanalise(self):
+        c = self.credito.retrato(2, 3000, 2000)["cadastro"]
+        self.assertEqual((c["bloqueado_no_erp"], c["data_do_bloqueio_no_erp"], c["observacao_do_bloqueio_no_erp"]),
+                         (True, "2026-09-20", self.BLOQUEADA["observacao"]))
+        c = self.credito.retrato(3, 3000, 2000)["cadastro"]
+        self.assertEqual((c["bloqueado_no_erp"], c["data_do_bloqueio_no_erp"]), (False, "2024-04-19"))
+
+    def test_no_assistente(self):
+        a = criar_assistente(self.pasta, self.calc)
+        r = a.recorte(None, credito=True)
+        self.assertEqual(r.cursor().execute("SELECT bloqueado_no_erp, data_bloqueio, observacao_bloqueio FROM clientes "
+                                            "WHERE id_cliente = 2").fetchone(),
+                         (True, D(2026, 9, 20), self.BLOQUEADA["observacao"]))
+        self.assertEqual(r.cursor().execute("SELECT COUNT(*) FROM clientes WHERE bloqueado_no_erp").fetchone()[0], 1)
+        colunas = {x[0] for x in a.recorte(None).cursor().execute("DESCRIBE clientes").fetchall()}
+        self.assertFalse({"bloqueado_no_erp", "observacao_bloqueio"} & colunas)  # sem a página: nem existe
+        f = Ferramentas(r, self.calc, a.cfg, None, credito=a.credito)
+        res, p = f.executar("credito_cliente", {"id_cliente": 2})
+        self.assertIsNone(p["erro"])
+        self.assertEqual(res["cliente"]["bloqueio_no_erp"],
+                         {"bloqueado": True, "data_no_erp": D(2026, 9, 20), "observacao": self.BLOQUEADA["observacao"]})
+
+
+class TestSemBloqueio(Base):
+    bloqueios_no_cache = False
+
+    def test_avisa_e_nao_marca_ninguem(self):
+        self.assertTrue(self.calc.cache.sem_bloqueio)
+        d = self.credito.calcular([2, 1])
+        self.assertEqual(([c["bloqueio"] for c in d["clientes"]], d["credito"]["bloqueados"]), ([None, None], None))
+        self.assertEqual(len(d["avisos"]), 1)
+        self.assertIn("ainda não chegou", d["avisos"][0])
+        self.assertEqual(self.credito.calcular()["avisos"], [])  # sem cliente escolhido, nada a avisar
+        self.calc.cache.info["bloqueio_erro"] = "Column unknown OBSBLOQUEADO"
+        self.assertIn("Não deu para ler", self.credito.calcular([2])["avisos"][0])
+        self.assertFalse(any(c["bloqueado"] for c in self.credito.buscar("a")))
+        self.assertIsNone(self.credito.retrato(2, 3000, 2000)["cadastro"]["bloqueado_no_erp"])
+        a = criar_assistente(self.pasta, self.calc)
+        self.assertIsNone(a.recorte(None, credito=True).cursor().execute(
+            "SELECT bloqueado_no_erp FROM clientes WHERE id_cliente = 2").fetchone()[0])
 
 
 class TestSemParcelas(Base):

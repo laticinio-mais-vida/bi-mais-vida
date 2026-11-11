@@ -1,7 +1,8 @@
 // Página Usuários (só administradores): quem entra no painel (nome, usuário, senha, papel), quais páginas cada um vê
 // e quais vendedores ele vê em todas elas (inclusive no Assistente, na API pública e no Crédito): todos, os das equipes
-// marcadas (os que entrarem depois também) ou só alguns. O que é próprio de uma página (as abas de Metas) fica no
-// Configurar dela; aqui aparece só o resumo, com o link. Quem barra é o servidor, a página só monta o cadastro.
+// marcadas (os que entrarem depois também) ou só alguns. O que é próprio de uma página (as abas de Metas, as abas e os
+// supervisores de Premiações) fica no Configurar dela; aqui aparece só o resumo, com o link. Quem barra é o servidor, a
+// página só monta o cadastro.
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
@@ -122,14 +123,34 @@ function notaMetas(u, f) {
   return { pagina: "metas", link, texto: `${vistas.length === 1 ? "aba" : "abas"} ${emLista(vistas.map(tituloAba))}${fora}` };
 }
 
+const TITULO_ABA_PREMIACOES = { vendedores: "Vendedores", supervisores: "Supervisores", comissao: "Comissão" };
+
+// A nota de Premiações: as abas e os quadros de supervisor escolhidos em Premiações › Configurar e o que some por causa
+// dos vendedores do acesso (o quadro de um supervisor soma a carteira inteira do estado dele).
+function notaPremiacoes(u, f) {
+  if (!u) return { pagina: "premiacoes", aviso: true, texto: "depois de criar o acesso, escolha as abas em Premiações › Configurar; até isso, a página fica vazia para ela" };
+  const link = `#/config-premiacoes?u=${encodeURIComponent(u.login)}`;
+  const p = u.papel !== "admin" ? u.premiacoes : null;
+  const abas = p?.abas || [];
+  if (!abas.length) return { pagina: "premiacoes", aviso: true, link, texto: "ainda sem abas: a página fica vazia até você escolher" };
+  const e = f.escopo;
+  const estados = !e || e.modo === "alguns" ? new Set() : e.modo === "todos" ? null : new Set(e.equipes);
+  const quadros = (dados.supervisores_premiacoes || [])
+    .filter((s) => (p.supervisores || []).includes(s.id) && (estados === null || estados.has(s.estado)));
+  const vistas = abas.filter((a) => a !== "supervisores" || quadros.length);
+  if (!vistas.length) return { pagina: "premiacoes", aviso: true, link, texto: "os quadros de supervisor escolhidos ficam fora dos vendedores do acesso: a página fica vazia para ela" };
+  const sups = vistas.includes("supervisores") ? ` (${quadros.length === 1 ? "o quadro" : "os quadros"} de ${emLista(quadros.map((s) => s.nome))})` : "";
+  const fora = abas.includes("supervisores") && !vistas.includes("supervisores") ? "; Supervisores não aparece (soma a carteira inteira do estado)" : "";
+  return { pagina: "premiacoes", link, texto: `${vistas.length === 1 ? "aba" : "abas"} ${emLista(vistas.map((a) => TITULO_ABA_PREMIACOES[a]))}${sups}${fora}` };
+}
+
 // O que muda de uma página para outra (o resto é igual em todas: só os vendedores do acesso). u: o cadastro salvo
-// (as abas de Metas vêm dele); f: o formulário.
+// (as abas de Metas e de Premiações vêm dele); f: o formulário.
 function notasDasPaginas(u, f) {
   const e = f.escopo;
   const notas = [];
   if (f.paginas.includes("metas")) notas.push(notaMetas(u, f));
-  const supervisores = e && (e.modo === "todos" || (e.modo === "equipes" && e.equipes.some((q) => q === "BA" || q === "ES")));
-  if (f.paginas.includes("premiacoes") && e && !supervisores) notas.push({ pagina: "premiacoes", texto: "sem a aba dos supervisores (ela soma a carteira inteira do estado)" });
+  if (f.paginas.includes("premiacoes")) notas.push(notaPremiacoes(u, f));
   if (f.paginas.includes("devolucoes") && e?.modo === "todos") notas.push({ pagina: "devolucoes", texto: "inclusive os terceirizados (vendedores sem equipe)" });
   if (f.paginas.includes("credito") && e && e.modo !== "todos") notas.push({ pagina: "credito", texto: "só os clientes da carteira desses vendedores ou com títulos deles" });
   return notas;
@@ -205,7 +226,8 @@ function desenharEditor(primeira = false) {
       <div class="usu-vazio-ic">${icone("escudo")}</div>
       <h3>Escolha um acesso ou crie um novo</h3>
       <p>Aqui ficam o nome, o usuário, a senha, as <b>páginas</b> de cada pessoa e os <b>vendedores</b> que ela vê, em
-        todas as páginas. As abas de Metas ficam em <b>Metas › Configurar</b>.</p>
+        todas as páginas. As abas de Metas ficam em <b>Metas › Configurar</b>, e as de Premiações, em
+        <b>Premiações › Configurar</b>.</p>
       <button class="btn primario" id="u-novo2" type="button">${icone("mais")}Novo acesso</button>
     </section>`;
     alvo.querySelector("#u-novo2").addEventListener("click", () => trocarPara(""));
@@ -501,9 +523,13 @@ async function salvar() {
       ctx.eu = { ...ctx.eu, ...r.usuario };
       ctx.aoSalvarEu && ctx.aoSalvarEu(r.usuario);
     }
-    const semAbas = r.usuario.papel !== "admin" && r.usuario.paginas.includes("metas") && !r.usuario.visoes.length;
+    const vis = r.usuario.papel !== "admin";
+    const semAbas = [
+      ...(vis && r.usuario.paginas.includes("metas") && !r.usuario.visoes.length ? ["Metas"] : []),
+      ...(vis && r.usuario.paginas.includes("premiacoes") && !(r.usuario.premiacoes?.abas || []).length ? ["Premiações"] : []),
+    ];
     toast(original ? `Acesso de ${r.usuario.nome} salvo` :
-      `Acesso de ${r.usuario.nome} criado${semAbas ? ". Agora escolha as abas dela em Metas › Configurar" : ""}`);
+      `Acesso de ${r.usuario.nome} criado${semAbas.length ? `. Agora escolha as abas dela em ${semAbas.map((p) => `${p} › Configurar`).join(" e em ")}` : ""}`);
     abrir(r.usuario.login);
     render();
   } catch (e) {

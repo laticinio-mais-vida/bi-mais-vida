@@ -96,7 +96,7 @@ const PAGINAS = {
   },
   "config-premiacoes": {
     titulo: "Configurações das premiações",
-    fixo: "Faixas dos vendedores, regras e metas dos supervisores, brindes da comissão",
+    fixo: "Faixas dos vendedores, regras e metas dos supervisores, brindes da comissão e o acesso de cada pessoa",
     pai: "premiacoes",
     admin: true,
     sempreMonta: true,

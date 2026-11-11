@@ -24,9 +24,9 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import (TABELAS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_COMISSAO, TABELAS_CREDITO, TABELAS_DETALHE,
-                      TABELAS_DEVOLUCOES_NOTAS, TABELAS_PARCELAS, TABELAS_PEDIDOS, TABELAS_PEDIDOS_DETALHE, TABELAS_REDE,
-                      Cache)
+from bi.cache import (TABELAS, TABELAS_BLOQUEIOS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_COMISSAO, TABELAS_CREDITO,
+                      TABELAS_DETALHE, TABELAS_DEVOLUCOES_NOTAS, TABELAS_PARCELAS, TABELAS_PEDIDOS,
+                      TABELAS_PEDIDOS_DETALHE, TABELAS_REDE, Cache)
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
 from bi.metas import Calculadora
@@ -83,6 +83,10 @@ LIMITES = [(1, 5000.0, "28 DIAS"), (2, 2000.0, "A VISTA"), (3, 1000.0, "07 DIAS"
 # não têm nada pago em parte. O 102 foi pago em 2 parcelas; o 103 é um boleto em 2 com a 1ª paga; o 105 recebeu
 # R$ 100 numa parcela paga em parte.
 PARCELAS = [(102, 2, 2, 500.0), (103, 2, 1, 650.0), (105, 1, 0, 100.0)]
+# O bloqueio no cadastro do ERP (cliente, bloqueado, data, observação): a padaria (2) está bloqueada; o açougue (3) foi
+# desbloqueado e ficou com a observação do bloqueio antigo. Quem não está aqui não tem bloqueio nem observação.
+BLOQUEIOS = [(2, True, D(2026, 9, 20), "BLOQUEADO POR PERDA DE RECEBIMENTO DA NF 640001."),
+             (3, False, D(2024, 4, 19), "VENDA SOMENTE A VISTA.\nAUTORIZADO PELO FINANCEIRO.")]
 
 
 def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
@@ -90,7 +94,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                parcelas: bool = True, carteira: bool = True, vigencias=(), retratos=(),
                metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=(), comissao: bool = True,
                linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True, linhas_pedidos_detalhe=(),
-               pedidos_extras=(), devolucoes_notas: bool = True) -> Calculadora:
+               pedidos_extras=(), devolucoes_notas: bool = True, bloqueios: bool = True,
+               linhas_bloqueios=BLOQUEIOS) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -102,14 +107,16 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     gravada (data, vendedor, tipo, produto, valor, comissão); percentuais: a tabela (vendedor, produto, %).
     pedidos_detalhe: False = cache sem os pedidos um a um e os itens deles; linhas_pedidos_detalhe: os cabeçalhos
     (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá.
-    devolucoes_notas: False = cache sem as devoluções nota a nota (com ela, cada devolução abaixo é uma nota)."""
+    devolucoes_notas: False = cache sem as devoluções nota a nota (com ela, cada devolução abaixo é uma nota).
+    bloqueios: False = cache sem o bloqueio dos clientes no ERP; linhas_bloqueios: as linhas dela (ver BLOQUEIOS)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
                           **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
                           **(TABELAS_PARCELAS if credito and parcelas else {}), **(TABELAS_CARTEIRA if carteira else {}),
                           **(TABELAS_BRINDES if brindes else {}), **(TABELAS_COMISSAO if comissao else {}),
                           **(TABELAS_PEDIDOS_DETALHE if pedidos_detalhe else {}),
-                          **(TABELAS_DEVOLUCOES_NOTAS if devolucoes_notas else {})}.items():
+                          **(TABELAS_DEVOLUCOES_NOTAS if devolucoes_notas else {}),
+                          **(TABELAS_BLOQUEIOS if bloqueios else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -210,6 +217,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
         con.executemany("INSERT INTO comissoes_vendas VALUES (?, ?, ?, ?, ?, ?)", list(linhas_comissao))
     if comissao and percentuais:
         con.executemany("INSERT INTO comissoes_percentuais VALUES (?, ?, ?)", list(percentuais))
+    if bloqueios and linhas_bloqueios:
+        con.executemany("INSERT INTO clientes_bloqueio VALUES (?, ?, ?, ?)", list(linhas_bloqueios))
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),
         ("banco_copia", "2026-10-01T07:00"), ("inicio", "2026-01-01")])

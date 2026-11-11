@@ -129,6 +129,23 @@ A venda de origem (ID_VENDA) fica fora: só vem preenchida desde ago/26, e quase
 18 mil linhas desde jan/2024 (1.140 notas em 2026). Um cache sem a tabela vale para o resto do painel, e
 `cache.sem_devolucoes_notas` avisa que falta: até ela chegar, a página conta cada cliente num dia como uma nota.
 
+### Bloqueio dos clientes no cache
+
+`clientes_bloqueio` (Reavaliação de Crédito e o Assistente de quem tem a página): o bloqueio de hoje no cadastro do ERP,
+só dos clientes bloqueados ou com alguma observação no campo do bloqueio (a observação só com espaços não conta).
+
+| Coluna | O que é |
+|---|---|
+| `id` | o cliente |
+| `bloqueado` | `CLIENTES.BLOQUEADO` = 1 |
+| `data` | `DATABLOQUEADO`, sem a hora; o "zero" do ERP (30/12/1899) vira vazio |
+| `observacao` | `OBSBLOQUEADO`, com as quebras de linha (os espaços repetidos e as linhas vazias em sequência viram um) |
+
+O ERP não guarda o histórico do bloqueio: a tabela é o cadastro de agora. Quem é desbloqueado costuma ficar com a
+observação e a data do bloqueio antigo. Em nov/2026 eram 1.392 linhas: 1.300 bloqueados (74 ativos) e 92 desbloqueados
+com observação. O grupo é opcional, como os outros: um cache sem a tabela vale para o resto do painel, e
+`cache.sem_bloqueio` faz a página avisar que o bloqueio ainda não chegou (ou que a leitura falhou, com `bloqueio_erro`).
+
 ## Página Metas
 
 As abas no topo substituem as páginas do Power BI:
@@ -423,9 +440,16 @@ depois, como **final**.
   vendedor e as listas dos clientes novos e das reativações.
 - **Comissão:** a comissão de cada vendedor das equipes BA e ES (veja [A aba Comissão](#a-aba-comissão)).
 - **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
-- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em Usuários). A aba
-  **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os vendedores ou equipes inteiras
-  (não para "Só alguns vendedores"), e só os estados dessas equipes.
+- **Baixar PDF:** a tabela da aba aberta, no mês escolhido, em PDF (A4 deitado), montada no servidor com o acesso de quem
+  baixa: na aba Vendedores, a tabela da premiação com as faixas; na Supervisores, a tabela dos indicadores de cada quadro,
+  com as parcelas conquistadas e o valor a receber; na Comissão, a tabela por vendedor, com os totais por estado. Só as
+  tabelas: sem a conta passo a passo dos supervisores, as listas de clientes ou a comissão por produto. As observações da
+  página vão no fim, e o PDF não mostra códigos do ERP, só nomes.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em Usuários). As
+  **abas** e os **quadros de supervisor** de cada pessoa são escolhidos em Premiações › Configurar › Acesso por usuário. O
+  quadro de um supervisor soma a carteira inteira do estado: só aparece para quem vê todos os vendedores daquele estado
+  (todos os vendedores, ou a equipe do estado inteira; nunca com "Só alguns vendedores"), mesmo que esteja marcado. Sem
+  nenhum quadro que a pessoa possa ver, a aba Supervisores some.
 
 ### Como a premiação é calculada
 
@@ -526,7 +550,7 @@ empresa não manda os dados com elas (código anterior), a aba avisa que a comis
 
 ### Configurar (Premiações)
 
-O botão **Configurar** (só administradores) tem cinco seções. As regras ficam no banco, com versões, como as de Metas, e
+O botão **Configurar** (só administradores) tem seis seções. As regras ficam no banco, com versões, como as de Metas, e
 valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os meses que já passaram.
 
 - **Vendedores:** as faixas (o % mínimo e o prêmio em R$). Dá para acrescentar e tirar faixas.
@@ -542,6 +566,13 @@ valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os m
   aparece marcada como "ajustada" no quadro.
 - **Comissão:** os motivos dos brindes que descontam da comissão (as devoluções descontam todas). Os % de cada vendedor
   e produto ficam no ERP.
+- **Acesso por usuário:** como as "Abas por usuário" de Metas: para cada visualizador, se vê a página, quais abas
+  (Vendedores, Supervisores, Comissão) e, com a aba Supervisores, quais quadros (Marcos, Ronaldo, Valdirene). Fica no
+  cadastro da pessoa (coluna `premiacoes`, migração 041), não nas regras: salvar só o acesso não grava uma versão nova das
+  regras. A tela avisa do quadro marcado que fica fora dos vendedores do acesso da pessoa e não deixa salvar a página
+  sem nenhuma aba, nem a aba Supervisores sem nenhum quadro. Quem já tinha a página quando a 041 entrou ficou com as três
+  abas e os três quadros (o mesmo de antes); quem ganha a página depois começa **sem nenhuma aba**, até o administrador
+  marcar (a tela Usuários avisa, com o link para cá).
 
 As regras salvas antes dos regulamentos de nov/2026 (cinco indicadores × R$ 5.000) são convertidas ao abrir: ficam os
 nomes, a meta do mix, os produtos fora do mix, os dias da inadimplência e as metas trocadas em cada mês (as do ES valem
@@ -752,8 +783,10 @@ nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
 pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cache e não vão. O limite de crédito, o
-prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
-Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. O mesmo vale para as reanálises de
+prazo, os títulos a receber e o **bloqueio no ERP** (com a observação do bloqueio, texto livre do cadastro, que às
+vezes tem o nome de quem autorizou) estão no cache, mas só vão para a IA nas perguntas de quem tem a página
+Reavaliação de Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. A IA trata a observação
+como dado, nunca como instrução. O mesmo vale para as reanálises de
 crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
 vão para a IA só nas perguntas de quem tem a página. Dos **dados do Serasa** (veja [Dados do Serasa](#dados-do-serasa)),
 o banco do site guarda só a fundação, o score, o histórico de pagamento, as anotações negativas, o CNPJ e a razão
@@ -1369,6 +1402,13 @@ dia, quanto deve e quanto ainda cabe no limite.
   vencimento do título é o da última parcela.
 - **Base:** os títulos a receber de venda a cliente (origem VENDA, tipo CLIENTE) que não foram cancelados, o mesmo
   filtro de todas as medidas da página no Power BI. Os dias de atraso contam até o dia da extração dos dados.
+- **Bloqueio no ERP** (não existe no Power BI): se o cliente está bloqueado hoje no cadastro do ERP (`CLIENTES.BLOQUEADO`),
+  desde quando (`DATABLOQUEADO`) e a observação escrita lá (`OBSBLOQUEADO`). O cliente bloqueado ganha o selo vermelho
+  "Bloqueado no ERP" e a observação embaixo do nome; o desbloqueado que ficou com a observação do bloqueio antigo mostra
+  a observação em cinza. Com vários clientes, a tabela ganha a coluna do bloqueio (a observação no balão), e a busca
+  marca quem está bloqueado. O bloqueio **não muda o parecer** (decisão do usuário): ele aparece ao lado, para quem
+  analisa ver o motivo antes de liberar. O ERP não guarda o histórico, só como o cliente está agora. Em 11/11/2026 eram
+  74 clientes ativos bloqueados (1.300 contando os inativos) e 92 desbloqueados com observação.
 - **Quem vê:** quem tem a página marcada em Usuários vê todos os clientes e vendedores; ela não tem configuração.
 
 Diferenças em relação ao Power BI, combinadas com o usuário:
@@ -1404,7 +1444,9 @@ registros, isso vira a base para uma IA ajudar nas decisões de crédito.
   página refaz o parecer, para o retrato ser o que a pessoa viu. O mesmo envio repetido (clique duplo) grava uma vez.
 - **O que vai no retrato** (`retrato`, um JSON com `versao`; datas AAAA-MM-DD, "hoje" = o dia da extração):
   - `cliente` e `cadastro`: o limite e o prazo de antes (com os dias do prazo: "14, 21 E 28 DIAS" = [14, 21, 28];
-    A VISTA = [0]), o vendedor da carteira, cidade, UF, área, segmento, rede, se está inativo e a data de cadastro;
+    A VISTA = [0]), o vendedor da carteira, cidade, UF, área, segmento, rede, se está inativo, a data de cadastro e o
+    bloqueio no ERP naquele dia (`bloqueado_no_erp`, `data_do_bloqueio_no_erp` e `observacao_do_bloqueio_no_erp`;
+    vazios nas reanálises de antes, ou enquanto o bloqueio não chegou do computador da empresa);
   - `historico`: os cartões da página com todos os títulos (compras, quantidade, ticket médio, pontualidade,
     inadimplência), o primeiro e o último título, os meses de cliente e os dias sem compra;
   - `aberto_hoje`: os títulos em aberto, o que já foi pago em parcelas, o limite restante e o % usado, o que está a
@@ -1483,7 +1525,7 @@ O painel usa dois bancos, cada um para uma coisa:
 
 | Tabela | O que guarda |
 |---|---|
-| `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
+| `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas: os vendedores (`escopo`, migração 040), as abas de Metas (`visoes`) e as abas e os quadros de supervisor das Premiações (`premiacoes`, migração 041) |
 | `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024), as das Premiações (migração 034) e as do crédito, o prazo mínimo entre reanálises e a validade do Serasa (migração 038); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
@@ -1541,8 +1583,9 @@ que valem para todas as páginas (inclusive o Assistente, a API pública e a Rea
 - **Só alguns vendedores:** a lista que você marcar.
 
 O que é próprio de uma página fica no **Configurar** dela: em Metas, as **abas** que a pessoa vê ("Abas por
-usuário"); dentro delas, só os vendedores do acesso (a aba sem nenhum deles não aparece para ela). A aba Supervisores
-das Premiações só aparece com "Todos" ou "Só as equipes"; os terceirizados das Devoluções, com "Todos". Na Reavaliação
+usuário"); dentro delas, só os vendedores do acesso (a aba sem nenhum deles não aparece para ela). Em Premiações, as
+**abas** e os **quadros de supervisor** ("Acesso por usuário"); o quadro de um supervisor só aparece com "Todos" ou "Só
+as equipes" com a equipe do estado dele. Os terceirizados das Devoluções aparecem com "Todos". Na Reavaliação
 de Crédito, a pessoa só acha os clientes da carteira dos vendedores dela (ou com títulos deles) e vê só os títulos
 desses vendedores; o limite, o em aberto e o parecer são do cliente inteiro. Quem é criado precisa ter os vendedores
 escolhidos para salvar. Quem foi cadastrado antes de uma página existir não a recebe sozinho: o administrador marca a
@@ -1550,7 +1593,8 @@ página nova.
 
 Exemplos:
 
-- **Supervisor da BA:** em Usuários, "Só as equipes" BA e Edir; em Metas › Configurar, as abas Metas BA e Produtos BA.
+- **Supervisor da BA:** em Usuários, "Só as equipes" BA e Edir; em Metas › Configurar, as abas Metas BA e Produtos BA;
+  em Premiações › Configurar, as abas Vendedores e Supervisores, com o quadro do Marcos.
 - **Vendedor:** em Usuários, "Só alguns vendedores" com só ele; em Metas, a aba dele. Indicadores, ranking, corrida e
   tabelas mostram só os números dele.
 
@@ -1564,8 +1608,8 @@ Na página **Usuários** (só para administradores):
   deixa) para você passar à pessoa.
 - **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito).
 - **Vendedores que vê:** todos, só as equipes ou só alguns (veja acima). Embaixo aparece o que muda de uma página
-  para outra (as abas de Metas, com o link **Configurar**, a aba Supervisores, os terceirizados, os clientes do
-  Crédito). Um aviso lembra quando a pessoa tem Metas mas ainda nenhuma aba, ou ainda não tem vendedores.
+  para outra (as abas de Metas e as de Premiações, com o link **Configurar**, os terceirizados, os clientes do
+  Crédito). Um aviso lembra quando a pessoa tem Metas ou Premiações mas ainda nenhuma aba, ou ainda não tem vendedores.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
 
 Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura

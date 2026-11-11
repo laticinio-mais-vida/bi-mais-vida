@@ -1356,6 +1356,8 @@ body.sem-rolagem { overflow: hidden; }
 .chip-equipe.e-BA { background: color-mix(in srgb, var(--s-out) 16%, transparent); color: color-mix(in srgb, var(--s-out) 70%, var(--tinta)); }
 .chip-equipe.e-EDIR { background: color-mix(in srgb, var(--k-cli) 16%, transparent); color: var(--k-cli); }
 .cp-usuarios { grid-template-columns: minmax(250px, 310px) 1fr; }
+/* em tela estreita, a lista em cima do editor (a regra da faixa de 1180px vem antes da de cima e não valia) */
+@media (max-width: 1180px) { .cp-usuarios { grid-template-columns: 1fr; } }
 .cp-usuarios .usu-lista .dica a { color: var(--acento-tinta); font-weight: 700; }
 .cp-usuarios .usu-item .avatar { background: var(--s-out); }
 .com-lateral .barra-salvar { left: calc(50% + var(--lateral-w) / 2); width: max-content; max-width: calc(100vw - 32px); } /* centro do conteúdo, não da tela */
@@ -1548,6 +1550,14 @@ table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
 .cr-erp.bom .ic { color: var(--cr-bom); }
 .cr-erp.ruim { border-color: var(--cr-ruim); }
 .cr-erp.ruim .ic { color: var(--cr-ruim); }
+/* o bloqueio no cadastro do ERP: no cabeçalho do cliente (embaixo do nome), no parecer e na busca */
+.cr-cliente.com-bloqueio { flex-wrap: wrap; }
+.cr-cliente .cr-erp-bloqueio { flex: 1 1 100%; margin: 0; }
+.cr-erp-bloqueio.ruim b { color: var(--cr-ruim); }
+.cr-parecer .cr-erp-bloqueio { margin: 0 0 12px; }
+.cr-obs { white-space: pre-line; overflow-wrap: anywhere; font-style: italic; }
+.cr-tag-bloqueio { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--ruim); box-shadow: inset 0 0 0 1.2px var(--ruim); vertical-align: 1px; }
+.cr-tag-bloqueio .ic { width: 11px; height: 11px; }
 /* o prazo mínimo entre reanálises */
 .cr-bloqueio { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--cr-ruim); font-size: 13px; }
 .cr-bloqueio > .ic { flex: none; width: 17px; height: 17px; margin-top: 1px; color: var(--cr-ruim); }

@@ -42,7 +42,7 @@ RAIZ = Path(__file__).resolve().parent
 WEB = RAIZ / "web"
 
 from bi.acesso import (COOKIE, EQUIPES, PAGINAS, ApiOcupada, LimiteApi, LimiteTentativas, Usuarios,  # noqa: E402
-                       eh_admin, escopo_vendedores, paginas_permitidas, visoes_permitidas)
+                       eh_admin, escopo_vendedores, paginas_permitidas, premiacoes_permitidas, visoes_permitidas)
 from bi.agenda import Agenda  # noqa: E402
 from bi.ajustes import AjustesVolume  # noqa: E402
 from bi.aprovacao import MetasAprovadas, MetasComAprovadas  # noqa: E402
@@ -60,6 +60,7 @@ from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.premiacoes import ConfigPremiacoes, Premiacoes  # noqa: E402
+from bi.premiacoes_pdf import TIPO as TIPO_PDF  # noqa: E402
 from bi.projecoes import NOME_EQUIPE, ConfigProjecoes, Projetor, SemVendedores  # noqa: E402
 from bi.publicacao import ROTA as ROTA_RECEBER, Envio, Recebimento, Recusado, gerar_chave  # noqa: E402
 from bi.reanalise import ConfigCredito, Reanalises  # noqa: E402
@@ -423,16 +424,20 @@ class Manipulador(BaseHTTPRequestHandler):
 
     def _config_usuarios(self) -> dict:
         """A tela Usuários: as pessoas, as páginas e, para escolher os vendedores do acesso, as equipes e a lista de
-        vendedores (sem a cópia do banco ainda, a lista vem vazia, com o aviso)."""
+        vendedores (sem a cópia do banco ainda, a lista vem vazia, com o aviso). Para as notas das páginas: as abas de
+        Metas e os supervisores das Premiações (nome e estado)."""
         vendedores, aviso = [], None
         if self.app.cache.pronto():
             vendedores = self.app.assistente.catalogo_vendedores(com_metas=True)
         else:
             aviso = "A lista de vendedores aparece depois da primeira cópia do banco do ERP."
+        supervisores = [{k: s[k] for k in ("id", "nome", "estado")}
+                        for s in self.app.config_premiacoes.atual()["supervisores"]["lista"]]
         return {"usuarios": self.app.usuarios.listar(),
                 "paginas": [{"id": k, "titulo": v} for k, v in PAGINAS.items()],
                 "equipes": [{"id": e, "nome": NOME_EQUIPE.get(e, e)} for e in EQUIPES],
                 "visoes": [{"id": k, "titulo": v["titulo"], "grupos": v["grupos"]} for k, v in VISOES.items()],
+                "supervisores_premiacoes": supervisores,
                 "vendedores": vendedores, "aviso_vendedores": aviso, "data_ref": self.app.cache.info.get("data_ref")}
 
     def _config_projecoes(self) -> dict:
@@ -685,6 +690,34 @@ class Manipulador(BaseHTTPRequestHandler):
         if acessos:
             log.info("%s alterou as abas de Metas de %s", eu["login"], ", ".join(acessos))
         return self._json({"ok": True, "config": configuracao.atual(), **self._visualizadores()})
+
+    def _acesso_premiacoes(self) -> dict:
+        """Para Premiações › Configurar › Acesso por usuário: os visualizadores (com as páginas, os vendedores do acesso e
+        as abas e os supervisores das Premiações de cada um) e o nome dos vendedores das listas de "só alguns"."""
+        v = self._visualizadores()
+        return {"usuarios": v["usuarios"], "nomes": v["nomes"]}
+
+    def _salvar_config_premiacoes(self, eu: dict, corpo: dict):
+        """Configuração da página Premiações: as regras (config) e, em "usuarios", as abas e os supervisores que cada
+        visualizador vê (os vendedores dele ficam em Usuários). As duas partes vão numa transação só: ou grava tudo, ou
+        nada. Sem config, as regras ficam como estão (não grava uma versão nova)."""
+        config, acessos = corpo.get("config"), corpo.get("usuarios")
+        regras = self.app.config_premiacoes
+        if config:
+            regras.validar(config)  # antes de abrir a transação
+        versao = None
+        with self.app.banco.conexao() as con:
+            if acessos:
+                self.app.usuarios.definir_premiacoes(acessos, con)
+            if config:
+                versao = regras.gravar(config, eu, con)
+        if versao:
+            regras.usar(*versao)
+            log.info("%s salvou as regras das Premiações (versão %s)", eu["login"], versao[0])
+        if acessos:
+            log.info("%s alterou o acesso de %s às Premiações", eu["login"], ", ".join(acessos))
+        return self._json({"ok": True, **self.app.premiacoes.config_dados(corpo.get("mes")),
+                           **self._acesso_premiacoes()})
 
     def _salvar_config_projecoes(self, eu: dict, corpo: dict):
         """Configuração da página Projeções: os vendedores da página (os de cada pessoa ficam em Usuários)."""
@@ -1073,13 +1106,19 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.sugestao.config_dados(q.get("mes")))
             if url.path == "/api/sugestao/aprovacao":  # estado=BA&mes=2026-11
                 return self._json(self.app.sugestao.aprovacao(q.get("estado"), q.get("mes")))
-            if url.path == "/api/premiacoes":
+            if url.path in ("/api/premiacoes", "/api/premiacoes/pdf"):
                 if "premiacoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Premiações", HTTPStatus.FORBIDDEN)
-                # aba=vendedores|supervisores|comissao&mes=2026-10 (vazio = o mês dos dados)
-                return self._json(self.app.premiacoes.calcular(q.get("aba"), q.get("mes"), *escopo_vendedores(usuario)))
+                # aba=vendedores|supervisores|comissao (vazio = a primeira do acesso)&mes=2026-10 (vazio = o mês dos
+                # dados). As abas e os supervisores da pessoa vêm da configuração da página; os vendedores, de Usuários.
+                acesso = (q.get("aba"), q.get("mes"), *escopo_vendedores(usuario), *premiacoes_permitidas(usuario))
+                if url.path == "/api/premiacoes/pdf":  # a tabela da aba em PDF, montada agora com o acesso de quem baixa
+                    conteudo, nome = self.app.premiacoes.pdf(*acesso)
+                    log.info("%s baixou %s (%s KB)", usuario["login"], nome, len(conteudo) // 1024)
+                    return self._baixavel(conteudo, TIPO_PDF, nome)
+                return self._json(self.app.premiacoes.calcular(*acesso))
             if url.path == "/api/premiacoes/config":
-                return self._json(self.app.premiacoes.config_dados(q.get("mes")))
+                return self._json({**self.app.premiacoes.config_dados(q.get("mes")), **self._acesso_premiacoes()})
             if url.path in ("/api/devolucoes", "/api/devolucoes/parecer"):
                 if "devolucoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Devoluções", HTTPStatus.FORBIDDEN)
@@ -1212,10 +1251,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s salvou as regras da Sugestão de Metas", usuario["login"])
                 return self._json({"ok": True, **self.app.sugestao.config_dados(corpo.get("mes"))})
             if url.path == "/api/premiacoes/config":
-                corpo = self._corpo_json()
-                self.app.config_premiacoes.salvar(corpo.get("config") or {}, usuario)
-                log.info("%s salvou as regras das Premiações", usuario["login"])
-                return self._json({"ok": True, **self.app.premiacoes.config_dados(corpo.get("mes"))})
+                return self._salvar_config_premiacoes(usuario, self._corpo_json())
             if url.path == "/api/sugestao/aprovacao":
                 corpo = self._corpo_json()
                 itens = corpo.get("itens")

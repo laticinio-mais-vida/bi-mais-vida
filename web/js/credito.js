@@ -269,7 +269,7 @@ function ligarBusca(container) {
       lista.innerHTML = achados.map((c, i) => `
         <button type="button" class="multi-op cr-op${i === ativo ? " ativo" : ""}" role="option" aria-selected="${escolhido(c.id)}" data-i="${i}">
           <span class="cr-marca${escolhido(c.id) ? " sim" : ""}">${icone("visto")}</span>
-          <span class="n">${esc(c.nome)}<small>código ${c.id}${c.carteira ? ` · carteira ${esc(c.carteira)}` : ""} · ${c.titulos ? `${fmt.num(c.titulos)} títulos` : "sem títulos"}</small></span>
+          <span class="n">${esc(c.nome)}${c.bloqueado ? ` <span class="cr-tag-bloqueio">${icone("cadeado")}bloqueado no ERP</span>` : ""}<small>código ${c.id}${c.carteira ? ` · carteira ${esc(c.carteira)}` : ""} · ${c.titulos ? `${fmt.num(c.titulos)} títulos` : "sem títulos"}</small></span>
         </button>`).join("");
     }
     lista.hidden = false;
@@ -423,21 +423,49 @@ function chipsSituacao(d) {
   if (k.inadimplencia > 0) chips.push(`<span class="status ruim">${icone("alerta")}Inadimplente</span>`);
   if (cr.limite > 0 && passouDoLimite(cr)) chips.push(`<span class="status ruim">${icone("alerta")}Passou do limite</span>`);
   if (!chips.length && cr.em_aberto === 0) chips.push(`<span class="status bom">${icone("certo")}Nada em aberto</span>`);
+  if (cr.bloqueados) { // o bloqueio no cadastro do ERP vem primeiro
+    const n = cr.bloqueados, varios = d.clientes.length > 1;
+    chips.unshift(`<span class="status ruim">${icone("cadeado")}${varios ? `${n} bloqueado${n === 1 ? "" : "s"} no ERP` : "Bloqueado no ERP"}</span>`);
+  }
   return chips.join("");
+}
+
+// O bloqueio de hoje no cadastro do ERP (bi/credito.py _bloqueios): bloqueado, com a data e a observação; desbloqueado,
+// a observação que ficou no campo (a de um bloqueio antigo, quase sempre). Sem o dado ainda, o aviso do topo explica.
+function notaBloqueio(b) {
+  if (!b || (!b.bloqueado && !b.observacao)) return "";
+  const obs = b.observacao ? `<span class="cr-obs">${esc(b.observacao)}</span>` : "";
+  if (b.bloqueado) {
+    return `<p class="cr-erp ruim cr-erp-bloqueio">${icone("cadeado")}<span><b>Bloqueado no ERP${b.data ? ` desde ${fmt.data(b.data)}` : ""}.</b>
+      ${obs ? `Observação no cadastro: ${obs}` : "Sem observação no cadastro."}</span></p>`;
+  }
+  return `<p class="cr-erp cr-erp-bloqueio">${icone("info")}<span>Não está bloqueado no ERP. No campo do bloqueio ficou a
+    observação${b.data ? ` de ${fmt.data(b.data)}` : ""}: ${obs}</span></p>`;
+}
+
+// Na tabela de vários clientes: o bloqueio com a observação no balão.
+function celulaBloqueio(b) {
+  if (!b) return "…";
+  if (!b.bloqueado) return "—";
+  const tt = b.observacao ? ` data-tt="${esc(`<div class='tt-t'>Observação no cadastro do ERP</div><span class='cr-obs'>${esc(b.observacao)}</span>`)}"` : "";
+  return `<span class="status ruim"${tt}>${icone("cadeado")}${b.data ? `desde ${fmt.data(b.data)}` : "bloqueado"}</span>`;
 }
 
 function cabecalhoClientes(d) {
   if (d.clientes.length === 1) {
     const c = d.clientes[0];
+    const nota = notaBloqueio(c.bloqueio);
     return `
-    <section class="cartao secao entra cr-cliente" style="--i:1">
+    <section class="cartao secao entra cr-cliente${nota ? " com-bloqueio" : ""}" style="--i:1">
       <span class="cr-cliente-icone">${icone("loja")}</span>
       <div class="cr-cliente-nome"><b>${esc(c.nome)}</b>
         <small>código ${c.id}${c.carteira ? ` · carteira de ${esc(c.carteira)}` : ""} · prazo ${esc(c.prazo || "não informado")}</small></div>
       <div class="cr-cliente-chips">${chipsSituacao(d)}</div>
+      ${nota}
     </section>`;
   }
   const cr = d.credito;
+  const comBloqueio = cr.bloqueados != null; // sem o dado ainda (o aviso do topo explica), a coluna não aparece
   return `
   <section class="cartao secao entra" style="--i:1">
     <div class="cr-cliente cr-cliente-varios">
@@ -447,13 +475,15 @@ function cabecalhoClientes(d) {
     </div>
     <p class="cr-analise-dica">${icone("escudo")}Para analisar um limite novo, deixe só um cliente escolhido.</p>
     <div class="tabela-rolagem"><table class="dados cr-varios">
-      <thead><tr><th>Cliente</th><th>Prazo</th><th>Limite</th><th>Em aberto</th><th>Restante</th></tr></thead>
+      <thead><tr><th>Cliente</th><th>Prazo</th><th>Limite</th><th>Em aberto</th><th>Restante</th>${comBloqueio ? "<th>Bloqueio no ERP</th>" : ""}</tr></thead>
       <tbody>${d.clientes.map((c) => `<tr>
         <td class="cr-nome">${esc(c.nome)}<small>código ${c.id}${c.carteira ? ` · carteira de ${esc(c.carteira)}` : ""}</small></td>
         <td>${esc(c.prazo || "—")}</td><td>${fmt.moeda2(c.limite)}</td><td>${fmt.moeda2(c.em_aberto)}</td>
-        <td class="${passouDoLimite(c) ? "cr-negativo" : ""}">${fmt.moeda2(c.restante)}</td></tr>`).join("")}</tbody>
+        <td class="${passouDoLimite(c) ? "cr-negativo" : ""}">${fmt.moeda2(c.restante)}</td>
+        ${comBloqueio ? `<td class="centro">${celulaBloqueio(c.bloqueio)}</td>` : ""}</tr>`).join("")}</tbody>
       <tfoot><tr><td>Total</td><td></td><td>${fmt.moeda2(cr.limite)}</td><td>${fmt.moeda2(cr.em_aberto)}</td>
-        <td class="${passouDoLimite(cr) ? "cr-negativo" : ""}">${fmt.moeda2(cr.restante)}</td></tr></tfoot>
+        <td class="${passouDoLimite(cr) ? "cr-negativo" : ""}">${fmt.moeda2(cr.restante)}</td>
+        ${comBloqueio ? `<td class="centro">${cr.bloqueados ? `${cr.bloqueados} bloqueado${cr.bloqueados === 1 ? "" : "s"}` : "nenhum bloqueado"}</td>` : ""}</tr></tfoot>
     </table></div>
   </section>`;
 }
@@ -917,12 +947,17 @@ function parecer(a) {
   const comparado = variacao == null ? "hoje sem limite no cadastro"
     : Math.abs(variacao) < 0.0005 ? "o mesmo de hoje"
     : `${variacao > 0 ? "+" : "−"}${fmt.pct(Math.abs(variacao), 0)} sobre o de hoje (${fmt.moeda(n.limite_atual)})`;
+  const b = a.cliente.bloqueio; // a regra não olha o bloqueio no ERP: ele só aparece ao lado
+  const bloqueio = b?.bloqueado ? `<p class="cr-erp ruim cr-erp-bloqueio">${icone("cadeado")}<span><b>O cliente está
+    bloqueado no ERP${b.data ? ` desde ${fmt.data(b.data)}` : ""}.</b> O parecer olha só os números dos títulos: confira o motivo
+    do bloqueio${b.observacao ? ` (<span class="cr-obs">${esc(b.observacao)}</span>)` : ""} antes de liberar.</span></p>` : "";
   return `
   <div class="cr-parecer ${p.classe} entra" style="--i:0">
     <div class="cr-parecer-cab">
       <span class="status ${p.classe}">${icone(p.icone)}${p.rotulo}</span>
       <span class="cr-parecer-pedido">limite pedido <b>${fmt.moeda2(a.pedido)}</b> · ${comparado}</span>
     </div>
+    ${bloqueio}
     <ul class="cr-criterios">${a.criterios.map((c) => `
       <li class="${c.status}"><span class="cr-crit-ic">${icone(ICONE_CRITERIO[c.status])}</span>
         <div><b>${esc(c.titulo)}</b><span>${esc(c.detalhe)}</span></div></li>`).join("")}
@@ -1217,11 +1252,14 @@ function comoCalcula(d, i) {
             emitidos no período entravam, e as parcelas pagas não voltavam). Negativo = passou do limite. Com vários clientes
             escolhidos, os limites e o que está em aberto somam. Limite, utilizado, prazo e restante só aparecem com cliente
             escolhido.</li>
+          <li><b>Bloqueio no ERP:</b> se o cliente está bloqueado hoje no cadastro do ERP, desde quando e a observação
+            escrita lá. Quem foi desbloqueado costuma ficar com a observação do bloqueio antigo, que aparece em cinza. O
+            ERP não guarda o histórico, só como o cliente está agora. O bloqueio não muda o parecer: ele aparece ao lado.</li>
           ${comoParecer(d.regra_parecer)}
           <li><b>Reanálise</b> (com um cliente escolhido, depois do parecer): quem tem a página registra o limite e o
             prazo liberados e a justificativa, e o painel guarda junto os números do cliente naquele momento (compras,
-            pontualidade, o que está em aberto, os 12 meses da regra, o mês a mês e o parecer), para comparar decisões
-            depois e para o Assistente. O registro não muda o ERP e fica só no site. Não dá para editar: quem registrou ou
+            pontualidade, o que está em aberto, os 12 meses da regra, o mês a mês, o bloqueio no ERP e o parecer), para
+            comparar decisões depois e para o Assistente. O registro não muda o ERP e fica só no site. Não dá para editar: quem registrou ou
             um administrador exclui e registra de novo.</li>
           <li><b>Prazo mínimo entre reanálises:</b> ${d.regras ? (d.regras.intervalo_reanalise_dias
               ? `${d.regras.intervalo_reanalise_dias} dias` : "desligado (0 dias)") : "o que o administrador definir"},

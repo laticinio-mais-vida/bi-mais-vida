@@ -136,12 +136,44 @@ TABELAS_COMISSAO = {
                          "comissao DOUBLE"),
     "comissoes_percentuais": "id_vendedor INTEGER, id_produto INTEGER, pct DOUBLE",
 }
+# O bloqueio do cliente no cadastro do ERP (CLIENTES.BLOQUEADO, DATABLOQUEADO e OBSBLOQUEADO), para a Reavaliação de
+# Crédito: só os clientes bloqueados ou com alguma observação no campo do bloqueio (quem foi desbloqueado costuma ficar com
+# a observação). O ERP não guarda o histórico: é o de agora. data é a DATABLOQUEADO (o "zero" do ERP, 30/12/1899, vira
+# nulo). Fica fora de TABELAS_CREDITO para o site com o código anterior aceitar o pacote: opcional como os pedidos, e sem
+# ela a página avisa.
+TABELAS_BLOQUEIOS = {
+    "clientes_bloqueio": "id INTEGER, bloqueado BOOLEAN, data DATE, observacao VARCHAR",
+}
+MAX_OBSERVACAO = 2000  # caracteres da observação do bloqueio (no ERP, a maior tem menos de 300)
 
 
 def _data(v):
     if isinstance(v, dt.datetime):
         return v.date()
     return v
+
+
+def _data_erp(v):
+    """Uma data de cadastro do ERP: sem a hora, e o "zero" dele (30/12/1899) ou outra de antes de 1901 vira nulo."""
+    d = _data(v)
+    return d if isinstance(d, dt.date) and d.year > 1900 else None
+
+
+def _observacao(v) -> str | None:
+    """Um campo de observação do ERP (texto longo): as quebras de linha do Windows viram \\n, os espaços repetidos viram
+    um, linhas vazias em sequência viram uma; vazio vira nulo."""
+    if v is None:
+        return None
+    if hasattr(v, "read"):  # texto longo que o fdb entregou em partes
+        v = v.read()
+    if isinstance(v, bytes):
+        v = v.decode("cp1252", "replace")
+    linhas = []
+    for linha in str(v).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        linha = " ".join(linha.split())
+        if linha or (linhas and linhas[-1]):
+            linhas.append(linha)
+    return "\n".join(linhas).strip()[:MAX_OBSERVACAO] or None
 
 
 def _colunas(colunas: str) -> list[str]:
@@ -187,6 +219,7 @@ class Cache:
         self.sem_brindes = False  # faltam os brindes: a premiação dos supervisores conta sem eles
         self.sem_comissao = False  # falta a comissão das vendas e os percentuais (só a aba Comissão precisa)
         self.sem_devolucoes_notas = False  # faltam as devoluções nota a nota: a página Devoluções conta por cliente e dia
+        self.sem_bloqueio = False  # falta o bloqueio dos clientes no ERP (só a Reavaliação de Crédito mostra)
         # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
         # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
         # cache anterior.
@@ -229,6 +262,7 @@ class Cache:
         sem_brindes = _tabela_diferente(con, TABELAS_BRINDES) is not None
         sem_comissao = _tabela_diferente(con, TABELAS_COMISSAO) is not None
         sem_devolucoes_notas = _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS) is not None
+        sem_bloqueio = _tabela_diferente(con, TABELAS_BLOQUEIOS) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -245,6 +279,7 @@ class Cache:
             self.sem_brindes = sem_brindes
             self.sem_comissao = sem_comissao
             self.sem_devolucoes_notas = sem_devolucoes_notas
+            self.sem_bloqueio = sem_bloqueio
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -263,8 +298,9 @@ class Cache:
     @staticmethod
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
-        cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes, a comissão e as devoluções
-        nota a nota podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de estar no formato atual."""
+        cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes, a comissão, as devoluções
+        nota a nota e o bloqueio dos clientes podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de
+        estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
             nome = (_tabela_diferente(con) or _tabela_diferente(con, TABELAS_DETALHE, faltar_pode=True)
@@ -276,7 +312,8 @@ class Cache:
                     or _tabela_diferente(con, TABELAS_CARTEIRA, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_COMISSAO, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_BLOQUEIOS, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -297,10 +334,10 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito, parcelas, a carteira, os brindes, a comissão ou as notas de devolução que não deu para ler ou
-        registrar (pedidos_erro, pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro, carteira_erro,
-        brindes_erro, comissao_erro, devolucoes_notas_erro) esperam a próxima cópia, em vez de extrair tudo de novo a
-        cada minuto."""
+        redes, crédito, parcelas, a carteira, os brindes, a comissão, as notas de devolução ou o bloqueio que não deu
+        para ler ou registrar (pedidos_erro, pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro,
+        carteira_erro, brindes_erro, comissao_erro, devolucoes_notas_erro, bloqueio_erro) esperam a próxima cópia, em
+        vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
         except OSError:
@@ -315,6 +352,7 @@ class Cache:
                 or (self.sem_brindes and not self.info.get("brindes_erro"))
                 or (self.sem_comissao and not self.info.get("comissao_erro"))
                 or (self.sem_devolucoes_notas and not self.info.get("devolucoes_notas_erro"))
+                or (self.sem_bloqueio and not self.info.get("bloqueio_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -338,11 +376,12 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito, parcelas, carteira, brindes, comissão e notas de devolução: a leitura (ou o
-            # registro) pode ter falhado
+            # pedidos, rede, crédito, parcelas, carteira, brindes, comissão, notas de devolução e bloqueio: a leitura
+            # (ou o registro) pode ter falhado
             opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_PEDIDOS_DETALHE, **TABELAS_REDE,
                                            **TABELAS_CREDITO, **TABELAS_PARCELAS, **TABELAS_CARTEIRA,
-                                           **TABELAS_BRINDES, **TABELAS_COMISSAO, **TABELAS_DEVOLUCOES_NOTAS}.items()
+                                           **TABELAS_BRINDES, **TABELAS_COMISSAO, **TABELAS_DEVOLUCOES_NOTAS,
+                                           **TABELAS_BLOQUEIOS}.items()
                          if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
@@ -651,6 +690,21 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler as notas de devolução (a página Devoluções conta por cliente e dia): %s", e)
                 devolucoes_notas_erro = str(e)[:300]
+            # O bloqueio dos clientes no cadastro (Reavaliação de Crédito), também à parte: os bloqueados e os que têm
+            # alguma observação no campo do bloqueio (só espaços não conta).
+            self.estado["etapa"] = "Lendo os bloqueios dos clientes"
+            bloqueio_erro = None
+            try:
+                bloqueios = []
+                for i, b, d, o in bd.consulta("SELECT ID_CLIENTE, BLOQUEADO, DATABLOQUEADO, OBSBLOQUEADO FROM CLIENTES "
+                                              "WHERE BLOQUEADO = 1 OR OBSBLOQUEADO IS NOT NULL"):
+                    bloqueado, observacao = int(b or 0) == 1, _observacao(o)
+                    if bloqueado or observacao:
+                        bloqueios.append((i, bloqueado, _data_erp(d), observacao))
+                dados["clientes_bloqueio"] = bloqueios
+            except Exception as e:
+                log.warning("não deu para ler o bloqueio dos clientes (a Reavaliação de Crédito fica sem ele): %s", e)
+                bloqueio_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -669,5 +723,6 @@ class Cache:
             *([("brindes_erro", brindes_erro)] if brindes_erro else []),
             *([("comissao_erro", comissao_erro)] if comissao_erro else []),
             *([("devolucoes_notas_erro", devolucoes_notas_erro)] if devolucoes_notas_erro else []),
+            *([("bloqueio_erro", bloqueio_erro)] if bloqueio_erro else []),
         ]
         return dados

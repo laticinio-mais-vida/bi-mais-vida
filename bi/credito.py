@@ -14,7 +14,9 @@ Diferenças aprovadas em relação ao Power BI:
   (a medida dela não existe mais lá).
 
 Além do Power BI: o valor já pago de cada título (boleto dividido em parcelas, tabela titulos_parcelas do cache).
-As parcelas pagas saem do que está em aberto e voltam para o limite restante.
+As parcelas pagas saem do que está em aberto e voltam para o limite restante. E o bloqueio de hoje no cadastro do ERP
+(tabela clientes_bloqueio do cache: bloqueado, desde quando e a observação; o ERP não guarda o histórico), que só
+aparece: o parecer continua pelos números (decisão do usuário).
 
 O parecer de um limite novo (analisar): quem digita o limite total que o cliente vai ter recebe Indicado, Indicado com
 ressalvas ou Não indicado, com os motivos. É uma regra fixa (sem IA: a mesma resposta para os mesmos dados) sobre o
@@ -233,7 +235,22 @@ class Credito:
             "LEFT JOIN titulos_receber t ON t.id_cliente = a.id GROUP BY a.id, a.nome, a.id_vendedor, a.comeca "
             "ORDER BY a.id <> ?, NOT a.comeca, n = 0, a.nome LIMIT ?",
             [texto, codigo, *params_acesso, codigo, max(1, min(limite, MAX_BUSCA))])
-        return [{"id": i, "nome": n, "carteira": nomes.get(v) if v else None, "titulos": t} for i, n, v, t in linhas]
+        bloqueios = self._bloqueios([i for i, *_ in linhas]) or {}
+        return [{"id": i, "nome": n, "carteira": nomes.get(v) if v else None, "titulos": t,
+                 "bloqueado": bool(bloqueios.get(i, {}).get("bloqueado"))} for i, n, v, t in linhas]
+
+    def _bloqueios(self, clientes: list[int]) -> dict[int, dict] | None:
+        """O bloqueio de hoje no cadastro do ERP de cada cliente: {cliente: {bloqueado, data, observacao}}; quem não está
+        na tabela não está bloqueado nem tem observação. data é a do campo do bloqueio no ERP (de quando o cliente foi
+        bloqueado; desbloqueado, ela e a observação costumam ficar). None: o cache ainda não tem a tabela (o computador
+        da empresa com o código anterior)."""
+        if self.cache.sem_bloqueio:
+            return None
+        if not clientes:
+            return {}
+        achados = {i: {"bloqueado": bool(b), "data": d, "observacao": o} for i, b, d, o in self.cache.consulta(
+            f"SELECT id, bloqueado, data, observacao FROM clientes_bloqueio WHERE id IN ({_marcas(clientes)})", clientes)}
+        return {c: achados.get(c, {"bloqueado": False, "data": None, "observacao": None}) for c in clientes}
 
     # --- a página -----------------------------------------------------------------------
     def calcular(self, clientes: list[int] | None = None, mes: int | None = None, ano: int | None = None,
@@ -311,6 +328,8 @@ class Credito:
         if self.cache.sem_parcelas:
             avisos.append("As parcelas dos títulos ainda não chegaram do computador da empresa: o valor já pago e o "
                           "limite restante ainda não descontam as parcelas pagas.")
+        if clientes and self.cache.sem_bloqueio:
+            avisos.append(self.aviso_bloqueio())
         return {
             "data_ref": self.cache.data_ref(),
             "extraido_em": self.cache.info.get("extraido_em"),
@@ -342,6 +361,7 @@ class Credito:
         abertos = {i: (qtd, total, pg) for i, qtd, total, pg in self.cache.consulta(
             f"SELECT t.id_cliente, COUNT(*), SUM(t.total), SUM({pago}) FROM titulos_receber t{junta} "
             f"WHERE t.id_cliente IN ({_marcas(clientes)}) AND t.quitacao IS NULL GROUP BY 1", clientes)}
+        bloqueios = self._bloqueios(clientes)
         saida = []
         for c in clientes:
             nome, carteira, limite, prazo = cadastro[c]
@@ -352,6 +372,7 @@ class Credito:
                 "limite": limite, "qtd_abertos": qtd, "titulos_abertos": total, "pago_parcelas": pg,
                 "em_aberto": total - pg, "restante": limite - (total - pg),
                 "usado": (total - pg) / limite if limite > 0 else None,
+                "bloqueio": None if bloqueios is None else bloqueios[c],  # None: ainda não chegou do computador
             })
         return saida
 
@@ -361,8 +382,18 @@ class Credito:
                                                           "em_aberto", "restante")}
         prazos = sorted({c["prazo"] or "não informado" for c in clientes})
         carteiras = sorted({c["carteira"] or "sem vendedor" for c in clientes})
+        sem_bloqueio = any(c["bloqueio"] is None for c in clientes)
         return {**soma, "usado": soma["em_aberto"] / soma["limite"] if soma["limite"] > 0 else None,
-                "prazos": prazos, "carteiras": carteiras}
+                "prazos": prazos, "carteiras": carteiras,
+                "bloqueados": None if sem_bloqueio else sum(1 for c in clientes if c["bloqueio"]["bloqueado"])}
+
+    def aviso_bloqueio(self) -> str:
+        """Por que o bloqueio dos clientes no ERP não aparece (o cache não tem a tabela)."""
+        if self.cache.info.get("bloqueio_erro"):
+            return ("Não deu para ler o bloqueio dos clientes no banco do ERP: o computador da empresa tenta de novo na "
+                    "próxima cópia do banco.")
+        return ("O bloqueio dos clientes no ERP ainda não chegou do computador da empresa: aparece depois da próxima "
+                "atualização.")
 
     def _opcoes(self, hoje: dt.date, nomes: dict[int, str], permitidos: set[int] | None) -> dict:
         filtro, params = ("", []) if permitidos is None else (
@@ -562,7 +593,9 @@ class Credito:
                           "ainda não desconta as parcelas pagas.")
         return {
             "hoje": h["hoje"],
-            "cliente": {"id": c["id"], "nome": c["nome"], "carteira": c["carteira"], "prazo": c["prazo"]},
+            # o bloqueio no ERP só aparece ao lado do parecer: a regra não olha para ele
+            "cliente": {"id": c["id"], "nome": c["nome"], "carteira": c["carteira"], "prazo": c["prazo"],
+                        "bloqueio": c["bloqueio"]},
             "pedido": pedido,
             "parecer": p["parecer"],
             "criterios": p["criterios"],
@@ -641,6 +674,7 @@ class Credito:
 
         pp = self._parecer(h, pedido)
         pl = self._parecer(h, liberado) if liberado > 0 else None
+        b = c["bloqueio"]  # None: o bloqueio ainda não tinha chegado do computador da empresa
         return {
             "versao": RETRATO_VERSAO,
             "cliente": {"id": c["id"], "nome": c["nome"]},
@@ -652,6 +686,10 @@ class Credito:
                 "id_vendedor_carteira": carteira or None, "carteira": c["carteira"], "cidade": cidade, "uf": uf,
                 "area": area, "segmento": segmento, "rede": rede, "inativo": None if inativo is None else bool(inativo),
                 "data_cadastro": _iso(cadastro), "meses_cadastro": _meses(cadastro, hoje) if cadastro else None,
+                # o bloqueio no cadastro do ERP naquele dia (a observação de um bloqueio antigo costuma ficar)
+                "bloqueado_no_erp": None if b is None else b["bloqueado"],
+                "data_do_bloqueio_no_erp": _iso(b["data"]) if b else None,
+                "observacao_do_bloqueio_no_erp": b["observacao"] if b else None,
             },
             "historico": {  # os cartões da página, com todos os títulos do cliente
                 "compras_valor": _arred(k["valor"]), "compras_qtd": k["quantidade"], "ticket_medio": _arred(k["ticket"]),

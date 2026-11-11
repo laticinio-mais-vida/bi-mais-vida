@@ -2,8 +2,9 @@
 // nov/2026: um quadro por supervisor, com as parcelas, a trava, o bônus e o desconto) e a Comissão (a comissão dos
 // vendedores das equipes BA e ES), uma aba para cada, como as abas da página de Metas. A conta fica no servidor
 // (bi/premiacoes.py); aqui é a apresentação: os cartões, as tabelas dos vendedores e da comissão (que viram imagem para
-// o WhatsApp), os quadros dos supervisores, a comissão por produto e o passo a passo.
-import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
+// o WhatsApp), os quadros dos supervisores, a comissão por produto e o passo a passo. As abas e os quadros que cada
+// pessoa vê vêm do servidor (Premiações › Configurar › Acesso por usuário); o PDF da tabela da aba é montado lá também.
+import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, irParaLogin, MESES } from "./util.js";
 import { ligarCaptura } from "./relatorio.js";
 
 const ABAS = {
@@ -20,7 +21,8 @@ export function montarPremiacoes(container, contexto) {
   ctx = contexto;
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const salvo = ler("mv-premiacoes", {});
-  estado.aba = ABAS[q.get("aba")] ? q.get("aba") : ABAS[salvo.aba] ? salvo.aba : "vendedores";
+  // Sem aba no endereço nem guardada, o servidor abre a primeira do acesso.
+  estado.aba = ABAS[q.get("aba")] ? q.get("aba") : ABAS[salvo.aba] ? salvo.aba : null;
   estado.mes = /^\d{4}-\d{2}$/.test(q.get("m") || "") ? q.get("m") : null;
   estado.dados = null;
 
@@ -33,7 +35,8 @@ export function montarPremiacoes(container, contexto) {
       <div class="filtros">
         <label class="campo" title="Mês"><span class="ic-campo">${icone("calendario")}</span><select id="p-mes" aria-label="Mês"></select></label>
         <label class="campo" title="Ano"><span class="ic-campo">${icone("funil")}</span><select id="p-ano" aria-label="Ano"></select></label>
-        ${ctx.admin ? `<a class="btn btn-config" href="#/config-premiacoes" title="Faixas dos vendedores, regras e metas dos supervisores, brindes da comissão">${icone("ajustes")}<span>Configurar</span></a>` : ""}
+        <button class="btn" type="button" id="p-pdf" title="Baixa a tabela desta aba em PDF, no mês escolhido" disabled>${icone("arquivo")}<span>Baixar PDF</span></button>
+        ${ctx.admin ? `<a class="btn btn-config" href="#/config-premiacoes" title="Faixas dos vendedores, regras e metas dos supervisores, brindes da comissão e o acesso de cada pessoa">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
     </div>
     <div id="p-avisos"></div>
@@ -57,6 +60,7 @@ export function montarPremiacoes(container, contexto) {
     carregar();
   });
   container.querySelector("#p-mes").addEventListener("change", (e) => { estado.mes = e.target.value; carregar(); });
+  container.querySelector("#p-pdf").addEventListener("click", (e) => baixarPdf(e.currentTarget));
   container.querySelector("#p-conteudo").addEventListener("click", aoClicar);
   container.querySelector("#p-conteudo").addEventListener("change", (e) => {
     if (e.target.id === "p-com-vendedor") trocarVendedor(Number(e.target.value));
@@ -90,28 +94,38 @@ function posicionarIndicador() {
 }
 
 function atualizarUrl() {
-  guardar("mv-premiacoes", { aba: estado.aba });
+  if (estado.aba) guardar("mv-premiacoes", { aba: estado.aba });
   if (!location.hash.startsWith("#/premiacoes")) return; // trocou de página enquanto carregava
-  const p = new URLSearchParams({ aba: estado.aba });
+  const p = new URLSearchParams();
+  if (estado.aba) p.set("aba", estado.aba);
   if (estado.mes) p.set("m", estado.mes);
-  history.replaceState(null, "", `#/premiacoes?${p}`);
+  const s = p.toString();
+  history.replaceState(null, "", `#/premiacoes${s ? `?${s}` : ""}`);
 }
+
+// O que a aba mostra: sem linhas (nenhum vendedor do acesso no mês), o PDF fica desligado.
+const temTabela = (d) => d && (d.aba === "supervisores" ? d.supervisores.length > 0 : d.vendedores.length > 0);
 
 async function carregar(silencioso = false) {
   const conteudo = document.getElementById("p-conteudo");
   if (!conteudo) return;
   const pedido = ++estado.pedido;
   if (estado.dados) conteudo.classList.add("recarregando");
+  const pdf = document.getElementById("p-pdf");
+  if (pdf) pdf.disabled = true;
   atualizarUrl();
   try {
-    const p = new URLSearchParams({ aba: estado.aba });
+    const p = new URLSearchParams();
+    if (estado.aba) p.set("aba", estado.aba);
     if (estado.mes) p.set("mes", estado.mes);
     const d = await api(`/api/premiacoes?${p}`);
     if (pedido !== estado.pedido) return;
     estado.dados = d;
+    estado.aba = d.aba;
     estado.mes = d.mes.valor;
     atualizarUrl();
     marcarAba(d.abas);
+    if (pdf) pdf.disabled = !temTabela(d);
     preencherPeriodo(d);
     ctx.subtitulo(d);
     document.getElementById("p-avisos").innerHTML = (d.avisos || [])
@@ -123,10 +137,14 @@ async function carregar(silencioso = false) {
     ligarTooltips(conteudo);
   } catch (e) {
     if (pedido !== estado.pedido) return;
-    if (e.status === 403 && estado.aba !== "vendedores") { // a aba dos supervisores não é do acesso
-      estado.aba = "vendedores";
-      marcarAba(["vendedores"]);
+    if (e.status === 403 && estado.aba) { // a aba guardada não é do acesso: o servidor abre a primeira que for
+      estado.aba = null;
       return carregar(silencioso);
+    }
+    if (e.status === 403) { // nenhuma aba do acesso (como em Metas): sem abas, mês, ano nem PDF
+      marcarAba([]);
+      document.querySelector("#p-abas")?.closest(".controles")?.setAttribute("hidden", "");
+      document.getElementById("subtitulo-pagina").innerHTML = "<span>Nenhuma aba liberada</span>";
     }
     if (e.status === 400 && estado.mes) { // mês guardado sem meta: volta para o mês dos dados
       estado.mes = null;
@@ -135,7 +153,7 @@ async function carregar(silencioso = false) {
     }
     // 503: os dados da aba ainda não chegaram do computador da empresa (não é erro)
     const espera = e.status === 503;
-    const msg = espera ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : e.message;
+    const msg = espera || e.status === 403 ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : e.message;
     conteudo.innerHTML = `<div class="cartao secao vazio">${icone(e.status === 403 ? "cadeado" : espera ? "relogio" : "alerta")}<p>${e.status === 403 || espera ? "" : "Não foi possível carregar: "}${esc(msg)}</p></div>`;
     if (!silencioso && e.status !== 403 && !espera) toast(e.message, "erro");
   } finally {
@@ -149,6 +167,44 @@ function preencherPeriodo(d) {
   document.getElementById("p-ano").innerHTML = anos.map((a) => `<option value="${a}"${a === ano ? " selected" : ""}>${a}</option>`).join("");
   document.getElementById("p-mes").innerHTML = d.meses.filter((m) => m.valor.startsWith(ano))
     .map((m) => `<option value="${m.valor}"${m.valor === d.mes.valor ? " selected" : ""}>${nomeMes(Number(m.valor.slice(5)))}</option>`).join("");
+}
+
+// O PDF da tabela da aba aberta, montado agora no servidor com o acesso de quem baixa.
+async function baixarPdf(botao) {
+  const d = estado.dados;
+  if (!d) return;
+  const p = new URLSearchParams({ aba: d.aba, mes: d.mes.valor });
+  botao.disabled = true;
+  botao.classList.add("girando");
+  toast("Montando o PDF…");
+  try {
+    const r = await fetch(`/api/premiacoes/pdf?${p}`);
+    if (r.status === 401) return irParaLogin();
+    if (!r.ok) {
+      let msg = `erro ${r.status}`;
+      try { msg = (await r.json()).erro || msg; } catch { /* sem corpo */ }
+      throw new Error(msg);
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await r.blob());
+    link.download = nomeDoArquivo(r.headers.get("Content-Disposition")) || "Premiações.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    toast("Arquivo salvo em Downloads.");
+  } catch (err) {
+    toast(err.message, "erro");
+  } finally {
+    botao.classList.remove("girando");
+    botao.disabled = !temTabela(estado.dados);
+  }
+}
+
+function nomeDoArquivo(cabecalho) {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cabecalho || "");
+  if (utf8) { try { return decodeURIComponent(utf8[1]); } catch { /* usa o outro */ } }
+  return /filename="([^"]+)"/i.exec(cabecalho || "")?.[1];
 }
 
 function aoClicar(e) {

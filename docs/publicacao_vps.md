@@ -769,6 +769,31 @@ Configurar.
 - **Voltar atrás:** as colunas antigas foram apagadas: restaure o dump de antes, não só a pasta.
 - **PC:** recebe a 040 quando o código for atualizado lá (os acessos do PC são outros).
 
+#### Premiações por pessoa, PDF das premiações e bloqueio no crédito (migração 041)
+
+Três mudanças juntas (veja o README, "Página Premiações" e "Página Reavaliação de Crédito"):
+- **Premiações › Configurar › Acesso por usuário:** as abas e os quadros de supervisor de cada visualizador (coluna
+  `usuarios.premiacoes`). O botão **Baixar PDF** da página monta a tabela da aba aberta no servidor (fpdf2, que a
+  imagem já tem).
+- **Reavaliação de Crédito:** o bloqueio do cliente no cadastro do ERP (tabela nova e opcional do cache,
+  `clientes_bloqueio`), que só aparece: o parecer não muda.
+
+- **Ordem:** qualquer uma. O site com o código anterior aceita o pacote novo do PC (a tabela nova fica fora das que ele
+  confere), e o site novo aceita o pacote do PC com o código anterior: o crédito avisa que o bloqueio ainda não chegou.
+  O bloqueio só aparece no site depois que o **PC** rodar o código novo (reabrir o iniciar.bat) e mandar uma extração.
+- **A migração 041** acrescenta `usuarios.premiacoes` (com um CHECK do formato) e preenche quem já tem a página
+  Premiações com as três abas e os três supervisores, o mesmo de antes (o acesso de vendedores continua limitando a aba
+  Supervisores). Quem ganhar a página depois começa sem nenhuma aba. Ensaie em BEGIN/ROLLBACK e confira, para cada
+  visualizador do site, o que ele vê antes e depois: deve ser igual.
+- **Depois de publicar:** em Premiações › Configurar › Acesso por usuário, escolha as abas e os quadros de cada pessoa
+  (por exemplo, o supervisor do ES só com o quadro do Ronaldo). Baixe o PDF de cada aba como administrador e como uma
+  pessoa de acesso limitado. No crédito, depois do envio do PC, abra um cliente bloqueado no ERP.
+- **Voltar atrás:** o código anterior não lê a coluna (ela pode ficar) e ignora a tabela do cache. Quem tinha a página
+  volta a ver tudo o que os vendedores do acesso permitem. Para apagar de vez: `ALTER TABLE usuarios DROP COLUMN
+  premiacoes` e `DELETE FROM migracoes WHERE versao = '041_premiacoes_acesso'`.
+- **PC:** recebe a 041 quando o código for atualizado lá; a extração passa a ler também o bloqueio dos clientes (uma
+  consulta a mais no cadastro de clientes).
+
 #### Faixa da sugestão de metas (sem migração)
 
 A Sugestão de Metas ganha a **faixa** (piso e teto) na meta de volume de cada linha, as colunas **Variação** e **Faixa** na

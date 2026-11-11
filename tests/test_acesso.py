@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_vendedores
+from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_vendedores, premiacoes_permitidas
 from bi.banco import Banco
 from tests.apoio import BaseBanco
 
@@ -115,6 +115,89 @@ class TestVendedoresDoAcesso(Base):
         self.assertEqual(self.ana()["paginas"], ["assistente"])
         self.u.definir_metas({"ana": {"ve": True, "visoes": ["edir"]}})
         self.assertEqual((self.ana()["paginas"], self.ana()["visoes"]), (["metas", "assistente"], ["edir"]))
+
+
+class TestPremiacoesDaPessoa(Base):
+    """As abas e os quadros de supervisor das Premiações (coluna premiacoes, Premiações › Configurar › Acesso por
+    usuário). Os vendedores dentro deles continuam os do escopo."""
+
+    def test_sem_escolha_nao_ve_nenhuma_aba(self):
+        self.assertIsNone(self.ana()["premiacoes"])
+        self.assertEqual(premiacoes_permitidas(self.ana()), ([], []))
+        self.assertEqual(premiacoes_permitidas(self.u.obter("chefe")), (None, None))  # o administrador vê tudo
+        self.assertIsNone(self.u.obter("chefe")["premiacoes"])
+
+    def test_grava_na_ordem_e_liga_a_pagina(self):
+        self.u.definir_premiacoes({"ana": {"ve": True, "abas": ["comissao", "supervisores", "comissao"],
+                                           "supervisores": ["valdirene", "ronaldo"]}})
+        ana = self.ana()
+        self.assertEqual(ana["premiacoes"], {"abas": ["supervisores", "comissao"], "supervisores": ["ronaldo", "valdirene"]})
+        self.assertEqual(ana["paginas"], ["metas", "premiacoes", "assistente"])
+        self.assertEqual(premiacoes_permitidas(ana), (["supervisores", "comissao"], ["ronaldo", "valdirene"]))
+        # sem a aba Supervisores, a lista dos quadros fica vazia; sem "ve", a página fica como está
+        self.u.definir_premiacoes({"ana": {"abas": ["vendedores"], "supervisores": ["marcos"]}})
+        self.assertEqual((self.ana()["premiacoes"], self.ana()["paginas"]),
+                         ({"abas": ["vendedores"], "supervisores": []}, ["metas", "premiacoes", "assistente"]))
+        # desligar a página guarda o que estava marcado (vale de novo se ligar)
+        self.u.definir_premiacoes({"ana": {"ve": False, "abas": [], "supervisores": []}})
+        self.assertEqual((self.ana()["paginas"], self.ana()["premiacoes"]),
+                         (["metas", "assistente"], {"abas": [], "supervisores": []}))
+        # o cadastro em Usuários não mexe no que é da página
+        self.u.salvar({"login": "ana", "nome": "Ana", "papel": "visualizador", "paginas": ["premiacoes"]}, "ana")
+        self.assertEqual(self.ana()["premiacoes"], {"abas": [], "supervisores": []})
+
+    def test_validacao_e_tudo_ou_nada(self):
+        self.u.definir_premiacoes({"ana": {"ve": True, "abas": ["vendedores"]}})
+        for errado in ({"abas": []}, {"abas": ["gerentes"]}, {"abas": "vendedores"},
+                       {"abas": ["supervisores"], "supervisores": []}, {"abas": ["supervisores"], "supervisores": ["joao"]},
+                       {"abas": ["vendedores"], "supervisores": "marcos"}):
+            with self.subTest(errado=errado), self.assertRaises(ValueError):
+                self.u.definir_premiacoes({"ana": errado})
+        with self.assertRaises(ValueError):  # o segundo está errado: o primeiro também não grava
+            self.u.definir_premiacoes({"ana": {"abas": ["comissao"]}, "ninguem": {"abas": ["comissao"]}})
+        self.assertEqual(self.ana()["premiacoes"], {"abas": ["vendedores"], "supervisores": []})
+        # é a única página: não dá para tirar
+        self.u.salvar({"login": "ana", "nome": "Ana", "papel": "visualizador", "paginas": ["premiacoes"]}, "ana")
+        with self.assertRaises(ValueError):
+            self.u.definir_premiacoes({"ana": {"ve": False, "abas": []}})
+        # o administrador não guarda nada (vê tudo)
+        self.u.definir_premiacoes({"chefe": {"abas": ["comissao"]}})
+        self.assertIsNone(self.u.obter("chefe")["premiacoes"])
+
+
+class TestMigracao041(BaseBanco):
+    """bi/migracoes/041_premiacoes_acesso.sql: quem já tinha a página Premiações continua vendo as três abas e os três
+    supervisores (o acesso de vendedores continua limitando, como antes); os outros ficam sem nada escolhido."""
+
+    def setUp(self):
+        super().setUp()
+        todas = Banco._arquivos_migracao()
+        with mock.patch.object(Banco, "_arquivos_migracao", staticmethod(lambda: [a for a in todas if a.stem < "041"])):
+            self.banco.migrar()
+
+    def test_cada_caso(self):
+        with self.banco.conexao() as con:
+            for login, papel, paginas in (("chefe", "admin", None), ("com", "visualizador", ["metas", "premiacoes"]),
+                                          ("sem", "visualizador", ["metas"]), ("antigo", "visualizador", None)):
+                con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas) VALUES (%s, %s, %s, 'x', "
+                            "%s::text[])", [login, login.title(), papel, paginas])
+        self.assertEqual(self.banco.migrar(), ["041_premiacoes_acesso"])
+        with self.banco.conexao() as con:
+            acessos = dict(con.execute("SELECT login, premiacoes FROM usuarios").fetchall())
+        tudo = {"abas": ["vendedores", "supervisores", "comissao"], "supervisores": ["marcos", "ronaldo", "valdirene"]}
+        self.assertEqual(acessos, {"chefe": None, "com": tudo, "sem": None, "antigo": None})
+        u = Usuarios(self.banco)
+        self.assertEqual(premiacoes_permitidas(u.obter("com")), (tudo["abas"], tudo["supervisores"]))
+        self.assertEqual(premiacoes_permitidas(u.obter("sem")), ([], []))
+
+    def test_o_banco_recusa_acesso_mal_formado(self):
+        import psycopg  # só aqui: sem o psycopg, a classe inteira é pulada
+        self.banco.migrar()
+        self.criar_usuario("ana")
+        for errado in ('[1]', '{"abas": "vendedores", "supervisores": []}', '{"abas": []}', '"x"'):
+            with self.subTest(errado=errado), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.banco.conexao() as con:
+                    con.execute("UPDATE usuarios SET premiacoes = %s::jsonb WHERE login = 'ana'", [errado])
 
 
 class TestCadastroESessao(Base):
@@ -244,7 +327,7 @@ class TestMigracao040(BaseBanco):
         self.criar("igual.metas", paginas=["gestao"], gestao={"modo": "metas", "vendedores": None})
         self.criar("aba.velha", paginas=["projecoes"], visoes=["geral"], projecoes=todos)  # aba que não existe mais
         self.criar("antigo", paginas=None, visoes=None)  # de antes da escolha de páginas: só Metas
-        self.assertEqual(self.banco.migrar(), ["040_acesso_vendedores"])
+        self.assertEqual(self.banco.migrar()[:1], ["040_acesso_vendedores"])  # e as que vieram depois
         with self.banco.conexao() as con:
             escopos = dict(con.execute("SELECT login, escopo FROM usuarios").fetchall())
             colunas = {c for (c,) in con.execute("SELECT column_name FROM information_schema.columns "

@@ -40,6 +40,10 @@ ganham sobre o recebimento e ficam fora). O % é do vendedor para cada produto (
 - menos as devoluções não canceladas de todos os motivos (pela data de entrada) e os brindes dos motivos escolhidos
   (padrão: danificado e vencido), cada um × o % de hoje da tabela para o vendedor e o produto (a devolução não traz o
   valor da comissão e às vezes vem com 0%; o brinde não tem %). Produto sem % na tabela não desconta.
+
+Quem vê o quê: as abas e os quadros de supervisor de cada visualizador ficam em Premiações › Configurar › Acesso por
+usuário (bi/acesso.py, coluna premiacoes); os vendedores dentro deles, na tela Usuários. O quadro de um supervisor só
+aparece para quem vê a carteira inteira do estado dele. O PDF de cada aba (bi/premiacoes_pdf.py) sai com o mesmo acesso.
 """
 from __future__ import annotations
 
@@ -49,12 +53,14 @@ import math
 import re
 from collections import Counter
 
+from . import premiacoes_pdf
 from .configuracao import RegrasNoBanco
 from .metas import Calculadora, nome_bonito
 from .sugestao import curto_mes, indice, ler_mes, rotulo_mes, texto_mes
 
 ESTADOS = ("BA", "ES")
 ABAS = ("vendedores", "supervisores", "comissao")
+TITULOS_ABAS = {"vendedores": "Vendedores", "supervisores": "Supervisores", "comissao": "Comissão"}
 SUPERVISORES = ("marcos", "ronaldo", "valdirene")
 INDICADORES = ("faturamento", "mix", "positivacao", "novos", "reativacao")
 TITULOS = {"faturamento": "Faturamento líquido", "mix": "Mix (exceto mussarela)", "positivacao": "Positivação",
@@ -492,6 +498,21 @@ class Premiacoes:
             return []
         return [e for e in ESTADOS if equipes is None or e in equipes]
 
+    def supervisores_do_acesso(self, permitidos: set[int] | None, equipes: set[str] | None,
+                               supervisores: list[str] | None = None, cfg: dict | None = None) -> list[dict]:
+        """Os supervisores (das regras, na ordem delas) cujo quadro o usuário vê: os liberados para ele na configuração da
+        página (None = todos) que são de um estado cuja carteira inteira ele vê (estados_supervisor)."""
+        estados = self.estados_supervisor(permitidos, equipes)
+        lista = (cfg or self.config.atual())["supervisores"]["lista"]
+        return [s for s in lista if s["estado"] in estados and (supervisores is None or s["id"] in supervisores)]
+
+    def abas_do_acesso(self, permitidos: set[int] | None, equipes: set[str] | None, abas: list[str] | None = None,
+                       supervisores: list[str] | None = None, cfg: dict | None = None) -> list[str]:
+        """As abas que o usuário vê, na ordem da página: as liberadas para ele na configuração da página (None = todas);
+        a dos supervisores, só com o quadro de algum supervisor que ele possa ver."""
+        return [a for a in ABAS if (abas is None or a in abas)
+                and (a != "supervisores" or self.supervisores_do_acesso(permitidos, equipes, supervisores, cfg))]
+
     def meses(self) -> list[int]:
         """Os meses com meta de clientes até o mês dos dados (do mais novo ao mais velho)."""
         cache = self.calc.cache
@@ -519,12 +540,12 @@ class Premiacoes:
             raise ValueError(f"escolha um mês {quais} entre {curto_mes(meses[-1])} e {curto_mes(meses[0])}")
         return i, meses
 
-    def _base(self, aba: str, i: int, meses: list[int], permitidos, equipes) -> dict:
+    def _base(self, aba: str, i: int, meses: list[int], abas: list[str]) -> dict:
+        """O que toda aba devolve. abas: as que o usuário vê (abas_do_acesso)."""
         hoje = self.hoje()
         return {
             "aba": aba,
-            "abas": ["vendedores", *(["supervisores"] if self.estados_supervisor(permitidos, equipes) else []),
-                     "comissao"],
+            "abas": abas,
             "mes": _mes(i),
             "meses": [_mes(m) for m in meses],
             "situacao": "final" if hoje > _fim(i) else "prevista",
@@ -534,21 +555,43 @@ class Premiacoes:
         }
 
     def calcular(self, aba: str | None = None, mes: str | None = None, permitidos: set[int] | None = None,
-                 equipes: set[str] | None = None) -> dict:
-        """aba: vendedores, supervisores ou comissao (vazio = vendedores); mes: AAAA-MM (vazio = o mês dos dados).
-        permitidos/equipes: o que o usuário vê (None = sem limite), como na página de Metas."""
-        aba = aba or "vendedores"
-        if aba not in ABAS:
+                 equipes: set[str] | None = None, abas: list[str] | None = None,
+                 supervisores: list[str] | None = None) -> dict:
+        """aba: vendedores, supervisores ou comissao (vazio = a primeira que o usuário vê); mes: AAAA-MM (vazio = o mês
+        dos dados). permitidos/equipes: os vendedores do acesso (tela Usuários; None = sem limite). abas/supervisores: o
+        que a configuração da página libera para o usuário (bi/acesso.py premiacoes_permitidas; None = tudo). Aba fora do
+        acesso -> PermissionError."""
+        if aba and aba not in ABAS:
             raise ValueError(f"aba desconhecida: {aba}")
+        vistas = self.abas_do_acesso(permitidos, equipes, abas, supervisores)
+        if not vistas:
+            raise PermissionError("seu acesso ainda não tem nenhuma aba das Premiações liberada; fale com o "
+                                  "administrador")
+        aba = aba or vistas[0]
+        if aba not in vistas:
+            if aba == "supervisores" and (abas is None or aba in abas) and not self.estados_supervisor(permitidos,
+                                                                                                        equipes):
+                raise PermissionError("a premiação dos supervisores soma a carteira inteira do estado: seu acesso, "
+                                      "limitado a alguns vendedores ou equipes, não a inclui")
+            raise PermissionError(f"seu acesso não inclui a aba {TITULOS_ABAS[aba]} das Premiações")
         if aba == "supervisores":
-            return self.supervisores(mes, permitidos, equipes)
+            return self.supervisores(mes, permitidos, equipes, supervisores, vistas)
         if aba == "comissao":
-            return self.comissao(mes, permitidos, equipes)
-        return self.vendedores(mes, permitidos, equipes)
+            return self.comissao(mes, permitidos, equipes, vistas)
+        return self.vendedores(mes, permitidos, equipes, vistas)
+
+    def pdf(self, aba: str | None = None, mes: str | None = None, permitidos: set[int] | None = None,
+            equipes: set[str] | None = None, abas: list[str] | None = None,
+            supervisores: list[str] | None = None) -> tuple[bytes, str]:
+        """A tabela de uma aba em PDF (bi/premiacoes_pdf.py), com o mesmo acesso de calcular: (conteúdo, nome do
+        arquivo). Aba sem nada para mostrar no mês -> ValueError."""
+        d = self.calcular(aba, mes, permitidos, equipes, abas, supervisores)
+        return premiacoes_pdf.documento(d), premiacoes_pdf.nome_arquivo(d)
 
     # --- vendedores --------------------------------------------------------------------------
     def vendedores(self, mes: str | None = None, permitidos: set[int] | None = None,
-                   equipes: set[str] | None = None) -> dict:
+                   equipes: set[str] | None = None, abas: list[str] | None = None) -> dict:
+        """abas: as que o usuário vê (None = abas_do_acesso só pelos vendedores do acesso)."""
         self._conferir()
         i, meses = self._escolher_mes(mes)
         regras = self.calc.regras()
@@ -583,7 +626,7 @@ class Premiacoes:
         linhas.sort(key=lambda v: v["nome"].upper())
         meta_total = sum(v["meta"] for v in linhas)
         return {
-            **self._base("vendedores", i, meses, permitidos, equipes),
+            **self._base("vendedores", i, meses, abas if abas is not None else self.abas_do_acesso(permitidos, equipes)),
             "faixas": faixas,
             "vendedores": linhas,
             "total": {"meta": meta_total, "atendidos": total_atendidos, "pct": _div(total_atendidos, meta_total),
@@ -811,18 +854,23 @@ class Premiacoes:
         }
 
     def supervisores(self, mes: str | None = None, permitidos: set[int] | None = None,
-                     equipes: set[str] | None = None) -> dict:
-        estados = self.estados_supervisor(permitidos, equipes)
-        if not estados:
+                     equipes: set[str] | None = None, quais: list[str] | None = None,
+                     abas: list[str] | None = None) -> dict:
+        """quais: os supervisores liberados para o usuário na configuração da página (None = todos); só aparecem os de
+        um estado cuja carteira inteira ele vê. abas: as que ele vê (None = abas_do_acesso só pelos vendedores)."""
+        if not self.estados_supervisor(permitidos, equipes):
             raise PermissionError("a premiação dos supervisores soma a carteira inteira do estado: seu acesso, limitado "
                                   "a alguns vendedores ou equipes, não a inclui")
+        cfg_total = self.config.atual()
+        lista = self.supervisores_do_acesso(permitidos, equipes, quais, cfg_total)
+        if not lista:
+            raise PermissionError("seu acesso não inclui o quadro de nenhum supervisor")
+        estados = [e for e in ESTADOS if any(s["estado"] == e for s in lista)]
         self._conferir(detalhe=True)
         cache = self.calc.cache
         i, meses = self._escolher_mes(mes)
         regras = self.calc.regras()
-        cfg_total = self.config.atual()
         cfg = cfg_total["supervisores"]
-        lista = [s for s in cfg["lista"] if s["estado"] in estados]
         fora_mix = set(cfg["produtos_fora_mix"]) | {regras.produto(p) for p in cfg["produtos_fora_mix"]}
         vencido = set(cfg["motivos_vencido"])
         carteiras = self._carteiras(regras)
@@ -879,7 +927,8 @@ class Premiacoes:
             avisos.append(f"A janela da inadimplência começa em {curto_mes(j_de)}, antes do início dos dados "
                           f"({inicio.strftime('%m/%Y')}): o faturamento dos 6 meses fica menor que o real.")
         return {
-            **self._base("supervisores", i, meses, permitidos, equipes),
+            **self._base("supervisores", i, meses,
+                         abas if abas is not None else self.abas_do_acesso(permitidos, equipes, cfg=cfg_total)),
             "supervisores": cartoes,
             "escalas": {k: cfg[k] for k in ("escala_faturamento", "escala_clientes", "trava", "bonus", "devolucao")},
             "janela": {"de": texto_mes(j_de), "ate": texto_mes(j_ate), "rotulo": f"{curto_mes(j_de)} a {curto_mes(j_ate)}"},
@@ -924,9 +973,10 @@ class Premiacoes:
         return mov
 
     def comissao(self, mes: str | None = None, permitidos: set[int] | None = None,
-                 equipes: set[str] | None = None) -> dict:
+                 equipes: set[str] | None = None, abas: list[str] | None = None) -> dict:
         """A comissão de cada vendedor das equipes BA e ES no mês: a das vendas (gravada pelo ERP) menos as devoluções e
-        os brindes escolhidos × o % de hoje da tabela do vendedor para o produto."""
+        os brindes escolhidos × o % de hoje da tabela do vendedor para o produto. abas: as que o usuário vê (None =
+        abas_do_acesso só pelos vendedores)."""
         self._conferir(detalhe=True)
         cache = self.calc.cache
         if cache.sem_comissao:
@@ -997,7 +1047,7 @@ class Premiacoes:
                           "de algum vendedor) não descontam: o vendedor não tem % de comissão para o produto na tabela "
                           "do ERP. Veja em Comissão por produto.")
         return {
-            **self._base("comissao", i, meses, permitidos, equipes),
+            **self._base("comissao", i, meses, abas if abas is not None else self.abas_do_acesso(permitidos, equipes)),
             "vendedores": linhas,
             "total": total,
             "por_estado": por_estado,

@@ -1,24 +1,38 @@
 // Configuração da página Premiações (só administradores): as faixas dos vendedores; cada supervisor (nome, variável,
 // pesos, meta do mix, prêmio da inadimplência e as metas de todo mês de clientes novos e de reativação); as regras dos
 // supervisores (as faixas, a trava, o bônus, o desconto pelo vencido, os dias sem comprar da reativação, os produtos
-// fora do mix e os dias de atraso da inadimplência); as metas de um supervisor num mês; e os motivos dos brindes que
-// descontam da comissão. Quem vê a página fica em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em
-// Usuários). Tudo vale depois de Salvar, para todos os meses.
+// fora do mix e os dias de atraso da inadimplência); as metas de um supervisor num mês; os motivos dos brindes que
+// descontam da comissão; e, em "Acesso por usuário", as abas e os quadros de supervisor que cada visualizador vê (os
+// vendedores dele, em todas as páginas, ficam em Usuários; aqui só aparecem, para avisar do quadro que ficaria de fora).
+// Tudo vale depois de Salvar; as regras, para todos os meses.
 import { api, esc, fmt, icone, toast } from "./util.js";
+import { iniciais } from "./conta.js";
 
 const INDICADORES = [
   ["faturamento", "Faturamento líquido"], ["mix", "Mix (exceto mussarela)"], ["positivacao", "Positivação"],
   ["novos", "Ativação de clientes novos"], ["reativacao", "Reativação de clientes"],
 ];
 const SECOES = [["vendedores", "usuario", "Vendedores"], ["supervisores", "pessoas", "Supervisores"],
-  ["regras", "ajustes", "Regras dos supervisores"], ["metas", "alvo", "Metas dos supervisores"], ["comissao", "moeda", "Comissão"]];
+  ["regras", "ajustes", "Regras dos supervisores"], ["metas", "alvo", "Metas dos supervisores"], ["comissao", "moeda", "Comissão"],
+  ["usuarios", "escudo", "Acesso por usuário"]];
+// As abas da página Premiações, na ordem dela (bi/premiacoes.py ABAS).
+const ABAS = [
+  ["vendedores", "usuario", "Vendedores", "a premiação de cada vendedor pela meta de clientes"],
+  ["supervisores", "pessoas", "Supervisores", "os quadros dos supervisores, que somam a carteira inteira do estado"],
+  ["comissao", "moeda", "Comissão", "a comissão de cada vendedor das equipes BA e ES"],
+];
+const NOME_EQUIPE = { ES: "ES", BA: "BA", EDIR: "Edir" };
 
 let ctx = null, raiz = null;
 let dados = null;          // resposta de /api/premiacoes/config
 let orig = null, rasc = null;
+let usuarios = [], nomesAcesso = {};     // os visualizadores e o nome dos vendedores das listas de "só alguns"
+let origAcessos = null, acessos = null;  // login -> { ve, abas, supervisores }
+let usuarioSel = null, buscaUsuario = "";
 let secao = "vendedores";
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
+const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export function configPremiacoesTemAlteracoes() { return !!(rasc && contarAlteracoes() > 0); }
 
@@ -31,6 +45,7 @@ export async function montarConfigPremiacoes(container, contexto) {
     const q = new URLSearchParams(location.hash.split("?")[1] || "");
     const mes = /^\d{4}-\d{2}$/.test(q.get("m") || "") ? q.get("m") : "";
     if (SECOES.some(([id]) => id === q.get("secao"))) secao = q.get("secao");
+    if (q.get("u")) { secao = "usuarios"; usuarioSel = q.get("u"); }  // o link "Configurar" da tela Usuários
     carregarDados(await api(`/api/premiacoes/config${mes ? `?mes=${mes}` : ""}`));
     render();
   } catch (e) {
@@ -42,6 +57,15 @@ function carregarDados(r) {
   dados = r;
   orig = clone(r.config);
   rasc = clone(r.config);
+  usuarios = r.usuarios || [];
+  nomesAcesso = r.nomes || {};
+  origAcessos = Object.fromEntries(usuarios.map((u) => [u.login, {
+    ve: (u.paginas || []).includes("premiacoes"),
+    abas: [...(u.premiacoes?.abas || [])],
+    supervisores: [...(u.premiacoes?.supervisores || [])],
+  }]));
+  acessos = clone(origAcessos);
+  if (!usuarios.some((u) => u.login === usuarioSel)) usuarioSel = usuarios[0]?.login ?? null;
 }
 
 // ---------- apoio ----------
@@ -59,12 +83,17 @@ function folhas(o, prefixo = "", saida = {}) {
   return saida;
 }
 
-function contarAlteracoes() {
+function contarAlteracoesRegras() {
   const a = folhas(rasc), b = folhas(orig);
   let n = 0;
   for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (!Object.is(a[k], b[k])) n++;
   return n;
 }
+
+// Uma pessoa com o acesso mudado conta como uma alteração.
+const usuarioMudou = (login) => !igual(acessos[login], origAcessos[login]);
+const usuariosMudados = () => usuarios.filter((u) => usuarioMudou(u.login));
+const contarAlteracoes = () => contarAlteracoesRegras() + usuariosMudados().length;
 
 const somaPesos = (s) => INDICADORES.reduce((t, [k]) => t + (Number(s.pesos[k]) || 0), 0);
 const padraoDe = (id) => dados.padrao.supervisores.lista.find((x) => x.id === id);
@@ -76,8 +105,9 @@ function render() {
     <aside class="cartao config-menu entra" style="--i:0">
       ${SECOES.map(([id, ic, nome]) => `<button data-secao="${id}" class="${secao === id ? "ativa" : ""}">${icone(ic)}${nome}</button>`).join("")}
       <div class="dica">${icone("info")} As regras valem para todos os meses assim que você salvar: mudar uma faixa ou um
-        peso recalcula também os meses que já passaram. Cada pessoa vê só os vendedores do acesso dela, escolhidos em
-        <a href="#/usuarios">Usuários</a> (a aba dos supervisores, só com todos os vendedores ou equipes inteiras).</div>
+        peso recalcula também os meses que já passaram. As abas e os quadros de supervisor de cada pessoa ficam em Acesso
+        por usuário; os vendedores dentro deles, em <a href="#/usuarios">Usuários</a> (o quadro de um supervisor, só para
+        quem vê todos os vendedores do estado dele).</div>
     </aside>
     <div id="cp-secao"></div>
   </div>
@@ -92,7 +122,7 @@ function render() {
     renderSecao();
   }));
   raiz.querySelector("#cp-salvar").addEventListener("click", salvar);
-  raiz.querySelector("#cp-descartar").addEventListener("click", () => { rasc = clone(orig); render(); });
+  raiz.querySelector("#cp-descartar").addEventListener("click", () => { rasc = clone(orig); acessos = clone(origAcessos); render(); });
   renderSecao();
 }
 
@@ -102,6 +132,7 @@ function renderSecao() {
   else if (secao === "regras") secaoRegras(alvo);
   else if (secao === "metas") secaoMetas(alvo);
   else if (secao === "comissao") secaoComissao(alvo);
+  else if (secao === "usuarios") secaoUsuarios(alvo);
   else secaoVendedores(alvo);
   atualizarBarra();
 }
@@ -466,6 +497,209 @@ function limparVazios(mes) {
   if (!Object.keys(metasMes[mes]).length) delete metasMes[mes];
 }
 
+// ======================================================================================
+// Acesso por usuário: as abas e os quadros de supervisor de cada visualizador (os vendedores dele ficam em Usuários)
+// ======================================================================================
+const tituloAba = (id) => ABAS.find(([a]) => a === id)?.[2] || id;
+const nomeVendedor = (id) => nomesAcesso[id] || `Vendedor ${id}`;
+const emLista = (itens) => (itens.length <= 1 ? itens.join("") : `${itens.slice(0, -1).join(", ")} e ${itens[itens.length - 1]}`);
+
+// Os estados cuja carteira inteira a pessoa vê pelos vendedores do acesso (o quadro de um supervisor soma o estado
+// inteiro, como o servidor confere): null = os dois; vazio = nenhum (só alguns vendedores, ou ainda sem escolha).
+function estadosDoAcesso(u) {
+  const e = u.escopo;
+  if (!e || e.modo === "alguns") return new Set();
+  if (e.modo === "todos") return null;
+  return new Set(e.equipes);
+}
+
+const quadroFora = (u, s) => { const est = estadosDoAcesso(u); return est !== null && !est.has(s.estado); };
+const quadrosVistos = (u) => rasc.supervisores.lista.filter((s) => acessos[u.login].supervisores.includes(s.id) && !quadroFora(u, s));
+// As abas marcadas que aparecem para a pessoa: a dos supervisores, só com algum quadro que ela possa ver.
+const abasVistas = (u) => acessos[u.login].abas.filter((id) => id !== "supervisores" || quadrosVistos(u).length);
+
+// Os vendedores do acesso, como estão na tela Usuários (aqui só para ler).
+function textoVendedores(u) {
+  const e = u.escopo;
+  if (!e) return "ainda nenhum vendedor escolhido";
+  if (e.modo === "todos") return "todos os vendedores";
+  if (e.modo === "equipes") return `os vendedores ${e.equipes.length === 1 ? "da equipe" : "das equipes"} ${emLista(e.equipes.map((q) => NOME_EQUIPE[q] || q))}`;
+  const n = e.vendedores.length;
+  return n <= 3 ? `só ${emLista(e.vendedores.map(nomeVendedor))}` : `só ${n} vendedores escolhidos`;
+}
+
+function resumoCurtoAcesso(u) {
+  const a = acessos[u.login];
+  if (!a.ve) return "não vê a página";
+  if (!a.abas.length) return "sem abas";
+  return `${a.abas.length} aba${a.abas.length === 1 ? "" : "s"}`;
+}
+
+// O que falta para salvar o acesso (null = pode salvar). O servidor confere de novo.
+function erroAcesso(u) {
+  const a = acessos[u.login];
+  if (!a.ve) return (u.paginas || []).some((p) => p !== "premiacoes") ? null : "é a única página desta pessoa; libere outra em Usuários antes de tirar esta";
+  if (!a.abas.length) return "marque ao menos uma aba, ou desligue a página";
+  if (a.abas.includes("supervisores") && !a.supervisores.length) return "marque ao menos um supervisor, ou tire a aba Supervisores";
+  return null;
+}
+
+function erroUsuario(u, msg) {
+  secao = "usuarios";
+  usuarioSel = u.login;
+  render();
+  const el = raiz.querySelector("#cp-u-erro");
+  el.textContent = `${u.nome}: ${msg}.`;
+  el.hidden = false;
+  toast(`${u.nome}: ${msg}`, "erro");
+}
+
+function secaoUsuarios(alvo) {
+  if (!usuarios.length) {
+    alvo.innerHTML = `<section class="cartao usu-vazio entra" style="--i:1">
+      <div class="usu-vazio-ic">${icone("escudo")}</div><h3>Ainda não há visualizadores</h3>
+      <p>Cadastre as pessoas em <b>Usuários</b>; depois, aqui você escolhe as abas das Premiações de cada uma.</p>
+      <a class="btn primario" href="#/usuarios">${icone("escudo")}Abrir Usuários</a></section>`;
+    return;
+  }
+  alvo.innerHTML = `
+  <div class="usuarios cp-usuarios">
+    <aside class="cartao usu-lista entra" style="--i:1">
+      <div class="cartao-cab"><div><h2>${icone("escudo")}Visualizadores</h2>
+        <p class="sub">Quem vê a página, quais abas e quais quadros de supervisor</p></div></div>
+      <label class="campo sem-seta cp-busca-u"><span class="ic-campo">${icone("busca")}</span><input id="cp-busca-u" type="search" placeholder="Buscar pessoa" value="${esc(buscaUsuario)}"></label>
+      <div class="usu-itens" id="cp-u-itens"></div>
+      <div class="dica">${icone("info")}<span>Nome, senha, páginas e os vendedores que cada pessoa vê (em todas as páginas)
+        ficam em <a href="#/usuarios">Usuários</a>. Administradores veem tudo.</span></div>
+    </aside>
+    <div id="cp-u-editor"></div>
+  </div>`;
+  alvo.querySelector("#cp-busca-u").addEventListener("input", (e) => { buscaUsuario = e.target.value; desenharItensUsuarios(); });
+  desenharItensUsuarios();
+  desenharEditorUsuario();
+}
+
+function desenharItensUsuarios() {
+  const termo = buscaUsuario.trim().toLowerCase();
+  const el = raiz.querySelector("#cp-u-itens");
+  el.innerHTML = usuarios.filter((u) => !termo || `${u.nome} ${u.login}`.toLowerCase().includes(termo)).map((u, i) => {
+    const a = acessos[u.login];
+    return `<button type="button" class="usu-item ${u.login === usuarioSel ? "selecionado" : ""} ${a.ve ? "" : "inativo"}" data-login="${esc(u.login)}" style="--i:${i}">
+      <span class="avatar">${esc(iniciais(u.nome))}</span>
+      <span class="t"><b>${esc(u.nome)}${usuarioMudou(u.login) ? " <em>(alterado)</em>" : ""}</b><small>${esc(u.login)} · ${esc(resumoCurtoAcesso(u))}</small></span>
+      <span class="chip-papel ${a.ve ? "" : "inativo"}">${a.ve ? "Vê" : "Não vê"}</span>
+    </button>`;
+  }).join("") || `<p class="usu-nota">${icone("busca")}Ninguém com esse nome.</p>`;
+  el.querySelectorAll(".usu-item").forEach((b) => b.addEventListener("click", () => {
+    if (usuarioSel === b.dataset.login) return;
+    usuarioSel = b.dataset.login;
+    desenharItensUsuarios();
+    desenharEditorUsuario();
+  }));
+}
+
+function desenharEditorUsuario() {
+  const alvo = raiz.querySelector("#cp-u-editor");
+  const u = usuarios.find((x) => x.login === usuarioSel);
+  if (!u) { alvo.innerHTML = ""; return; }
+  const a = acessos[u.login];
+  const outras = (u.paginas || []).filter((p) => p !== "premiacoes");
+  alvo.innerHTML = `
+  <section class="cartao usu-editor entra" style="--i:2">
+    <div class="cartao-cab"><div>
+      <h2>${icone("trofeu")}Premiações de ${esc(u.nome)}</h2>
+      <p class="sub">${esc(u.login)}${u.ativo ? "" : " · acesso desativado em Usuários"}</p>
+    </div></div>
+    <div class="opcao-linha">
+      <button class="chave ${a.ve ? "ligada" : ""}" id="cp-u-ve" type="button" role="switch" aria-checked="${a.ve}" aria-label="Vê a página Premiações"></button>
+      <div><b>Vê a página Premiações</b><p>${a.ve ? "A página aparece na barra lateral desta pessoa." : "Desligado, a página some da barra lateral e o servidor não manda os números."}
+        ${!outras.length && a.ve ? " É a única página dela: para tirar, libere outra antes em Usuários." : ""}</p></div>
+    </div>
+    <div id="cp-u-permissoes" ${a.ve ? "" : "hidden"}></div>
+    <div class="usu-resumo" id="cp-u-resumo"></div>
+    <p class="form-erro" id="cp-u-erro" role="alert" hidden></p>
+  </section>`;
+  alvo.querySelector("#cp-u-ve").addEventListener("click", () => {
+    a.ve = !a.ve;
+    desenharEditorUsuario();
+    aoMudarAcesso();
+  });
+  if (a.ve) desenharPermissoesUsuario(u);
+  atualizarResumoUsuario(u);
+}
+
+function aoMudarAcesso() {
+  desenharItensUsuarios();
+  atualizarBarra();
+}
+
+function desenharPermissoesUsuario(u) {
+  const a = acessos[u.login];
+  const alvo = raiz.querySelector("#cp-u-permissoes");
+  const lista = rasc.supervisores.lista;
+  const nenhumEstado = lista.every((s) => quadroFora(u, s));
+  const opcao = (dado, id, on, ic, titulo, sub, aviso) => `<button type="button" class="visao-op ${on ? "ativo" : ""}" data-${dado}="${id}" aria-pressed="${on}">
+      <span class="marca-caixa">${icone("visto")}</span>${icone(ic)}
+      <span><b>${esc(titulo)}</b><small>${esc(sub)}</small>${aviso ? `<small class="aviso-nota">${esc(aviso)}</small>` : ""}</span>
+    </button>`;
+  alvo.innerHTML = `
+    <h3 class="usu-titulo">Abas que pode ver</h3>
+    <div class="visoes-escolha">
+      ${ABAS.map(([id, ic, titulo, sub]) => opcao("aba", id, a.abas.includes(id), ic, titulo, sub,
+        id === "supervisores" && nenhumEstado ? "os vendedores do acesso desta pessoa não incluem um estado inteiro: a aba não aparece para ela" : "")).join("")}
+    </div>
+    ${a.abas.includes("supervisores") ? `
+    <h3 class="usu-titulo">Quadros dos supervisores que pode ver</h3>
+    <div class="visoes-escolha">
+      ${lista.map((s) => opcao("sup", s.id, a.supervisores.includes(s.id), "pessoas", s.nome, `supervisor do ${s.estado}`,
+        quadroFora(u, s) && !nenhumEstado ? `fora do acesso desta pessoa (precisa ver todos os vendedores do ${s.estado}): o quadro não aparece` : "")).join("")}
+    </div>` : ""}
+    <p class="usu-nota ${u.escopo ? "" : "aviso-nota"}">${icone(u.escopo ? "pessoas" : "alerta")}<span>Dentro das abas, ${esc(u.nome)} vê
+      <b>${esc(textoVendedores(u))}</b>, como está em <a href="#/usuarios">Usuários</a> (vale para todas as páginas).</span></p>`;
+  const alternar = (lista_, id, ordem) => {
+    const marcados = new Set(lista_);
+    marcados.has(id) ? marcados.delete(id) : marcados.add(id);
+    return ordem.filter((x) => marcados.has(x));
+  };
+  alvo.querySelectorAll("[data-aba]").forEach((b) => b.addEventListener("click", () => {
+    a.abas = alternar(a.abas, b.dataset.aba, ABAS.map(([id]) => id));
+    // Ao ligar a aba dos supervisores pela primeira vez, já vêm marcados os quadros que a pessoa pode ver.
+    if (b.dataset.aba === "supervisores" && a.abas.includes("supervisores") && !a.supervisores.length) {
+      a.supervisores = lista.filter((s) => !quadroFora(u, s)).map((s) => s.id);
+    }
+    desenharPermissoesUsuario(u);
+    atualizarResumoUsuario(u);
+    aoMudarAcesso();
+  }));
+  alvo.querySelectorAll("[data-sup]").forEach((b) => b.addEventListener("click", () => {
+    a.supervisores = alternar(a.supervisores, b.dataset.sup, lista.map((s) => s.id));
+    b.classList.toggle("ativo", a.supervisores.includes(b.dataset.sup));
+    b.setAttribute("aria-pressed", a.supervisores.includes(b.dataset.sup));
+    atualizarResumoUsuario(u);
+    aoMudarAcesso();
+  }));
+}
+
+function atualizarResumoUsuario(u) {
+  const el = raiz.querySelector("#cp-u-resumo");
+  if (!el) return;
+  const a = acessos[u.login];
+  const quem = `<b>${esc(u.nome)}</b>`;
+  let txt;
+  if (!a.ve) txt = `${quem} não vê a página Premiações.`;
+  else if (!a.abas.length) txt = "Marque ao menos uma aba para esta pessoa: sem abas, a página fica vazia para ela.";
+  else if (a.abas.includes("supervisores") && !a.supervisores.length) txt = "Marque ao menos um supervisor, ou tire a aba Supervisores.";
+  else {
+    const vistas = abasVistas(u), quadros = quadrosVistos(u);
+    const abas = emLista(vistas.map((id) => `<b>${esc(tituloAba(id))}</b>`));
+    const sups = vistas.includes("supervisores") ? `, com ${quadros.length === 1 ? "o quadro" : "os quadros"} de ${emLista(quadros.map((s) => `<b>${esc(s.nome)}</b>`))}` : "";
+    txt = vistas.length
+      ? `${quem} vê ${vistas.length === 1 ? "a aba" : "as abas"} ${abas}${sups}; dentro delas, ${esc(textoVendedores(u))}.`
+      : `${quem} não veria nenhuma aba: os quadros marcados ficam fora dos vendedores do acesso dela.`;
+  }
+  el.innerHTML = `${icone("olho")}<span>${txt}</span>`;
+}
+
 // ---------- gravação ----------
 function erro(msg) {
   const el = raiz.querySelector("#cp-erro");
@@ -474,20 +708,35 @@ function erro(msg) {
 }
 
 async function salvar() {
-  const errado = rasc.supervisores.lista.find((s) => Math.abs(somaPesos(s) - 1) > 1e-6);
+  const regras = contarAlteracoesRegras() > 0;
+  const mudados = usuariosMudados();
+  const errado = regras && rasc.supervisores.lista.find((s) => Math.abs(somaPesos(s) - 1) > 1e-6);
   if (errado) {
     if (secao !== "supervisores") { secao = "supervisores"; render(); }
     return erro(`Os pesos de ${errado.nome || "um supervisor"} somam ${fmt.num(somaPesos(errado) * 100, 2)}%: precisam dar 100%.`);
   }
+  for (const u of mudados) {
+    const msg = erroAcesso(u);
+    if (msg) return erroUsuario(u, msg);
+  }
+  // Só vai o que mudou: sem regras novas, o servidor não grava outra versão delas.
+  const corpo = { mes: dados.mes.valor };
+  if (regras) corpo.config = rasc;
+  if (mudados.length) corpo.usuarios = Object.fromEntries(mudados.map((u) => [u.login, acessos[u.login]]));
   const btn = raiz.querySelector("#cp-salvar");
   btn.disabled = true;
   try {
-    carregarDados(await api("/api/premiacoes/config", { json: { config: rasc, mes: dados.mes.valor } }));
-    toast("Regras das premiações salvas");
+    carregarDados(await api("/api/premiacoes/config", { json: corpo }));
+    toast(regras && mudados.length ? "Regras e acessos das premiações salvos"
+      : regras ? "Regras das premiações salvas" : "Acesso às premiações salvo");
     ctx.aoSalvar && ctx.aoSalvar();
     render();
   } catch (e) {
-    erro(e.message);
+    if (secao === "usuarios") {
+      const el = raiz.querySelector("#cp-u-erro");
+      if (el) { el.textContent = e.message; el.hidden = false; }
+      toast(e.message, "erro");
+    } else erro(e.message);
   } finally {
     btn.disabled = false;
   }
