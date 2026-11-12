@@ -546,6 +546,25 @@ function textoEscala(faixas) {
   return faixas.map((f) => `a partir de ${pctFaixa(f.min)} da meta, ${pctFaixa(f.pct)}`).join("; ");
 }
 
+// As faixas de cada indicador usado (bi/premiacoes.py ESCALA), um item por linha; os que têm as mesmas faixas saem
+// juntos ("positivação, novos e reativação: ...").
+const ESCALA_DO_INDICADOR = { faturamento: "escala_faturamento", mix: "escala_faturamento", positivacao: "escala_positivacao",
+  novos: "escala_novos", reativacao: "escala_reativacao" };
+const NOME_NAS_FAIXAS = { faturamento: "faturamento", mix: "mix", positivacao: "positivação", novos: "novos",
+  reativacao: "reativação" };
+function textoFaixas(e, usados) {
+  const grupos = [];
+  for (const [k] of usados) {
+    const texto = textoEscala(e[ESCALA_DO_INDICADOR[k]] || []);
+    const g = grupos.find((x) => x.texto === texto);
+    if (g) g.nomes.push(NOME_NAS_FAIXAS[k]); else grupos.push({ texto, nomes: [NOME_NAS_FAIXAS[k]] });
+  }
+  return grupos.map((g) => {
+    const nomes = emLista(g.nomes);
+    return `<li><b>${nomes.charAt(0).toUpperCase() + nomes.slice(1)}:</b> ${g.texto}.</li>`;
+  }).join("");
+}
+
 function comoSupervisores(d, i) {
   const e = d.escalas;
   const sups = d.supervisores;
@@ -600,9 +619,9 @@ function comoSupervisores(d, i) {
             conta quem já tinha comprado: as vendas do painel começam em ${fmt.data(d.inicio_dados).slice(3)}; para quem não
             comprou desde então, a compra anterior é a do último título de venda do ERP. Quem nunca comprou não conta. Cada
             cliente conta uma vez no mês.</li>
-          <li><b>Faixas</b> (sem interpolação): faturamento e mix: ${textoEscala(e.escala_faturamento)}; positivação,
-            novos e reativação: ${textoEscala(e.escala_clientes)}. Abaixo da primeira faixa, a parcela fica em R$ 0. As
-            metas de novos e de reativação ficam em Configurar.</li>
+          <li><b>Faixas</b> (sem interpolação; abaixo da primeira faixa, a parcela fica em R$ 0). As faixas e as metas
+            de novos e de reativação ficam em Configurar.
+            <ul class="metodo-passos metodo-sub">${textoFaixas(e, usados)}</ul></li>
           <li><b>Trava</b> pelo % da meta de faturamento, sobre a soma das parcelas: ${e.trava.map((f) => `a partir de ${pctFaixa(f.min)}, paga ${pctFaixa(f.pct)}`).join("; ")};
             abaixo de ${pctFaixa(e.trava[0].min)}, nada.</li>
           <li><b>Bônus de superação</b>, só com o faturamento acima de 100% da meta, sobre o valor depois da trava:
@@ -618,7 +637,8 @@ function comoSupervisores(d, i) {
         </ul>
         <h4>Bom saber</h4>
         <ul class="metodo-passos">
-          <li>Com as faixas de 150%, as parcelas conquistadas podem passar do variável.</li>
+          <li>Com faixas que pagam mais de 100% da parcela (no padrão, 150% a partir de 120% da meta), as parcelas
+            conquistadas podem passar do variável.</li>
           <li>Enquanto o mês está em andamento, o prêmio aparece como previsto.</li>
           <li>As regras valem para todos os meses: mudar uma regra em Configurar recalcula também os meses que já passaram.</li>
         </ul>

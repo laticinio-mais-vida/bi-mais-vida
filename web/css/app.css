@@ -1324,6 +1324,9 @@ body.sem-rolagem { overflow: hidden; }
 .metodo-corpo { margin-top: 16px; animation: subir .4s var(--suave); }
 .metodo-passos { margin: 0; padding-left: 22px; display: grid; gap: 10px; color: var(--tinta-2); font-size: 14px; max-width: 980px; }
 .metodo-passos b { color: var(--tinta); }
+/* sem o min-width, uma tabela larga dentro de um passo (os pesos dos supervisores) alarga a lista inteira no celular */
+.metodo-passos > li { min-width: 0; }
+.metodo-sub { margin-top: 6px; gap: 4px; list-style: disc; }
 .metodo-corpo h4 { margin: 20px 0 10px; font-size: 14px; color: var(--tinta-2); }
 .erro-tabela td.rotulo { font-weight: 700; }
 /* botão Configurar de cada página (só administradores) e link de volta no topo das configurações */

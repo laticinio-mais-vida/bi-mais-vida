@@ -480,9 +480,11 @@ Cada indicador tem um peso; a **parcela** de referência é o peso × o variáve
 As metas de novos e de reativação não existem na planilha nem nas aprovadas: ficam no Configurar (um número por
 supervisor para todo mês). Qualquer meta pode ser trocada num mês específico.
 
-**Faixas** (% da meta → % da parcela pago, sem interpolação):
-- faturamento e mix: a partir de 90%, 30%; a partir de 100%, 100%;
-- positivação, novos e reativação: a partir de 80%, 40%; a partir de 100%, 100%; a partir de 120%, 150%.
+**Faixas** (% da meta → % da parcela pago, sem interpolação), em Premiações › Configurar › Regras dos supervisores:
+- faturamento e mix (as mesmas faixas): a partir de 90%, 30%; a partir de 100%, 100%;
+- positivação, novos e reativação, **cada um com as suas faixas** (o padrão é igual para os três): a partir de 80%, 40%;
+  a partir de 100%, 100%; a partir de 120%, 150%. Até 12/11/2026 os três tinham uma lista só; as regras salvas antes
+  disso abrem com essa lista copiada para cada um.
 
 **A conta**, nesta ordem (cada passo arredondado ao centavo):
 1. **Conquistado** = a soma das parcelas (pode passar do variável, por causa das faixas de 150%).

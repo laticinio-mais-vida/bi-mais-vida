@@ -307,7 +307,9 @@ function secaoRegras(alvo) {
         delas, a trava pelo % da meta de faturamento, depois o bônus de superação e, por último, o desconto pelo vencido.
         Não há interpolação entre as faixas.</p></div></div>
     ${editorFaixas("escala_faturamento", "Faixas do faturamento e do mix", "o segundo número é o % da parcela pago", "% da meta → paga (%)")}
-    ${editorFaixas("escala_clientes", "Faixas da positivação, dos novos e da reativação", "o segundo número é o % da parcela pago", "% da meta → paga (%)")}
+    ${editorFaixas("escala_positivacao", "Faixas da positivação", "o segundo número é o % da parcela pago", "% da meta → paga (%)")}
+    ${editorFaixas("escala_novos", "Faixas da ativação de clientes novos", "o segundo número é o % da parcela pago", "% da meta → paga (%)")}
+    ${editorFaixas("escala_reativacao", "Faixas da reativação de clientes", "o segundo número é o % da parcela pago", "% da meta → paga (%)")}
     ${editorFaixas("trava", "Trava do faturamento", "sobre a soma das parcelas; abaixo da primeira faixa, nada", "% da meta → paga (%)")}
     ${editorFaixas("bonus", "Bônus de superação", "só com o faturamento acima de 100% da meta; sobre o valor depois da trava", "% da meta → + (%)")}
     ${editorDevolucao()}

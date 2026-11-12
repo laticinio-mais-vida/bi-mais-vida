@@ -72,6 +72,14 @@ V1 = {
 }
 CHAVES_V1 = {"ajustes", "nomes", "maximo", "motivos_improprios", "receita", "mix", "inadimplencia", "positivacao",
              "devolucoes"}
+ESCALAS_CLIENTES = ("escala_positivacao", "escala_novos", "escala_reativacao")
+
+
+def so_escala_antiga(sup: dict, faixas) -> dict:
+    """As regras dos supervisores como eram salvas até 12/11/2026: uma escala só para positivação, novos e reativação."""
+    sup = {k: v for k, v in sup.items() if k not in ESCALAS_CLIENTES}
+    sup["escala_clientes"] = faixas
+    return sup
 
 # Para acrescentar ao cache: clientes, cadastros e compras.
 CLIENTE = "INSERT INTO clientes VALUES (?, ?, ?)"
@@ -134,15 +142,16 @@ class TestFuncoes(unittest.TestCase):
         self.assertEqual(clientes_para(54, 0.96), 52)  # 51,84
 
     def test_escalas(self):
-        fat, cli = REGRAS["escala_faturamento"], REGRAS["escala_clientes"]
+        fat = REGRAS["escala_faturamento"]
         for a, esperado in ((None, 0), (0.8999, 0), (0.9, 0.3), (1800 / 2000, 0.3), (0.9999, 0.3), (1.0, 1.0),
                             (1.5, 1.0)):
             with self.subTest(faturamento=a):
                 self.assertEqual(pct_faixa(a, fat), esperado)
-        for a, esperado in ((0.7999, 0), (0.8, 0.4), (32 / 40, 0.4), (0.9999, 0.4), (1.0, 1.0), (1.1999, 1.0),
-                            (1.2, 1.5), (24 / 20, 1.5), (3.0, 1.5)):
-            with self.subTest(clientes=a):
-                self.assertEqual(pct_faixa(a, cli), esperado)
+        for chave in ("escala_positivacao", "escala_novos", "escala_reativacao"):  # o padrão é igual nas três
+            for a, esperado in ((0.7999, 0), (0.8, 0.4), (32 / 40, 0.4), (0.9999, 0.4), (1.0, 1.0), (1.1999, 1.0),
+                                (1.2, 1.5), (24 / 20, 1.5), (3.0, 1.5)):
+                with self.subTest(chave, clientes=a):
+                    self.assertEqual(pct_faixa(a, REGRAS[chave]), esperado)
 
     def test_trava_bonus_e_devolucao(self):
         for a, esperado in ((None, 0), (0.8999, 0), (0.9, 0.5), (0.9499, 0.5), (0.95, 1.0), (1.3, 1.0)):
@@ -192,11 +201,11 @@ class TestFuncoes(unittest.TestCase):
     def test_proxima_e_alcance(self):
         self.assertIsNone(alcance(10, 0))
         self.assertIsNone(alcance(None, 10))
-        self.assertEqual(proxima(29, 40, REGRAS["escala_clientes"], True), {"min": 0.8, "pct": 0.4, "falta": 3})
-        self.assertEqual(proxima(894, 972, REGRAS["escala_clientes"], True)["falta"], 78)
+        self.assertEqual(proxima(29, 40, REGRAS["escala_novos"], True), {"min": 0.8, "pct": 0.4, "falta": 3})
+        self.assertEqual(proxima(894, 972, REGRAS["escala_positivacao"], True)["falta"], 78)
         self.assertEqual(proxima(2012630.37, 2140000, REGRAS["escala_faturamento"], False)["falta"], 127369.63)
-        self.assertIsNone(proxima(25, 20, REGRAS["escala_clientes"], True))  # 125%: já na última faixa
-        self.assertIsNone(proxima(10, None, REGRAS["escala_clientes"], True))
+        self.assertIsNone(proxima(25, 20, REGRAS["escala_reativacao"], True))  # 125%: já na última faixa
+        self.assertIsNone(proxima(10, None, REGRAS["escala_novos"], True))
 
     def test_nome_do_cliente_sem_o_codigo(self):
         self.assertEqual(nome_cliente("HOJE HAMBURGUERIA (CLIENTE 5959)"), "HOJE HAMBURGUERIA")
@@ -237,6 +246,30 @@ class TestRegras(unittest.TestCase):
         self.assertEqual((s["motivos_vencido"], s["produtos_fora_mix"], s["dias_sem_compra"], s["dias_inadimplencia"]),
                          ([3, 16], [32, 12551, 12552], 60, 30))
         self.assertFalse(CHAVES_V1 & set(s))  # o código antigo ainda abre uma versão nova, se precisar voltar
+        self.assertNotIn("escala_clientes", s)
+        clientes = [{"min": 0.8, "pct": 0.4}, {"min": 1.0, "pct": 1.0}, {"min": 1.2, "pct": 1.5}]
+        self.assertEqual([s[k] for k in ESCALAS_CLIENTES], [clientes] * 3)
+        s["escala_novos"].append({"min": 2, "pct": 2})
+        self.assertEqual(s["escala_positivacao"], clientes)  # listas separadas, não a mesma
+
+    def test_escalas_de_cada_indicador(self):
+        # Salvas até 12/11/2026: a escala única vira a de cada um dos três, e nada muda na conta.
+        antiga = [{"min": 0.7, "pct": 0.5}, {"min": 1.0, "pct": 1.0}]
+        cfg = padrao()
+        cfg["supervisores"] = so_escala_antiga(cfg["supervisores"], antiga)
+        s = _valida(cfg)["supervisores"]
+        self.assertNotIn("escala_clientes", s)
+        self.assertEqual([s[k] for k in ESCALAS_CLIENTES], [antiga] * 3)
+        self.assertEqual(_valida({**cfg, "supervisores": s})["supervisores"], s)  # já convertida, fica igual
+        # A escala própria vale mais que a antiga; quem não traz a sua fica com a cópia da antiga.
+        cfg["supervisores"]["escala_novos"] = [{"min": "1.1", "pct": "1"}, {"min": 0.9, "pct": 0.5}]
+        s = _valida(cfg)["supervisores"]
+        self.assertEqual(s["escala_novos"], [{"min": 0.9, "pct": 0.5}, {"min": 1.1, "pct": 1.0}])  # em ordem
+        self.assertEqual((s["escala_positivacao"], s["escala_reativacao"]), (antiga, antiga))
+        # Sem a antiga nem a própria: o padrão.
+        cfg = padrao()
+        del cfg["supervisores"]["escala_reativacao"]
+        self.assertEqual(_valida(cfg)["supervisores"]["escala_reativacao"], padrao()["supervisores"]["escala_reativacao"])
 
     def test_validacao(self):
         cfg = padrao()
@@ -270,7 +303,9 @@ class TestRegras(unittest.TestCase):
             "variável negativa": lambda c: c["supervisores"]["lista"][2].update(variavel=-1),
             "bônus abaixo de 100%": lambda c: c["supervisores"].update(bonus=[{"min": 0.95, "pct": 0.02}]),
             "trava acima de 100%": lambda c: c["supervisores"].update(trava=[{"min": 0.9, "pct": 1.5}]),
-            "escala vazia": lambda c: c["supervisores"].update(escala_clientes=[]),
+            "escala vazia": lambda c: c["supervisores"].update(escala_reativacao=[]),
+            "escala antiga vazia": lambda c: c.update(supervisores=so_escala_antiga(c["supervisores"], [])),
+            "escala acima de 500%": lambda c: c["supervisores"].update(escala_novos=[{"min": 1, "pct": 5.1}]),
             "escala repetida": lambda c: c["supervisores"].update(
                 escala_faturamento=[{"min": 1, "pct": 1}, {"min": 1, "pct": 0.5}]),
             "devolução repetida": lambda c: c["supervisores"]["devolucao"].update(
@@ -467,6 +502,25 @@ class TestPremiacoes(unittest.TestCase):
         self.assertEqual((marcos["conquistado"], marcos["bonus"]["pct"], marcos["devolucao"]["pct"], marcos["premio"]),
                          (3300, 0.02, 1.0, 3366))
         self.assertIsNone(marcos["adicional"])
+
+    def test_faixas_de_cada_indicador_de_clientes(self):
+        # O mesmo mês do test_conta_completa, com faixas próprias só para os novos: 100% da meta paga 50% da parcela.
+        self.montar()
+        self.acrescentar(*cliente(20, ES, D(2026, 9, 20), [D(2026, 9, 21)]))
+        novos = [{"min": 0.5, "pct": 0.25}, {"min": 1.0, "pct": 0.5}]
+        self.regras(lambda s: s.update(escala_novos=novos, metas_mes={"2026-09": {
+            "valdirene": {"fat": 1500, "cli": 3, "novos": 1, "reativacao": 1}}}))
+        r = self.p.supervisores("2026-09")
+        v = {c["id"]: c for c in r["supervisores"]}["valdirene"]
+        self.assertEqual([(x["id"], x["pct"], x["parcela"]) for x in v["indicadores"]],
+                         [("faturamento", 1.0, 3150), ("mix", 0, 0), ("positivacao", 1.0, 1350), ("novos", 0.5, 675),
+                          ("reativacao", 1.0, 1350)])
+        self.assertEqual(ind(v, "novos")["faixa"], {"min": 1.0, "pct": 0.5})
+        self.assertEqual(v["conquistado"], 7200 - 675)
+        # a tela recebe as três escalas (para o "Como é calculado")
+        self.assertEqual(set(r["escalas"]), {"escala_faturamento", *ESCALAS_CLIENTES, "trava", "bonus", "devolucao"})
+        self.assertEqual(r["escalas"]["escala_novos"], novos)
+        self.assertEqual(r["escalas"]["escala_positivacao"], REGRAS["escala_positivacao"])
 
     def test_liquido_pelas_regras_da_meta(self):
         p = self.montar(fora=(999,))

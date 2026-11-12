@@ -24,8 +24,9 @@ sem interpolação:
 - reativação: clientes da carteira com uma compra no mês feita depois de 60 dias ou mais sem comprar, contados da compra
   anterior até essa (meta 20). Só conta quem já tinha comprado: a compra anterior é a última venda do cache ou, sem
   nenhuma, o último título de venda do ERP de antes do início das vendas do cache (os títulos vão até 2012).
-Faturamento e mix: 90% da meta → 30% da parcela, 100% → 100%. Os outros: 80% → 40%, 100% → 100%, 120% → 150%. Sobre a
-soma das parcelas, nesta ordem: a trava pelo % da meta de faturamento (abaixo de 90%, nada; de 90% a 95%, metade), o
+Faturamento e mix (as mesmas faixas): 90% da meta → 30% da parcela, 100% → 100%. Positivação, novos e reativação têm cada
+um as suas faixas (padrão igual para os três: 80% → 40%, 100% → 100%, 120% → 150%; até 12/11/2026 eram uma escala só,
+"escala_clientes", que as regras salvas antes copiam para os três ao abrir). Sobre a soma das parcelas, nesta ordem: a trava pelo % da meta de faturamento (abaixo de 90%, nada; de 90% a 95%, metade), o
 bônus de superação (acima de 100%: +2%; 110%: +5%; 120%: +7%; 150%: +10%) e o desconto pelo vencido (devoluções não
 canceladas e brindes de motivo vencido ÷ vendas: até 0,5%, nada; até 1%, 5%; acima, 10%). Só a Valdirene: mais R$ 450
 com a inadimplência em até 0,45% (títulos de venda a cliente emitidos de 7 a 2 meses antes do mês, vencidos há 30 dias
@@ -65,8 +66,11 @@ SUPERVISORES = ("marcos", "ronaldo", "valdirene")
 INDICADORES = ("faturamento", "mix", "positivacao", "novos", "reativacao")
 TITULOS = {"faturamento": "Faturamento líquido", "mix": "Mix (exceto mussarela)", "positivacao": "Positivação",
            "novos": "Ativação de clientes novos", "reativacao": "Reativação de clientes"}
-ESCALA = {"faturamento": "escala_faturamento", "mix": "escala_faturamento", "positivacao": "escala_clientes",
-          "novos": "escala_clientes", "reativacao": "escala_clientes"}
+ESCALA = {"faturamento": "escala_faturamento", "mix": "escala_faturamento", "positivacao": "escala_positivacao",
+          "novos": "escala_novos", "reativacao": "escala_reativacao"}
+# As escalas próprias de cada indicador de clientes e o nome delas nas mensagens de erro.
+ESCALAS_CLIENTES = {"escala_positivacao": "da escala da positivação", "escala_novos": "da escala dos clientes novos",
+                    "escala_reativacao": "da escala da reativação"}
 METAS_MES = ("fat", "cli", "novos", "reativacao")  # as metas de um supervisor que dá para trocar num mês
 META_DO_INDICADOR = {"faturamento": "fat", "positivacao": "cli", "novos": "novos", "reativacao": "reativacao"}
 ROTULOS_META = {"fat": "faturamento", "cli": "clientes (positivação)", "novos": "clientes novos",
@@ -99,9 +103,11 @@ def padrao() -> dict:
                                     "reativacao": 0.15},
                                    {"valor": 450.0, "limite": 0.0045}),
             ],
-            # % da meta a partir do qual a faixa vale -> % da parcela pago (não há interpolação)
+            # % da meta a partir do qual a faixa vale -> % da parcela pago (não há interpolação). O faturamento e o mix
+            # usam a mesma; positivação, novos e reativação, cada um a sua (o padrão é igual nas três).
             "escala_faturamento": [{"min": 0.90, "pct": 0.30}, {"min": 1.0, "pct": 1.0}],
-            "escala_clientes": [{"min": 0.80, "pct": 0.40}, {"min": 1.0, "pct": 1.0}, {"min": 1.20, "pct": 1.50}],
+            **{k: [{"min": 0.80, "pct": 0.40}, {"min": 1.0, "pct": 1.0}, {"min": 1.20, "pct": 1.50}]
+               for k in ESCALAS_CLIENTES},
             "trava": [{"min": 0.90, "pct": 0.50}, {"min": 0.95, "pct": 1.0}],
             "bonus": [{"min": 1.0, "pct": 0.02}, {"min": 1.10, "pct": 0.05}, {"min": 1.20, "pct": 0.07},
                       {"min": 1.50, "pct": 0.10}],
@@ -301,12 +307,15 @@ def _valida(cfg: dict) -> dict:
             raise ValueError(f"supervisor repetido: {sid}")
         entradas[sid] = s
     lista = [_supervisor(entradas.get(b["id"]) or {}, b) for b in sb["lista"]]
+    # Até 12/11/2026 positivação, novos e reativação usavam uma escala só ("escala_clientes"): quem não traz a
+    # escala própria fica com uma cópia dela, ou com o padrão.
+    antiga = sup_in.get("escala_clientes")
     sup = {
         "lista": lista,
         "escala_faturamento": _faixas(sup_in.get("escala_faturamento", sb["escala_faturamento"]),
                                       "da escala do faturamento e do mix", 5.0),
-        "escala_clientes": _faixas(sup_in.get("escala_clientes", sb["escala_clientes"]),
-                                   "da escala de positivação, novos e reativação", 5.0),
+        **{k: _faixas(sup_in[k] if k in sup_in else antiga if antiga is not None else sb[k], nome, 5.0)
+           for k, nome in ESCALAS_CLIENTES.items()},
         "trava": _faixas(sup_in.get("trava", sb["trava"]), "da trava", 1.0),
         "bonus": _faixas(sup_in.get("bonus", sb["bonus"]), "do bônus", 1.0, menor=1.0),
         "devolucao": _regra_devolucao(sup_in.get("devolucao"), sb["devolucao"]),
@@ -930,7 +939,7 @@ class Premiacoes:
             **self._base("supervisores", i, meses,
                          abas if abas is not None else self.abas_do_acesso(permitidos, equipes, cfg=cfg_total)),
             "supervisores": cartoes,
-            "escalas": {k: cfg[k] for k in ("escala_faturamento", "escala_clientes", "trava", "bonus", "devolucao")},
+            "escalas": {k: cfg[k] for k in ("escala_faturamento", *ESCALAS_CLIENTES, "trava", "bonus", "devolucao")},
             "janela": {"de": texto_mes(j_de), "ate": texto_mes(j_ate), "rotulo": f"{curto_mes(j_de)} a {curto_mes(j_ate)}"},
             "corte_vencimento": corte.isoformat(),
             "dias_atraso": cfg["dias_inadimplencia"],
