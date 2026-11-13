@@ -2787,6 +2787,12 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
   background: var(--surface-3); color: var(--tinta-2); font: 800 12px var(--f-texto);
 }
 .ag-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+/* Concluídas junta as dos últimos 30 dias: a lista tem altura máxima e rola por dentro, com o cabeçalho parado. A
+   folga em volta (padding com margem negativa) não deixa a rolagem cortar a sombra, o card que sobe e o foco. */
+.ag-coluna[data-coluna="concluida"] .ag-cards {
+  max-height: min(620px, 75vh); overflow-y: auto; margin: -6px; padding: 6px;
+  scrollbar-width: thin; scrollbar-color: var(--linha-forte) transparent;
+}
 .ag-card {
   display: grid; gap: 6px; padding: 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--linha);
   box-shadow: var(--sombra-1); cursor: pointer; transition: translate .25s var(--mola), box-shadow .2s;

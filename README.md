@@ -1293,6 +1293,8 @@ Em **Kanban**, as tarefas que você criou ou de que participa ficam em colunas p
 
 - **A ordem:** nas colunas das abertas, pelo prazo (no mesmo dia, pelo horário; as sem horário por último); em
   Concluídas, as mais recentes em cima. Embaixo do nome, cada coluna mostra o período que ela cobre.
+- **Concluídas** tem altura máxima (cerca de 5 cards): quando passa disso, a lista ganha uma barra de rolagem e o
+  restante fica embaixo, rolando dentro da coluna.
 - **O card** mostra o título, o prazo (vermelho se venceu), **Fazendo** se a tarefa já começou, quem criou (se não
   foi você), quantas pessoas participam, quantas subtarefas suas faltam e o andamento das subtarefas. Se uma
   subtarefa sua venceu ou vence hoje antes da tarefa, o card avisa (**Sua subtarefa venceu**, **Sua subtarefa vence
