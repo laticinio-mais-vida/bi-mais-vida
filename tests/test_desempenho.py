@@ -45,6 +45,9 @@ class TestContas(unittest.TestCase):
         self.assertEqual(compras_esperadas(semanas(1, 8, 15, 22, 29), 1, D(2026, 11, 27)), 5)  # sexta: outra semana
         # área de dois dias (segunda e terça): uma visita por semana
         self.assertEqual(compras_esperadas(semanas(7, 8, 14, 15), 1, None), 2)
+        # quinzenal numa área de terça e quarta, com a última compra na terça 24/11: 8 e 22/12 (com um dia de cada
+        # vez, a quarta voltava oito dias depois: 2, 15 e 23/12)
+        self.assertEqual(compras_esperadas(semanas(1, 2, 8, 9, 15, 16, 22, 23, 29, 30), 2, D(2026, 11, 24)), 2)
         # quinzenal: comprou em 30/11 -> 14 e 28/12; em 16/11 -> 7 e 21/12; sem compra -> 7 e 21/12
         self.assertEqual(compras_esperadas(segundas, 2, D(2026, 11, 30)), 2)
         self.assertEqual(compras_esperadas(segundas, 2, D(2026, 11, 16)), 2)
@@ -200,6 +203,17 @@ class TestPainel(ComCache, BaseBanco):
         self.assertEqual(thais["regime"], "volume")
         self.assertEqual((thais["mes"]["mussarela"]["meta"], thais["mes"]["outras"]["meta"]), (6000.0, None))
         self.assertEqual(thais["mes"]["mussarela"]["real"], 4750.0)  # 5000 − 250 (o 999 é "não conta")
+
+    def test_sem_avisos_de_dia_e_de_frequencia(self):
+        # na BA, o cliente 7 está sem área (sem dia de atendimento) e o 2 e o 12, sem frequência no cadastro: a conta
+        # avisa (como nas campanhas), mas o painel não mostra esses avisos (decisão do usuário, 11/11/2026)
+        from bi.indicadores import _efetividade
+        self.montar(redes={c: "SEMANAL" for c in (1, 3, 4, 7, 10, 11, 13, 14)})
+        conta = _efetividade(self.cur, {"filtros": {}}, [BA], D(2026, 9, 1), D(2026, 9, 30), {1: [3], 2: [4], 3: [5]})
+        self.assertEqual(len(conta["avisos"]), 2)
+        d = self.painel("BA")
+        self.assertFalse([a for a in d["avisos"] if "sem dia de atendimento" in a or "frequência de compra" in a])
+        self.assertIsNotNone(d["vendedores"][0]["mes"]["efetividade"]["real"])
 
     def test_hoje_e_sem_meta_no_mes(self):
         self.montar()

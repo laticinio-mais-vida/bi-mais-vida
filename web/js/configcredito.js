@@ -44,7 +44,8 @@ function render() {
   <div class="config">
     <aside class="cartao config-menu entra" style="--i:0">
       <button type="button" class="ativa">${icone("cadeado")}Regras do crédito</button>
-      <div class="dica">${icone("info")} As regras valem assim que você salvar, para todos os clientes.
+      <div class="dica">${icone("info")} As regras valem assim que você salvar, para todos os clientes. Cada pessoa vê só os
+        clientes dos vendedores do acesso dela, escolhidos em <a href="#/usuarios">Usuários</a>.
         ${dados.ativo ? "" : "Neste computador as reanálises e os dados do Serasa não ficam gravados: estas regras valem no site."}</div>
     </aside>
     <section class="cartao secao entra" style="--i:1">

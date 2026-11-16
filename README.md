@@ -6,7 +6,8 @@ Metas Outras Linhas ES, mais a Produtos ES, que o Power BI não tinha), reunidas
 fórmulas DAX. A página **Projeções** prevê o
 faturamento bruto dos próximos 6 meses. A página **Sugestão de Metas** sugere a meta do mês seguinte de cada vendedor, por
 produto (as páginas de sugestão do Power BI). A página **Premiações** mostra o prêmio do mês de cada vendedor e de cada
-supervisor (as páginas de premiação do Power BI) e a comissão dos vendedores. A página **Assistente** responde perguntas sobre os dados com IA
+supervisor (a dos vendedores, como no Power BI; a dos supervisores, pelos regulamentos de nov/2026) e a comissão dos vendedores. A página **Devoluções** separa o que voltou na
+entrega do vencido e danificado no cliente, por causa, produto, cliente e vendedor, e monta o Parecer de Devoluções em PDF. A página **Assistente** responde perguntas sobre os dados com IA
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
@@ -108,6 +109,42 @@ item, e em 7 a soma dos itens difere do total do pedido em mais de 5 centavos. A
 pedidos por data, os itens por pedido) e não têm índice: filtrar por data ou por pedido continua rápido (cerca de 1
 ms). Um cache sem elas (o PC ainda com o código anterior) vale para o resto do painel, e `cache.sem_pedidos_detalhe`
 avisa que faltam.
+
+### Devoluções nota a nota no cache
+
+`devolucoes_notas` (página Devoluções): as devoluções da DEVOLUCOESVENDA com os produtos de cada uma
+(LISTADEVOLUCAOVENDA), uma linha por nota, produto e motivo, desde o início do cache. As canceladas vêm marcadas. Os
+totais batem com `devolucoes_itens` e `devolucoes_clientes_itens`, que agrupam as mesmas linhas por dia.
+
+| Coluna | O que é |
+|---|---|
+| `id_devolucao` | a nota de devolução no ERP: é ela que identifica a nota |
+| `nota`, `serie` | número (NUMDOCUMENTO, em texto como no ERP) e série. Na devolução na entrega a nota é a nossa (séries 013 e 017); na imprópria é a do cliente (séries 1, 2, 3…), por isso o número se repete entre clientes |
+| `emissao`, `data` | data da nota e data da entrada (a das outras tabelas de devolução) |
+| `id_vendedor`, `id_cliente`, `tipocliente` | como em `devolucoes_clientes_itens` |
+| `cancelada` | verdadeiro se a devolução foi cancelada |
+| `id_produto`, `id_motivo`, `valor`, `quantidade` | o produto, o motivo do item, em R$ e na unidade do produto |
+
+A venda de origem (ID_VENDA) fica fora: só vem preenchida desde ago/26, e quase só no vencido. Em nov/2026 eram cerca de
+18 mil linhas desde jan/2024 (1.140 notas em 2026). Um cache sem a tabela vale para o resto do painel, e
+`cache.sem_devolucoes_notas` avisa que falta: até ela chegar, a página conta cada cliente num dia como uma nota.
+
+### Bloqueio dos clientes no cache
+
+`clientes_bloqueio` (Reavaliação de Crédito e o Assistente de quem tem a página): o bloqueio de hoje no cadastro do ERP,
+só dos clientes bloqueados ou com alguma observação no campo do bloqueio (a observação só com espaços não conta).
+
+| Coluna | O que é |
+|---|---|
+| `id` | o cliente |
+| `bloqueado` | `CLIENTES.BLOQUEADO` = 1 |
+| `data` | `DATABLOQUEADO`, sem a hora; o "zero" do ERP (30/12/1899) vira vazio |
+| `observacao` | `OBSBLOQUEADO`, com as quebras de linha (os espaços repetidos e as linhas vazias em sequência viram um) |
+
+O ERP não guarda o histórico do bloqueio: a tabela é o cadastro de agora. Quem é desbloqueado costuma ficar com a
+observação e a data do bloqueio antigo. Em nov/2026 eram 1.392 linhas: 1.300 bloqueados (74 ativos) e 92 desbloqueados
+com observação. O grupo é opcional, como os outros: um cache sem a tabela vale para o resto do painel, e
+`cache.sem_bloqueio` faz a página avisar que o bloqueio ainda não chegou (ou que a leitura falhou, com `bloqueio_erro`).
 
 ## Página Metas
 
@@ -212,12 +249,9 @@ O botão **Configurar** da página Projeções (só administradores) abre duas s
   cada um, a venda bruta da carteira nos últimos 12 meses, quantos clientes compraram e a última venda. Um aviso
   mostra quantos clientes estão sem vendedor no cadastro (e quanto venderam), porque ficam fora.
   Fica gravado no banco, com todas as versões anteriores (quem salvou e quando).
-- **Acesso por usuário:** para cada visualizador, se ele vê a página e quais vendedores aparecem para ele:
-  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados em Metas › Configurar. Se o acesso
-    de Metas mudar, este muda junto;
-  - **Todos da página;**
-  - **Só alguns:** a lista que você marcar.
-  Os totais somam só as carteiras dos vendedores que a pessoa vê. Administradores veem todos os vendedores da página.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê, dos vendedores da página, só os do acesso dela (também
+  em Usuários). Os totais somam só as carteiras dos vendedores que a pessoa vê. Administradores veem todos os vendedores
+  da página.
 
 ### Como a projeção é calculada
 
@@ -266,8 +300,7 @@ da METAS.xlsx; no ES, a sugestão é a referência para a meta.
 - **Resumo dos vendedores:** todos os vendedores do estado, com a base, a meta sugerida, o crescimento e a meta já lançada
   (a aprovada no painel, com ✓, ou a da METAS.xlsx; Copiar imagem para o WhatsApp). Clicar num vendedor filtra a página.
 - **Como a sugestão é calculada:** o passo a passo com os números em vigor.
-- **Acesso:** a página é liberada em Usuários; os vendedores que cada pessoa vê são os do acesso de Metas (as abas ES e BA
-  liberadas e os vendedores marcados).
+- **Acesso:** a página é liberada em Usuários; cada pessoa vê só os vendedores do acesso dela (também em Usuários).
 - **Assistente:** quem tem a página pergunta "qual a meta sugerida da Jamille para novembro?" e recebe os mesmos números.
 
 ### Como a sugestão é calculada
@@ -391,22 +424,32 @@ maior parte dos outros é da Thais e do Ricardo - EU, que tiveram clientes repas
 
 ## Página Premiações
 
-As páginas **Premiacao Vendedores** e **Premiacao Supervisores** do Power BI (ocultas lá), numa página só, com uma aba para
-cada uma, como as abas de Metas, e uma terceira aba, **Comissão**. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os meses com META CLIENTE
-na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**; depois, como **final**.
+A premiação do mês, numa página só, com uma aba para cada parte, como as abas de Metas: **Vendedores** (a página
+"Premiacao Vendedores" do Power BI, oculta lá), **Supervisores** (os regulamentos de nov/2026, que substituíram a página
+"Premiacao Supervisores" do Power BI) e **Comissão**. Os filtros são o mês e o ano (o padrão é o mês dos dados; entram os
+meses com META CLIENTE na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece como **previsto**;
+depois, como **final**.
 
 - **Vendedores:** um por linha, os que têm META CLIENTE maior que zero no mês (planilha METAS.xlsx ou meta aprovada no
   painel, com ✓), de todos os estados. Mostra a meta de clientes, os atendidos, o % da meta, a faixa atingida, o prêmio e
   quantos clientes faltam para a faixa seguinte. Os cartões trazem o total a pagar, os atendidos, as faixas e quem está a
   até 3 clientes da próxima faixa. A tabela vira imagem para o WhatsApp (Copiar imagem).
-- **Supervisores:** um quadro por estado (Marcos no BA e Ronaldo no ES; os nomes mudam no Configurar), com os cinco
-  indicadores, o realizado, a meta, o alcance, os pontos e o prêmio. "Ver as contas" mostra de onde sai cada número e a
-  carteira de cada vendedor.
+- **Supervisores:** um quadro por supervisor: Marcos (BA), Ronaldo (ES) e Valdirene (ES, a mesma carteira do Ronaldo,
+  pelo regulamento dela). Cada quadro mostra os indicadores (realizado, meta, alcance, a faixa atingida e a parcela) e
+  **A conta**, do conquistado ao valor a receber. "Ver as contas" mostra de onde sai cada número, a carteira de cada
+  vendedor e as listas dos clientes novos e das reativações.
 - **Comissão:** a comissão de cada vendedor das equipes BA e ES (veja [A aba Comissão](#a-aba-comissão)).
 - **Como é calculado:** o passo a passo de cada aba, com as regras em vigor.
-- **Acesso:** a página é liberada em Usuários. Os vendedores que cada pessoa vê são os do acesso de Metas (as abas liberadas
-  e os vendedores marcados). A aba **Supervisores** soma a carteira inteira do estado: só aparece para quem vê todos os
-  vendedores (sem vendedores marcados), e só os estados das abas liberadas.
+- **Baixar PDF:** a tabela da aba aberta, no mês escolhido, em PDF (A4 deitado), montada no servidor com o acesso de quem
+  baixa: na aba Vendedores, a tabela da premiação com as faixas; na Supervisores, a tabela dos indicadores de cada quadro,
+  com as parcelas conquistadas e o valor a receber; na Comissão, a tabela por vendedor, com os totais por estado. Só as
+  tabelas: sem a conta passo a passo dos supervisores, as listas de clientes ou a comissão por produto. As observações da
+  página vão no fim, e o PDF não mostra códigos do ERP, só nomes.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela (também em Usuários). As
+  **abas** e os **quadros de supervisor** de cada pessoa são escolhidos em Premiações › Configurar › Acesso por usuário. O
+  quadro de um supervisor soma a carteira inteira do estado: só aparece para quem vê todos os vendedores daquele estado
+  (todos os vendedores, ou a equipe do estado inteira; nunca com "Só alguns vendedores"), mesmo que esteja marcado. Sem
+  nenhum quadro que a pessoa possa ver, a aba Supervisores some.
 
 ### Como a premiação é calculada
 
@@ -418,25 +461,59 @@ na planilha ou aprovada). Enquanto o mês está em andamento, o prêmio aparece 
 3. **Prêmio:** o da maior faixa atingida (as faixas não se somam). Padrão do Power BI: 91% → R$ 200, 96% → R$ 250 e 100% →
    R$ 350. Abaixo de 91%, nada.
 
-**Supervisores:** a carteira é a de **hoje**. Entram os clientes cujo vendedor no cadastro é do estado, pelas Configurações
-das metas ou, sem configuração, pelo supervisor no ERP; terceiros, o Edir e as contas internas ficam fora. Só entram vendas,
-devoluções e brindes de cliente (sem funcionário, fornecedor ou produtor).
+**Supervisores** (os regulamentos de nov/2026: o "segunda versão" do Ronaldo, que vale também para o Marcos, e a "nova
+estrutura" da Valdirene). A carteira é a de **hoje**. Entram os clientes cujo vendedor no cadastro é do estado, pelas
+Configurações das metas ou, sem configuração, pelo supervisor no ERP; terceiros, o Edir e as contas internas ficam fora.
+Só entram vendas, devoluções e brindes de cliente (sem funcionário, fornecedor ou produtor), sem os produtos que ficam
+fora das metas. O Ronaldo e a Valdirene usam os mesmos números do ES.
 
-| Indicador | Conta | Meta (padrão) | Pontos |
-|---|---|---|---|
-| Faturamento líquido (25%) | vendas do mês − devoluções não canceladas de todos os motivos (pela data de entrada) − brindes | soma das METAS FATURAMENTO dos vendedores do estado no mês | abaixo de 80% da meta, nada; acima, 25% × alcance, no máximo 25% |
-| Mix (15%) | líquido sem os produtos 32, 12551 e 12552 (a mussarela) ÷ líquido | 55% | mínimo de 85% de alcance; 15% × alcance, no máximo 15% |
-| Inadimplência (10%) | títulos de venda a cliente emitidos de 7 a 2 meses antes (para outubro, março a agosto), vencidos há 30 dias ou mais na data dos dados e ainda em aberto, ÷ o faturamento líquido desses 6 meses | 0,42% no BA e 0,5% no ES | até a meta, 10%; acima, nada |
-| Positivação (25%) | clientes da carteira com venda no mês | soma das METAS CLIENTE dos vendedores do estado no mês | mínimo de 80%; 25% × alcance, no máximo 25% |
-| Devoluções impróprias (25%) | devoluções e brindes com motivo 3, 4 ou 10 a 16 ÷ faturamento bruto | 1,5% | até a meta, 25%; acima, nada |
+Cada indicador tem um peso; a **parcela** de referência é o peso × o variável:
 
-**Prêmio = soma dos pontos × R$ 5.000.** No BA, a meta não inclui o Edir, que é outro grupo.
+| Indicador | Marcos e Ronaldo (R$ 6.000) | Valdirene (R$ 9.000) | Conta | Meta |
+|---|---|---|---|---|
+| Faturamento líquido | 30% | 35% | vendas do mês − as devoluções que descontam na meta (Metas › Configurar: erro de lançamento, recusa, falta de mercadoria, cliente ausente e os erros de faturamento, logística e expedição, sem as canceladas). Brindes não descontam, como na meta | soma das METAS FATURAMENTO dos vendedores do estado no mês (sem o Edir no BA) |
+| Mix (exceto mussarela) | — | 20% | líquido sem a mussarela (32, 12551 e 12552, editável) ÷ líquido | 55% |
+| Positivação | 25% | 15% | clientes da carteira com venda no mês | soma das METAS CLIENTE dos vendedores do estado no mês |
+| Ativação de clientes novos | 25% | 15% | clientes da carteira cadastrados no ERP no mês **e** com compra no mesmo mês | 40 por mês |
+| Reativação de clientes | 20% | 15% | clientes da carteira com uma compra no mês feita depois de **60 dias ou mais sem comprar**, contados da compra anterior até essa. **Só conta quem já tinha comprado:** a compra anterior é a última venda do painel (desde jan/24) ou, sem nenhuma, o último título de venda do ERP (os títulos vão até 2012) | 20 por mês |
 
-A inadimplência conta o que está em aberto **hoje** (o dia da extração dos dados), como no Power BI: o prêmio de um mês já
-fechado muda quando um cliente paga depois.
+As metas de novos e de reativação não existem na planilha nem nas aprovadas: ficam no Configurar (um número por
+supervisor para todo mês). Qualquer meta pode ser trocada num mês específico.
 
-Os brindes vêm de uma tabela nova do cache (`brindes_clientes_itens`). Enquanto o computador da empresa não manda os dados
-com ela (código anterior), a aba avisa e conta sem os brindes.
+**Faixas** (% da meta → % da parcela pago, sem interpolação), em Premiações › Configurar › Regras dos supervisores:
+- faturamento e mix (as mesmas faixas): a partir de 90%, 30%; a partir de 100%, 100%;
+- positivação, novos e reativação, **cada um com as suas faixas** (o padrão é igual para os três): a partir de 80%, 40%;
+  a partir de 100%, 100%; a partir de 120%, 150%. Até 12/11/2026 os três tinham uma lista só; as regras salvas antes
+  disso abrem com essa lista copiada para cada um.
+
+**A conta**, nesta ordem (cada passo arredondado ao centavo):
+1. **Conquistado** = a soma das parcelas (pode passar do variável, por causa das faixas de 150%).
+2. **Trava** pelo % da meta de faturamento: abaixo de 90%, nada; de 90% até abaixo de 95%, metade; a partir de 95%, tudo.
+3. **Bônus de superação**, sobre o valor depois da trava, só com o faturamento **acima** de 100% da meta: +2% (até abaixo
+   de 110%), +5% (a partir de 110%), +7% (a partir de 120%) e +10% (a partir de 150%). Com 100% exato, sem bônus.
+4. **Desconto pelo vencido**, por último: devoluções não canceladas e brindes com motivo "Devolução imprópria - vencido" ou
+   "Brinde - vencido" ÷ as vendas do mês. Até 0,5%, sem desconto; acima de 0,5% até 1%, mantém 95%; acima de 1%, mantém 90%.
+5. **Só a Valdirene: prêmio da inadimplência** de R$ 450 com a inadimplência em até 0,45%: títulos de venda a cliente
+   emitidos de 7 a 2 meses antes (para outubro, março a agosto), vencidos há 30 dias ou mais na data dos dados e ainda em
+   aberto, ÷ o faturamento líquido desses 6 meses. Entra depois de tudo, fora da trava, do bônus e do desconto, e **não é
+   pago quando a trava zera** o prêmio (faturamento abaixo de 90%).
+
+Exemplo do regulamento: parcelas de R$ 6.000 (100% de todas), faturamento a 105% da meta e vencido em 0,7%: a trava mantém
+R$ 6.000, o bônus de 2% leva a R$ 6.120 e o desconto (mantém 95%) deixa R$ 5.814.
+
+Casos de borda:
+- Cadastrado em 30/09 e com a primeira compra em 01/10: não conta em nenhum dos dois meses como cliente novo.
+- Voltou a comprar duas vezes no mesmo mês: uma reativação. Exatamente 60 dias sem comprar: conta.
+- Cliente que nunca tinha comprado (nenhuma venda nem título de venda) e compra agora: nem novo, se o cadastro é de
+  outro mês, nem reativado, porque não é compra "de novo". Em out/26, no BA, um cliente cadastrado em 2010 ficou fora por
+  isso; outros dois, sem compra desde 2020 e 2021 (pelos títulos), contaram.
+- O alcance aparece arredondado para baixo (89,96% vira 89,9%), para não mostrar 90% ao lado de uma parcela zerada.
+- A inadimplência conta o que está em aberto **hoje** (o dia da extração dos dados): o prêmio de um mês já fechado muda
+  quando um cliente paga depois.
+- Os nomes dos clientes aparecem sem o código que o ERP põe no fim ("(CLIENTE 5959)").
+
+Os brindes vêm de uma tabela do cache (`brindes_clientes_itens`). Sem ela (código anterior no computador da empresa), o
+vencido conta só as devoluções, com aviso.
 
 ### A aba Comissão
 
@@ -475,35 +552,142 @@ empresa não manda os dados com elas (código anterior), a aba avisa que a comis
 
 ### Configurar (Premiações)
 
-O botão **Configurar** (só administradores) tem quatro seções. As regras ficam no banco, com versões, como as de Metas, e
+O botão **Configurar** (só administradores) tem seis seções. As regras ficam no banco, com versões, como as de Metas, e
 valem para **todos os meses**: mudar uma faixa ou um peso recalcula também os meses que já passaram.
 
 - **Vendedores:** as faixas (o % mínimo e o prêmio em R$). Dá para acrescentar e tirar faixas.
-- **Supervisores:** o prêmio máximo, o nome de cada supervisor, o peso, o mínimo e a meta de cada indicador (a soma dos pesos
-  precisa dar 100%), os dias de atraso da inadimplência, os produtos fora do mix e os motivos das devoluções impróprias, com
-  "Restaurar padrão do Power BI".
-- **Metas dos supervisores:** para o mês escolhido, a soma automática das metas dos vendedores e um campo para trocar a meta
-  de faturamento ou de clientes daquele mês (apagar volta à soma). A meta trocada aparece marcada como "ajustada" no quadro.
+- **Supervisores:** de cada um, o nome, o variável, os pesos dos cinco indicadores (0 = não entra; a soma precisa dar
+  100%), a meta do mix, o prêmio da inadimplência (liga/desliga, valor e limite) e as metas de todo mês de clientes novos
+  e de reativação. O estado de cada um é fixo: ele diz a carteira.
+- **Regras dos supervisores:** as faixas do faturamento e do mix e as da positivação, dos novos e da reativação, a trava,
+  o bônus, o desconto pelo vencido (dá para acrescentar e tirar faixas), os motivos do vencido, os produtos fora do mix e
+  os dias (sem comprar, da reativação; de atraso, da inadimplência). "Restaurar o padrão" mantém as metas trocadas em
+  cada mês.
+- **Metas dos supervisores:** para o mês escolhido e cada supervisor, a meta automática de faturamento, de clientes, de
+  novos e de reativação e um campo para trocá-la naquele mês (0 = sem meta; apagar volta à automática). A meta trocada
+  aparece marcada como "ajustada" no quadro.
 - **Comissão:** os motivos dos brindes que descontam da comissão (as devoluções descontam todas). Os % de cada vendedor
   e produto ficam no ERP.
+- **Acesso por usuário:** como as "Abas por usuário" de Metas: para cada visualizador, se vê a página, quais abas
+  (Vendedores, Supervisores, Comissão) e, com a aba Supervisores, quais quadros (Marcos, Ronaldo, Valdirene). Fica no
+  cadastro da pessoa (coluna `premiacoes`, migração 041), não nas regras: salvar só o acesso não grava uma versão nova das
+  regras. A tela avisa do quadro marcado que fica fora dos vendedores do acesso da pessoa e não deixa salvar a página
+  sem nenhuma aba, nem a aba Supervisores sem nenhum quadro. Quem já tinha a página quando a 041 entrou ficou com as três
+  abas e os três quadros (o mesmo de antes); quem ganha a página depois começa **sem nenhuma aba**, até o administrador
+  marcar (a tela Usuários avisa, com o link para cá).
+
+As regras salvas antes dos regulamentos de nov/2026 (cinco indicadores × R$ 5.000) são convertidas ao abrir: ficam os
+nomes, a meta do mix, os produtos fora do mix, os dias da inadimplência e as metas trocadas em cada mês (as do ES valem
+para o Ronaldo e a Valdirene).
 
 ### Diferenças em relação ao Power BI (premiações)
 
-1. **Metas dos supervisores:** a soma das metas dos vendedores do mês. No Power BI elas ficavam fixas no DAX e eram as de
-   setembro/26: no BA, R$ 2.252.568 e 967 clientes, a soma de setembro sem o Edir; no ES, R$ 2.075.000, e os 983 clientes
-   ficam a 1 de 1.049 − Adriana.
-2. **Total dos vendedores:** a soma dos prêmios. O Power BI aplicava a faixa ao % do total, o que não servia para pagar.
-3. **Só vendas a cliente** na conta do supervisor: o Power BI ligava venda a funcionário ou fornecedor pelo código, que pode
-   coincidir com o de um cliente.
-4. **Vendedores de cada supervisor:** pelas Configurações das metas e pelo supervisor do ERP, não por uma lista fixa de nomes.
-   Hoje dá os mesmos 9 do BA e 12 do ES do Power BI.
-5. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
+1. **Total dos vendedores:** a soma dos prêmios. O Power BI aplicava a faixa ao % do total, o que não servia para pagar.
+2. **Supervisores:** a conta do Power BI (cinco indicadores × R$ 5.000, um supervisor por estado) foi trocada pelos
+   regulamentos de nov/2026, para todos os meses. Ficaram dela a carteira (pelas Configurações das metas e pelo supervisor
+   do ERP, não por uma lista fixa de nomes; só vendas a cliente), o mix e a inadimplência.
+3. **Regras editáveis** no Configurar (no Power BI ficavam nas fórmulas).
 
 Conferência em 30/10/2026 (outubro até 29/10, com os brindes lidos do ERP): vendedores R$ 2.700 (11 de 21 com prêmio).
-Supervisores com as metas fixas do Power BI: BA R$ 4.887,54 e ES R$ 3.454,88. Com a soma das metas de outubro: BA
-R$ 4.843,12 e ES R$ 3.417,62. Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11),
-de R$ 68.152,20 de comissão das vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os
-descontos de cada vendedor batem com a conta feita direto no ERP.
+Comissão: R$ 67.173,75 a pagar (BA R$ 35.943,92 com 9 vendedores; ES R$ 31.229,83 com 11), de R$ 68.152,20 de comissão das
+vendas − R$ 606,20 das devoluções − R$ 372,25 dos brindes. A comissão das vendas e os descontos de cada vendedor batem com
+a conta feita direto no ERP.
+
+Conferência dos supervisores em 10/11/2026 (outubro, cache do PC, metas padrão de 40 novos e 20 reativações): Marcos
+R$ 4.284,00 (faturamento a 104,37% da meta, bônus de 2%), Ronaldo R$ 1.396,50 e Valdirene R$ 1.667,25 (os dois com o faturamento a
+94,0%: trava de 50%; vencido em 0,80%: mantém 95%; inadimplência em 0,49%: sem o adicional). Os números (líquido, clientes,
+novos, reativações, vencido e inadimplência) batem com as consultas feitas à parte, direto no cache.
+
+## Página Devoluções
+
+O que voltou dos clientes, separado em dois problemas de natureza diferente, e o **Parecer de Devoluções** em PDF, no
+formato do documento que era montado à mão. A página é independente das outras: não tem meta (a de 1,5% é só da premiação
+dos supervisores) nem usa o que se configura para Metas.
+
+- **Voltou na entrega:** o pedido não ficou no cliente (erro de lançamento, recusa, cliente ausente, erro de faturamento,
+  da expedição ou da logística, falta de mercadoria). Poucas notas, de valor alto, quase sempre a nota inteira: a página
+  lista nota a nota. Em 12 meses (nov/25 a out/26), R$ 757 mil, 75% do total, em 485 notas.
+- **Vencido e danificado no cliente:** o produto foi entregue, ficou na loja e voltou vencido ou danificado, pela
+  devolução imprópria ou pela troca por brinde. É mercadoria que não volta para a venda. Muitos casos pequenos, todo mês: a página mede o índice sobre a venda por produto, segmento, frequência de
+  visita e cliente.
+
+Os filtros são o mês e o ano (o padrão é o mês dos dados), a região (BA, ES ou Terceirizados) e o vendedor. Tudo se compara
+com a **média dos 6 meses anteriores**.
+
+- **Resumo:** o índice de devolução (% da venda bruta) dividido em na entrega e no cliente, a evolução de 13 meses (em % ou
+  em R$), cada causa agrupada pelo responsável (comercial, operação interna, logística, fábrica, ponto de venda) e as regiões
+  lado a lado.
+- **Na entrega:** as notas devolvidas (e quantas a cada 100 entregas), o valor, os erros de lançamento e o valor médio por
+  nota; a tabela por causa; **as notas do mês**, uma a uma (número, série, cliente, vendedor, causa, itens e valor); a tabela
+  por vendedor; e os **clientes que repetem** (duas ou mais notas em 6 meses).
+- **No cliente:** o vencido e danificado e o vencido em % da venda, os clientes atingidos e os reincidentes (vencido em 3 ou mais dos 6
+  meses); os **produtos**, com o vencido em quantidade sobre o vendido, no mês e em 6 meses (em vermelho, os 50% acima da
+  média); o vencido por **segmento** e por **frequência de visita** (a rede Semanal, Quinzenal ou Mensal do cliente); a
+  **danificado por origem** (na produção, na logística, no cliente, sem origem informada), com os produtos de cada uma;
+  e os clientes, com a concentração ("95 clientes fizeram metade do vencido e danificado").
+- **Vendedores:** a tabela por região (BA → ES → Terceirizados, com subtotais), ordenável pelo cabeçalho, que vira imagem
+  para o WhatsApp. Nos terceirizados, quem vendeu sem devolução vira uma linha só ("Outros N sem devolução"). O clique num
+  vendedor abre o bloco dele como sai no Parecer, com o botão **PDF do vendedor**.
+- **Parecer em PDF** (no topo): o documento BA + ES, o de cada região e **Todos os PDFs (zip)**, com as pastas de antes
+  (`Parecer Devoluções Setembro-2026.pdf`, `BA/… BA.pdf`, `BA/… Jamille.pdf`, …, `TERCEIRIZADOS/… Terceirizados.pdf`). O
+  nome do vendedor no arquivo é o da planilha de metas. Os PDFs são montados na hora, com o acesso de quem baixa.
+- **Acesso:** a página é liberada em Usuários, e cada pessoa vê só os vendedores do acesso dela, como nas outras páginas.
+  As regiões são as desses vendedores. Os terceirizados (vendedores sem equipe) só aparecem para quem vê todos os
+  vendedores (ou tem um deles na lista de "Só alguns"); os PDFs também seguem o acesso.
+
+### Como as devoluções são calculadas
+
+1. **Devoluções:** as não canceladas de cliente do cadastro, pela data de entrada e pelo vendedor da devolução, nota a nota
+   (tabela `devolucoes_notas` do cache). Funcionário, fornecedor e produtor ficam fora. Cada produto fica com o código do
+   ERP (sem a equivalência das Configurações).
+2. **Trocas por brinde:** só os brindes de motivo vencido ou danificado (3, 4 e 10 a 16). Brinde de outro motivo
+   (transferência, retorno, degustação, doação, pagamento de contrato, perda, sem motivo) não é devolução. O ERP passou a
+   ter o motivo no brinde em abril de 2026: antes disso o vencido e danificado no cliente aparece menor, e a página
+   avisa.
+3. **Causas** (pelo código do motivo) e **responsáveis**:
+   - comercial: erro de lançamento (1) e recusa (2);
+   - operação interna: erro de faturamento (7), erro da expedição (9) e falta de mercadoria (5);
+   - logística: erro da logística (8), cliente ausente (6) e danificado na logística (11, 13);
+   - ponto de venda: vencido (3, 16) e danificado no cliente (12, 14);
+   - fábrica: danificado na produção (10, 15);
+   - danificado, sem origem informada (4).
+
+   Motivo novo no ERP entra em **Outros motivos**, com aviso. As causas ficam em `CAUSAS` (`bi/devolucoes.py`), com
+   a descrição de cada uma em `DESCRICOES`. A tela não mostra os códigos do ERP (motivo, produto, série da nota):
+   quem usa o painel vê o nome e, ao passar o mouse, a descrição.
+4. **Notas:** cada nota de devolução do ERP (`id_devolucao`) conta uma vez; uma nota com duas causas aparece nas duas.
+   Entregas são as notas de venda do mês. Sem as notas no cache (PC com o código anterior), cada cliente num dia conta como
+   uma nota, com aviso.
+5. **% da venda:** sobre a venda bruta do mesmo recorte (vendas não canceladas a cliente, pelo vendedor da venda). Nos
+   clientes, a compra é a do recorte nos 6 meses; no Parecer, o faturamento do cliente no mês, de todos os vendedores.
+6. **Comparação:** a média dos 6 meses anteriores (o % é o total dos meses sobre a venda dos meses; notas, valores e
+   clientes são a média por mês). Produto, segmento, frequência, clientes e reincidência usam os 6 meses até o escolhido.
+7. **Região:** a equipe do vendedor nas Configurações das metas ou o supervisor no ERP (BA e Edir = BA, ES = ES, sem
+   equipe = Terceirizados); o OCULTO fica fora.
+
+**O Parecer** segue as regras do documento de antes: só os vendedores com devolução, em ordem alfabética; as seções
+cliente ausente, erro de lançamento (com o nº de erros em vermelho: cada data e cliente conta um, como no documento),
+recusa, vencido, danificado e os tipos adicionais (danificado por problema na produção, imprópria danificado no cliente e na
+logística, brinde danificado no cliente, na logística e por problema na produção). Nas seções por produto, os produtos vêm
+na ordem do Parecer, com os sabores de bebida láctea somados por tamanho (a bandeja inclui o código antigo, 3643), e cada
+produto tem um **limite de volume** (15 para bebida láctea, manteiga de 200 e 500 g e requeijão; 10 para a manteiga a
+granel; 4 para coalho, minas frescal e parmesão cunha; 5 para o parmesão peça; 3 para o prato; 1 para as mussarelas e para
+produto fora da lista): o cliente abaixo do limite não aparece na tabela do produto, mas conta nos totais e nos rankings.
+No fim do vencido, os **clientes em alerta**: vencido ≥ 20% das compras do mês e volume ≥ 30, ou volume ≥ 100 (o volume
+soma quilos e unidades). Faturamento, expedição, logística e falta de mercadoria aparecem na página, mas não no Parecer.
+Todo PDF termina com os rankings por tipo (erro de lançamento, vencido, danificado e os adicionais por vendedor; recusa e
+cliente ausente por cliente). A ordem dos produtos e os limites ficam em `PRODUTOS_PARECER` (`bi/devolucoes.py`).
+
+Conferência em 09/11/2026:
+- **Setembro/26:** os rankings e os blocos batem com o Parecer feito à mão (as 19 linhas do erro de lançamento, os 23
+  vendedores do vencido, os blocos de Edir, Franquelin e Jamille). Há duas diferenças esperadas: volumes em quilos que
+  mudam na segunda casa (soma sem arredondar) e a linha "FUNCIONARIO" (um brinde a funcionário), que a página deixa fora.
+- **Outubro/26:**
+  - na entrega, R$ 52.719 em 39 notas, 0,74 a cada 100 entregas;
+  - no cliente, R$ 40.065 em 370 clientes;
+  - total R$ 92.783, 1,41% da venda, contra a média de 1,60% de abr a set/26.
+- **Notas:** as devoluções nota a nota somam o mesmo que as outras tabelas de devolução do cache (R$ 2.654.182,39 desde
+  2024).
 
 ## Página Assistente
 
@@ -567,14 +751,10 @@ o servidor monta na memória uma cópia dos dados só com essas linhas. A IA con
 arquivos, ao resto do cache ou a configurações. Pedir "ignore as regras" não adianta, porque o que está fora do
 acesso não existe para ela.
 
-O botão **Configurar** da página (só administradores) tem duas seções:
+Cada pessoa consulta só os vendedores do acesso dela, escolhidos em Usuários (os mesmos de todas as páginas).
 
-- **Acesso por usuário:** para cada visualizador, se usa o assistente e quais vendedores consulta. Os modos são:
-  - **Igual a Metas** (padrão): as equipes das abas de Metas e os vendedores liberados lá;
-  - **Todos;**
-  - **Só alguns.**
-- **Uso e custo:** perguntas e custo estimado por pessoa nos últimos 30 dias, o gasto de hoje e as últimas
-  perguntas.
+O botão **Configurar** da página (só administradores) mostra o **uso e custo**: perguntas e custo estimado por pessoa
+nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
 
 ### Chave, custo e limites
 
@@ -605,8 +785,10 @@ O botão **Configurar** da página (só administradores) tem duas seções:
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
 pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cache e não vão. O limite de crédito, o
-prazo e os títulos a receber estão no cache, mas só vão para a IA nas perguntas de quem tem a página Reavaliação de
-Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. O mesmo vale para as reanálises de
+prazo, os títulos a receber e o **bloqueio no ERP** (com a observação do bloqueio, texto livre do cadastro, que às
+vezes tem o nome de quem autorizou) estão no cache, mas só vão para a IA nas perguntas de quem tem a página
+Reavaliação de Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. A IA trata a observação
+como dado, nunca como instrução. O mesmo vale para as reanálises de
 crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
 vão para a IA só nas perguntas de quem tem a página. Dos **dados do Serasa** (veja [Dados do Serasa](#dados-do-serasa)),
 o banco do site guarda só a fundação, o score, o histórico de pagamento, as anotações negativas, o CNPJ e a razão
@@ -715,8 +897,32 @@ Um dos tipos prontos, com as mesmas contas do Power BI da empresa, ou uma Person
   - Diferente do Power BI, que divide todos os pedidos do período pelas visitas do período: lá, os pedidos fora de
     rota e os de sábado e domingo entram sem visita, e numa campanha curta isso distorce a conta.
   - Os pedidos vêm do ERP (PEDIDOVENDAS não cancelados, do tipo PEDIDOVENDA).
-  - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada dia de atendimento dela que cai no
+  - Visitas esperadas: cada cliente ativo da área recebe uma visita em cada semana com dia de atendimento dela no
     período. Feriados contam, como no Power BI.
+  - **Área com mais de um dia** (decisão de 11/11/2026): os dias marcados são os dias em que o vendedor **pode**
+    atender, não os que deve. A semana da área (de domingo a sábado) conta como **um dia só**, o último marcado:
+    - o cliente tem uma visita na semana, que vale com o pedido em qualquer um dos dias marcados (contam os pedidos
+      do primeiro; os dos outros dias da mesma semana não contam de novo);
+    - quem não comprou em nenhum dos dias conta a visita sem pedido;
+    - o quinzenal e o mensal olham a compra nos 7 ou 21 dias antes do primeiro dia marcado da semana.
+
+    Exemplo: área de segunda a sexta, com 10 clientes semanais. Na semana, 6 compram na segunda, 3 na
+    quarta e 1 não compra:
+
+    | Dia | Pedidos | Visitas | Efetividade |
+    |---|---|---|---|
+    | Segunda a quinta | — | — | (fora da média) |
+    | Sexta (o último dia marcado) | 9 | 10 | 90% |
+
+    Se cada um contasse no dia em que comprou, e quem não comprou na sexta, a média dos dias daria 66,7%: segunda
+    100%, quarta 100% e sexta 0%. O vendedor que não atende a área na sexta teria sempre uma sexta perto de 0%.
+  - A semana entra inteira no período em que termina:
+    - na campanha que começa numa quinta, a semana que fecha na sexta entra com os pedidos de segunda a quarta;
+    - na que termina numa quinta, a última semana fica fora;
+    - a semana em andamento só entra quando chega o último dia marcado.
+  - Área de um dia só: a conta é a mesma de antes.
+  - No painel de desempenho, os **atendimentos** do dia contam o cliente atendido no dia do pedido, e quem não foi
+    atendido na semana, no último dia marcado. Assim, o painel de um dia mostra quem o vendedor atendeu nele.
   - Os dias de cada área ficam em **Configurar › Dias de atendimento**. Clientes em área sem dia ficam fora da conta
     (pedidos e visitas), e o andamento avisa quantos são. Diferente do Power BI, que contava os pedidos deles e não
     as visitas.
@@ -777,6 +983,8 @@ navegador.
   esperados), o % de troca do mês e a situação. Passar o mouse na barra ou na meta mostra de onde ela veio: o saldo
   do mês, o potencial do dia e os pedidos em aberto. A escolha entre barras e tabela fica guardada no navegador.
 - **Ficha**: clicar no nome de um vendedor abre os 9 cartões dele; o ⓘ de cada cartão explica a conta.
+- **Sem avisos de cadastro** (decisão de 11/11/2026): o painel não mostra os avisos de clientes em área sem dia de
+  atendimento nem de clientes sem frequência de compra no cadastro. As campanhas continuam avisando.
 - **Cores**: verde a partir de 100% da meta, amarelo de 90% a 99%, vermelho abaixo de 90%. No % de troca, quanto menor
   melhor: verde até 1,0%, amarelo até 1,5% (o teto). Sem meta no período (dia sem cliente programado, mês sem
   planilha), a linha fica cinza com "sem meta".
@@ -784,9 +992,9 @@ navegador.
 | Indicador | Conta | De quem |
 |---|---|---|
 | Faturamento, mussarela e outras linhas (do período) | o realizado da página Metas (venda − devolução que desconta); a meta é a expectativa diária (abaixo) e, em mussarela e outras, a parte delas na meta do mês | vendedor da nota |
-| Atendimentos (do período) | clientes com pedido no dia da rota ÷ clientes esperados no dia: semanal sempre, quinzenal sem compra nos 7 dias antes, mensal sem compra nos 21 dias antes (os dias de atendimento das áreas) | carteira |
-| Efetividade acumulada do mês | a das campanhas: a média da efetividade de cada dia (pedidos na rota ÷ visitas esperadas); meta de 100% | carteira |
-| Frequência do mês | a das campanhas: semanas com compra ÷ clientes que compraram; meta: a média das compras esperadas desses clientes no mês inteiro, atendidos dentro da periodicidade e partindo da última compra antes do mês (o semanal que comprou no pedaço da semana que ficou no mês anterior não espera na primeira semana) | vendedor da nota |
+| Atendimentos (do período) | clientes com pedido no dia da rota ÷ clientes esperados no dia: semanal sempre, quinzenal sem compra nos 7 dias antes, mensal sem compra nos 21 dias antes (os dias de atendimento das áreas; na área com mais de um dia, uma visita por semana, que conta no dia do pedido ou, sem pedido, no último dia marcado) | carteira |
+| Efetividade acumulada do mês | a das campanhas: a média da efetividade de cada dia (pedidos na rota ÷ visitas esperadas; a área de vários dias vale um dia por semana, o último marcado); meta de 100% | carteira |
+| Frequência do mês | a das campanhas: semanas com compra ÷ clientes que compraram; meta: a média das compras esperadas desses clientes no mês inteiro, atendidos dentro da periodicidade e partindo da última compra antes do mês (o semanal que comprou no pedaço da semana que ficou no mês anterior não espera na primeira semana; na área com mais de um dia, uma compra por semana, contando do primeiro dia marcado dela) | vendedor da nota |
 | Positivação | clientes distintos com nota no mês × META CLIENTE (como na página Metas) | vendedor da nota |
 | Ticket médio | a venda média da página Metas: faturamento ÷ clientes × meta de faturamento ÷ META CLIENTE | vendedor da nota |
 | % Troca | devoluções e brindes de vencido e danificado (pelo nome do motivo; os de PERDA ficam fora) ÷ faturamento bruto da carteira | dono do cliente |
@@ -870,15 +1078,18 @@ python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
   **tarefas** são vistas por quem criou e pelos participantes (o administrador só vê as de que participa).
 - Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
-- O acesso de cada pessoa se escolhe no botão **Configurar** da página: **Igual a Metas** (padrão), **Todos** ou
-  **Só alguns**, como em Projeções e no Assistente.
-- Também em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
+- Os vendedores de cada pessoa são os do acesso dela, escolhidos em **Usuários** (os mesmos de todas as páginas e da
+  API pública).
+- Em **Configurar**, o administrador marca os **dias de atendimento** de cada área comercial (vale para a
   efetividade).
+  - São os dias em que o vendedor pode atender a área, um ou mais (veja a efetividade, acima).
   - O ponto de partida foi a planilha "Dia de Atendimento Areas Comerciais.xlsx" do Power BI, lida pela coluna
     numérica (a de texto tinha "Terça" com acento, que o Power BI não reconhecia).
   - Cada área pode ficar com dias, como **não atendida** (fora da conta, sem aviso) ou **pendente** (fora da conta,
-    com aviso).
-  - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)".
+    com aviso). Desmarcar todos os dias volta a área para pendente.
+  - A área mexida continua na lista até trocar o filtro ou a busca, ou salvar, para dar para marcar vários dias.
+  - **Usar o dia do nome nas pendentes** marca o dia que o nome diz, como em "TEIXEIRA (SEXTA)", ou os dias, como em
+    "EUNÁPOLIS CENTRAL (SEGUNDA E TERÇA)".
 
 ### Minha agenda
 
@@ -1082,6 +1293,8 @@ Em **Kanban**, as tarefas que você criou ou de que participa ficam em colunas p
 
 - **A ordem:** nas colunas das abertas, pelo prazo (no mesmo dia, pelo horário; as sem horário por último); em
   Concluídas, as mais recentes em cima. Embaixo do nome, cada coluna mostra o período que ela cobre.
+- **Concluídas** tem altura máxima (cerca de 5 cards): quando passa disso, a lista ganha uma barra de rolagem e o
+  restante fica embaixo, rolando dentro da coluna.
 - **O card** mostra o título, o prazo (vermelho se venceu), **Fazendo** se a tarefa já começou, quem criou (se não
   foi você), quantas pessoas participam, quantas subtarefas suas faltam e o andamento das subtarefas. Se uma
   subtarefa sua venceu ou vence hoje antes da tarefa, o card avisa (**Sua subtarefa venceu**, **Sua subtarefa vence
@@ -1222,6 +1435,13 @@ dia, quanto deve e quanto ainda cabe no limite.
   vencimento do título é o da última parcela.
 - **Base:** os títulos a receber de venda a cliente (origem VENDA, tipo CLIENTE) que não foram cancelados, o mesmo
   filtro de todas as medidas da página no Power BI. Os dias de atraso contam até o dia da extração dos dados.
+- **Bloqueio no ERP** (não existe no Power BI): se o cliente está bloqueado hoje no cadastro do ERP (`CLIENTES.BLOQUEADO`),
+  desde quando (`DATABLOQUEADO`) e a observação escrita lá (`OBSBLOQUEADO`). O cliente bloqueado ganha o selo vermelho
+  "Bloqueado no ERP" e a observação embaixo do nome; o desbloqueado que ficou com a observação do bloqueio antigo mostra
+  a observação em cinza. Com vários clientes, a tabela ganha a coluna do bloqueio (a observação no balão), e a busca
+  marca quem está bloqueado. O bloqueio **não muda o parecer** (decisão do usuário): ele aparece ao lado, para quem
+  analisa ver o motivo antes de liberar. O ERP não guarda o histórico, só como o cliente está agora. Em 11/11/2026 eram
+  74 clientes ativos bloqueados (1.300 contando os inativos) e 92 desbloqueados com observação.
 - **Quem vê:** quem tem a página marcada em Usuários vê todos os clientes e vendedores; ela não tem configuração.
 
 Diferenças em relação ao Power BI, combinadas com o usuário:
@@ -1257,7 +1477,9 @@ registros, isso vira a base para uma IA ajudar nas decisões de crédito.
   página refaz o parecer, para o retrato ser o que a pessoa viu. O mesmo envio repetido (clique duplo) grava uma vez.
 - **O que vai no retrato** (`retrato`, um JSON com `versao`; datas AAAA-MM-DD, "hoje" = o dia da extração):
   - `cliente` e `cadastro`: o limite e o prazo de antes (com os dias do prazo: "14, 21 E 28 DIAS" = [14, 21, 28];
-    A VISTA = [0]), o vendedor da carteira, cidade, UF, área, segmento, rede, se está inativo e a data de cadastro;
+    A VISTA = [0]), o vendedor da carteira, cidade, UF, área, segmento, rede, se está inativo, a data de cadastro e o
+    bloqueio no ERP naquele dia (`bloqueado_no_erp`, `data_do_bloqueio_no_erp` e `observacao_do_bloqueio_no_erp`;
+    vazios nas reanálises de antes, ou enquanto o bloqueio não chegou do computador da empresa);
   - `historico`: os cartões da página com todos os títulos (compras, quantidade, ticket médio, pontualidade,
     inadimplência), o primeiro e o último título, os meses de cliente e os dias sem compra;
   - `aberto_hoje`: os títulos em aberto, o que já foi pago em parcelas, o limite restante e o % usado, o que está a
@@ -1336,7 +1558,7 @@ O painel usa dois bancos, cada um para uma coisa:
 
 | Tabela | O que guarda |
 |---|---|
-| `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas |
+| `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas: os vendedores (`escopo`, migração 040), as abas de Metas (`visoes`) e as abas e os quadros de supervisor das Premiações (`premiacoes`, migração 041) |
 | `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024), as das Premiações (migração 034) e as do crédito, o prazo mínimo entre reanálises e a validade do Serasa (migração 038); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
@@ -1383,33 +1605,44 @@ Todo mundo entra com usuário e senha. Há dois papéis:
 | Papel | Vê | Pode mexer |
 |---|---|---|
 | **Administrador** | todas as páginas, abas e vendedores | Configurações, Usuários e o botão Atualizar dados |
-| **Visualizador** | só as páginas e abas marcadas e, se quiser, só alguns vendedores | só a própria senha |
+| **Visualizador** | só as páginas marcadas e, nelas, só os vendedores do acesso | só a própria senha |
 
-Em Usuários ficam só os dados da pessoa (nome, usuário, senha, papel) e as páginas que ela vê. O que ela vê
-dentro de cada página fica no botão **Configurar** da própria página, em "Acesso por usuário": em Metas, as
-abas e os vendedores; em Projeções, no Assistente e na Gestão, os vendedores (o padrão é igual ao acesso de Metas). A
-Sugestão de Metas e as Premiações seguem o acesso de Metas, sem escolha própria (a aba Supervisores das Premiações só
-aparece para quem vê todos os vendedores). A Reavaliação de Crédito não tem configuração: quem tem a
-página vê todos os clientes. Quem foi cadastrado antes de uma
-página existir não a recebe sozinho: o administrador marca a página nova.
+Em Usuários ficam os dados da pessoa (nome, usuário, senha, papel), as páginas que ela vê e os **vendedores que ela vê**,
+que valem para todas as páginas (inclusive o Assistente, a API pública e a Reavaliação de Crédito):
 
-Exemplos (em Metas › Configurar › Acesso por usuário):
+- **Todos os vendedores**, inclusive os sem equipe (terceirizados) e os que entrarem depois;
+- **Só as equipes** marcadas (BA, ES, Edir): o vendedor novo dessas equipes entra sozinho. A equipe de cada vendedor
+  fica em Metas › Configurar › Vendedores;
+- **Só alguns vendedores:** a lista que você marcar.
 
-- **Supervisor da BA:** abas Metas BA e Produtos BA e "Todos dessas abas" em Vendedores.
-- **Vendedor:** a aba dele e só ele marcado em Vendedores. Indicadores, ranking, corrida e tabelas mostram só
-  os números dele.
+O que é próprio de uma página fica no **Configurar** dela: em Metas, as **abas** que a pessoa vê ("Abas por
+usuário"); dentro delas, só os vendedores do acesso (a aba sem nenhum deles não aparece para ela). Em Premiações, as
+**abas** e os **quadros de supervisor** ("Acesso por usuário"); o quadro de um supervisor só aparece com "Todos" ou "Só
+as equipes" com a equipe do estado dele. Os terceirizados das Devoluções aparecem com "Todos". Na Reavaliação
+de Crédito, a pessoa só acha os clientes da carteira dos vendedores dela (ou com títulos deles) e vê só os títulos
+desses vendedores; o limite, o em aberto e o parecer são do cliente inteiro. Quem é criado precisa ter os vendedores
+escolhidos para salvar. Quem foi cadastrado antes de uma página existir não a recebe sozinho: o administrador marca a
+página nova.
+
+Exemplos:
+
+- **Supervisor da BA:** em Usuários, "Só as equipes" BA e Edir; em Metas › Configurar, as abas Metas BA e Produtos BA;
+  em Premiações › Configurar, as abas Vendedores e Supervisores, com o quadro do Marcos.
+- **Vendedor:** em Usuários, "Só alguns vendedores" com só ele; em Metas, a aba dele. Indicadores, ranking, corrida e
+  tabelas mostram só os números dele.
 
 Quem barra é o servidor: o visualizador recebe só os números liberados, mesmo se mexer no endereço da página.
-Mudanças de abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
+Mudanças de páginas, abas e vendedores valem na hora. Trocar a senha ou desativar alguém derruba as sessões abertas
 dessa pessoa.
 
 Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Assistente, Gestão, Reavaliação de Crédito). Embaixo aparece, só para consulta, o que a pessoa vê em cada
-  página marcada, com o link **Configurar** para mudar na configuração da página. Um aviso lembra quando a
-  pessoa tem Metas mas ainda nenhuma aba.
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito).
+- **Vendedores que vê:** todos, só as equipes ou só alguns (veja acima). Embaixo aparece o que muda de uma página
+  para outra (as abas de Metas e as de Premiações, com o link **Configurar**, os terceirizados, os clientes do
+  Crédito). Um aviso lembra quando a pessoa tem Metas ou Premiações mas ainda nenhuma aba, ou ainda não tem vendedores.
 - **Acesso ativo:** desativar bloqueia a entrada sem apagar o cadastro.
 
 Para todos: o menu com o nome, no canto superior direito, tem **Trocar minha senha** e **Sair**. A sessão dura
@@ -1478,10 +1711,10 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
   as devoluções canceladas são ignoradas.
 - **Dias úteis e feriados:** feriados nacionais e estaduais automáticos, peso do sábado por estado e
   exceções (feriado local, meio expediente, dia trabalhado).
-- **Acesso por usuário:** para cada visualizador, se ele vê a página Metas, quais **abas** e quais
-  **vendedores** ("Todos dessas abas" inclui quem entrar depois; "Só alguns" fixa a lista). O quadro azul resume
-  o que a pessoa vai ver. Fica gravado no cadastro do usuário, não nas regras, e "Restaurar padrão do Power BI"
-  não mexe nele. As regras e os acessos são salvos juntos: se uma parte não puder ser gravada, nada é gravado. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
+- **Abas por usuário:** para cada visualizador, se ele vê a página Metas e quais **abas** (os vendedores dentro
+  delas são os do acesso dele, em Usuários; a aba sem nenhum deles ganha um aviso e não aparece para ele). O quadro
+  azul resume o que a pessoa vai ver. Fica gravado no cadastro do usuário, não nas regras, e "Restaurar padrão do
+  Power BI" não mexe nele. As regras e as abas são salvas juntas: se uma parte não puder ser gravada, nada é gravado. Quem é criado em Usuários com a página Metas começa sem abas (a página fica vazia
   para ele) até você escolher aqui.
 
 ## Regras de cálculo (iguais ao Power BI)
@@ -1514,7 +1747,9 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/metas.py` | cálculo das visões |
 | `bi/projecoes.py` | projeção do faturamento bruto (modelo, faixa e filtros da página Projeções) |
 | `bi/sugestao.py` | página Sugestão de Metas: a conta das páginas de sugestão do Power BI, os faturamentos das áreas, as regras da página (tabela regras), o resumo dos vendedores, a ferramenta do Assistente e a aba de aprovação das metas |
-| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (cinco indicadores da carteira do estado), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
+| `bi/premiacoes.py` | página Premiações: o prêmio de cada vendedor (faixas sobre a META CLIENTE) e de cada supervisor (os regulamentos de nov/2026: parcelas por indicador, trava, bônus e desconto pelo vencido), a comissão dos vendedores (a gravada no ERP − devoluções − brindes), as regras da página (tabela regras) e as metas dos supervisores |
+| `bi/devolucoes.py` | página Devoluções: o que voltou na entrega (nota a nota) e o vencido e danificado no cliente por causa e responsável, a comparação com a média dos 6 meses anteriores, os produtos, segmentos, frequência de visita e clientes, a tabela dos vendedores e os dados do Parecer (blocos dos vendedores, limites dos produtos e rankings) |
+| `bi/parecer_pdf.py` | o Parecer de Devoluções em PDF (fpdf2), no formato do documento de antes, e o zip com as pastas BA, ES e TERCEIRIZADOS |
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |
 | `bi/ajustes.py` | ajustes de volume da página Sugestão de Metas (tabela sugestao_ajustes): os em vigor, em memória, e a gravação que leva a diferença para a meta aprovada na mesma transação |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |

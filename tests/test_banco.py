@@ -1,6 +1,6 @@
-"""O que veio dos arquivos para o PostgreSQL: a importação na migração 005, as conversas por usuário na 006, as
-versões das regras (bi/configuracao.py) e o registro de uso do Assistente (bi/uso.py). Precisam de
-BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
+"""O que veio dos arquivos para o PostgreSQL: a importação na migração 005 (com os vendedores do acesso como a 040
+deixa), as conversas por usuário na 006, as versões das regras (bi/configuracao.py) e o registro de uso do Assistente
+(bi/uso.py). Precisam de BI_TESTE_POSTGRES (veja tests/apoio.py); sem ele, são pulados."""
 from __future__ import annotations
 
 import datetime as dt
@@ -84,11 +84,11 @@ class TestImportacao(BaseBanco):
         usuarios = Usuarios(self.banco)
         self.assertEqual([u["login"] for u in usuarios.listar()], ["admin", "bia", "supervisor.es"])
         sup, bia, admin = usuarios.obter("supervisor.es"), usuarios.obter("bia"), usuarios.obter("admin")
-        self.assertEqual((sup["paginas"], sup["visoes"], sup["vendedores"]), (["metas"], ["es"], [124, 141]))
+        self.assertEqual((sup["paginas"], sup["visoes"], sup["escopo"]),
+                         (["metas"], ["es"], {"modo": "alguns", "vendedores": [124, 141]}))
         self.assertEqual((sup["criado_em"], sup["ultimo_acesso"]), ("2026-10-15T14:24:43", "2026-10-16T09:00:00"))
         self.assertEqual(bia["paginas"], ["projecoes", "assistente"])
-        self.assertEqual((bia["projecoes"], bia["assistente"]), ({"modo": "todos", "vendedores": None},
-                                                                 {"modo": "alguns", "vendedores": [85]}))
+        self.assertEqual(bia["escopo"], {"modo": "todos"})  # sem abas de Metas: o "todos" das Projeções (040)
         self.assertFalse(bia["ativo"])
         self.assertIsNone(admin["paginas"])
         self.assertIsNotNone(usuarios.autenticar("supervisor.es", "segredo1"))  # a senha veio junto

@@ -90,6 +90,15 @@ class Calendario:
             return {"peso": peso, "tipo": "sabado" if peso else "fds", "motivo": "Sábado"}
         return {"peso": 1.0, "tipo": "util", "motivo": None}
 
+    def dia_util_antes(self, dia: dt.date, regiao: str) -> dt.date:
+        """O último dia útil (peso acima de 0) da região antes de `dia`."""
+        d = dia - UM_DIA
+        for _ in range(60):
+            if self.dia(d, regiao)["peso"] > 0:
+                break
+            d -= UM_DIA
+        return d
+
     def dias_do_mes(self, ano: int, mes: int, regiao: str) -> list[dict]:
         _, n = calendar.monthrange(ano, mes)
         return [{"data": dt.date(ano, mes, d), **self.dia(dt.date(ano, mes, d), regiao)} for d in range(1, n + 1)]

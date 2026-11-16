@@ -1,5 +1,5 @@
 // Gráficos em SVG desenhados à mão (sem bibliotecas): anel de progresso, corrida da meta, ranking, barras,
-// histórico com projeção e colunas de dois anos com uma linha num segundo eixo.
+// histórico com projeção, colunas de dois anos com uma linha num segundo eixo e colunas empilhadas por categoria.
 import { esc, fmt, icone, MESES, STATUS, corStatus, mostrarTooltip, esconderTooltip, linhaTT, reduzMovimento } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -423,6 +423,93 @@ export function colunasLinha(el, { meses, atual, anterior, linha, base = null, m
       html += linhaTT(nomes.anterior, volume(anterior[i]), cores.anterior);
       if (atual[i] && anterior[i] > 0) html += linhaTT("Variação", `${atual[i] >= anterior[i] ? "+" : "−"}${fmt.pct(Math.abs(atual[i] / anterior[i] - 1))}`);
       if (linha[i] != null) html += linhaTT(nomes.linha, `${linha[i] >= 0 ? "+" : "−"}${fmt.pct(Math.abs(linha[i]))}`, cores.linha);
+      mostrarTooltip(html, ev.clientX, ev.clientY);
+    };
+    const sair = () => { el.classList.remove("ativo"); esconderTooltip(); };
+    const cap = el.querySelector(".captura");
+    cap.addEventListener("mousemove", mover);
+    cap.addEventListener("mouseleave", sair);
+  };
+  desenhar();
+  el._redesenhar = desenhar;
+  if (el._ro) el._ro.disconnect();
+  el._ro = new ResizeObserver(() => { if (Math.abs(el.clientWidth - w) > 4) desenhar(); });
+  el._ro.observe(el);
+}
+
+// ---------- colunas empilhadas por categoria, num eixo só (página Devoluções) ----------
+// meses: os rótulos; series: [{ id, nome, cor }] na ordem da pilha (de baixo para cima); valores: um objeto por mês com
+// o valor de cada série ({ [id]: número }); formato: o valor na dica; eixo: o rótulo do eixo; extra(i): HTML a mais na
+// dica do mês i; destaque: o índice do mês em destaque. Uma fresta da cor do fundo separa as partes da coluna.
+function topoRedondo(x, y, w, h, r) {
+  const q = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h}V${y + q}Q${x},${y} ${x + q},${y}H${x + w - q}Q${x + w},${y} ${x + w},${y + q}V${y + h}Z`;
+}
+
+export function colunasEmpilhadas(el, { meses, series, valores, formato = fmt.moedaC, eixo = fmt.eixo, extra = null,
+  destaque = null, rotulo = "Valores por mês", vazio = "Nada para mostrar." }) {
+  let w = 0;
+  const desenhar = () => {
+    w = el.clientWidth;
+    const tela = el.closest(".tela-cheia");
+    const W = Math.max(300, el.clientWidth);
+    const curto = W < 560;
+    const H = tela ? Math.max(340, Math.min(820, tela.clientHeight - 250)) : (curto ? 250 : 300);
+    const m = { e: curto ? 50 : 64, d: 10, t: 14, b: 30 };
+    const n = meses.length;
+    const totais = valores.map((v) => series.reduce((s, x) => s + Math.max(0, v[x.id] || 0), 0));
+    if (!totais.some((t) => t > 0)) {
+      el.innerHTML = `<div class="vazio">${icone("grafico")}<p>${esc(vazio)}</p></div>`;
+      return;
+    }
+    const tk = ticks(Math.max(...totais) * 1.06, 4);
+    const yMax = tk[tk.length - 1];
+    const banda = (W - m.e - m.d) / n;
+    const xc = (i) => m.e + banda * (i + 0.5);
+    const y = (v) => H - m.b - (v / yMax) * (H - m.t - m.b);
+    const larg = Math.max(6, Math.min(34, banda * 0.56));
+    const ap = el.dataset.desenhado ? "" : " cresce";
+
+    let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(rotulo)}">`;
+    if (destaque != null) s += `<rect class="banda-destaque meta" x="${m.e + banda * destaque + 2}" y="${m.t - 8}" width="${banda - 4}" height="${H - m.b - m.t + 8}" rx="8"/>`;
+    tk.forEach((v) => {
+      s += `<line class="grade-l" x1="${m.e}" x2="${W - m.d}" y1="${y(v)}" y2="${y(v)}"/>`;
+      s += `<text class="eixo-t" x="${m.e - 8}" y="${y(v) + 4}" text-anchor="end">${esc(eixo(v))}</text>`;
+    });
+    meses.forEach((r, i) => {
+      if (curto && n > 8 && i % 2 && i !== n - 1) return; // celular: um rótulo sim, outro não
+      s += `<text class="eixo-t" x="${xc(i)}" y="${H - 9}" text-anchor="middle">${esc(r)}</text>`;
+    });
+    valores.forEach((v, i) => {
+      const partes = series.filter((x) => (v[x.id] || 0) > 0);
+      let base = 0;
+      partes.forEach((x, k) => {
+        const topo = y(base + v[x.id]);
+        const h = Math.max(0, y(base) - topo - (k ? 2 : 0));
+        const estilo = `style="--c:${x.cor};animation-delay:${i * 30}ms"`;
+        s += k === partes.length - 1
+          ? `<path class="coluna${ap}" d="${topoRedondo(xc(i) - larg / 2, topo, larg, h, 4)}" ${estilo}/>`
+          : `<rect class="coluna${ap}" x="${xc(i) - larg / 2}" y="${topo}" width="${larg}" height="${h}" ${estilo}/>`;
+        base += v[x.id];
+      });
+    });
+    s += `<rect class="mira-banda" x="0" y="${m.t}" width="${banda}" height="${H - m.t - m.b}" rx="6"/>`;
+    s += `<rect class="captura" x="${m.e}" y="${m.t - 8}" width="${W - m.e - m.d}" height="${H - m.t - m.b + 8}" fill="transparent"/>`;
+    s += "</svg>";
+    el.innerHTML = s;
+    el.dataset.desenhado = "1";
+
+    const svg = el.querySelector("svg"), mira = el.querySelector(".mira-banda");
+    const mover = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      const i = Math.max(0, Math.min(n - 1, Math.floor((px - m.e) / banda)));
+      el.classList.add("ativo");
+      mira.setAttribute("x", m.e + banda * i);
+      let html = `<div class="tt-t">${esc(meses[i])}</div>`;
+      [...series].reverse().forEach((x) => { if ((valores[i][x.id] || 0) > 0) html += linhaTT(x.nome, formato(valores[i][x.id]), x.cor); });
+      html += linhaTT("Total", formato(totais[i]));
+      if (extra) html += extra(i);
       mostrarTooltip(html, ev.clientX, ev.clientY);
     };
     const sair = () => { el.classList.remove("ativo"); esconderTooltip(); };

@@ -140,10 +140,10 @@ muda no outro.
 
 | Quero... | Onde fazer |
 |---|---|
-| Dar acesso a alguém, mudar o que a pessoa vê ou bloquear um acesso | No site, página **Usuários** (só administradores) |
-| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados | No site, página **Metas** › botão **Configurar** (só administradores) |
-| Escolher os vendedores das projeções e o que cada pessoa vê nelas | No site, página **Projeções** › botão **Configurar** (só administradores) |
-| Escolher quais vendedores cada pessoa consulta no assistente e ver o uso e o custo | No site, página **Assistente** › botão **Configurar** (só administradores) |
+| Dar acesso a alguém, escolher as páginas e os vendedores que a pessoa vê (em todas as páginas) ou bloquear um acesso | No site, página **Usuários** (só administradores) |
+| Mudar regras: grupo de cada vendedor e produto, motivos de devolução, feriados; as abas de Metas de cada pessoa | No site, página **Metas** › botão **Configurar** (só administradores) |
+| Escolher os vendedores que entram nas projeções | No site, página **Projeções** › botão **Configurar** (só administradores) |
+| Ver o uso e o custo do assistente | No site, página **Assistente** › botão **Configurar** (só administradores) |
 | Trocar a minha senha | No site, menu com o seu nome (canto superior direito) › Trocar minha senha |
 
 Os acessos do site começaram, em 15/10/2026, como cópia dos do PC (mesmos logins e senhas).
@@ -675,6 +675,25 @@ cada venda, menos as devoluções e os brindes danificados e vencidos.
 - **As regras:** a seção nova `comissao` (os motivos dos brindes) entra com o padrão nas versões já salvas. O código
   anterior ignora essa seção.
 
+#### Premiações – supervisores pelos regulamentos de nov/2026 (sem migração)
+
+A aba **Supervisores** deixa a conta do Power BI (cinco indicadores × R$ 5.000) e passa a seguir os regulamentos: Marcos
+(BA) e Ronaldo (ES) com variável de R$ 6.000, Valdirene (ES) com R$ 9.000 e o prêmio da inadimplência (veja o README,
+"Como a premiação é calculada"). Vale para todos os meses.
+
+- **Ordem:** qualquer uma; não há migração e os dados que o PC manda não mudaram (a conta usa tabelas que o cache já
+  traz: vendas, devoluções, brindes, `clientes_detalhes.data_cadastro` e títulos).
+- **As regras salvas** (`regras`, nome `premiacoes`) da versão 1 são convertidas ao abrir: ficam os nomes, a meta do mix,
+  os produtos fora do mix, os dias da inadimplência e as metas trocadas em cada mês (as do ES valem para o Ronaldo e a
+  Valdirene); o resto vem do padrão. Nada é gravado até alguém salvar no Configurar. Antes de publicar, leia a última
+  versão salva (SELECT só de leitura) e ensaie a conversão com ela.
+- **Depois de publicar:** confira em Configurar › Supervisores o variável da Valdirene (R$ 9.000 é "para fins de exemplo"
+  no regulamento) e as metas de todo mês de clientes novos (40) e de reativação (20). As abas Vendedores e Comissão não
+  mudam. Peça a quem estava com a página aberta para recarregá-la.
+- **Voltar atrás:** o código anterior abre uma versão salva no formato novo com os padrões dele (as chaves novas não têm
+  os nomes das antigas), mas perde as metas trocadas em cada mês. Para recuperá-las, grave de novo a última versão 1
+  (está na tabela `regras`, com o id de antes).
+
 #### Subtarefa automática na agenda (migração 035)
 
 Quem entra numa tarefa com autonomia (que passa a vir marcada) ganha a subtarefa automática "Crie as suas subtarefas
@@ -732,6 +751,48 @@ do administrador.
   aplicativo de teste em Aplicativos conectados.
 - **Voltar atrás:** o código anterior não lê a tabela (ela fica guardada) e as rotas `/api/v1` somem. Para apagar as
   chaves de vez: `DROP TABLE chaves_api` e `DELETE FROM migracoes WHERE versao = '039_chaves_api'`.
+
+#### Vendedores do acesso em Usuários (migração 040)
+
+Os vendedores que cada visualizador vê saem da configuração das páginas e vão para a tela **Usuários**: todos, só as
+equipes marcadas ou só alguns, valendo para todas as páginas (Metas, Projeções, Sugestão, Premiações, Devoluções,
+Assistente, Gestão, API pública e, agora também, Reavaliação de Crédito). As abas de Metas continuam em Metas ›
+Configurar.
+
+- **A migração 040** cria `usuarios.escopo` a partir do acesso de Metas (com lista de vendedores: só eles; sem lista:
+  as equipes das abas; sem abas: o "todos" ou as listas de "só alguns" das páginas com escolha própria que a pessoa
+  tem) e apaga `vendedores`, `escopo_projecoes`, `escopo_assistente` e `escopo_gestao`. Quem fica sem vendedores sai
+  num aviso do log da migração e na tela Usuários.
+- **Antes de publicar:** compare, para cada visualizador do site, o que ele vê hoje em cada página com o que passa a
+  ver (a 040 no banco de prévia). Quem tinha uma escolha própria diferente da de Metas numa página pode passar a ver
+  menos nela; quem tem a página Crédito passa a ver só os clientes dos vendedores dele.
+- **Voltar atrás:** as colunas antigas foram apagadas: restaure o dump de antes, não só a pasta.
+- **PC:** recebe a 040 quando o código for atualizado lá (os acessos do PC são outros).
+
+#### Premiações por pessoa, PDF das premiações e bloqueio no crédito (migração 041)
+
+Três mudanças juntas (veja o README, "Página Premiações" e "Página Reavaliação de Crédito"):
+- **Premiações › Configurar › Acesso por usuário:** as abas e os quadros de supervisor de cada visualizador (coluna
+  `usuarios.premiacoes`). O botão **Baixar PDF** da página monta a tabela da aba aberta no servidor (fpdf2, que a
+  imagem já tem).
+- **Reavaliação de Crédito:** o bloqueio do cliente no cadastro do ERP (tabela nova e opcional do cache,
+  `clientes_bloqueio`), que só aparece: o parecer não muda.
+
+- **Ordem:** qualquer uma. O site com o código anterior aceita o pacote novo do PC (a tabela nova fica fora das que ele
+  confere), e o site novo aceita o pacote do PC com o código anterior: o crédito avisa que o bloqueio ainda não chegou.
+  O bloqueio só aparece no site depois que o **PC** rodar o código novo (reabrir o iniciar.bat) e mandar uma extração.
+- **A migração 041** acrescenta `usuarios.premiacoes` (com um CHECK do formato) e preenche quem já tem a página
+  Premiações com as três abas e os três supervisores, o mesmo de antes (o acesso de vendedores continua limitando a aba
+  Supervisores). Quem ganhar a página depois começa sem nenhuma aba. Ensaie em BEGIN/ROLLBACK e confira, para cada
+  visualizador do site, o que ele vê antes e depois: deve ser igual.
+- **Depois de publicar:** em Premiações › Configurar › Acesso por usuário, escolha as abas e os quadros de cada pessoa
+  (por exemplo, o supervisor do ES só com o quadro do Ronaldo). Baixe o PDF de cada aba como administrador e como uma
+  pessoa de acesso limitado. No crédito, depois do envio do PC, abra um cliente bloqueado no ERP.
+- **Voltar atrás:** o código anterior não lê a coluna (ela pode ficar) e ignora a tabela do cache. Quem tinha a página
+  volta a ver tudo o que os vendedores do acesso permitem. Para apagar de vez: `ALTER TABLE usuarios DROP COLUMN
+  premiacoes` e `DELETE FROM migracoes WHERE versao = '041_premiacoes_acesso'`.
+- **PC:** recebe a 041 quando o código for atualizado lá; a extração passa a ler também o bloqueio dos clientes (uma
+  consulta a mais no cadastro de clientes).
 
 #### Faixa da sugestão de metas (sem migração)
 

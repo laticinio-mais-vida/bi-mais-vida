@@ -14,7 +14,10 @@ Tipos prontos, com as contas do Power BI da empresa (MAIS VIDAS-PBIT.pbit):
   nas visitas desse dia. Pedido de cliente de área de outro dia não conta (o "Pedidos Fora de Rota" do Power BI) e dia sem visita
   esperada (o fim de semana, por exemplo) fica fora da média (decisões do usuário: o Power BI divide todos os
   pedidos do período pelas visitas do período). Os dias de cada área ficam no PostgreSQL (areas_atendimento);
-  cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso.
+  cliente em área sem dia fica fora da conta (pedidos e visitas) e entra no aviso. Área com mais de um dia: são os
+  dias em que o vendedor PODE atender, não os que deve, e a semana conta como um dia só (decisão do usuário,
+  11/11/2026): o cliente tem uma visita, atendida com o pedido em qualquer um dos dias, e ela entra no último dia
+  marcado da semana (_efetividade).
 - frequencia: semanas com compra, somadas cliente a cliente, ÷ clientes positivados. A semana vai de domingo a
   sábado e é cortada na virada do mês, como o WEEKNUM do Power BI.
 - preco_medio: preço médio (venda líquida ÷ quantidade líquida) de cada produto contra o preço-alvo dele. Na campanha,
@@ -88,8 +91,8 @@ ABERTURAS = {"area": "Área comercial", "segmento": "Segmento", "produto": "Prod
 MAX_ABERTURA = 50
 SEM_DIA = "ficaram fora da efetividade: estão em áreas sem dia de atendimento (veja Gestão › Configurar)"
 # Frequência de compra do cliente (o campo REDE do cadastro) -> de quantas em quantas semanas ele compra. Na
-# efetividade, o quinzenal só é visita esperada sem compra nos 7 dias antes; o mensal, sem compra nos 21 dias antes
-# (ou, nos dois, se compra no próprio dia).
+# efetividade, o quinzenal só é visita esperada sem compra nos 7 dias antes do primeiro dia marcado da semana; o
+# mensal, sem compra nos 21 dias antes (ou, nos dois, se compra num dia marcado).
 FREQUENCIAS = {"SEMANAL": 1, "QUINZENAL": 2, "MENSAL": 4}
 MAX_SEMANAS = max(FREQUENCIAS.values())
 
@@ -238,7 +241,9 @@ def descritor(metrica: str, p: dict, unidade: str | None = None) -> dict:
                  descricao="média da efetividade de cada dia (pedidos na rota do dia ÷ visitas esperadas no dia, pelos "
                            "dias de atendimento das áreas e pela frequência de compra de cada cliente), pela carteira "
                            "do vendedor; pedido de cliente de área de outro dia não conta, e dias sem visita esperada "
-                           "ficam fora",
+                           "ficam fora. Na área com mais de um dia (os dias em que o vendedor pode atender), a semana "
+                           "conta como um dia só, no último dia marcado: o cliente tem uma visita, que vale com o "
+                           "pedido em qualquer um dos dias",
                  rotulo_meta="% de efetividade", numerador="Pedidos na rota", denominador="Visitas esperadas",
                  aberturas=["area", "segmento"], abrir_padrao="area")
     elif metrica == "frequencia":
@@ -673,18 +678,30 @@ _VISITAVEL = "NOT COALESCE(k.inativo, false) AND NOT contains(upper(COALESCE(k.c
 
 
 def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: dict[int, list[int]],
-                 abrir: str | None = None, distintos: bool = False) -> dict:
+                 abrir: str | None = None, distintos: bool = False, atendido_no_dia: bool = False) -> dict:
     """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos na
     rota do dia (de clientes das áreas atendidas nesse dia da semana) ÷ as visitas esperadas no dia. Pedido de cliente
     de área de outro dia não conta (o "fora de rota" do Power BI). Dia sem visita esperada (o fim de semana, o dia sem
     área) fica fora da média. Cliente em área sem linha em areas_atendimento (pendente) fica fora e entra no aviso;
     área com dias vazios (não atendida) fica fora sem aviso.
 
-    Visita esperada pela frequência de compra do cliente (frequencia_semanas, da rede do cadastro): o semanal é
-    esperado em todo dia de atendimento da área dele; o quinzenal, se não comprou nos 7 dias antes; o mensal, se não
-    comprou nos 21 dias antes (as três semanas anteriores). O cliente fora da previsão que compra no dia entra nas
-    visitas desse dia (decisão do usuário: antes o pedido contava sem a visita, e o dia passava de 100%). Compra =
-    pedido de venda (de qualquer vendedor e em qualquer dia). Cliente sem frequência no cadastro conta como semanal.
+    Uma visita por cliente em cada semana (de domingo a sábado) com dia marcado na área dele. Os dias marcados são os
+    dias em que o vendedor PODE atender, e a semana conta como um dia só (decisão do usuário, 11/11/2026): a visita
+    é atendida se o cliente fez pedido em qualquer um deles (contam os pedidos do primeiro; os dos outros dias da
+    semana, não) e entra, com ou sem pedido, no último dia marcado da semana. Assim a semana entra inteira no período
+    em que ela termina, com os pedidos dos dias de antes do início. Na área de um dia só, é a conta de sempre: a
+    visita e os pedidos caem nesse dia.
+
+    atendido_no_dia (os atendimentos do painel de desempenho, que olham um dia): a visita atendida conta no dia do
+    pedido, e só a sem pedido fica no último dia marcado; o período só escolhe os dias (o atendido antes do início
+    fica fora, e a semana que termina depois do fim entra com os atendidos até ele).
+
+    Esperado pela frequência de compra do cliente (frequencia_semanas, da rede do cadastro): o semanal, toda semana; o
+    quinzenal, se não comprou nos 7 dias antes do primeiro dia marcado da semana; o mensal, se não comprou nos 21 dias
+    antes (as três semanas anteriores). O cliente fora da previsão que faz pedido num dia marcado também conta a visita
+    (decisão do usuário: antes o pedido contava sem a visita, e o dia passava de 100%). Compra = pedido de venda (de
+    qualquer vendedor e em qualquer dia). Cliente sem frequência no cadastro conta como semanal. O pedido de cliente
+    inativo ou com "PEDIDO BLOQUEADO" no nome conta sem visita, como antes.
 
     distintos: o numerador conta os clientes com pedido na rota do dia (cada um uma vez), não os pedidos: os
     atendimentos do painel de desempenho (bi/desempenho.py). As visitas esperadas são as mesmas."""
@@ -692,8 +709,6 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
     grupos = ("k.id_vendedor_carteira AS v, k.id_area AS a, COALESCE(k.area, '(sem área)') AS ar, "
               "COALESCE(k.segmento, '(sem segmento)') AS s")
     rota = sorted((a, d) for a, dias in areas.items() for d in dias)
-    com_rota = (f"WITH rota AS (SELECT unnest(?::INTEGER[]) AS id_area, unnest(?::INTEGER[]) AS dia_semana)",
-                [[a for a, _ in rota], [d for _, d in rota]])
     sem_dia, sem_frequencia = cur.execute(
         f"SELECT COUNT(*) FILTER (WHERE k.id_area IS NULL OR k.id_area NOT IN (SELECT unnest(?::INTEGER[]))), "
         f"COUNT(*) FILTER (WHERE k.id_area IN (SELECT unnest(?::INTEGER[])) AND k.frequencia_semanas IS NULL) "
@@ -702,29 +717,44 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
     pedidos: dict = {}  # na rota: o dia do pedido é um dia de atendimento da área do cliente
     visitas: dict = {}
     if rota:
-        for v, a, ar, s, data, n in cur.execute(
-                f"{com_rota[0]} SELECT {grupos}, p.data, "
-                f"{'COUNT(DISTINCT p.id_cliente)' if distintos else 'SUM(p.pedidos)'} FROM _pedidos_venda p "
-                f"JOIN clientes k ON k.id_cliente = p.id_cliente "
-                f"JOIN rota r ON r.id_area = k.id_area AND r.dia_semana = isodow(p.data) "
-                f"WHERE {_PEDIDO_VALIDO} AND p.data BETWEEN ? AND ? AND {onde_k} GROUP BY 1, 2, 3, 4, 5",
-                [*com_rota[1], inicio, ate, *params_k]).fetchall():
-            pedidos.setdefault((v, a, ar, s), Counter())[data] += _numero(n)
-        dias = [inicio + dt.timedelta(days=i) for i in range((ate - inicio).days + 1)]
-        for v, a, ar, s, data, n in cur.execute(
-                f"{com_rota[0]}, dias AS (SELECT unnest(?::DATE[]) AS dia), "
-                f"esperados AS (SELECT k.id_cliente, {grupos}, x.dia, COALESCE(k.frequencia_semanas, 1) AS semanas "
+        # As semanas inteiras que tocam o período: o primeiro e o último dia marcado delas podem cair fora dele.
+        de = inicio - dt.timedelta(days=inicio.isoweekday() % 7)  # o domingo
+        ate_sabado = ate + dt.timedelta(days=6 - ate.isoweekday() % 7)
+        dias = [de + dt.timedelta(days=i) for i in range((ate_sabado - de).days + 1)]
+        for v, a, ar, s, data, n_pedidos, n_visitas in cur.execute(
+                f"WITH rota AS (SELECT unnest(?::INTEGER[]) AS id_area, unnest(?::INTEGER[]) AS dia_semana), "
+                f"dias AS (SELECT unnest(?::DATE[]) AS dia), "
+                f"compras AS (SELECT p.id_cliente, p.data, {'1' if distintos else 'SUM(p.pedidos)'} AS n "
+                f"FROM _pedidos_venda p WHERE {_PEDIDO_VALIDO} AND p.data BETWEEN ? AND ? GROUP BY 1, 2), "
+                # os dias marcados da área de cada cliente, com a semana (o domingo)
+                f"agenda AS (SELECT k.id_cliente, {grupos}, x.dia, "
+                f"x.dia - CAST(isodow(x.dia) % 7 AS INTEGER) AS semana, "
+                f"COALESCE(k.frequencia_semanas, 1) AS semanas, {_VISITAVEL} AS visitavel "
                 f"FROM clientes k JOIN rota r ON r.id_area = k.id_area JOIN dias x ON isodow(x.dia) = r.dia_semana "
-                f"WHERE {onde_k} AND {_VISITAVEL}), "
-                f"compras AS (SELECT DISTINCT p.id_cliente, p.data FROM _pedidos_venda p WHERE {_PEDIDO_VALIDO} "
-                f"AND p.data BETWEEN ? AND ?) "
-                f"SELECT v, a, ar, s, dia, COUNT(*) FROM esperados e WHERE semanas <= 1 OR NOT EXISTS ("
-                f"SELECT 1 FROM compras p WHERE p.id_cliente = e.id_cliente "
-                f"AND p.data BETWEEN e.dia - 7 * (e.semanas - 1) AND e.dia - 1) "
-                f"OR EXISTS (SELECT 1 FROM compras p WHERE p.id_cliente = e.id_cliente AND p.data = e.dia) "
+                f"WHERE {onde_k}), "
+                # cada cliente em cada semana: o primeiro e o último dia marcado e o primeiro com pedido
+                f"semanas AS (SELECT g.id_cliente, g.v, g.a, g.ar, g.s, g.semana, any_value(g.semanas) AS semanas, "
+                f"bool_or(g.visitavel) AS visitavel, MIN(g.dia) AS primeiro, MAX(g.dia) AS ultimo, "
+                f"MIN(g.dia) FILTER (WHERE c.id_cliente IS NOT NULL) AS atendido "
+                f"FROM agenda g LEFT JOIN compras c ON c.id_cliente = g.id_cliente AND c.data = g.dia "
+                f"GROUP BY 1, 2, 3, 4, 5, 6), "
+                f"marcas AS (SELECT w.v, w.a, w.ar, w.s, {'w.atendido' if atendido_no_dia else 'w.ultimo'} AS dia, "
+                f"c.n AS pedidos, "
+                f"CASE WHEN w.visitavel THEN 1 ELSE 0 END AS visitas "
+                f"FROM semanas w JOIN compras c ON c.id_cliente = w.id_cliente AND c.data = w.atendido "
+                f"UNION ALL "
+                f"SELECT w.v, w.a, w.ar, w.s, w.ultimo, 0, 1 FROM semanas w "
+                f"WHERE w.atendido IS NULL AND w.visitavel AND (w.semanas <= 1 OR NOT EXISTS ("
+                f"SELECT 1 FROM compras p WHERE p.id_cliente = w.id_cliente "
+                f"AND p.data BETWEEN w.primeiro - 7 * (w.semanas - 1) AND w.primeiro - 1))) "
+                f"SELECT v, a, ar, s, dia, SUM(pedidos), SUM(visitas) FROM marcas WHERE dia BETWEEN ? AND ? "
                 f"GROUP BY 1, 2, 3, 4, 5",
-                [*com_rota[1], dias, *params_k, inicio - dt.timedelta(days=7 * (MAX_SEMANAS - 1)), ate]).fetchall():
-            visitas.setdefault((v, a, ar, s), Counter())[data] += n
+                [[a for a, _ in rota], [d for _, d in rota], dias, de - dt.timedelta(days=7 * (MAX_SEMANAS - 1)),
+                 ate, *params_k, inicio, ate]).fetchall():
+            if n_pedidos:
+                pedidos.setdefault((v, a, ar, s), Counter())[data] += _numero(n_pedidos)
+            if n_visitas:
+                visitas.setdefault((v, a, ar, s), Counter())[data] += int(n_visitas)
     vend: dict = {}
     total = (Counter(), Counter())  # (pedidos, visitas) por dia
     por: dict = {}

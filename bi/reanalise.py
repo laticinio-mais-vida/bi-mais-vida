@@ -364,11 +364,12 @@ class Reanalises:
 
     # --- o Assistente ----------------------------------------------------------------------
     def para_ia(self, id_cliente: int, parecidos: bool, novo_limite: float | None = None, mes: str | None = None,
-                maximo: int = MAX_IA) -> dict:
+                maximo: int = MAX_IA, acesso=None) -> dict:
         """Para a ferramenta reanalises_credito. id_cliente 0 = todas, das mais novas para as mais antigas; parecidos:
         as de outros clientes com o perfil mais parecido com o de hoje de id_cliente (com novo_limite, o pedido ÷ o maior
         saldo também conta); mes (AAAA-MM): só as registradas nele. Cada uma com o que aconteceu depois
-        (Credito.depois) e, junto, um resumo de todas as do filtro (nas parecidas, das devolvidas)."""
+        (Credito.depois) e, junto, um resumo de todas as do filtro (nas parecidas, das devolvidas). acesso: função
+        cliente -> bool com os clientes dos vendedores do acesso de quem pergunta (None = todos)."""
         if not self.ativo:
             raise ValueError("as reanálises de crédito ficam no site (bi.maisvida.cloud); neste painel não há nenhuma")
         id_cliente = int(id_cliente or 0)
@@ -393,6 +394,9 @@ class Reanalises:
             todas = [_linha(r) for r in con.execute(
                 f"SELECT {colunas} FROM credito_reanalises WHERE {' AND '.join(onde)} ORDER BY id DESC",
                 params).fetchall()]
+        if acesso is not None:  # só as de clientes do acesso (cada cliente conferido uma vez)
+            dele = {c: acesso(c) for c in {d["id_cliente"] for d in todas}}
+            todas = [d for d in todas if dele[d["id_cliente"]]]
         if alvo:
             for d in todas:
                 d["distancia"] = distancia(alvo, perfil_do_retrato(d["retrato"]))

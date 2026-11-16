@@ -278,6 +278,21 @@ class TestAssistente(Base):
         _, p = com.executar("reanalises_credito", {"id_cliente": "Mercado", "parecidos": False})
         self.assertIn("código de cliente", p["erro"])
 
+    def test_ferramenta_so_os_clientes_do_acesso(self):
+        """Quem vê só a BA: o 1 (título 104 da BA) e o 2 (carteira da BA) entram; o 4 (do Edir) não."""
+        self.registrar_varios()
+        a = criar_assistente(self.pasta, self.calc)
+        ba = Ferramentas(a.recorte(a.ids_do_escopo(None, {"BA"}), credito=True), self.calc, a.cfg, {"BA"},
+                         credito=a.credito, reanalises=self.reanalises)
+        r, p = ba.executar("reanalises_credito", {"id_cliente": 0, "parecidos": False})
+        self.assertEqual((p["erro"], [x["cliente"]["id"] for x in r["reanalises"]], r["total"]), (None, [2, 1], 2))
+        r, p = ba.executar("reanalises_credito", {"id_cliente": 1, "parecidos": True})
+        self.assertEqual((p["erro"], [x["cliente"]["id"] for x in r["reanalises"]]), (None, [2]))
+        _, p = ba.executar("reanalises_credito", {"id_cliente": 4, "parecidos": False})
+        self.assertIn("não é dos vendedores do acesso", p["erro"])
+        _, p = ba.executar("credito_cliente", {"id_cliente": 4})
+        self.assertIn("não é dos vendedores do acesso", p["erro"])
+
 
 class TestPrazoMinimo(Base):
     def setUp(self):

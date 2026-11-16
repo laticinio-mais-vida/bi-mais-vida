@@ -14,8 +14,10 @@ const vazio = (v) => v == null || isNaN(v) || Math.abs(v) < 0.005;
 
 function cabecalho(d, titulo) {
   const c = d.calendario;
+  // O ritmo conta até o último dia útil antes da cópia do banco; quando os dados já têm notas de depois, diz até onde.
+  const ate = c.ritmo_ate && c.ritmo_ate !== d.data_ref ? ` (até ${fmt.semana(c.ritmo_ate)}, ${fmt.dataCurta(c.ritmo_ate)})` : "";
   const ritmo = c.situacao === "fechado" ? (c.meses.length > 1 ? "período fechado" : "mês fechado")
-    : `${fmt.dias(c.dias_decorridos)} de ${fmt.dias(c.dias_uteis)} dias úteis · ritmo esperado ${fmt.pct(c.ritmo)}`;
+    : `${fmt.dias(c.dias_decorridos)} de ${fmt.dias(c.dias_uteis)} dias úteis${ate} · ritmo esperado ${fmt.pct(c.ritmo)}`;
   return `
     <div class="relatorio-cab">
       <img src="/img/logo-maisvida.png" alt="Mais Vida">
