@@ -18,7 +18,13 @@ _api_carregada = False
 
 
 def _instalar_shim_cliente_legado() -> None:
-    class _LegacyDLL(ctypes.WinDLL):
+    # O fdb abre o fbclient com ctypes.WinDLL no Windows (importado na hora de carregar) e, no Linux,
+    # com o CDLL que o fdb.ibase importou ao ser carregado; por isso no Linux a troca é no ibase.CDLL
+    # (trocar ctypes.CDLL não chega no fdb).
+    nome = "WinDLL" if hasattr(ctypes, "WinDLL") else "CDLL"
+    base = getattr(ctypes, nome)
+
+    class _LegacyDLL(base):
         _stubbed = ("fb_shutdown", "fb_shutdown_callback")
 
         def __getattr__(self, name):
@@ -31,7 +37,10 @@ def _instalar_shim_cliente_legado() -> None:
                     return stub
                 raise
 
-    ctypes.WinDLL = _LegacyDLL
+    if nome == "WinDLL":
+        ctypes.WinDLL = _LegacyDLL
+    else:
+        ibase.CDLL = _LegacyDLL
 
 
 def _codec_tolerante(encoding: str) -> str:
