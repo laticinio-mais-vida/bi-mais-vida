@@ -444,16 +444,18 @@ class Tarefas:
     def pendencias(self, usuario: int) -> list[dict]:
         """O que a pessoa precisa justificar agora (o painel fica bloqueado até ela justificar): as tarefas que ela
         criou e as subtarefas dela, abertas e vencidas, sem justificativa do prazo de agora nas últimas RENOVAR horas.
-        Cada uma com a última justificativa (mesmo de um prazo de antes), quem criou a tarefa e, na tarefa, quantas
+        Cada uma com a tarefa principal (título e descrição), a última justificativa (mesmo de um prazo de antes), quem criou a tarefa e, na tarefa, quantas
         subtarefas ainda faltam (concluir leva todas)."""
         agora = self.agora()
         with self.banco.conexao() as con:
             itens = [i for i in con.execute(
                 "SELECT t.id, NULL::bigint, t.titulo, t.prazo, t.hora, t.titulo, t.criador, c.nome, "
-                "(SELECT count(*) FROM agenda_subtarefas s WHERE s.tarefa = t.id AND s.concluida_em IS NULL) "
+                "(SELECT count(*) FROM agenda_subtarefas s WHERE s.tarefa = t.id AND s.concluida_em IS NULL), "
+                "t.descricao, NULL::text "
                 "FROM agenda_tarefas t JOIN usuarios c ON c.id = t.criador "
                 "WHERE t.criador = %(eu)s AND t.concluida_em IS NULL "
-                "UNION ALL SELECT t.id, s.id, s.titulo, s.prazo, s.hora, t.titulo, t.criador, c.nome, 0 "
+                "UNION ALL SELECT t.id, s.id, s.titulo, s.prazo, s.hora, t.titulo, t.criador, c.nome, 0, "
+                "t.descricao, s.descricao "
                 "FROM agenda_subtarefas s JOIN agenda_tarefas t ON t.id = s.tarefa JOIN usuarios c ON c.id = t.criador "
                 "WHERE s.responsavel = %(eu)s AND s.concluida_em IS NULL AND t.concluida_em IS NULL "
                 "ORDER BY 4, 5 NULLS LAST, 1, 2 NULLS FIRST", {"eu": usuario}) if agora > _vence_em(i[3], i[4])]
@@ -466,13 +468,14 @@ class Tarefas:
                         [sorted({i[0] for i in itens})]):
                     historico.setdefault((tarefa, sub), []).append(dict(zip(_J, j)))
         saida = []
-        for tarefa, sub, titulo, prazo, h, titulo_tarefa, criador, nome_criador, abertas in itens:
+        for tarefa, sub, titulo, prazo, h, titulo_tarefa, criador, nome_criador, abertas, desc_tarefa, desc in itens:
             js = historico.get((tarefa, sub), [])
             if any((j["prazo"], j["hora"]) == (prazo, h) and _local(j["criada_em"]) > agora - RENOVAR for j in js):
                 continue
             ultima = js[0] if js else None
             saida.append({
                 "tarefa": tarefa, "subtarefa": sub, "titulo": titulo, "tarefa_titulo": titulo_tarefa,
+                "tarefa_descricao": desc_tarefa, "descricao": desc,
                 "prazo": prazo.isoformat(), "hora": _hhmm(h), "vence_em": _vence_em(prazo, h).isoformat(),
                 "criador": {"id": criador, "nome": nome_criador}, "eu_criador": criador == usuario,
                 "abertas": abertas,
@@ -597,14 +600,14 @@ class Tarefas:
                 avisar(con, [usuario], "vence_em_breve", f"“{_curto(titulo)}” vence {quando}", None, tarefa, sub,
                        chave=f"vence:{'s' if sub else 't'}{sub or tarefa}:{prazo}:{_hhmm(h) or ''}")
             vencidas = con.execute(
-                "SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora, u.nome FROM agenda_subtarefas s "
+                "SELECT s.tarefa, s.id, s.titulo, s.prazo, s.hora, u.nome, t.titulo FROM agenda_subtarefas s "
                 "JOIN agenda_tarefas t ON t.id = s.tarefa JOIN usuarios u ON u.id = s.responsavel "
                 "WHERE t.criador = %(eu)s AND s.responsavel <> %(eu)s AND s.concluida_em IS NULL "
                 "AND t.concluida_em IS NULL AND s.prazo BETWEEN %(desde)s AND %(hoje)s",
                 {"eu": usuario, "desde": hoje - dt.timedelta(days=DIAS_VENCEU), "hoje": hoje}).fetchall()
-            for tarefa, sub, titulo, prazo, h, nome in vencidas:
+            for tarefa, sub, titulo, prazo, h, nome, titulo_tarefa in vencidas:
                 if agora - dt.timedelta(days=DIAS_VENCEU) < _vence_em(prazo, h) < agora:
-                    avisar(con, [usuario], "venceu", f"A subtarefa “{_curto(titulo)}”, de {nome}, venceu sem ser "
+                    avisar(con, [usuario], "venceu", f"A subtarefa “{_curto(titulo)}”, de {nome}, da tarefa “{_curto(titulo_tarefa)}”, venceu sem ser "
                            f"concluída ({self._prazo(prazo, h)})", None, tarefa, sub,
                            chave=f"venceu:s{sub}:{prazo}:{_hhmm(h) or ''}")
 

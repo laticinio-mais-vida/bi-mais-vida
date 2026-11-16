@@ -240,15 +240,18 @@ function haQuanto(iso) {
 // o aviso da prorrogação (para quem criou, editar a tarefa) e os botões.
 function itemHtml(p, texto) {
   const prazo = `${dataCurta(p.prazo)}${p.hora ? ` às ${p.hora}` : ""}`;
+  const venceu = `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${prazo} · ${haQuanto(p.vence_em)}</span>`;
   const u = p.ultima;
   const ultima = u ? `<div class="ag-just"><p>${icone("conversa")}<span>${esc(u.texto)}</span></p>
       <small><span>${u.minha ? "Sua última justificativa" : `Última justificativa${u.por ? ` · ${esc(u.por)}` : ""}`}, ${fmt.dataHora(u.criada_em)}${u.do_prazo ? "" : " (de um prazo anterior)"}</span></small></div>` : "";
   const nota = p.eu_criador ? "Você criou esta tarefa: para mudar o prazo, edite a tarefa depois de justificar."
     : `Caso queira prorrogamento do prazo, solicite ao criador da tarefa (${esc(p.criador.nome)}).`;
   return `<li class="av-item" data-chave="${chave(p)}">
-    <div class="av-item-cab"><span class="chip ag-c-tarefa">${icone("tarefa")}${p.subtarefa ? "Subtarefa" : "Tarefa"}</span><b>${esc(p.titulo)}</b></div>
-    <div class="ag-chips">${p.subtarefa ? `<span class="chip">Parte de: ${esc(p.tarefa_titulo)}</span>` : ""}
-      <span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${prazo} · ${haQuanto(p.vence_em)}</span></div>
+    <div class="av-item-cab"><span class="chip ag-c-tarefa">${icone("tarefa")}Tarefa</span><b>${esc(p.tarefa_titulo)}</b></div>
+    ${p.tarefa_descricao ? `<p class="av-desc">${esc(p.tarefa_descricao)}</p>` : ""}
+    ${p.subtarefa ? `<div class="ag-sub-vencida"><small>${icone("alerta")}Subtarefa atrasada</small><b>${esc(p.titulo)}</b>
+      ${p.descricao ? `<p>${esc(p.descricao)}</p>` : ""}
+      <div class="ag-chips">${venceu}</div></div>` : `<div class="ag-chips">${venceu}</div>`}
     ${ultima}
     <textarea rows="3" maxlength="2000" aria-label="Por que ${esc(p.titulo)} atrasou" placeholder="Por que atrasou? Quem participa da tarefa vê.">${esc(texto)}</textarea>
     <p class="av-nota">${icone("info")}<span>${nota}</span></p>

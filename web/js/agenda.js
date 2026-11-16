@@ -546,16 +546,18 @@ function refHtml(r, dia, n, vencida = false) {
   const x = s || t;
   const pode = (s ? s.pode : t.pode).concluir;
   const dica = dicaCheck(t, s);
+  // a subtarefa vencida (no bloco das atrasadas): a tarefa principal em cima, com a descrição, e a subtarefa embaixo
+  const comTarefa = vencida && s;
   const chips = [
-    `<span class="chip ag-c-tarefa">${icone("tarefa")}${s ? `Subtarefa${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}` : "Tarefa"}</span>`,
+    `<span class="chip ag-c-tarefa">${icone("tarefa")}${s && !comTarefa ? `Subtarefa${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}` : "Tarefa"}</span>`,
     s ? chipAutomatica(s) : "",
     // a automática no primeiro dia: até quando ela vai
     s && !vencida && dia < s.prazo ? `<span class="chip">${icone("relogio")}Até ${dataCurta(s.prazo)}</span>` : "",
-    vencida ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(x.prazo)}</span>` : "",
+    vencida && !s ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(x.prazo)}</span>` : "",
     // venceu hoje, no horário do prazo: fica no dia, sem ir para o bloco das atrasadas (que é dos dias de antes)
     !vencida && x.atrasada && x.prazo === estado.dados.hoje ? `<span class="chip ag-c-atrasada">${icone("alerta")}Venceu às ${x.hora}</span>` : "",
     x.situacao === "fazendo" ? `<span class="chip ag-c-fazendo">${icone("relogio")}Fazendo</span>` : "",
-    s ? `<span class="chip">Parte de: ${esc(t.titulo)}</span>` : "",
+    s && !comTarefa ? `<span class="chip">Parte de: ${esc(t.titulo)}</span>` : "",
     !s && t.total ? `<span class="chip">${icone("visto")}${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span>` : "",
     !s && t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
     !t.eu_criador ? `<span class="chip">${icone("usuario")}De ${esc(t.criador.nome)}</span>` : "",
@@ -564,8 +566,14 @@ function refHtml(r, dia, n, vencida = false) {
     <button type="button" class="ag-check ${x.feita ? "feita" : ""}" data-check ${pode ? "" : "disabled"}
       aria-pressed="${x.feita}" title="${esc(dica)}" aria-label="${esc(dica)}: ${esc(x.titulo)}">${icone("visto")}</button>
     <div class="ag-item-t">
-      <b>${x.hora ? `<span class="ag-hora">${icone("relogio")}${x.hora}</span>` : ""}${esc(x.titulo)}</b>
-      ${x.descricao ? `<p>${esc(x.descricao)}</p>` : ""}
+      ${comTarefa ? `<b>${esc(t.titulo)}</b>
+      ${t.descricao ? `<p>${esc(t.descricao)}</p>` : ""}
+      <div class="ag-sub-vencida"><small>${icone("alerta")}Subtarefa atrasada${s.minha ? "" : ` · ${esc(s.responsavel.nome)}`}</small>
+        <b>${s.hora ? `<span class="ag-hora">${icone("relogio")}${s.hora}</span>` : ""}${esc(s.titulo)}</b>
+        ${s.descricao ? `<p>${esc(s.descricao)}</p>` : ""}
+        <div class="ag-chips"><span class="chip ag-c-atrasada">${icone("alerta")}Venceu em ${dataCurta(s.prazo)}</span></div>
+      </div>` : `<b>${x.hora ? `<span class="ag-hora">${icone("relogio")}${x.hora}</span>` : ""}${esc(x.titulo)}</b>
+      ${x.descricao ? `<p>${esc(x.descricao)}</p>` : ""}`}
       <div class="ag-chips">${chips}</div>
       ${x.feita ? `<div class="ag-feito"><small><span>${textoConclusao(t, s, x.prazo)}</span></small></div>` : ""}
       ${justHtml(x, 1)}${botaoJust(x, "data-justificar")}
@@ -1704,7 +1712,7 @@ function desenharQuadro(animar) {
 function cardHtml(t, n) {
   const minhas = t.subtarefas.filter((s) => s.minha && !s.feita);
   // as suas que vencem antes da tarefa: o card fica na coluna do prazo da tarefa, com o aviso
-  const vencidas = minhas.filter((s) => s.atrasada).length;
+  const vencidas = minhas.filter((s) => s.atrasada);
   const hoje = minhas.filter((s) => !s.atrasada && s.prazo === estado.quadro.hoje).length;
   const chips = [
     t.feita ? `<span class="chip ag-c-feita">${icone("visto")}Concluída em ${dataCurta(t.concluida_em.slice(0, 10))}</span>`
@@ -1713,7 +1721,6 @@ function cardHtml(t, n) {
     !t.eu_criador ? `<span class="chip">${icone("usuario")}De ${esc(t.criador.nome)}</span>` : "",
     t.participantes.length ? `<span class="chip" title="${esc(t.participantes.map((p) => p.nome).join(", "))}">${icone("pessoas")}${plural(t.participantes.length + 1, "pessoa", "pessoas")}</span>` : "",
     minhas.length ? `<span class="chip ag-c-tarefa" title="Subtarefas suas que faltam">${icone("tarefa")}${plural(minhas.length, "subtarefa sua", "subtarefas suas")}</span>` : "",
-    vencidas ? `<span class="chip ag-c-atrasada">${icone("alerta")}${vencidas === 1 ? "Sua subtarefa venceu" : `${fmt.num(vencidas)} subtarefas suas venceram`}</span>` : "",
     hoje ? `<span class="chip ag-c-hoje">${icone("relogio")}${hoje === 1 ? "Sua subtarefa vence hoje" : `${fmt.num(hoje)} subtarefas suas vencem hoje`}</span>` : "",
     t.justificativas.length ? `<span class="chip ag-c-justificada" title="${esc(t.justificativas[0].texto)}">${icone("conversa")}Atraso justificado</span>` : "",
   ].filter(Boolean).join("");
@@ -1722,6 +1729,8 @@ function cardHtml(t, n) {
     <b>${esc(t.titulo)}</b>
     ${t.descricao ? `<p>${esc(t.descricao)}</p>` : ""}
     <div class="ag-chips">${chips}</div>
+    ${vencidas.length ? `<ul class="ag-card-vencidas" aria-label="Subtarefas suas que venceram">${vencidas.map((s) =>
+      `<li>${icone("alerta")}<span>Venceu em ${prazoTxt(s)}: <b>${esc(s.titulo)}</b></span></li>`).join("")}</ul>` : ""}
     ${t.total ? `<div class="ag-card-prog">${barra(t.feitas, t.total - t.feitas)}<span>${t.feitas} de ${plural(t.total, "subtarefa feita", "subtarefas feitas")}</span></div>` : ""}
   </li>`;
 }

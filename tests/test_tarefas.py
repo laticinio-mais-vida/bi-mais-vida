@@ -433,8 +433,9 @@ class TestTarefasNoBanco(BaseBanco):
         """A linha do tempo do plano: subtarefa do Beto até 27/10 às 10:00, numa tarefa da Ana até 31/10."""
         relogio = {"agora": dt.datetime(2026, 10, 27, 10, 0)}
         tarefas = Tarefas(self.banco, agora=lambda: relogio["agora"])
-        t = tarefas.criar(self.ana, {"titulo": "Feira", "prazo": "2026-10-31", "participantes": [{"id": self.beto}],
-                                     "subtarefas": [{"titulo": "Preços", "responsavel": self.beto,
+        t = tarefas.criar(self.ana, {"titulo": "Feira", "descricao": "Estande da feira de novembro", "prazo": "2026-10-31",
+                                     "participantes": [{"id": self.beto}],
+                                     "subtarefas": [{"titulo": "Preços", "descricao": "Tabela nova", "responsavel": self.beto,
                                                      "prazo": "2026-10-27", "hora": "10:00"}]})
         sub = t["subtarefas"][0]["id"]
 
@@ -445,9 +446,10 @@ class TestTarefasNoBanco(BaseBanco):
         self.assertEqual(em(10, 27, 10, 0), [])  # no horário do prazo ainda não venceu
         self.assertEqual(em(10, 27, 10, 1), [("Preços", None)])
         p, = tarefas.pendencias(self.beto)
-        self.assertEqual({k: p[k] for k in ("tarefa", "subtarefa", "tarefa_titulo", "prazo", "hora", "vence_em",
-                                            "eu_criador")},
-                         {"tarefa": t["id"], "subtarefa": sub, "tarefa_titulo": "Feira", "prazo": "2026-10-27",
+        self.assertEqual({k: p[k] for k in ("tarefa", "subtarefa", "tarefa_titulo", "tarefa_descricao", "descricao",
+                                            "prazo", "hora", "vence_em", "eu_criador")},
+                         {"tarefa": t["id"], "subtarefa": sub, "tarefa_titulo": "Feira",
+                          "tarefa_descricao": "Estande da feira de novembro", "descricao": "Tabela nova", "prazo": "2026-10-27",
                           "hora": "10:00", "vence_em": "2026-10-27T10:00:00", "eu_criador": False})
         self.assertEqual((p["criador"]["nome"], tarefas.pendencias(self.ana)), ("Ana", []))  # é só do responsável
         em(10, 27, 10, 15)

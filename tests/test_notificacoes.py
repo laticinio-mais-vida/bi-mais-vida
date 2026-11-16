@@ -175,8 +175,8 @@ class TestNotificacoes(BaseBanco):
         self.tarefas.gerar_avisos(self.ana)
         self.assertEqual(sorted(self.textos(self.ana)), [
             ("vence_em_breve", "“Feira” vence hoje às 14:00"),
-            ("venceu", "A subtarefa “Estande”, de Beto, venceu sem ser concluída (28/10)"),
-            ("venceu", "A subtarefa “Material”, de Beto, venceu sem ser concluída (29/10)")])
+            ("venceu", "A subtarefa “Estande”, de Beto, da tarefa “Feira”, venceu sem ser concluída (28/10)"),
+            ("venceu", "A subtarefa “Material”, de Beto, da tarefa “Feira”, venceu sem ser concluída (29/10)")])
         # prorrogado, o prazo novo avisa de novo
         t = self.tarefas.obter(self.ana, t["id"])
         self.tarefas.editar(self.ana, t["id"], {
