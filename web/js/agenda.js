@@ -472,6 +472,8 @@ function desenharDia(animar) {
   el.querySelector(".ag-fb textarea")?.focus();
 }
 
+const LIMITE_DIA_UTIL = 17; // a partir deste dia útil, o formulário avisa que algum mês pode não ter o dia
+
 function itemHtml(i, dia, futuro, n) {
   const a = atividade(i.atividade);
   const repete = a.repeticao !== "nenhuma", varios = variosDias(a);
@@ -500,6 +502,7 @@ function itemHtml(i, dia, futuro, n) {
     <div class="ag-item-t">
       <b>${a.hora ? `<span class="ag-hora">${icone("relogio")}${horario(a)}</span>` : ""}${esc(a.titulo)}</b>
       ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ""}
+      ${i.ajuste ? `<p class="ag-ajuste">${icone("alerta")}<span>Data ajustada: ${esc(i.ajuste)}.</span></p>` : ""}
       <div class="ag-chips"><span class="chip">${icone(repete ? "atualizar" : "calendario")}${esc(a.quando)}</span>
         ${a.ocupado ? `<span class="chip ag-c-ocupado" title="Ninguém marca outra coisa para você nesse horário">${icone("cadeado")}Horário ocupado</span>` : ""}
         ${a.exige_feedback ? `<span class="chip laranja">${icone("conversa")}Pede feedback</span>` : ""}</div>
@@ -1271,6 +1274,7 @@ function formAtividade(a, dia, modelo = null) {
           <label class="campo-form"><span data-du-rotulo></span>
             <input type="number" name="dia_util" min="1" max="23" inputmode="numeric" value="${v.dia_util ? Math.abs(v.dia_util) : 1}">
             <small data-du-texto></small></label>
+          <p class="ag-ajuste" data-du-aviso hidden></p>
           <div class="ag-regiao"><span>Calendário</span>
             <div class="seg-mini" role="group" aria-label="Calendário dos dias úteis">${["ES", "BA"].map((r) =>
               `<button type="button" data-regiao="${r}" class="${estado.form.regiao === r ? "ativo" : ""}">${r}</button>`).join("")}</div></div>
@@ -1532,7 +1536,11 @@ function mostrarDiaUtil() {
   f.querySelector("[data-du-texto]").textContent = !(n >= 1 && n <= 23) ? "De 1 a 23."
     : fim ? (n === 1 ? "No último dia útil do mês (1 = o último; o próprio dia conta)."
       : `Faltando ${n} dias úteis para acabar o mês, contando o próprio dia (1 = o último dia útil).`)
-    : `No ${n}º dia útil do mês. Mês com menos dias úteis: no último.`;
+    : `No ${n}º dia útil do mês.`;
+  // os meses têm de 17 a 23 dias úteis: do 17º em diante, algum mês pode não ter o dia pedido
+  const aviso = f.querySelector("[data-du-aviso]");
+  aviso.hidden = !(n >= LIMITE_DIA_UTIL && n <= 23);
+  if (!aviso.hidden) aviso.innerHTML = `${icone("alerta")}<span>Há meses com menos de ${n} dias úteis (eles costumam ter de 17 a 23). Nesses meses, a atividade vai para o ${fim ? "primeiro" : "último"} dia útil, e a agenda avisa no dia.</span>`;
 }
 
 function escolherRepeticao(rep) {

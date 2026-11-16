@@ -176,6 +176,19 @@ class TestAgendaNoBanco(BaseBanco):
         m = self.agenda.mes(self.ana, "2026-10")
         com = lambda id_: [d["data"] for d in m["dias"] if id_ in [i["atividade"] for i in d["itens"]]]
         self.assertEqual((com(primeiro), com(faltando3)), (["2026-10-01"], ["2026-10-28"]))
+        # nov/2026 no ES tem só 19 dias úteis: o 22º vai para o último (30/11) e faltando 22, para o primeiro (03/11),
+        # com o aviso no dia; o 3º não muda nada
+        muitos = self.criar(repeticao="mensal", dia_util=22, regiao="ES")
+        muitos_fim = self.criar(repeticao="mensal", dia_util=-22, regiao="ES")
+        terceiro = self.criar(repeticao="mensal", dia_util=3, regiao="ES")
+        nov = self.agenda.mes(self.ana, "2026-11")
+        avisos = {(d["data"], i["atividade"]): i.get("ajuste") for d in nov["dias"] for i in d["itens"]}
+        self.assertEqual(avisos[("2026-11-30", muitos)],
+                         "Novembro tem só 19 dias úteis (ES): o 22º dia útil passou para o último, 30/11")
+        self.assertEqual(avisos[("2026-11-03", muitos_fim)], "Novembro tem só 19 dias úteis (ES): faltando 22 dias "
+                                                             "úteis passou para o primeiro dia útil, 03/11")
+        self.assertIsNone(avisos[("2026-11-05", terceiro)])
+        self.assertEqual(sum(1 for (_, a), v in avisos.items() if v), 2)
         # editar para o dia fixo tira o dia útil (e o calendário)
         a = self.agenda.editar(self.ana, faltando3, {"titulo": "Visitar a loja", "inicio": "2026-10-01",
                                                       "repeticao": "mensal", "dia_mes": 10})

@@ -40,6 +40,8 @@ REPETICOES = ("nenhuma", "diaria", "semanal", "mensal", "intervalo")
 ACOES = ("criar", "editar", "encerrar", "excluir", "concluir")
 MAX_TITULO = 120
 MAX_TEXTO = 2000
+MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro",
+         "Novembro", "Dezembro"]
 MAX_DIA_UTIL = 23  # o dia útil do mês da mensal vai até o 23º (do começo ou do fim); o mês com menos usa o mais perto
 MAX_FALTAS = 30   # dias sem conclusão que o histórico lista (os mais recentes)
 MAX_PERIODO = 93  # dias que o Assistente lê de uma vez
@@ -228,6 +230,20 @@ def dia_util_do_mes(cal: Calendario, ano: int, mes: int, regiao: str, n: int) ->
     if not uteis:
         return None
     return uteis[min(n, len(uteis)) - 1] if n > 0 else uteis[max(len(uteis) + n, 0)]
+
+
+def ajuste_dia_util(a: dict, dia: dt.date, cal: Calendario | None) -> str | None:
+    """O aviso do mês com menos dias úteis que o pedido, no dia para onde a mensal num dia útil foi (None: sem
+    ajuste): 'Novembro tem só 19 dias úteis (ES): o 22º dia útil passou para o último, 30/11'."""
+    n = a.get("dia_util") if a["repeticao"] == "mensal" else None
+    if not n or cal is None:
+        return None
+    uteis = cal.dias_uteis(dia.year, dia.month, a["regiao"])
+    if len(uteis) >= abs(n) or dia not in (uteis[-1:] if n > 0 else uteis[:1]):
+        return None
+    pedido = f"o {n}º dia útil passou para o último" if n > 0 else \
+        f"faltando {-n} dias úteis passou para o primeiro dia útil"
+    return f"{MESES[dia.month - 1]} tem só {len(uteis)} dias úteis ({a['regiao']}): {pedido}, {dia:%d/%m}"
 
 
 def texto_dia_util(n: int) -> str:
@@ -534,7 +550,8 @@ class Agenda:
 
     # --- leitura ---------------------------------------------------------------------------
     def _dias(self, usuario: int, de: dt.date, ate: dt.date) -> tuple[list[dict], list[tuple[dt.date, list[dict]]]]:
-        """As atividades que aparecem entre de e ate e, dia a dia, os itens de cada dia ({a, feito})."""
+        """As atividades que aparecem entre de e ate e, dia a dia, os itens de cada dia ({a, feito, ajuste}; ajuste:
+        o aviso da mensal num dia útil que o mês não tem, ajuste_dia_util)."""
         with self.banco.conexao() as con:
             atividades = [dict(zip(_CAMPOS, r)) for r in con.execute(
                 f"SELECT {_COLUNAS} FROM agenda_atividades WHERE usuario = %(u)s AND ((inicio <= %(ate)s AND "
@@ -548,7 +565,8 @@ class Agenda:
         ordenadas = sorted(atividades, key=_ordem)
         dias, dia = [], de
         while dia <= ate:
-            dias.append((dia, [{"a": a, "feito": feitos.get((a["id"], dia))} for a in ordenadas
+            dias.append((dia, [{"a": a, "feito": feitos.get((a["id"], dia)), "ajuste": ajuste_dia_util(a, dia, cal)}
+                               for a in ordenadas
                                if (a["id"], dia) in feitos or ocorre(a, dia, cal)]))
             dia += UM_DIA
         return atividades, dias
@@ -563,7 +581,8 @@ class Agenda:
                 "dias": [{"data": dia.isoformat(),
                           "itens": [{"atividade": i["a"]["id"], "feita": i["feito"] is not None,
                                      "feedback": i["feito"][0] if i["feito"] else None,
-                                     "concluida_em": hora(i["feito"][1]) if i["feito"] else None} for i in itens]}
+                                     "concluida_em": hora(i["feito"][1]) if i["feito"] else None,
+                                     **({"ajuste": i["ajuste"]} if i["ajuste"] else {})} for i in itens]}
                          for dia, itens in dias]}
 
     def periodo(self, usuario: int, de, ate, texto: str = "") -> dict:
@@ -596,7 +615,8 @@ class Agenda:
                 totais[_TOTAL[situacao]] += 1
                 linhas.append({"atividade": i["a"]["id"], "titulo": i["a"]["titulo"], "hora": _hhmm(i["a"]["hora"]),
                                "hora_fim": _hhmm(i["a"]["hora_fim"]), "situacao": situacao,
-                               **({"feedback": i["feito"][0]} if i["feito"] else {})})
+                               **({"feedback": i["feito"][0]} if i["feito"] else {}),
+                               **({"ajuste": i["ajuste"]} if i["ajuste"] else {})})
             eventos = [g for g in google.get(dia.isoformat(), []) if all(p in _chave(g["titulo"]) for p in palavras)]
             desatualizada |= any(g["desatualizada"] for g in eventos)
             vao = eventos[:max(0, MAX_GOOGLE_IA - n_google)]

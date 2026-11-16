@@ -2419,6 +2419,10 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
   background: var(--acento-suave); color: var(--acento-tinta); font: 700 12.5px var(--f-texto); vertical-align: 1px;
 }
 .ag-hora .ic { width: 12px; height: 12px; }
+/* a mensal num dia útil que o mês não tem: a data foi ajustada (no dia da agenda e no formulário) */
+.ag-item-t > p.ag-ajuste, .ag-ajuste { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; padding: 6px 9px; border-radius: 9px;
+  background: var(--acento-suave); color: var(--acento-tinta); font-size: 12.5px; font-weight: 600; white-space: normal; }
+.ag-ajuste .ic { width: 14px; height: 14px; flex: none; margin-top: 1px; }
 .ag-item-t > p { margin: 3px 0 0; font-size: 13px; color: var(--tinta-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .ag-chips .chip { padding: 3px 9px; font-size: 11.5px; }
