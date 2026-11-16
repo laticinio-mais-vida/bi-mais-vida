@@ -624,6 +624,10 @@ FERRAMENTAS = [
                                           "(padrão); intervalo = a cada N dias")},
             "dias_semana": {**_INTEIROS, "description": "semanal: 1 = segunda ... 7 = domingo"},
             "dia_mes": {"type": "integer", "description": "mensal: o dia, de 1 a 31 (o mês sem esse dia usa o último)"},
+            "dia_util": {"type": "integer",
+                         "description": ("mensal num dia útil do mês, no lugar de dia_mes (precisa da regiao): 1 = o "
+                                         "primeiro dia útil, 2 = o segundo...; contando do fim, -1 = o último dia útil, "
+                                         "-5 = faltando 5 dias úteis para acabar o mês (o próprio dia conta); de -23 a 23")},
             "intervalo": {"type": "integer",
                           "description": "intervalo: a cada quantos dias, contando do início (2 a 365; quinzenal = 15)"},
             "so_dias_uteis": {"type": "boolean",
@@ -1270,11 +1274,12 @@ class Ferramentas:
 
     def f_propor_agenda(self, passo: dict, acao: str, atividade=None, titulo=None, descricao=None, inicio=None,
                         hora=None, hora_fim=None, ocupado=None, repeticao=None, dias_semana=None, dia_mes=None,
-                        intervalo=None, so_dias_uteis=None, regiao=None, fim=None, exige_feedback=None, dia=None,
+                        dia_util=None, intervalo=None, so_dias_uteis=None, regiao=None, fim=None, exige_feedback=None, dia=None,
                         feedback=None) -> dict:
         campos = {k: v for k, v in {"titulo": titulo, "descricao": descricao, "inicio": inicio, "hora": hora,
                                     "hora_fim": hora_fim, "ocupado": ocupado, "repeticao": repeticao,
-                                    "dias_semana": dias_semana, "dia_mes": dia_mes, "intervalo": intervalo,
+                                    "dias_semana": dias_semana, "dia_mes": dia_mes, "dia_util": dia_util,
+                                    "intervalo": intervalo,
                                     "so_dias_uteis": so_dias_uteis, "regiao": regiao, "fim": fim,
                                     "exige_feedback": exige_feedback}.items() if v is not None}
         agenda = self._agenda()
@@ -1527,7 +1532,9 @@ criada, mudada, encerrada, excluída ou concluída: diga que a proposta está pr
 ficou. Para mudar, encerrar, excluir ou concluir, ache antes o código com ver_agenda; se houver mais de uma \
 candidata, pergunte qual. Encerrar mantém o histórico; excluir apaga tudo: na dúvida, proponha encerrar.
 - Como traduzir: "toda segunda e quinta às 9h" = semanal, dias_semana [1, 4], hora 09:00; "todo dia útil" = diaria \
-com so_dias_uteis e a regiao (ES ou BA; na dúvida, pergunte); "todo dia 5" = mensal, dia_mes 5; "de 15 em 15 dias" \
+com so_dias_uteis e a regiao (ES ou BA; na dúvida, pergunte); "todo dia 5" = mensal, dia_mes 5; "no 3º dia útil do mês" = \
+mensal, dia_util 3, e a regiao; "no último dia útil do mês" = mensal, dia_util -1; "faltando 5 dias úteis para acabar o \
+mês" = mensal, dia_util -5; "de 15 em 15 dias" \
 ou "quinzenal" = intervalo 15; "amanhã às 14h" = nenhuma, inicio amanhã, hora 14:00; "das 14h às 15h" = hora 14:00 \
 e hora_fim 15:00; "de 10 a 14/11" = nenhuma, inicio 10/11 e fim 14/11; "bloqueie esse horário" ou "marque como \
 ocupado" = ocupado (precisa de hora e hora_fim); "precisa de retorno" ou "com feedback" = exige_feedback. Sem o dia, \

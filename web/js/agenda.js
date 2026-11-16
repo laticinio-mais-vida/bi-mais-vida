@@ -17,7 +17,7 @@
 //   Vence hoje, Vence essa semana, de segunda a domingo, e Vence depois; a coluna vem do servidor) e as concluídas há
 //   pouco. O card não se arrasta: clicar abre a janela da tarefa, onde se muda a situação.
 // O botão Nova (e o Novo neste dia) abre em tela cheia o formulário de atividade nova (única, diária, semanal, mensal
-// ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
+// num dia fixo ou num dia útil do mês, contado do começo ou do fim, ou a cada N dias, com horário opcional) ou de tarefa nova (prazo e um card por pessoa, com ou sem autonomia, com as
 // subtarefas dela; clicar no nome abre o card já com uma subtarefa nova: escolhe-se o dia, escreve-se o nome, e o dia
 // escolhido depois já é o da próxima, que abre com a anterior guardada), que também edita uma atividade ou uma
 // tarefa. Os dias se escolhem numa faixa de quadradinhos como a da agenda (escolherdia.js), que mostra quanto cada dia
@@ -647,9 +647,14 @@ async function aoClicar(e) {
     b.classList.toggle("ativo", estado.form.dias.has(d));
     return b.setAttribute("aria-pressed", String(estado.form.dias.has(d)));
   }
-  if (b.dataset.regiao) {
+  if (b.dataset.regiao) { // o calendário da diária e o da mensal são o mesmo
     estado.form.regiao = b.dataset.regiao;
-    return b.parentElement.querySelectorAll("button").forEach((x) => x.classList.toggle("ativo", x === b));
+    return raiz.querySelectorAll("#ag-form [data-regiao]").forEach((x) => x.classList.toggle("ativo", x.dataset.regiao === b.dataset.regiao));
+  }
+  if (b.dataset.mesModo || b.dataset.mesDe) {
+    if (b.dataset.mesModo) estado.form.mesModo = b.dataset.mesModo; else estado.form.mesDe = b.dataset.mesDe;
+    b.parentElement.querySelectorAll("button").forEach((x) => { x.classList.toggle("ativo", x === b); x.setAttribute("aria-pressed", String(x === b)); });
+    return mostrarDiaUtil();
   }
   if (b.dataset.autonomia) {
     lerSubs();
@@ -727,6 +732,7 @@ function aoTeclar(e) {
 // O título da subtarefa (no formulário e na janela da tarefa) é uma caixa de texto que cresce com ele.
 function aoDigitar(e) {
   if (e.target.matches('textarea[data-campo="titulo"]')) ajustarTitulo(e.target);
+  if (e.target.name === "dia_util") mostrarDiaUtil();
 }
 
 // A altura da caixa do título da subtarefa: a do texto, até MAX_ALTURA_TITULO (depois, rola). O título não tem quebras
@@ -1224,9 +1230,13 @@ function desenharForm(item, tipo, dia, modelo = null) {
 // pode ficar ocupado).
 function formAtividade(a, dia, modelo = null) {
   const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, hora_fim: null, ocupado: false, repeticao: "nenhuma",
-                   dias_semana: null, dia_mes: null, intervalo: null, so_dias_uteis: false, regiao: null, fim: null,
-                   exige_feedback: false, ...modelo };
-  estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES" };
+                   dias_semana: null, dia_mes: null, dia_util: null, intervalo: null, so_dias_uteis: false, regiao: null,
+                   fim: null, exige_feedback: false, ...modelo };
+  // na mensal: o dia fixo ou o dia útil, contado do começo do mês ou do fim
+  estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES",
+                  mesModo: v.dia_util ? "util" : "fixo", mesDe: v.dia_util < 0 ? "fim" : "inicio" };
+  const seg = (attr, atual, ops, rotulo) => `<div class="seg-mini" role="group" aria-label="${rotulo}">${ops.map(([k, n]) =>
+    `<button type="button" ${attr}="${k}" class="${k === atual ? "ativo" : ""}" aria-pressed="${k === atual}">${n}</button>`).join("")}</div>`;
   return `<div class="ag-tela-col">
       <label class="campo-form"><span>Título</span>
         <input name="titulo" maxlength="120" autocomplete="off" value="${esc(v.titulo)}" placeholder="Ex.: Visitar o Mercado do João"></label>
@@ -1249,9 +1259,23 @@ function formAtividade(a, dia, modelo = null) {
       <div class="ag-sub" data-para="semanal"><div class="campo-form"><span>Dias da semana</span>
         <div class="dias-semana" role="group" aria-label="Dias da semana">${DIAS.map(([d, n]) =>
           `<button type="button" data-dia-semana="${d}" aria-pressed="${estado.form.dias.has(d)}" class="${estado.form.dias.has(d) ? "ativo" : ""}">${n}</button>`).join("")}</div></div></div>
-      <div class="ag-sub" data-para="mensal"><label class="campo-form"><span>Dia do mês</span>
-        <input type="number" name="dia_mes" min="1" max="31" inputmode="numeric" value="${v.dia_mes ?? ""}">
-        <small>Em meses que não têm esse dia, cai no último.</small></label></div>
+      <div class="ag-sub" data-para="mensal">
+        <div class="campo-form"><span>Em que dia do mês</span>${seg("data-mes-modo", estado.form.mesModo,
+          [["fixo", "Dia fixo"], ["util", "Dia útil"]], "Dia fixo ou dia útil do mês")}</div>
+        <label class="campo-form" data-mes-campo="fixo" ${estado.form.mesModo === "fixo" ? "" : "hidden"}><span>Dia do mês</span>
+          <input type="number" name="dia_mes" min="1" max="31" inputmode="numeric" value="${v.dia_mes ?? ""}">
+          <small>Em meses que não têm esse dia, cai no último.</small></label>
+        <div class="ag-sub" data-mes-campo="util" ${estado.form.mesModo === "util" ? "" : "hidden"}>
+          <div class="campo-form"><span>Contar os dias úteis</span>${seg("data-mes-de", estado.form.mesDe,
+            [["inicio", "Do começo do mês"], ["fim", "Do fim do mês"]], "Contar do começo ou do fim do mês")}</div>
+          <label class="campo-form"><span data-du-rotulo></span>
+            <input type="number" name="dia_util" min="1" max="23" inputmode="numeric" value="${v.dia_util ? Math.abs(v.dia_util) : 1}">
+            <small data-du-texto></small></label>
+          <div class="ag-regiao"><span>Calendário</span>
+            <div class="seg-mini" role="group" aria-label="Calendário dos dias úteis">${["ES", "BA"].map((r) =>
+              `<button type="button" data-regiao="${r}" class="${estado.form.regiao === r ? "ativo" : ""}">${r}</button>`).join("")}</div></div>
+        </div>
+      </div>
       <div class="ag-sub" data-para="intervalo"><label class="campo-form"><span>A cada quantos dias</span>
         <input type="number" name="intervalo" min="2" max="365" inputmode="numeric" value="${v.intervalo ?? 15}">
         <small>Contando do primeiro dia. Quinzenal: 15.</small></label></div>
@@ -1493,6 +1517,22 @@ function mostrarCampos() {
   f.querySelector("[data-rotulo-fim]").innerHTML = unica ? "Até <small>(opcional, para vários dias)</small>" : "Termina em <small>(opcional)</small>";
   f.elements.fim.closest(".ed").dataset.vazio = unica ? "Só neste dia" : "Sem data para terminar";
   limitesDoDia(f.elements.fim); // redesenha com o texto de quando não há o último dia
+  mostrarDiaUtil();
+}
+
+// A mensal: o dia fixo ou o dia útil; no dia útil, o rótulo do número e o que ele quer dizer ("3º dia útil do mês",
+// "Último dia útil do mês", "Faltando 5 dias úteis para acabar o mês").
+function mostrarDiaUtil() {
+  const f = raiz.querySelector("#ag-form");
+  if (!f?.elements.dia_util) return;
+  const util = estado.form.mesModo === "util", fim = estado.form.mesDe === "fim";
+  f.querySelectorAll("[data-mes-campo]").forEach((el) => { el.hidden = el.dataset.mesCampo !== (util ? "util" : "fixo"); });
+  f.querySelector("[data-du-rotulo]").textContent = fim ? "Quantos dias úteis faltam para acabar o mês" : "Qual dia útil do mês";
+  const n = Number(f.elements.dia_util.value);
+  f.querySelector("[data-du-texto]").textContent = !(n >= 1 && n <= 23) ? "De 1 a 23."
+    : fim ? (n === 1 ? "No último dia útil do mês (1 = o último; o próprio dia conta)."
+      : `Faltando ${n} dias úteis para acabar o mês, contando o próprio dia (1 = o último dia útil).`)
+    : `No ${n}º dia útil do mês. Mês com menos dias úteis: no último.`;
 }
 
 function escolherRepeticao(rep) {
@@ -1547,14 +1587,17 @@ function coletar() {
 function coletarAtividade() {
   const f = raiz.querySelector("#ag-form");
   const rep = estado.form.repeticao;
-  const uteis = rep === "diaria" && f.elements.so_dias_uteis.checked;
+  const diaUtil = rep === "mensal" && estado.form.mesModo === "util";
+  const uteis = (rep === "diaria" && f.elements.so_dias_uteis.checked) || diaUtil;
   const num = (n) => (f.elements[n].value === "" ? null : Number(f.elements[n].value));
   const hora = f.elements.hora.value || null;
   return {
     titulo: f.elements.titulo.value.trim(), descricao: f.elements.descricao.value.trim(), inicio: f.elements.inicio.value,
     hora, hora_fim: (hora && f.elements.hora_fim.value) || null, ocupado: !!hora && f.elements.ocupado.checked,
     repeticao: rep, dias_semana: rep === "semanal" ? [...estado.form.dias].sort() : null,
-    dia_mes: rep === "mensal" ? num("dia_mes") : null, intervalo: rep === "intervalo" ? num("intervalo") : null,
+    dia_mes: rep === "mensal" && !diaUtil ? num("dia_mes") : null,
+    dia_util: diaUtil ? (num("dia_util") ?? 0) * (estado.form.mesDe === "fim" ? -1 : 1) : null, // vazio: o servidor explica
+    intervalo: rep === "intervalo" ? num("intervalo") : null,
     so_dias_uteis: uteis, regiao: uteis ? estado.form.regiao : null,
     fim: f.elements.fim.value || null, // na única, o último dia de uma atividade de vários dias
     exige_feedback: f.elements.exige_feedback.checked,
