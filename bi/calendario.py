@@ -99,6 +99,13 @@ class Calendario:
             d -= UM_DIA
         return d
 
+    def dias_uteis(self, ano: int, mes: int, regiao: str) -> list[dt.date]:
+        """Os dias úteis (peso acima de 0) do mês, em ordem; guardados, porque a agenda pergunta dia a dia."""
+        memo = self.__dict__.setdefault("_uteis", {})
+        if (ano, mes, regiao) not in memo:
+            memo[(ano, mes, regiao)] = [d["data"] for d in self.dias_do_mes(ano, mes, regiao) if d["peso"] > 0]
+        return memo[(ano, mes, regiao)]
+
     def dias_do_mes(self, ano: int, mes: int, regiao: str) -> list[dict]:
         _, n = calendar.monthrange(ano, mes)
         return [{"data": dt.date(ano, mes, d), **self.dia(dt.date(ano, mes, d), regiao)} for d in range(1, n + 1)]

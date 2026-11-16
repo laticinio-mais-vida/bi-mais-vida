@@ -71,6 +71,23 @@ class TestOcorre(unittest.TestCase):
         dia5 = atividade(repeticao="mensal", dia_mes=5, inicio="2026-10-26")  # o primeiro é em novembro
         self.assertEqual(dias_de(dia5, D(2026, 10, 1), D(2026, 12, 31)), [D(2026, 11, 5), D(2026, 12, 5)])
 
+    def test_mensal_num_dia_util(self):
+        # nov/2026 no ES: 02/11 Finados e 20/11 Consciência Negra; os dias úteis vão de 03/11 a 30/11 (19 dias)
+        cal = Calendario()
+        terceiro = atividade(repeticao="mensal", dia_util=3, regiao="ES", inicio="2026-11-01")
+        ultimo = atividade(repeticao="mensal", dia_util=-1, regiao="ES", inicio="2026-11-01")
+        faltando5 = atividade(repeticao="mensal", dia_util=-5, regiao="ES", inicio="2026-11-01")
+        self.assertEqual((terceiro["dia_mes"], terceiro["so_dias_uteis"]), (None, True))
+        self.assertEqual(dias_de(terceiro, D(2026, 11, 1), D(2026, 12, 31), cal), [D(2026, 11, 5), D(2026, 12, 3)])
+        self.assertEqual(dias_de(ultimo, D(2026, 11, 1), D(2026, 12, 31), cal), [D(2026, 11, 30), D(2026, 12, 31)])
+        # faltando 5 dias úteis, o próprio dia contado: 24, 25, 26, 27 e 30/11; em dezembro, 24, 28, 29, 30 e 31 (25 é Natal)
+        self.assertEqual(dias_de(faltando5, D(2026, 11, 1), D(2026, 12, 31), cal), [D(2026, 11, 24), D(2026, 12, 24)])
+        # o mês com menos dias úteis que o pedido: o último (do começo) ou o primeiro (do fim)
+        muitos = atividade(repeticao="mensal", dia_util=23, regiao="ES", inicio="2026-11-01")
+        self.assertEqual(dias_de(muitos, D(2026, 11, 1), D(2026, 11, 30), cal), [D(2026, 11, 30)])
+        muitos_fim = atividade(repeticao="mensal", dia_util=-23, regiao="ES", inicio="2026-11-01")
+        self.assertEqual(dias_de(muitos_fim, D(2026, 11, 1), D(2026, 11, 30), cal), [D(2026, 11, 3)])
+
     def test_a_cada_n_dias(self):
         a = atividade(repeticao="intervalo", intervalo=15, inicio="2026-10-01")
         self.assertEqual(dias_de(a, D(2026, 9, 1), D(2026, 11, 30)),
@@ -99,6 +116,11 @@ class TestValida(unittest.TestCase):
             "um dia da semana": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "semanal", "dias_semana": []},
             "1 (segunda)": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "semanal", "dias_semana": [0]},
             "o dia do mês": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "mensal", "dia_mes": 32},
+            "o dia útil do mês vai": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "mensal", "dia_util": 24,
+                                      "regiao": "ES"},
+            "conta a partir de 1": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "mensal", "dia_util": 0,
+                                    "regiao": "ES"},
+            "calendário dos dias úteis": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "mensal", "dia_util": 3},
             "o intervalo": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "intervalo", "intervalo": 1},
             "ES ou BA": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "diaria", "so_dias_uteis": True},
             "antes do início": {"titulo": "x", "inicio": "2026-10-26", "repeticao": "diaria", "fim": "2026-10-01"},
@@ -146,6 +168,21 @@ class TestAgendaNoBanco(BaseBanco):
         self.assertEqual(self.agenda.mes(self.ana)["mes"], "2026-10")  # sem mês: o de hoje
         with self.assertRaises(ValueError):
             self.agenda.mes(self.ana, "outubro")
+
+    def test_mensal_num_dia_util_no_banco(self):
+        # out/2026 no ES, com o feriado extra de 27/10: o 1º dia útil é 01/10; o último, 30/10; faltando 3, 28/10
+        primeiro = self.criar(repeticao="mensal", dia_util=1, regiao="ES")
+        faltando3 = self.criar(repeticao="mensal", dia_util=-3, regiao="ES")
+        m = self.agenda.mes(self.ana, "2026-10")
+        com = lambda id_: [d["data"] for d in m["dias"] if id_ in [i["atividade"] for i in d["itens"]]]
+        self.assertEqual((com(primeiro), com(faltando3)), (["2026-10-01"], ["2026-10-28"]))
+        # editar para o dia fixo tira o dia útil (e o calendário)
+        a = self.agenda.editar(self.ana, faltando3, {"titulo": "Visitar a loja", "inicio": "2026-10-01",
+                                                      "repeticao": "mensal", "dia_mes": 10})
+        self.assertEqual((a["dia_mes"], a["dia_util"], a["so_dias_uteis"], a["regiao"]), (10, None, False, None))
+        # o banco recusa o dia útil fora da mensal
+        with self.banco.conexao() as con, self.assertRaises(Exception):
+            con.execute("UPDATE agenda_atividades SET dia_util = 2 WHERE id = %s", [faltando3])
 
     def test_concluir_com_feedback(self):
         livre = self.criar(repeticao="semanal", dias_semana=[1])
@@ -354,6 +391,9 @@ class TestHorarioETexto(unittest.TestCase):
             ({"repeticao": "semanal", "dias_semana": [6, 7]}, "Todo sábado e domingo"),
             ({"repeticao": "semanal", "dias_semana": [1, 3, 6]}, "Semanal: segunda, quarta e sábado"),
             ({"repeticao": "mensal", "dia_mes": 31}, "Todo dia 31 (ou o último do mês)"),
+            ({"repeticao": "mensal", "dia_util": 3, "regiao": "ES"}, "Todo mês: 3º dia útil (ES)"),
+            ({"repeticao": "mensal", "dia_util": -1, "regiao": "BA"}, "Todo mês: último dia útil (BA)"),
+            ({"repeticao": "mensal", "dia_util": -5, "regiao": "ES"}, "Todo mês: faltando 5 dias úteis para acabar (ES)"),
             ({"repeticao": "intervalo", "intervalo": 15, "fim": "2026-11-30"}, "A cada 15 dias, até 30/11"),
             ({"repeticao": "diaria", "fim": "2027-01-05"}, "Todo dia, até 05/01/2027"),
             ({"inicio": "2026-11-10", "fim": "2026-11-14"}, "De 10/11 a 14/11"),

@@ -5,8 +5,9 @@ As tarefas com prazo, divididas com outras pessoas, ficam em bi/tarefas.py (a me
   usuário e filtra por ele, e a atividade de outra pessoa é tratada como se não existisse.
 - Repetição (ocorre): única (só no dia do início ou, com o último dia, todos os dias do início ao fim: a de vários
   dias, migração 026), diária (todo dia, ou só os dias úteis de uma região, com os feriados e os extras de
-  Configurações, bi/calendario.py), semanal (dias da semana escolhidos), mensal (um dia fixo; o mês sem esse dia usa o
-  último) ou a cada N dias desde o início. A repetida pode ter um último dia (fim). O horário é opcional (migração
+  Configurações, bi/calendario.py), semanal (dias da semana escolhidos), mensal (um dia fixo, e o mês sem esse dia usa o
+  último; ou um dia útil do mês, migração 043: o N-ésimo do começo ou, contando do fim, o último ou o dia em que faltam
+  N dias úteis, ele incluído, no calendário de uma região) ou a cada N dias desde o início. A repetida pode ter um último dia (fim). O horário é opcional (migração
   019), com o fim também opcional (migração 026): no dia, as com horário vêm primeiro, em ordem.
 - Horário ocupado (migração 026): a atividade com começo e fim marcada como ocupada trava o horário da pessoa nos dias
   em que acontece, de hoje em diante. Nem a pessoa marca outra atividade que cruze esse horário, nem quem cria tarefas
@@ -39,6 +40,7 @@ REPETICOES = ("nenhuma", "diaria", "semanal", "mensal", "intervalo")
 ACOES = ("criar", "editar", "encerrar", "excluir", "concluir")
 MAX_TITULO = 120
 MAX_TEXTO = 2000
+MAX_DIA_UTIL = 23  # o dia útil do mês da mensal vai até o 23º (do começo ou do fim); o mês com menos usa o mais perto
 MAX_FALTAS = 30   # dias sem conclusão que o histórico lista (os mais recentes)
 MAX_PERIODO = 93  # dias que o Assistente lê de uma vez
 HORIZONTE = 366   # dias à frente que o horário ocupado confere entre duas atividades que se repetem sem fim
@@ -47,9 +49,9 @@ MAX_AVISOS = 3  # eventos do Google citados no aviso de uma atividade (os outros
 MAX_GOOGLE_IA = 200  # eventos do Google que o Assistente lê de uma vez (cada um custa tokens)
 NOME_DIA = ["", "segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]  # date.isoweekday()
 _GRAVAR = ("titulo", "descricao", "inicio", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes",
-           "intervalo", "so_dias_uteis", "regiao", "fim", "exige_feedback")
+           "dia_util", "intervalo", "so_dias_uteis", "regiao", "fim", "exige_feedback")
 # O que decide os dias e os horários da atividade: editar só confere o horário ocupado se algo disso mudou.
-_QUANDO = ("inicio", "fim", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes", "intervalo",
+_QUANDO = ("inicio", "fim", "hora", "hora_fim", "ocupado", "repeticao", "dias_semana", "dia_mes", "dia_util", "intervalo",
            "so_dias_uteis", "regiao")
 _CAMPOS = ("id", *_GRAVAR)
 _COLUNAS = ", ".join(_CAMPOS)
@@ -157,7 +159,8 @@ def _valida(dados: dict) -> dict:
     a = {"titulo": titulo, "descricao": _texto(dados.get("descricao"), "a descrição"),
          "inicio": _data(dados.get("inicio"), "da atividade"), "hora": _hora(dados.get("hora")),
          "hora_fim": _hora(dados.get("hora_fim")), "ocupado": bool(dados.get("ocupado")),
-         "repeticao": repeticao, "dias_semana": None, "dia_mes": None, "intervalo": None, "so_dias_uteis": False,
+         "repeticao": repeticao, "dias_semana": None, "dia_mes": None, "dia_util": None, "intervalo": None,
+         "so_dias_uteis": False,
          "regiao": None, "fim": None, "exige_feedback": bool(dados.get("exige_feedback"))}
     if a["hora_fim"] and not a["hora"]:
         raise ValueError("diga a que horas a atividade começa, antes do fim do horário")
@@ -175,6 +178,13 @@ def _valida(dados: dict) -> dict:
         if dias[0] < 1 or dias[-1] > 7:
             raise ValueError("os dias da semana vão de 1 (segunda) a 7 (domingo)")
         a["dias_semana"] = dias
+    elif repeticao == "mensal" and dados.get("dia_util") not in (None, ""):
+        n = _inteiro(dados.get("dia_util"), "o dia útil do mês", -MAX_DIA_UTIL, MAX_DIA_UTIL)
+        if n == 0:
+            raise ValueError("o dia útil do mês conta a partir de 1 (do começo ou do fim do mês)")
+        if dados.get("regiao") not in REGIOES:
+            raise ValueError("escolha o calendário dos dias úteis: ES ou BA")
+        a["dia_util"], a["so_dias_uteis"], a["regiao"] = n, True, dados["regiao"]
     elif repeticao == "mensal":
         a["dia_mes"] = _inteiro(dados.get("dia_mes"), "o dia do mês", 1, 31)
     elif repeticao == "intervalo":
@@ -193,7 +203,8 @@ def _valida(dados: dict) -> dict:
 
 
 def ocorre(a: dict, dia: dt.date, cal: Calendario | None = None) -> bool:
-    """A atividade acontece neste dia? cal: o calendário dos dias úteis (só a diária com so_dias_uteis usa)."""
+    """A atividade acontece neste dia? cal: o calendário dos dias úteis (só as com so_dias_uteis usam: a diária e a
+    mensal num dia útil)."""
     if dia < a["inicio"] or (a["fim"] and dia > a["fim"]):
         return False
     repeticao = a["repeticao"]
@@ -203,9 +214,27 @@ def ocorre(a: dict, dia: dt.date, cal: Calendario | None = None) -> bool:
         return not a["so_dias_uteis"] or cal.dia(dia, a["regiao"])["peso"] > 0
     if repeticao == "semanal":
         return dia.isoweekday() in a["dias_semana"]
+    if repeticao == "mensal" and a.get("dia_util"):
+        return dia == dia_util_do_mes(cal, dia.year, dia.month, a["regiao"], a["dia_util"])
     if repeticao == "mensal":
         return dia.day == min(a["dia_mes"], calendar.monthrange(dia.year, dia.month)[1])
     return (dia - a["inicio"]).days % a["intervalo"] == 0
+
+
+def dia_util_do_mes(cal: Calendario, ano: int, mes: int, regiao: str, n: int) -> dt.date | None:
+    """O n-ésimo dia útil do mês (n > 0, do começo) ou, com n < 0, contando do fim (-1 = o último). O mês com menos
+    dias úteis que isso usa o último (do começo) ou o primeiro (do fim); o mês sem nenhum, nenhum dia."""
+    uteis = cal.dias_uteis(ano, mes, regiao)
+    if not uteis:
+        return None
+    return uteis[min(n, len(uteis)) - 1] if n > 0 else uteis[max(len(uteis) + n, 0)]
+
+
+def texto_dia_util(n: int) -> str:
+    """'3º dia útil do mês', 'Último dia útil do mês', 'Faltando 5 dias úteis para acabar o mês'."""
+    if n > 0:
+        return f"{n}º dia útil do mês"
+    return "Último dia útil do mês" if n == -1 else f"Faltando {-n} dias úteis para acabar o mês"
 
 
 def _dm(dia: dt.date, hoje: dt.date) -> str:
@@ -217,8 +246,8 @@ def _lista_e(itens: list[str]) -> str:
 
 
 def texto_repeticao(a: dict, hoje: dt.date) -> str:
-    """'Só neste dia', 'De 10/11 a 14/11', 'Todo dia útil (ES)', 'Toda segunda e quinta', 'Todo dia 5', 'A cada 15
-    dias' (e 'até 30/11')."""
+    """'Só neste dia', 'De 10/11 a 14/11', 'Todo dia útil (ES)', 'Toda segunda e quinta', 'Todo dia 5', 'Todo mês:
+    3º dia útil (ES)', 'A cada 15 dias' (e 'até 30/11')."""
     repeticao = a["repeticao"]
     if repeticao == "nenhuma":
         if a["fim"] and a["fim"] > a["inicio"]:
@@ -230,6 +259,10 @@ def texto_repeticao(a: dict, hoje: dt.date) -> str:
         dias, nomes = a["dias_semana"], _lista_e([NOME_DIA[d] for d in a["dias_semana"]])
         t = ("Todo dia da semana" if len(dias) == 7 else f"Toda {nomes}" if max(dias) <= 5
              else f"Todo {nomes}" if min(dias) >= 6 else f"Semanal: {nomes}")
+    elif repeticao == "mensal" and a.get("dia_util"):
+        n = a["dia_util"]
+        t = (f"Todo mês: {n}º dia útil" if n > 0 else "Todo mês: último dia útil" if n == -1
+             else f"Todo mês: faltando {-n} dias úteis para acabar") + f" ({a['regiao']})"
     elif repeticao == "mensal":
         t = f"Todo dia {a['dia_mes']}" + (" (ou o último do mês)" if a["dia_mes"] > 28 else "")
     else:
@@ -265,7 +298,7 @@ def calendario(configuracao) -> Calendario:
 
 # --- horário ocupado --------------------------------------------------------------------------------------------------
 _HORARIOS = ("id", "usuario", "nome", "titulo", "inicio", "fim", "hora", "hora_fim", "ocupado", "repeticao",
-             "dias_semana", "dia_mes", "intervalo", "so_dias_uteis", "regiao")
+             "dias_semana", "dia_mes", "dia_util", "intervalo", "so_dias_uteis", "regiao")
 
 
 def travar_horarios(con, pessoas) -> None:
@@ -305,7 +338,7 @@ def _com_horario(con, pessoas, desde: dt.date, so_ocupadas: bool, ignorar: int |
     """As atividades com horário das pessoas que ainda acontecem de desde em diante (só as ocupadas, se pedido)."""
     return [dict(zip(_HORARIOS, r)) for r in con.execute(
         "SELECT a.id, a.usuario, u.nome, a.titulo, a.inicio, a.fim, a.hora, a.hora_fim, a.ocupado, a.repeticao, "
-        "a.dias_semana, a.dia_mes, a.intervalo, a.so_dias_uteis, a.regiao FROM agenda_atividades a "
+        "a.dias_semana, a.dia_mes, a.dia_util, a.intervalo, a.so_dias_uteis, a.regiao FROM agenda_atividades a "
         "JOIN usuarios u ON u.id = a.usuario WHERE a.usuario = ANY(%(p)s::bigint[]) AND a.hora IS NOT NULL "
         "AND coalesce(a.fim, CASE a.repeticao WHEN 'nenhuma' THEN a.inicio ELSE 'infinity' END) >= %(desde)s "
         "AND a.id <> %(ignorar)s" + (" AND a.ocupado" if so_ocupadas else "") + " ORDER BY a.inicio, a.hora, a.id",
@@ -573,7 +606,7 @@ class Agenda:
                               **({"google": [_google_ia(g) for g in vao]} if vao else {})})
         r = {"hoje": hoje.isoformat(), "de": de.isoformat(), "ate": ate.isoformat(), "totais": totais,
              "atividades": [{k: v for k, v in _publica(a, hoje).items() if k not in ("dias_semana", "dia_mes",
-                             "intervalo", "so_dias_uteis", "regiao")} for a in atividades],
+                             "dia_util", "intervalo", "so_dias_uteis", "regiao")} for a in atividades],
              "dias": saida}
         if n_google:
             totais["google"] = n_google
@@ -736,6 +769,8 @@ class Agenda:
             mudados = {k: v for k, v in (dados or {}).items() if k in _GRAVAR}
             if not mudados:
                 raise ValueError("diga o que muda na atividade")
+            if "dia_mes" in mudados and "dia_util" not in mudados:  # passou do dia útil para o dia fixo
+                mudados["dia_util"] = None
             a = _valida({**antes, **mudados})
             depois = _publica(a, hoje)
             rotulos = {"titulo": "Título", "descricao": "Descrição", "inicio": "Início", "hora": "Horário",
