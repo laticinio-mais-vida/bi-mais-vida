@@ -2759,6 +2759,15 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .av-nota { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12.5px; color: var(--tinta-3); }
 .av-nota .ic { width: 14px; height: 14px; margin-top: 2px; flex: none; }
 .av-item .form-erro { margin: 0; }
+.av-desc { margin: 0; font-size: 13px; color: var(--tinta-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.av-item .ag-sub-vencida { margin-top: 0; }
+/* a subtarefa vencida debaixo da tarefa principal (bloco das atrasadas da agenda e janela de justificar o atraso) */
+.ag-sub-vencida { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--ruim-bg); box-shadow: inset 3px 0 0 var(--ruim-forte); }
+.ag-sub-vencida > small { display: flex; align-items: center; gap: 5px; font: 700 11.5px var(--f-texto); color: var(--ruim); }
+.ag-sub-vencida > small .ic { width: 13px; height: 13px; }
+.ag-sub-vencida > b { display: block; margin-top: 2px; font-size: 14px; overflow-wrap: anywhere; }
+.ag-sub-vencida > p { margin: 2px 0 0; font-size: 13px; color: var(--tinta-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-sub-vencida .ag-chips { margin-top: 6px; }
 .ag-tf > .ag-just, .ag-tf > .ag-just-abrir, .ag-tf > .ag-just-form { margin-top: 12px; }
 .chip.ag-c-justificada { background: var(--atencao-bg); color: var(--atencao); }
 
@@ -2803,6 +2812,11 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-card > b { font-size: 14.5px; overflow-wrap: anywhere; }
 .ag-card > p { margin: 0; font-size: 13px; color: var(--tinta-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ag-card .ag-chips { margin-top: 2px; }
+/* as subtarefas suas que venceram, pelo nome */
+.ag-card-vencidas { display: grid; gap: 2px; margin: 0; padding: 6px 8px; list-style: none; border-radius: 9px; background: var(--ruim-bg); font-size: 12.5px; color: var(--ruim); }
+.ag-card-vencidas li { display: flex; gap: 5px; align-items: flex-start; overflow-wrap: anywhere; }
+.ag-card-vencidas .ic { width: 13px; height: 13px; flex: none; margin-top: 2px; }
+.ag-card-vencidas b { color: var(--tinta); font-weight: 600; }
 .ag-card-prog { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--tinta-3); }
 .ag-card-prog .ag-barra { width: 70px; height: 5px; margin: 0; }
 .ag-coluna-vazia { padding: 18px 10px; border: 1.5px dashed var(--linha-forte); border-radius: 12px; text-align: center; font-size: 12.5px; color: var(--tinta-3); }
