@@ -17,13 +17,15 @@ import { montarAssistente } from "./assistente.js";
 import { montarConfigAssistente, configAssistenteTemAlteracoes } from "./configassistente.js";
 import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js";
 import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js";
+import { montarManejo, recarregarManejo } from "./manejo.js";
+import { montarConfigManejo, configManejoTemAlteracoes } from "./configmanejo.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 import { ligarAvisos } from "./avisos.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "devolucoes", "gestao", "credito"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "devolucoes", "gestao", "credito", "manejo"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -157,6 +159,21 @@ const PAGINAS = {
     pendente: configCreditoTemAlteracoes,
     montar: (el) => montarConfigCredito(el, { aoSalvar: () => app.remontar.add("credito") }),
   },
+  manejo: {
+    nome: "Manejo da Base",
+    titulo: "Manejo da Base",
+    montar: (el) => montarManejo(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("manejo", d) }),
+    recarregar: recarregarManejo,
+  },
+  "config-manejo": {
+    titulo: "Configurações do manejo da base",
+    fixo: "Quem justifica, os dias de cada regra, o prazo e os vendedores da central",
+    pai: "manejo",
+    admin: true,
+    sempreMonta: true,
+    pendente: configManejoTemAlteracoes,
+    montar: (el) => montarConfigManejo(el, { aoSalvar: () => app.remontar.add("manejo") }),
+  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel, quais páginas e quais vendedores cada pessoa vê",
@@ -179,6 +196,9 @@ const TEXTO_SUBTITULO = {
   assistente: () => "Pergunte sobre vendas, clientes, produtos e metas",
   gestao: () => "Sua agenda e os objetivos, as campanhas e o histórico de cada vendedor, por região",
   credito: subtituloCredito,
+  manejo: (d) => (d.rodada
+    ? `Lista de ${d.rodada.rotulo} · ${d.rodada.aberta ? `prazo ${fmt.dataCurta(d.rodada.prazo)}` : `prazo encerrado em ${fmt.dataCurta(d.rodada.prazo)}`}`
+    : "Sugestões para a central e para inativação"),
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

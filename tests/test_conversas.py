@@ -24,7 +24,7 @@ MIGRACOES = ["001_conversas", "002_usuarios", "003_regras", "004_assistente_perg
              "033_premiacoes", "034_regras_premiacoes", "035_agenda_subtarefa_automatica",
              "036_notificacoes_excluidas", "037_sugestao_ajustes",
              "038_credito_serasa", "039_chaves_api", "040_acesso_vendedores", "041_premiacoes_acesso",
-             "042_efetividade_area_varios_dias"]
+             "042_efetividade_area_varios_dias", "043_agenda_dia_util_do_mes", "044_manejo"]
 
 
 def resposta(texto: str, consultas: str = "") -> dict:

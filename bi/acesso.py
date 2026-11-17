@@ -11,7 +11,8 @@
   liberadas em Usuários e, em todas elas (inclusive no Assistente, na API pública e no Crédito), só os vendedores do
   acesso dele, escolhidos também em Usuários (escopo): todos, os das equipes marcadas (inclusive os que entrarem
   depois) ou só alguns. O que é próprio de uma página fica na configuração dela: em Metas, as abas que a pessoa vê; em
-  Premiações, as abas e os quadros de supervisor (coluna premiacoes, migração 041).
+  Premiações, as abas e os quadros de supervisor (coluna premiacoes, migração 041); no Manejo da Base, quem pode
+  justificar os clientes (coluna manejo, migração 044).
 - Gravações: uma de cada vez (trava no banco), conferindo tudo antes de gravar. As da configuração de uma página
   podem entrar na transação de quem chama (con), para gravar junto com as regras da página.
 """
@@ -34,7 +35,8 @@ from .configuracao import GRUPOS_VENDEDOR, VISOES
 
 PAPEIS = ("admin", "visualizador")
 PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "sugestao": "Sugestão de Metas", "premiacoes": "Premiações",
-           "devolucoes": "Devoluções", "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito"}
+           "devolucoes": "Devoluções", "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito",
+           "manejo": "Manejo da Base"}
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 # Os vendedores do acesso (bi/migracoes/040_acesso_vendedores.sql): todos / os das equipes marcadas / só alguns.
 MODOS_ESCOPO = ("todos", "equipes", "alguns")
@@ -46,7 +48,7 @@ ITERACOES = 600_000
 SENHA_MINIMA = 6
 TRAVA_CADASTRO = 7_240_102  # pg_advisory_xact_lock: duas gravações no cadastro não se misturam
 _LOGIN_VALIDO = re.compile(r"^[a-z0-9._-]{3,40}$")
-_COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, criado_em, "
+_COLUNAS = ("id, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, manejo, criado_em, "
             "ultimo_acesso")
 _COLUNAS_U = ", ".join("u." + c.strip() for c in _COLUNAS.split(","))  # as mesmas, numa consulta com outra tabela
 _N_COLUNAS = len(_COLUNAS.split(","))
@@ -112,9 +114,9 @@ def _de_b64(texto: str) -> bytes:
 # --- usuários -------------------------------------------------------------------------------
 def _usuario(linha) -> dict:
     """Linha da tabela usuarios -> o dicionário que o resto do código usa (com a senha; para a página, publico())."""
-    id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, criado, ultimo = linha
+    id_, login, nome, papel, ativo, senha, sessao, paginas, visoes, escopo, premiacoes, manejo, criado, ultimo = linha
     return {"id": id_, "login": login, "nome": nome, "papel": papel, "ativo": ativo, "senha": senha, "sessao": sessao,
-            "paginas": paginas, "visoes": visoes, "escopo": escopo, "premiacoes": premiacoes,
+            "paginas": paginas, "visoes": visoes, "escopo": escopo, "premiacoes": premiacoes, "manejo": manejo,
             "criado_em": hora(criado), "ultimo_acesso": hora(ultimo)}
 
 
@@ -163,7 +165,8 @@ def _com_pagina(u: dict, pagina: str, ve: bool) -> list[str]:
 def publico(u: dict) -> dict:
     """O que a página pode ver de um usuário (sem a senha nem o contador de sessão). escopo: os vendedores do acesso
     (None: administrador, ou visualizador ainda sem vendedores escolhidos). premiacoes: as abas e os supervisores da
-    página Premiações (None: administrador, ou visualizador ainda sem nada escolhido)."""
+    página Premiações (None: administrador, ou visualizador ainda sem nada escolhido). manejo: se a pessoa pode
+    justificar no Manejo da Base (None: administrador, ou visualizador que só consulta)."""
     admin = u["papel"] == "admin"
     return {
         "id": u["id"], "login": u["login"], "nome": u["nome"], "papel": u["papel"], "ativo": u["ativo"],
@@ -171,6 +174,7 @@ def publico(u: dict) -> dict:
         "paginas": None if admin else _paginas_de(u),
         "escopo": None if admin else u.get("escopo"),
         "premiacoes": None if admin else u.get("premiacoes"),
+        "manejo": None if admin else u.get("manejo"),
         "criado_em": u.get("criado_em"), "ultimo_acesso": u.get("ultimo_acesso"),
     }
 
@@ -474,6 +478,32 @@ class Usuarios:
                 c.execute("UPDATE usuarios SET premiacoes = %s::jsonb, paginas = %s::text[] WHERE id = %s",
                           [acesso, paginas, id_])
 
+    def definir_manejo(self, mudancas: dict, con=None) -> None:
+        """Pela configuração da página Manejo da Base: {login: {"ve": bool, "justifica": bool}}, quem vê a página e
+        quem pode justificar os clientes (os dos vendedores do acesso da pessoa, da tela Usuários). Sem "justifica",
+        fica o que estava; quem não vê a página não justifica. Confere tudo antes de gravar, para não salvar só
+        metade."""
+        if not isinstance(mudancas, dict):
+            raise ValueError("mande o acesso de cada pessoa pelo login")
+        with self._cadastro(con) as c:
+            usuarios = {u["login"]: u for u in self._buscar(c)}
+            novos = {}
+            for login, m in mudancas.items():
+                u = usuarios.get(login)
+                if not u:
+                    raise ValueError(f"usuário não encontrado: {login}")
+                if u["papel"] == "admin":
+                    continue  # o administrador não justifica: dá o veredito
+                m = m if isinstance(m, dict) else {}
+                if "justifica" in m and not isinstance(m["justifica"], bool):
+                    raise ValueError(f"diga se {u['nome']} pode justificar: sim ou não")
+                paginas = _com_pagina(u, "manejo", bool(m["ve"])) if "ve" in m else _paginas_de(u)
+                justifica = m["justifica"] if "justifica" in m else bool((u.get("manejo") or {}).get("justifica"))
+                novos[u["id"]] = [json.dumps({"justifica": justifica and "manejo" in paginas}), paginas]
+            for id_, (acesso, paginas) in novos.items():
+                c.execute("UPDATE usuarios SET manejo = %s::jsonb, paginas = %s::text[] WHERE id = %s",
+                          [acesso, paginas, id_])
+
     def excluir(self, login: str) -> None:
         """Apaga o usuário; as conversas dele no Assistente vão junto (o registro de uso fica, sem o vínculo). As
         campanhas que ele criou na Gestão ficam, sem dono: só os administradores passam a vê-las."""
@@ -541,6 +571,13 @@ def premiacoes_permitidas(usuario: dict) -> tuple[list[str] | None, list[str] | 
         return None, None
     p = usuario.get("premiacoes") or {}
     return list(p.get("abas") or []), list(p.get("supervisores") or [])
+
+
+def pode_justificar(usuario: dict) -> bool:
+    """Quem responde às sugestões do Manejo da Base: o visualizador que tem a página e a marca da configuração dela. O
+    administrador não justifica: dá o veredito."""
+    return (not eh_admin(usuario) and "manejo" in (usuario.get("paginas") or [])
+            and bool((usuario.get("manejo") or {}).get("justifica")))
 
 
 # --- tentativas de login --------------------------------------------------------------------

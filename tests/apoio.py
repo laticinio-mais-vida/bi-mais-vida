@@ -95,7 +95,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                metas_cli: dict | None = None, brindes: bool = True, linhas_brindes=(), comissao: bool = True,
                linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True, linhas_pedidos_detalhe=(),
                pedidos_extras=(), devolucoes_notas: bool = True, bloqueios: bool = True,
-               linhas_bloqueios=BLOQUEIOS) -> Calculadora:
+               linhas_bloqueios=BLOQUEIOS, vendas_extras=(), titulos_extras=(), parcelas_extras=(),
+               clientes_extras=(), vendedores_extras=()) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -108,7 +109,10 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     pedidos_detalhe: False = cache sem os pedidos um a um e os itens deles; linhas_pedidos_detalhe: os cabeçalhos
     (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá.
     devolucoes_notas: False = cache sem as devoluções nota a nota (com ela, cada devolução abaixo é uma nota).
-    bloqueios: False = cache sem o bloqueio dos clientes no ERP; linhas_bloqueios: as linhas dela (ver BLOQUEIOS)."""
+    bloqueios: False = cache sem o bloqueio dos clientes no ERP; linhas_bloqueios: as linhas dela (ver BLOQUEIOS).
+    Para o Manejo da Base: vendas_extras (no formato das vendas daqui), titulos_extras e parcelas_extras (como TITULOS
+    e PARCELAS), vendedores_extras (id, nome, id do supervisor, supervisor, inativo) e clientes_extras (id, nome,
+    vendedor, cidade, UF, inativo, data do cadastro)."""
     con = duckdb.connect(str(pasta / "cache.duckdb"))
     for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **(TABELAS_PEDIDOS if pedidos else {}),
                           **(TABELAS_REDE if rede else {}), **(TABELAS_CREDITO if credito else {}),
@@ -138,6 +142,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
             (D(2026, 7, 2), BA, 12, "CLIENTE", 32, 280.0, 10.0),
             (D(2026, 7, 20), BA, 12, "CLIENTE", 27, 90.0, 10.0),
         ]
+    vendas += list(vendas_extras)
     con.executemany("INSERT INTO vendas_clientes_itens VALUES (?, ?, ?, ?, ?, ?, ?)", vendas)
     con.execute("INSERT INTO vendas_itens SELECT data, id_vendedor, id_produto, SUM(valor), SUM(quantidade) "
                 "FROM vendas_clientes_itens GROUP BY ALL")
@@ -164,7 +169,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
         (11469, "BEBIDA LACTEA 500G", 3, "BEBIDAS", "UN", 0), (3643, "BEBIDA LACTEA 540G", 3, "BEBIDAS", "UN", 1),
         (999, "CARROCERIA USADA", 9, "IMOBILIZADO", "UN", 0)])
     con.executemany("INSERT INTO vendedores VALUES (?, ?, ?, ?, ?)", [
-        (ES, "RUBENS - ES", 3, "VALDIRENE", 0), (BA, "THAIS - CENTRAL", 7, "MARCOS", 0), (EDIR, "EDIR - PS", 8, "TERC", 0)])
+        (ES, "RUBENS - ES", 3, "VALDIRENE", 0), (BA, "THAIS - CENTRAL", 7, "MARCOS", 0), (EDIR, "EDIR - PS", 8, "TERC", 0),
+        *vendedores_extras])
     clientes = [(1, "MERCADO DO JOAO", ES), (2, "PADARIA DA MARIA", BA), (3, "ACOUGUE SAO JOSE", ES),
                 (4, "MERCEARIA DO EDIR", EDIR), (7, "CLIENTE SETE", BA)]
     detalhes = [
@@ -193,6 +199,9 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                 (D(2026, 9, 6), ES, 1, "FUNCIONARIO", "PEDIDOVENDA", 0, 1, 10.0),  # código de outro cadastro
                 *pedidos_extras,
             ])
+    clientes += [(c, nome, v) for c, nome, v, *_ in clientes_extras]
+    detalhes += [(c, nome, cidade, uf, 1, "ROTA 1", 1, "MERCADO", inativo, cadastro)
+                 for c, nome, _, cidade, uf, inativo, cadastro in clientes_extras]
     con.executemany("INSERT INTO clientes VALUES (?, ?, ?)", clientes)
     if rede:
         redes = {c: "SEMANAL" for c, _, _ in clientes} if redes is None else redes
@@ -201,10 +210,10 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     con.executemany("INSERT INTO clientes_detalhes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", detalhes)
     con.executemany("INSERT INTO motivos VALUES (?, ?)", [(1, "ERRO DE LANÇAMENTO"), (2, "RECUSA"), (3, "VENCIDO")])
     if credito:
-        con.executemany("INSERT INTO titulos_receber VALUES (?, ?, ?, ?, ?, ?, ?, ?)", TITULOS)
+        con.executemany("INSERT INTO titulos_receber VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [*TITULOS, *titulos_extras])
         con.executemany("INSERT INTO clientes_credito VALUES (?, ?, ?)", LIMITES)
         if parcelas:
-            con.executemany("INSERT INTO titulos_parcelas VALUES (?, ?, ?, ?)", PARCELAS)
+            con.executemany("INSERT INTO titulos_parcelas VALUES (?, ?, ?, ?)", [*PARCELAS, *parcelas_extras])
     if carteira and vigencias:
         con.executemany("INSERT INTO clientes_vigencias VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", list(vigencias))
     if carteira and retratos:

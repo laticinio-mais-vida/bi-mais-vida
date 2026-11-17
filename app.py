@@ -12,7 +12,8 @@ O painel fica em http://127.0.0.1:<porta>. Por padrão só aceita conexões dest
 `endereco = 0.0.0.0` no config.ini, outros computadores da rede entram com login e senha.
 Com `modo = vps` em [publicacao], não lê o banco do ERP: recebe os dados do computador da empresa (bi/publicacao.py).
 Usuários, regras, conversas, o uso do Assistente, as campanhas da Gestão e a Agenda ficam no PostgreSQL de [postgres]
-(bi/banco.py), no PC e no VPS; as reanálises de crédito e as agendas do Google, só no do VPS.
+(bi/banco.py), no PC e no VPS; as reanálises de crédito, as listas do Manejo da Base e as agendas do Google, só no do
+VPS.
 Outro aplicativo lê a Gestão pela API pública (/api/v1, só leitura, com a chave da pessoa): docs/api_publica.md.
 """
 from __future__ import annotations
@@ -56,6 +57,7 @@ from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.devolucoes import Devolucoes  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao, SemDados  # noqa: E402
 from bi.google_agenda import GoogleAgenda  # noqa: E402
+from bi.manejo import ConfigManejo, Manejo  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
@@ -104,7 +106,8 @@ ROTAS_GOOGLE_LOGIN = ("/api/agenda/google/entrar", "/api/agenda/google/retorno")
 ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atualizar",
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
                "/api/sugestao/aprovacao", "/api/sugestao/ajustes", "/api/premiacoes/config", "/api/assistente/config",
-               "/api/gestao/config", "/api/gestao/catalogo", "/api/credito/config", *ROTAS_GESTAO_MUDAR}
+               "/api/gestao/config", "/api/gestao/catalogo", "/api/credito/config", "/api/manejo/config",
+               "/api/manejo/veredito", *ROTAS_GESTAO_MUDAR}
 # API pública da Gestão (docs/api_publica.md): só leitura, para o servidor de outro aplicativo. Entra só com a chave que
 # /api/v1/entrar devolve (Authorization: Bearer), nunca com o cookie; as rotas do site não aceitam a chave.
 PREFIXO_API = "/api/v1/"
@@ -178,6 +181,10 @@ class Aplicacao:
         self.premiacoes = Premiacoes(self.calc, self.config_premiacoes, self.projetor._nomes_vendedores)
         # Página Devoluções e o Parecer de Devoluções em PDF: só leem o cache (sem regras próprias no banco).
         self.devolucoes = Devolucoes(self.calc, self.projetor._nomes_vendedores)
+        # Manejo da Base: as listas do mês, as justificativas e os vereditos ficam só no banco do site (no PC, a página
+        # avisa e nada é montado). As regras (a campanha ligada, os dias, o prazo e a central) são do administrador.
+        self.config_manejo = ConfigManejo(self.banco)
+        self.manejo = Manejo(self.banco, self.calc, self.config_manejo, self.projetor._nomes_vendedores, self.vps)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -214,6 +221,20 @@ class Aplicacao:
                 time.sleep(30)
 
         threading.Thread(target=laco, name="vigia", daemon=True).start()
+
+    def depois_de_receber(self) -> None:
+        """No site, logo depois de trocar o cache pelo que chegou do computador da empresa: atualiza as listas do
+        Manejo da Base com os dados novos. Em outra thread e sem deixar erro escapar: o recebimento dos dados não pode
+        esperar nem depender do banco (se falhar aqui, a lista é atualizada na próxima leitura da página)."""
+        def atualizar():
+            try:
+                self.manejo.sincronizar()
+            except BancoForaDoAr as e:
+                log.warning("manejo: banco fora do ar; a lista fica para a próxima leitura da página (%s)", e)
+            except Exception:
+                log.exception("manejo: falha ao atualizar a lista depois de receber os dados")
+
+        threading.Thread(target=atualizar, name="manejo", daemon=True).start()
 
     def recebido_em(self) -> str | None:
         try:
@@ -589,6 +610,65 @@ class Manipulador(BaseHTTPRequestHandler):
             log.info("%s enviou os dados do Serasa %s (cliente %s)", usuario["login"], r["id"], q.get("cliente"))
         return self._json({"ok": True, **r})
 
+    def _pode_manejo(self, usuario: dict) -> bool:
+        if "manejo" in paginas_permitidas(usuario):
+            return True
+        self._erro("seu acesso não inclui a página Manejo da Base", HTTPStatus.FORBIDDEN)
+        return False
+
+    def _mudar_manejo(self, usuario: dict, caminho: str, corpo: dict):
+        """Manejo da Base: a resposta de quem pode justificar ou o veredito do administrador, para um ou vários
+        clientes. A resposta traz quantos foram gravados, os recusados (com o motivo) e a lista do mês como ficou."""
+        if not self._pode_manejo(usuario):
+            return
+        ids = self._ids(usuario)  # os clientes dos vendedores do acesso (o administrador: todos)
+        if caminho == "/api/manejo/veredito":  # só o administrador (ROTAS_ADMIN)
+            r, oque = self.app.manejo.veredito(usuario, corpo), "deu o veredito"
+        else:
+            r, oque = self.app.manejo.justificar(usuario, ids, corpo), "justificou"
+        if r["gravados"]:
+            log.info("%s %s (%s) no Manejo da Base: %s cliente(s)%s", usuario["login"], oque, corpo.get("decisao"),
+                     r["gravados"], f", {len(r['recusados'])} recusado(s)" if r["recusados"] else "")
+        return self._json({"ok": True, **r, **self.app.manejo.listar(usuario, ids, corpo.get("mes"))})
+
+    def _config_manejo(self) -> dict:
+        """Manejo da Base › Configurar: as regras, os vendedores da campanha e, para "Quem justifica", os
+        visualizadores com os vendedores do acesso de cada um já resolvidos (None = todos), para a tela avisar do
+        vendedor da campanha que ficou sem ninguém para justificar."""
+        v = self._visualizadores()
+        acesso = {}
+        if self.app.cache.pronto():
+            for u in v["usuarios"]:
+                ids = self._ids(u)
+                acesso[u["login"]] = None if ids is None else sorted(ids)
+        return {**self.app.manejo.config_dados(), "usuarios": v["usuarios"], "nomes": v["nomes"],
+                "vendedores_do_acesso": acesso}
+
+    def _salvar_config_manejo(self, eu: dict, corpo: dict):
+        """Configuração da página Manejo da Base: as regras (config) e, em "usuarios", quem vê a página e quem pode
+        justificar (os vendedores de cada pessoa ficam em Usuários). As duas partes vão numa transação só: ou grava
+        tudo, ou nada. Sem config, as regras ficam como estão (não grava uma versão nova)."""
+        config, acessos = corpo.get("config"), corpo.get("usuarios")
+        regras = self.app.config_manejo
+        if config:
+            regras.validar(config)  # antes de abrir a transação
+        versao = None
+        with self.app.banco.conexao() as con:
+            if acessos:
+                self.app.usuarios.definir_manejo(acessos, con)
+            if config:
+                versao = regras.gravar(config, eu, con)
+        if versao:
+            regras.usar(*versao)
+            log.info("%s salvou as regras do Manejo da Base (versão %s): %s", eu["login"], versao[0], versao[1])
+            try:  # a campanha ligada ou uma regra trocada já vale para a lista (se falhar, vale na próxima leitura)
+                self.app.manejo.sincronizar()
+            except Exception:
+                log.exception("manejo: falha ao atualizar a lista depois de salvar as regras")
+        if acessos:
+            log.info("%s alterou quem justifica no Manejo da Base: %s", eu["login"], ", ".join(acessos))
+        return self._json({"ok": True, **self._config_manejo()})
+
     def _pode_assistente(self, usuario: dict) -> bool:
         if "assistente" in paginas_permitidas(usuario):
             return True
@@ -738,6 +818,7 @@ class Manipulador(BaseHTTPRequestHandler):
         except Recusado as e:
             log.warning("pacote recusado de %s: %s", self._ip(), e)
             return self._erro(str(e), HTTPStatus.FORBIDDEN)
+        self.app.depois_de_receber()  # o cache já foi trocado: o que depende dos dados novos roda à parte
         return self._json(r)
 
     def _pagina(self, caminho: str):
@@ -1162,6 +1243,16 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(d)
             if url.path == "/api/credito/config":  # as regras do crédito (só o administrador)
                 return self._json({"config": self.app.config_credito.atual(), "ativo": self.app.vps})
+            if url.path in ("/api/manejo", "/api/manejo/historico"):
+                if not self._pode_manejo(usuario):
+                    return
+                ids = self._ids(usuario)  # só os clientes dos vendedores do acesso (o administrador: todos)
+                if url.path == "/api/manejo/historico":  # cliente=12: as sugestões dele em todos os meses
+                    return self._json(self.app.manejo.historico(usuario, ids, q.get("cliente")))
+                # mes=2026-11 (vazio = a lista aberta, ou a mais recente)
+                return self._json(self.app.manejo.listar(usuario, ids, q.get("mes")))
+            if url.path == "/api/manejo/config":  # as regras e quem justifica (só o administrador)
+                return self._json(self._config_manejo())
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":
@@ -1274,6 +1365,10 @@ class Manipulador(BaseHTTPRequestHandler):
                 cfg = self.app.config_credito.salvar(self._corpo_json().get("config") or {}, usuario)
                 log.info("%s salvou as regras do crédito: %s", usuario["login"], cfg)
                 return self._json({"ok": True, "config": cfg, "ativo": self.app.vps})
+            if url.path in ("/api/manejo/justificar", "/api/manejo/veredito"):
+                return self._mudar_manejo(usuario, url.path, self._corpo_json())
+            if url.path == "/api/manejo/config":
+                return self._salvar_config_manejo(usuario, self._corpo_json())
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):

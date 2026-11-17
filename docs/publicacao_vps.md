@@ -808,6 +808,25 @@ tabela e os campos da faixa em Configurar › Regras da conta (veja o README, "C
   da conta, os três campos da faixa.
 - **Voltar atrás:** é só voltar o código; a versão anterior ignora os campos novos das regras.
 
+#### Manejo da Base (migração 044)
+
+Página nova, só no site (veja o README, "Página Manejo da Base"): as listas de clientes para passar para a central ou
+inativar, a justificativa de quem pode justificar e o veredito do administrador.
+
+- **Ordem:** qualquer uma; os dados que o PC manda não mudaram (a página usa tabelas que o cache já tem).
+- **A migração 044** só cria: as tabelas `manejo_rodadas`, `manejo_sugestoes` e `manejo_eventos`, a coluna
+  `usuarios.manejo` e o nome `manejo` na tabela `regras`. Não mexe em dado nenhum. Ensaie em BEGIN/ROLLBACK.
+- **A campanha começa desligada:** publicar não cria lista nenhuma. Depois de publicar, em Usuários, libere a página
+  Manejo da Base para cada pessoa; em Manejo da Base › Configurar, marque quem pode justificar, confira os vendedores
+  da central e ligue a campanha. A lista do mês nasce nesse momento, com o prazo no penúltimo dia útil.
+- **A cada envio do PC**, o site atualiza a lista à parte (`Aplicacao.depois_de_receber`): se o banco estiver fora do
+  ar, o recebimento dos dados segue normal e a lista é atualizada na próxima leitura da página.
+- **Voltar atrás:** o código anterior ignora as tabelas, a coluna e as regras novas (podem ficar). Para apagar de vez:
+  `DROP TABLE manejo_eventos, manejo_sugestoes, manejo_rodadas`, `ALTER TABLE usuarios DROP COLUMN manejo`,
+  `DELETE FROM regras WHERE nome = 'manejo'`, voltar o `regras_nome_check` sem `'manejo'` e
+  `DELETE FROM migracoes WHERE versao = '044_manejo'`. As justificativas e os vereditos vão junto: tire um dump antes.
+- **PC:** recebe a 044 quando o código for atualizado lá; a página só avisa que as listas ficam no site.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

@@ -6,7 +6,7 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", devolucoes: "devolucao", assistente: "conversa", gestao: "quadro", credito: "cartao" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", devolucoes: "devolucao", assistente: "conversa", gestao: "quadro", credito: "cartao", manejo: "loja" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
@@ -16,6 +16,7 @@ const DESCRICAO_PAGINA = {
   assistente: "Perguntas sobre os dados, respondidas por IA",
   gestao: "Objetivos, campanhas e o histórico de cada vendedor",
   credito: "Limite, compras, pontualidade e títulos de cada cliente",
+  manejo: "Clientes sugeridos para passar para a central ou inativar, com a justificativa do supervisor e o veredito",
 };
 const MODOS = [
   { id: "todos", nome: "Todos os vendedores", icone: "pessoas" },
@@ -144,13 +145,24 @@ function notaPremiacoes(u, f) {
   return { pagina: "premiacoes", link, texto: `${vistas.length === 1 ? "aba" : "abas"} ${emLista(vistas.map((a) => TITULO_ABA_PREMIACOES[a]))}${sups}${fora}` };
 }
 
+// A nota do Manejo da Base: se a pessoa pode justificar os clientes (marcado em Manejo da Base › Configurar) ou só
+// consulta as listas.
+function notaManejo(u) {
+  if (!u) return { pagina: "manejo", texto: "depois de criar o acesso, marque em Manejo da Base › Configurar se a pessoa pode justificar" };
+  const link = `#/config-manejo?u=${encodeURIComponent(u.login)}`;
+  const justifica = u.papel !== "admin" && u.manejo?.justifica === true;
+  return { pagina: "manejo", link, texto: justifica ? "pode justificar os clientes dos vendedores do acesso"
+    : "só consulta; para justificar, marque em Manejo da Base › Configurar" };
+}
+
 // O que muda de uma página para outra (o resto é igual em todas: só os vendedores do acesso). u: o cadastro salvo
-// (as abas de Metas e de Premiações vêm dele); f: o formulário.
+// (as abas de Metas e de Premiações e a marca de quem justifica no Manejo da Base vêm dele); f: o formulário.
 function notasDasPaginas(u, f) {
   const e = f.escopo;
   const notas = [];
   if (f.paginas.includes("metas")) notas.push(notaMetas(u, f));
   if (f.paginas.includes("premiacoes")) notas.push(notaPremiacoes(u, f));
+  if (f.paginas.includes("manejo")) notas.push(notaManejo(u));
   if (f.paginas.includes("devolucoes") && e?.modo === "todos") notas.push({ pagina: "devolucoes", texto: "inclusive os terceirizados (vendedores sem equipe)" });
   if (f.paginas.includes("credito") && e && e.modo !== "todos") notas.push({ pagina: "credito", texto: "só os clientes da carteira desses vendedores ou com títulos deles" });
   return notas;

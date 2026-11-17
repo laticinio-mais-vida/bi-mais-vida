@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_vendedores, premiacoes_permitidas
+from bi.acesso import ApiOcupada, LimiteApi, Usuarios, escopo_vendedores, pode_justificar, premiacoes_permitidas
 from bi.banco import Banco
 from tests.apoio import BaseBanco
 
@@ -181,7 +181,8 @@ class TestMigracao041(BaseBanco):
                                           ("sem", "visualizador", ["metas"]), ("antigo", "visualizador", None)):
                 con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas) VALUES (%s, %s, %s, 'x', "
                             "%s::text[])", [login, login.title(), papel, paginas])
-        self.assertEqual(self.banco.migrar(), ["041_premiacoes_acesso", "042_efetividade_area_varios_dias"])
+        self.assertEqual(self.banco.migrar(), ["041_premiacoes_acesso", "042_efetividade_area_varios_dias",
+                                               "043_agenda_dia_util_do_mes", "044_manejo"])
         with self.banco.conexao() as con:
             acessos = dict(con.execute("SELECT login, premiacoes FROM usuarios").fetchall())
         tudo = {"abas": ["vendedores", "supervisores", "comissao"], "supervisores": ["marcos", "ronaldo", "valdirene"]}
@@ -198,6 +199,71 @@ class TestMigracao041(BaseBanco):
             with self.subTest(errado=errado), self.assertRaises(psycopg.errors.CheckViolation):
                 with self.banco.conexao() as con:
                     con.execute("UPDATE usuarios SET premiacoes = %s::jsonb WHERE login = 'ana'", [errado])
+
+
+class TestManejoDaPessoa(Base):
+    """definir_manejo (Manejo da Base › Configurar): quem vê a página e quem pode justificar."""
+
+    def test_marca_e_pagina(self):
+        self.assertFalse(pode_justificar(self.ana()))
+        self.u.definir_manejo({"ana": {"ve": True, "justifica": True}})
+        ana = self.ana()
+        self.assertEqual((ana["manejo"], ana["paginas"]), ({"justifica": True}, ["metas", "assistente", "manejo"]))
+        self.assertTrue(pode_justificar(ana))
+        self.u.definir_manejo({"ana": {"ve": True}})  # sem "justifica", fica o que estava
+        self.assertTrue(pode_justificar(self.ana()))
+        self.u.definir_manejo({"ana": {"justifica": False}})  # só consulta
+        self.assertEqual((self.ana()["manejo"], pode_justificar(self.ana())), ({"justifica": False}, False))
+        # quem não vê a página não justifica, mesmo pedindo
+        self.u.definir_manejo({"ana": {"ve": False, "justifica": True}})
+        self.assertEqual((self.ana()["manejo"], self.ana()["paginas"]), ({"justifica": False}, ["metas", "assistente"]))
+        # o administrador não guarda nada: ele dá o veredito
+        self.u.definir_manejo({"chefe": {"ve": True, "justifica": True}})
+        chefe = self.u.obter("chefe")
+        self.assertEqual((chefe["manejo"], pode_justificar(chefe)), (None, False))
+
+    def test_validacao_e_tudo_ou_nada(self):
+        for errado in ({"ana": {"justifica": "sim"}}, {"ninguem": {"justifica": True}}, ["ana"],
+                       {"ana": {"ve": True, "justifica": True}, "ninguem": {"justifica": True}}):
+            with self.subTest(errado=errado), self.assertRaises(ValueError):
+                self.u.definir_manejo(errado)
+        self.assertIsNone(self.ana()["manejo"])
+        self.u.salvar({"login": "ana", "nome": "Ana", "papel": "visualizador", "paginas": ["manejo"]}, "ana")
+        with self.assertRaises(ValueError):  # é a única página: não dá para tirar
+            self.u.definir_manejo({"ana": {"ve": False}})
+
+
+class TestMigracao044(BaseBanco):
+    """bi/migracoes/044_manejo.sql: o que o banco recusa."""
+
+    def test_o_banco_recusa(self):
+        import psycopg  # só aqui: sem o psycopg, a classe inteira é pulada
+        self.criar_usuario("ana")
+        for errado in ('[1]', '{"justifica": "sim"}', '{}', '"x"'):
+            with self.subTest(errado=errado), self.assertRaises(psycopg.errors.CheckViolation):
+                with self.banco.conexao() as con:
+                    con.execute("UPDATE usuarios SET manejo = %s::jsonb WHERE login = 'ana'", [errado])
+        with self.banco.conexao() as con:
+            con.execute("INSERT INTO regras (nome, dados) VALUES ('manejo', '{}'::jsonb)")
+            con.execute("INSERT INTO manejo_rodadas (mes, prazo) VALUES ('2026-10-01', '2026-10-29'), "
+                        "('2026-11-01', '2026-11-27')")
+        nova = ("INSERT INTO manejo_sugestoes (mes, id_cliente, cliente, sugestao, id_vendedor, vendedor, "
+                "id_vendedor_entrada, entrou_em, retrato, fatos, dados_ate) VALUES (%s, 1, 'A', %s, 124, 'R', 124, "
+                "'2026-10-01', '{}', '{}', '2026-10-01 08:00') RETURNING id")
+        with self.banco.conexao() as con:
+            id_ = con.execute(nova, ["2026-10-01", "central"]).fetchone()[0]
+        # um cliente só tem uma sugestão em andamento, e uma por mês em cada lista
+        for mes, sugestao in (("2026-11-01", "inativar"), ("2026-10-01", "central")):
+            with self.subTest(mes=mes), self.assertRaises(psycopg.errors.UniqueViolation):
+                with self.banco.conexao() as con:
+                    con.execute(nova, [mes, sugestao])
+        with self.assertRaises(psycopg.errors.CheckViolation):  # quem quer manter o cliente diz por quê
+            with self.banco.conexao() as con:
+                con.execute("INSERT INTO manejo_eventos (sugestao, tipo, decisao, texto, retrato) "
+                            "VALUES (%s, 'justificativa', 'manter', ' ', '{}')", [id_])
+        with self.banco.conexao() as con:
+            con.execute("INSERT INTO manejo_eventos (sugestao, tipo, decisao, retrato) VALUES (%s, 'veredito', 'manter', "
+                        "'{}')", [id_])
 
 
 class TestCadastroESessao(Base):

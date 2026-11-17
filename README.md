@@ -1548,6 +1548,57 @@ ressalvas" é verde, com o ícone de alerta), a idade do Serasa com a validade, 
 fica verde; o que não é comparado com nada (compras, quantidade, ticket, limite, score) fica cinza. Botões, campos e o
 cliente escolhido seguem o padrão do painel.
 
+## Página Manejo da Base
+
+A campanha de cuidar da base de clientes de cada vendedor. O painel sugere e as pessoas decidem; ele não mexe no ERP.
+Só no site: no PC a página avisa.
+
+| Lista | Quem entra |
+|---|---|
+| **Passar para a central** | cliente ativo de vendedor das equipes do ES e da BA (fora a central) com 30 dias sem compra (semanal, quinzenal ou sem frequência no cadastro: o campo Rede com o nome de uma rede, ou vazio) ou 50 dias (mensal) |
+| **Inativar** | cliente ativo dessas equipes com título em aberto vencido há 120 dias ou mais; e cliente da central há 30 dias sem compra, contados do mais recente entre a entrada na central e a última compra |
+
+- **Dias sem compra:** da última venda faturada até o dia da cópia do banco. Sem venda no cache, vale o último título
+  de venda; sem nenhum, a data do cadastro. O cliente reativado conta do dia da reativação.
+- **Entrada na central:** o começo do bloco de trechos seguidos com um vendedor da central no histórico da carteira
+  (`clientes_vigencias`). Quem já estava nela no primeiro dia do histórico aparece como "desde antes de".
+- **Uma lista só por vez:** quem cai nas duas fica só na de inativação, com os dois motivos.
+- **Ficam fora:** terceiros, Edir e contas internas (quem não é das equipes ES e BA de Metas › Configurar), inativos e
+  os clientes "PEDIDO BLOQUEADO".
+
+**A lista do mês.** Cada mês tem a sua, com o prazo no penúltimo dia útil (de segunda a sexta; com feriado diferente no
+ES e na BA, vale o mais cedo). O cliente entra assim que cai numa regra, a cada envio dos dados; depois do prazo, quem
+cair já entra na lista do mês seguinte.
+
+| Situação | O que é |
+|---|---|
+| A justificar | quem pode justificar responde "pode" ou "deve continuar" (com o motivo), até o fim do dia do prazo |
+| Justificado | espera o veredito do administrador, que pode sair antes do prazo |
+| Sem justificativa | o prazo passou sem resposta: vai ao veredito assim |
+| Aguardando o ERP | veredito "passar para a central" ou "inativar": espera o cadastro mostrar a mudança |
+| Feito | o ERP já mostra o cliente na central ou inativo |
+| Mantido | veredito "continua": não volta no mesmo mês; se continuar na regra, entra na lista do mês seguinte |
+| Saiu | antes do veredito, voltou a comprar, pagou, já foi para a central ou já foi inativado |
+
+- Cada justificativa e cada veredito é uma linha nova no histórico, com quem, quando e os números do dia. O veredito
+  pode ser trocado, menos o que o ERP já mostra como feito.
+- Enquanto não há veredito, a sugestão acompanha o vendedor atual do cliente.
+- Se um envio do PC chega sem a frequência, os títulos ou o histórico da carteira, a regra que depende do dado fica
+  parada (não inclui nem tira ninguém) e a página avisa.
+
+**Quem faz o quê.** O administrador vê todos os vendedores, dá o veredito e configura. Quem tem a página e a marca
+"pode justificar" responde pelos clientes dos vendedores do acesso dele (tela Usuários). Quem tem a página sem a marca
+só consulta.
+
+### Configurar (Manejo da Base)
+
+- **Campanha:** ligada ou desligada. Começa desligada, e a lista só nasce quando for ligada (precisa de ao menos um
+  vendedor da central).
+- **Quem justifica:** para cada pessoa, "Vê a página" e "Pode justificar". A tela avisa do vendedor da campanha que
+  ficou sem ninguém para justificar.
+- **Regras:** os dias de cada regra (30, 30, 50, 120 e 30), o dia do prazo (1 = último dia útil, 2 = penúltimo) e os
+  vendedores da central.
+
 ## Banco de dados
 
 O painel usa dois bancos, cada um para uma coisa:
@@ -1574,6 +1625,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `agenda_justificativas` | o histórico das justificativas do atraso de cada tarefa e subtarefa: quem escreveu, quando e o prazo que tinha vencido (migração 027) |
 | `notificacoes` | as notificações do sino: para quem, o tipo, o texto, a tarefa, quando foi lida e quando foi excluída (a excluída fica escondida até a limpeza dos 90 dias); os avisos de prazo têm uma chave, para sair uma vez só (migrações 028 e 036) |
 | `google_contas`, `google_agendas` e `google_eventos` | o Google Agenda de cada pessoa, só leitura (migrações 031 e 032): as contas Google conectadas (o e-mail, a autorização cifrada e se ela caiu), as agendas de cada conta (o id da agenda no Google, se é a principal, se está ligada, a assinatura da última leitura, quando foi lida e o último erro) e os eventos lidos das ligadas, uma linha por ocorrência (título, início e fim, dia inteiro e se está ocupado). Desconectar a conta leva as agendas e os eventos dela; só o site usa |
+| `manejo_rodadas`, `manejo_sugestoes`, `manejo_eventos` | o Manejo da Base, só no site (migração 044): a lista de cada mês com o prazo; uma linha por mês, cliente e lista (central ou inativar), com o vendedor, os números da entrada (`retrato`), os da última atualização (`fatos`) e, quando encerra, o dia e o motivo (no máximo uma em andamento por cliente); e o histórico, só com inclusões, de cada justificativa e cada veredito, com quem, quando e os números do dia. Quem pode justificar fica em `usuarios.manejo` |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em`; a registrada pelo administrador dentro do prazo mínimo guarda a regra em `bloqueio` (migração 038) |
 | `credito_serasa` | os dados do Serasa, só no site (migração 038): uma linha por envio, que não muda depois, com o cliente, o CNPJ e a razão social do relatório, a emissão, o hash do arquivo (o mesmo PDF não grava duas vezes), a fundação, o score e o resto em `dados` (veja [Dados do Serasa](#dados-do-serasa)) e quem enviou; o excluído fica com `excluido_em` |
 | `parametros` | o segredo que assina os cookies de sessão |
@@ -1753,6 +1805,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/aprovacao.py` | metas aprovadas (tabela metas_aprovadas): a distribuição do volume pelo R$ aprovado e as planilhas de metas com as aprovadas por cima, que a Calculadora lê, e a diferença de um ajuste de volume somada na aprovada |
 | `bi/ajustes.py` | ajustes de volume da página Sugestão de Metas (tabela sugestao_ajustes): os em vigor, em memória, e a gravação que leva a diferença para a meta aprovada na mesma transação |
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
+| `bi/manejo.py` | o Manejo da Base (tabelas manejo_rodadas, manejo_sugestoes e manejo_eventos, só no site): as regras da campanha, a lista do mês atualizada a cada envio dos dados, as justificativas, os vereditos e as regras da página (tabela regras) |
+| `web/js/manejo.js`, `web/js/configmanejo.js` | a página Manejo da Base e a configuração dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas); as regras do crédito (tabela regras) e o prazo mínimo entre reanálises |
 | `bi/serasa.py` | os dados do Serasa (tabela credito_serasa, só no site): a leitura do PDF do Relato PJ, enviar, listar, excluir e o último envio para o retrato |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
