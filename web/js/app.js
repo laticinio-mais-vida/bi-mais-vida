@@ -19,13 +19,15 @@ import { montarGestao, recarregarGestao, gestaoTemAlteracoes } from "./gestao.js
 import { montarConfigGestao, configGestaoTemAlteracoes } from "./configgestao.js";
 import { montarManejo, recarregarManejo } from "./manejo.js";
 import { montarConfigManejo, configManejoTemAlteracoes } from "./configmanejo.js";
+import { montarCrm, recarregarCrm } from "./crm.js";
+import { montarConfigCrm, configCrmTemAlteracoes } from "./configcrm.js";
 import { montarUsuarios, usuariosTemAlteracoes } from "./usuarios.js";
 import { ligarMenuUsuario, mostrarUsuario } from "./conta.js";
 import { ligarLateral, marcarPagina, mostrarPaginas } from "./lateral.js";
 import { ligarAvisos } from "./avisos.js";
 
 const app = { opcoes: null, estado: null, rota: null, montadas: new Set(), remontar: new Set(), usuario: null, dados: {} };
-const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "devolucoes", "gestao", "credito", "manejo"];
+const PAGINAS_DE_DADOS = ["metas", "projecoes", "sugestao", "premiacoes", "devolucoes", "gestao", "credito", "manejo", "crm"];
 
 const ehAdmin = () => app.usuario?.papel === "admin";
 
@@ -174,6 +176,21 @@ const PAGINAS = {
     pendente: configManejoTemAlteracoes,
     montar: (el) => montarConfigManejo(el, { aoSalvar: () => app.remontar.add("manejo") }),
   },
+  crm: {
+    nome: "CRM",
+    titulo: "CRM dos clientes",
+    montar: (el) => montarCrm(el, { admin: ehAdmin(), subtitulo: (d) => subtitulo("crm", d) }),
+    recarregar: recarregarCrm,
+  },
+  "config-crm": {
+    titulo: "Configurações do CRM",
+    fixo: "Os números de cada indicador, o mix ideal de cada segmento e os custos industriais",
+    pai: "crm",
+    admin: true,
+    sempreMonta: true,
+    pendente: configCrmTemAlteracoes,
+    montar: (el) => montarConfigCrm(el, { aoSalvar: () => app.remontar.add("crm") }),
+  },
   usuarios: {
     titulo: "Usuários e acessos",
     fixo: "Quem entra no painel, quais páginas e quais vendedores cada pessoa vê",
@@ -199,6 +216,7 @@ const TEXTO_SUBTITULO = {
   manejo: (d) => (d.rodada
     ? `Lista de ${d.rodada.rotulo} · ${d.rodada.aberta ? `prazo ${fmt.dataCurta(d.rodada.prazo)}` : `prazo encerrado em ${fmt.dataCurta(d.rodada.prazo)}`}`
     : "Sugestões para a central e para inativação"),
+  crm: (d) => `Nota de 0 a 100 · semestre de ${fmt.dataCurta(d.regras.periodo.ini)} a ${fmt.dataCurta(d.regras.periodo.fim)}`,
 };
 
 // O subtítulo do topo mostra o filtro e a data dos dados da página aberta.

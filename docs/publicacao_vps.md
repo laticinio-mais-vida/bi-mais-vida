@@ -827,6 +827,29 @@ inativar, a justificativa de quem pode justificar e o veredito do administrador.
   `DELETE FROM migracoes WHERE versao = '044_manejo'`. As justificativas e os vereditos vão junto: tire um dump antes.
 - **PC:** recebe a 044 quando o código for atualizado lá; a página só avisa que as listas ficam no site.
 
+#### CRM (migração 045)
+
+Página nova, no PC e no site (veja o README, "Página CRM"): a nota de 0 a 100 de cada cliente, com a aderência à
+frequência, a pontualidade de pagamento, o mix ideal do segmento e a rentabilidade.
+
+- **Ordem:** qualquer uma; os dados que o PC manda não mudaram (a página só lê tabelas que o cache já tem: pedidos de
+  venda, pedidos um a um, rede, títulos a receber e vendas por cliente e produto).
+- **A migração 045** só acrescenta o nome `crm` ao `regras_nome_check`. Não cria tabela (o usuário só de leitura
+  `bi_leitura` não precisa de GRANT novo) nem mexe em dado nenhum. Ensaie em BEGIN/ROLLBACK.
+- **Sem regras gravadas, vale o padrão do código** (`bi/crm.py`, `PADRAO`): as faixas combinadas, o mix da planilha MIX
+  IDEAL SEGMENTOS com os ajustes e os custos de jan a set de 2026 da planilha "Custos Industriais". O primeiro Salvar em
+  CRM › Configurar grava a versão 1 na tabela `regras`.
+- **Depois de publicar:** em Usuários, libere a página CRM para quem vai usá-la (os vendedores que cada pessoa vê valem
+  aqui também). Abra a página como administrador e confira os cartões, um cliente de cada frequência e o Excel; abra
+  como uma pessoa de acesso limitado e confira que só aparecem os clientes dos vendedores dela. A primeira leitura depois
+  de cada envio do PC refaz a conta do cache inteiro (alguns segundos); as outras usam a conta guardada.
+- **Todo mês:** quando sair o custo industrial do mês, digite ou importe em CRM › Configurar › Custos e salve. Os
+  quintis da rentabilidade passam a contar até esse mês.
+- **Voltar atrás:** o código anterior ignora as regras do CRM (podem ficar). Para apagar de vez:
+  `DELETE FROM regras WHERE nome = 'crm'`, voltar o `regras_nome_check` sem `'crm'` e
+  `DELETE FROM migracoes WHERE versao = '045_crm'`. Os custos e o mix editados vão junto: tire um dump antes.
+- **PC:** recebe a 045 quando o código for atualizado lá; o CRM do PC tem as regras dele (o banco do PC é outro).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›
@@ -835,7 +858,7 @@ tabela `regras`. Para voltar a
 uma delas, no console SQL (`docker exec -it bi_banco psql -U bi -d bi`):
 
 ```sql
--- as versões, da mais nova para a mais antiga (nome = metas, projecoes, sugestao ou premiacoes)
+-- as versões, da mais nova para a mais antiga (nome = metas, projecoes, sugestao, premiacoes, credito, manejo ou crm)
 SELECT id, nome, salva_em, salva_por_nome FROM regras ORDER BY id DESC LIMIT 20;
 -- copia a versão 12 como a mais nova (troque o 12)
 INSERT INTO regras (nome, dados, salva_por_nome) SELECT nome, dados, 'volta para a versão 12' FROM regras WHERE id = 12;

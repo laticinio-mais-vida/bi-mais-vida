@@ -6,7 +6,7 @@
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { PAPEL, iniciais } from "./conta.js";
 
-const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", devolucoes: "devolucao", assistente: "conversa", gestao: "quadro", credito: "cartao", manejo: "loja" };
+const ICONE_PAGINA = { metas: "alvo", projecoes: "tendencia", sugestao: "foguete", premiacoes: "trofeu", devolucoes: "devolucao", assistente: "conversa", gestao: "quadro", credito: "cartao", manejo: "loja", crm: "estrela" };
 const DESCRICAO_PAGINA = {
   metas: "Metas do mês por vendedor e produto",
   projecoes: "Faturamento previsto para 6 meses",
@@ -17,6 +17,7 @@ const DESCRICAO_PAGINA = {
   gestao: "Objetivos, campanhas e o histórico de cada vendedor",
   credito: "Limite, compras, pontualidade e títulos de cada cliente",
   manejo: "Clientes sugeridos para passar para a central ou inativar, com a justificativa do supervisor e o veredito",
+  crm: "A nota de 0 a 100 de cada cliente: aderência à frequência, pontualidade, mix ideal e rentabilidade",
 };
 const MODOS = [
   { id: "todos", nome: "Todos os vendedores", icone: "pessoas" },

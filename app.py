@@ -58,6 +58,8 @@ from bi.devolucoes import Devolucoes  # noqa: E402
 from bi.gestao import PRORROGAR, Gestao, SemDados  # noqa: E402
 from bi.google_agenda import GoogleAgenda  # noqa: E402
 from bi.manejo import ConfigManejo, Manejo  # noqa: E402
+from bi.crm import MAX_PLANILHA as MAX_PLANILHA_CUSTOS, ConfigCrm, Crm  # noqa: E402
+from bi.arquivos import EXCEL, TIPOS as TIPOS_ARQUIVO  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
@@ -107,7 +109,7 @@ ROTAS_ADMIN = {"/api/config", "/api/config/padrao", "/api/calendario", "/api/atu
                "/api/usuarios", "/api/usuarios/excluir", "/api/projecoes/config", "/api/sugestao/config",
                "/api/sugestao/aprovacao", "/api/sugestao/ajustes", "/api/premiacoes/config", "/api/assistente/config",
                "/api/gestao/config", "/api/gestao/catalogo", "/api/credito/config", "/api/manejo/config",
-               "/api/manejo/veredito", *ROTAS_GESTAO_MUDAR}
+               "/api/manejo/veredito", "/api/crm/config", "/api/crm/custos/importar", *ROTAS_GESTAO_MUDAR}
 # API pública da Gestão (docs/api_publica.md): só leitura, para o servidor de outro aplicativo. Entra só com a chave que
 # /api/v1/entrar devolve (Authorization: Bearer), nunca com o cookie; as rotas do site não aceitam a chave.
 PREFIXO_API = "/api/v1/"
@@ -185,6 +187,10 @@ class Aplicacao:
         # avisa e nada é montado). As regras (a campanha ligada, os dias, o prazo e a central) são do administrador.
         self.config_manejo = ConfigManejo(self.banco)
         self.manejo = Manejo(self.banco, self.calc, self.config_manejo, self.projetor._nomes_vendedores, self.vps)
+        # CRM: a nota de 0 a 100 de cada cliente (aderência, pontualidade, mix e rentabilidade), calculada do cache. As
+        # regras, o mix ideal de cada segmento e os custos industriais são do administrador (tabela regras).
+        self.config_crm = ConfigCrm(self.banco)
+        self.crm = Crm(self.calc, self.config_crm, self.projetor._nomes_vendedores)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -1253,6 +1259,19 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.manejo.listar(usuario, ids, q.get("mes")))
             if url.path == "/api/manejo/config":  # as regras e quem justifica (só o administrador)
                 return self._json(self._config_manejo())
+            if url.path in ("/api/crm", "/api/crm/cliente", "/api/crm/excel"):
+                if "crm" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página CRM", HTTPStatus.FORBIDDEN)
+                ids = self._ids(usuario)  # os clientes da carteira dos vendedores do acesso (o administrador: todos)
+                if url.path == "/api/crm/cliente":  # id=12: o porquê da nota do cliente
+                    return self._json(self.app.crm.cliente(ids, q.get("id")))
+                if url.path == "/api/crm/excel":  # a lista inteira do acesso de quem baixa
+                    conteudo, nome = self.app.crm.excel(ids)
+                    log.info("%s baixou %s (%s KB)", usuario["login"], nome, len(conteudo) // 1024)
+                    return self._baixavel(conteudo, TIPOS_ARQUIVO[EXCEL][1], nome)
+                return self._json(self.app.crm.listar(ids))
+            if url.path == "/api/crm/config":  # as regras, o mix ideal e os custos (só o administrador)
+                return self._json(self.app.crm.config_dados())
             if url.path == "/api/projecoes/config":
                 return self._json(self._config_projecoes())
             if url.path == "/api/assistente/info":
@@ -1369,6 +1388,16 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._mudar_manejo(usuario, url.path, self._corpo_json())
             if url.path == "/api/manejo/config":
                 return self._salvar_config_manejo(usuario, self._corpo_json())
+            if url.path == "/api/crm/config":
+                self.app.config_crm.salvar(self._corpo_json().get("config") or {}, usuario)
+                log.info("%s salvou as regras do CRM", usuario["login"])
+                return self._json({"ok": True, **self.app.crm.config_dados()})
+            if url.path == "/api/crm/custos/importar":  # o corpo é a planilha .xlsx; nada é gravado (a tela mostra antes)
+                tamanho = int(self.headers.get("Content-Length") or 0)
+                if tamanho > MAX_PLANILHA_CUSTOS:
+                    raise ValueError(f"a planilha passou de {MAX_PLANILHA_CUSTOS // (1024 * 1024)} MB")
+                conteudo = self.rfile.read(tamanho) if tamanho else b""
+                return self._json({"ok": True, **self.app.crm.importar_custos(conteudo)})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):

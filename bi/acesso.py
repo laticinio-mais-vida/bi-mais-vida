@@ -36,7 +36,7 @@ from .configuracao import GRUPOS_VENDEDOR, VISOES
 PAPEIS = ("admin", "visualizador")
 PAGINAS = {"metas": "Metas", "projecoes": "Projeções", "sugestao": "Sugestão de Metas", "premiacoes": "Premiações",
            "devolucoes": "Devoluções", "assistente": "Assistente", "gestao": "Gestão", "credito": "Reavaliação de Crédito",
-           "manejo": "Manejo da Base"}
+           "manejo": "Manejo da Base", "crm": "CRM"}
 PAGINAS_PADRAO = ["metas"]  # quem foi cadastrado antes de existir a escolha de páginas
 # Os vendedores do acesso (bi/migracoes/040_acesso_vendedores.sql): todos / os das equipes marcadas / só alguns.
 MODOS_ESCOPO = ("todos", "equipes", "alguns")

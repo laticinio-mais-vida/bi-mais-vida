@@ -11,7 +11,8 @@ entrega do vencido e danificado no cliente, por causa, produto, cliente e vended
 (Claude). A página **Gestão** acompanha a equipe por região: objetivos, campanhas por vendedor (com base, meta e resultado) e o
 histórico interno de cada vendedor; no topo, a agenda de cada pessoa, com atividades únicas ou repetidas e o feedback do
 que foi feito, e tarefas com prazo divididas em subtarefas para outras pessoas, também num kanban. O atraso de
-uma tarefa precisa ser justificado, e o **sino** no topo avisa o que acontece nas tarefas.
+uma tarefa precisa ser justificado, e o **sino** no topo avisa o que acontece nas tarefas. A página **CRM** dá a cada
+cliente uma nota de 0 a 100: aderência à frequência, pontualidade de pagamento, mix ideal do segmento e rentabilidade.
 
 As páginas ficam na **barra lateral** à esquerda. O botão no topo dela recolhe a barra (só os ícones; o nome
 aparece ao passar o mouse) ou expande, e o painel lembra a escolha neste navegador. No celular, a barra vira
@@ -20,7 +21,8 @@ administrador vê. Cada página tem a sua configuração, no botão **Configurar
 administradores): em Metas abre as Configurações das metas; em Projeções, as Configurações das projeções; no
 Assistente, o que cada pessoa consulta e o uso; na Gestão, os vendedores que cada pessoa acompanha; na Sugestão de
 Metas, o crescimento desejado, os tetos e os faturamentos das áreas do BA; nas Premiações, as faixas dos vendedores, as
-regras dos supervisores e os brindes que descontam da comissão.
+regras dos supervisores e os brindes que descontam da comissão; no CRM, os números de cada indicador, o mix ideal de cada
+segmento e os custos industriais.
 
 ## Como abrir
 
@@ -1599,6 +1601,62 @@ só consulta.
 - **Regras:** os dias de cada regra (30, 30, 50, 120 e 30), o dia do prazo (1 = último dia útil, 2 = penúltimo) e os
   vendedores da central.
 
+## Página CRM
+
+Uma nota de 0 a 100 para cada cliente, a soma de quatro indicadores. Funciona no PC e no site, só lendo o cache e as
+regras; não grava nada por cliente. "Hoje" é o dia da cópia do banco do ERP.
+
+**Quem entra.** Os clientes ativos dos vendedores das equipes ES e BA (Metas › Configurar › Vendedores; dá para trocar
+as equipes no Configurar do CRM), sem "PEDIDO BLOQUEADO" no nome e com a primeira compra há mais de 1 mês. Compra é o
+pedido de venda não cancelado, de qualquer vendedor. Quem nunca comprou, ou comprou pela primeira vez há menos de 1
+mês, fica fora do CRM, sem nota (nem zero): o cartão "Clientes no CRM" mostra quantos.
+
+| Indicador | Pontos | Conta |
+|---|---|---|
+| **Aderência à frequência** | 20 | As 26 semanas fechadas (de domingo a sábado) até o último sábado antes de hoje, desde a primeira compra quando ela é mais recente, com uma compra por semana (a primeira; as outras da mesma semana não contam). A frequência é a rede do cadastro: SEMANAL, QUINZENAL ou MENSAL; outra rede, ou nenhuma, vale semanal. Semanal: a % das semanas com compra. Quinzenal e mensal: a % dos dias em dia, com 15 e 31 dias de prazo entre compras (cada compra deixa o cliente em dia pelo prazo; cada dia além é atraso). 100% = 20, a partir de 75% = 15, de 50% = 10, abaixo = 0 |
+| **Pontualidade de pagamento** | 20 | Os títulos de venda que venceram desde 01/01/2024 até 7 dias antes de hoje. Pontual é o pago até 7 dias depois do vencimento; o pago depois e o ainda em aberto são atrasados (o aberto conta os dias até hoje). A partir de 96% pontuais = 20, de 90% = 15, de 80% = 10, abaixo = 0. O atraso médio dos atrasados desconta de quem atrasa: a partir de 16 dias, 5 pontos; de 30 dias, 10; a nota não fica negativa. Sem título no período: 20, sinalizado |
+| **Mix ideal** | 20 | 20 × os itens do mix ideal do segmento que o cliente comprou nas mesmas semanas ÷ os itens do mix. O mix de cada segmento é o da planilha MIX IDEAL SEGMENTOS, com os ajustes combinados: os produtos de um mesmo item (a mesma cor na planilha) valem um pelo outro, e "qualquer mussarela" vale qualquer produto da linha de mussarela do ERP. O produto 3643 conta como 11469, como em Metas. Sem segmento, ou de segmento sem mix: 0, sinalizado |
+| **Rentabilidade** | 40 | Lucro bruto = faturamento − custo industrial do mês × volume, por produto e mês, das vendas faturadas a cliente desde jan/2026 até o último mês com custo. Os clientes do CRM são divididos em cinco partes iguais (quintis) pelo lucro total: 40, 30, 20, 10 e 0 pontos; quem não deixou lucro fica no último. Os cortes são refeitos a cada mês novo de custo e valem para o CRM inteiro, qualquer que seja o acesso de quem olha |
+
+A nota é a soma, guardada exata e arredondada só no fim (0,5 sobe). As faixas da nota na tela (80 a 100, 60 a 79...)
+servem só para ler a distribuição.
+
+**A página.** Filtros de vendedores, segmento, frequência, faixa da nota, "Só sinalizados" e a busca; os cartões (quantos
+estão no CRM e fora dele, a nota média de cada indicador, os clientes por faixa e os sinalizados) e a tabela, que ordena
+por qualquer coluna. Clicar num cliente abre o porquê de cada nota: as compras contadas no semestre, os títulos (a % em
+dia, o atraso médio e os em aberto), os itens do mix comprados e os que faltam (o que o vendedor pode oferecer) e o lucro
+bruto mês a mês e dos produtos. O botão **Excel** baixa a lista inteira do acesso. Cada pessoa vê só os clientes dos
+vendedores dela (Usuários), com o detalhe da pontualidade incluído.
+
+**Sinalizados.** O cliente sem segmento no cadastro, o de segmento sem mix ideal (fica com 0 no mix) e o sem título a
+receber no período (fica com os 20 da pontualidade) aparecem com um aviso, para corrigir o cadastro.
+
+**De onde vem o custo.** O cache não traz o custo dos produtos: ele fica em CRM › Configurar › Custos, por produto e mês,
+digitado ou importado. O padrão é a planilha "Custos Industriais jan a set" (2026), com as correções combinadas: o prato
+3 kg de fevereiro e de junho repete o mês anterior (a planilha tinha 0); a manteiga a granel 1 kg S (5754) usa o custo
+da manteiga a granel 1 kg (27); as mussarelas Muller (12175 e 12189) usam o da mussarela Mais Natural 4 kg (12552). O
+produto vendido sem custo fica fora do lucro bruto, e a página avisa quanto do faturamento ficou de fora.
+
+O cálculo é do cache inteiro e fica na memória até chegar uma cópia nova do ERP ou mudar uma regra.
+
+### Configurar (CRM)
+
+Só administradores. Tudo vale depois de Salvar, e cada Salvar vira uma versão nova na tabela `regras` (nome `crm`).
+
+- **Pontos e regras:** as equipes, os meses desde a primeira compra para entrar, as semanas do período e os prazos do
+  quinzenal e do mensal, as faixas da aderência e da pontualidade, os descontos pelo atraso médio, os pontos de quem não
+  tem título, os pontos do mix, o mês de início do lucro bruto e os pontos de cada quintil. Os quatro máximos precisam
+  somar 100: a tela mostra a soma enquanto você digita.
+- **Mix ideal:** os segmentos do cadastro, com quantos clientes ativos têm cada um, e os itens de cada segmento: um item
+  é um ou mais produtos que valem um pelo outro, ou "qualquer mussarela". Dá para mudar a ordem, tirar um produto ou o
+  mix inteiro do segmento e voltar ao da planilha. O segmento é comparado sem acento e sem diferença de maiúsculas.
+- **Custos:** a tabela de produtos × meses, em reais por unidade vendida (o kg ou a peça, como no pedido). Dá para colar
+  do Excel (os valores vão para os meses seguintes e os produtos de baixo) ou **Importar planilha** (.xlsx, até 5 MB, no
+  formato da "Custos Industriais": a linha dos meses e o produto à esquerda). A importação mostra antes o que muda e liga
+  cada linha ao produto do ERP pelo nome; o nome que não bate você escolhe na lista. Os meses com valor na planilha
+  substituem os da tabela; mês vazio ou com 0 fica como está, e nada é gravado antes de Salvar. Embaixo ficam os
+  produtos que usam o custo de outro e os **vendidos sem custo** (um clique põe o produto na tabela).
+
 ## Banco de dados
 
 O painel usa dois bancos, cada um para uma coisa:
@@ -1610,7 +1668,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | Tabela | O que guarda |
 |---|---|
 | `usuarios` | acessos: nome, login, senha em hash, papel, páginas e o que cada um vê nelas: os vendedores (`escopo`, migração 040), as abas de Metas (`visoes`) e as abas e os quadros de supervisor das Premiações (`premiacoes`, migração 041) |
-| `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024), as das Premiações (migração 034) e as do crédito, o prazo mínimo entre reanálises e a validade do Serasa (migração 038); cada Salvar vira uma versão nova, com quem salvou e quando |
+| `regras` | as regras de Metas, os vendedores de Projeções, as regras da Sugestão de Metas (migração 024), as das Premiações (migração 034) e as do crédito, o prazo mínimo entre reanálises e a validade do Serasa (migração 038), as do Manejo da Base (migração 044) e as do CRM: os números de cada indicador, o mix ideal e os custos industriais (migração 045); cada Salvar vira uma versão nova, com quem salvou e quando |
 | `conversas` e `mensagens` | o histórico do Assistente, de cada usuário |
 | `assistente_perguntas` | o registro de uso do Assistente: pergunta, consultas, tokens e custo |
 | `campanhas` e `campanha_vendedores` | as ações e os objetivos da página Gestão (coluna `tipo`): região, período, indicador (`metrica`, `parametros`, filtros), alvo, quem lançou, e os vendedores com a base e o resultado congelado (no preço médio, também o preço de cada produto: `base_precos` e `resultado_precos`, migração 013) |
@@ -1691,7 +1749,7 @@ Na página **Usuários** (só para administradores):
 
 - **Novo:** nome, usuário e senha. O botão **Gerar** cria uma senha aleatória (e copia, quando o navegador
   deixa) para você passar à pessoa.
-- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito).
+- **Páginas que pode ver** (Metas, Projeções, Sugestão de Metas, Premiações, Devoluções, Assistente, Gestão, Reavaliação de Crédito, Manejo da Base, CRM).
 - **Vendedores que vê:** todos, só as equipes ou só alguns (veja acima). Embaixo aparece o que muda de uma página
   para outra (as abas de Metas e as de Premiações, com o link **Configurar**, os terceirizados, os clientes do
   Crédito). Um aviso lembra quando a pessoa tem Metas ou Premiações mas ainda nenhuma aba, ou ainda não tem vendedores.
@@ -1807,6 +1865,8 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/credito.py` | página Reavaliação de Crédito: cartões (um ou vários clientes), títulos com o valor já pago e a ordem da tabela, a busca de cliente, o parecer de um limite novo, os prazos do ERP, o retrato de uma reanálise e o que aconteceu depois dela |
 | `bi/manejo.py` | o Manejo da Base (tabelas manejo_rodadas, manejo_sugestoes e manejo_eventos, só no site): as regras da campanha, a lista do mês atualizada a cada envio dos dados, as justificativas, os vereditos e as regras da página (tabela regras) |
 | `web/js/manejo.js`, `web/js/configmanejo.js` | a página Manejo da Base e a configuração dela |
+| `bi/crm.py` | página CRM: a nota de cada cliente (aderência, pontualidade, mix e rentabilidade) calculada do cache e guardada na memória até a próxima extração, o detalhe de um cliente, o Excel, as regras da página (tabela regras, com o mix ideal e os custos) e a leitura da planilha de custos |
+| `web/js/crm.js`, `web/js/configcrm.js` | a página CRM e a configuração dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas); as regras do crédito (tabela regras) e o prazo mínimo entre reanálises |
 | `bi/serasa.py` | os dados do Serasa (tabela credito_serasa, só no site): a leitura do PDF do Relato PJ, enviar, listar, excluir e o último envio para o retrato |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
