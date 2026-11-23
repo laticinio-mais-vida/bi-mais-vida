@@ -151,6 +151,10 @@ class TestRegra(unittest.TestCase):
                          {"score": "regular", "recomendacao": None, "risco": None, "fundacao": None,
                           "pontualidade_serasa": None, "anotacoes": None})
         self.assertIn("“Moderado” não está na capa", r["risco"]["fonte"])
+        # o envio lido antes da capa não tem a chave da recomendação (o relatório tinha, o painel não guardava)
+        self.assertIn("lido antes de o painel guardar a recomendação", r["recomendacao"]["fonte"])
+        novo = respostas_serasa({"score": {"valor": 500, "recomendacao": None}}, dt.date(2026, 1, 1))
+        self.assertEqual(novo["recomendacao"]["fonte"], "o relatório não trouxe a recomendação: escolha olhando o PDF")
         # anotações: nenhuma = automático; alguma (ou ilegível) = o analista escolhe, vendo a lista
         a = respostas_serasa({"anotacoes": [{"rotulo": "Pendências comerciais (PEFIN)", "quantidade": 1, "valor": 195.23},
                                             {"rotulo": "Protestos", "quantidade": None, "valor": None},

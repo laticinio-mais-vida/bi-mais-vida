@@ -209,6 +209,9 @@ def respostas_serasa(s: dict, hoje: dt.date) -> dict[str, dict]:
     rec = sc.get("recomendacao") or {}
     if rec.get("chave") in {o["chave"] for o in POR_CHAVE["recomendacao"]["opcoes"]}:
         r["recomendacao"] = _auto(rec["chave"], f"“{rec.get('texto')}” nas práticas de mercado")
+    elif sc and "recomendacao" not in sc:  # lido antes de o painel guardar a recomendação (antes da capa)
+        r["recomendacao"] = _manual("este PDF foi lido antes de o painel guardar a recomendação: escolha olhando o "
+                                    "PDF, ou envie o PDF de novo")
     else:
         r["recomendacao"] = _manual("o relatório não trouxe a recomendação: escolha olhando o PDF")
 
