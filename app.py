@@ -72,7 +72,7 @@ from bi.reanalise import ConfigCredito, Reanalises  # noqa: E402
 from bi.serasa import DadosSerasa  # noqa: E402
 from bi.sugestao import ConfigSugestao, Sugestao  # noqa: E402
 from bi.tarefas import Tarefas  # noqa: E402
-from bi.uso import RegistroUso  # noqa: E402
+from bi.uso import LimitesAssistente, RegistroUso, da_pessoa, limites_do_ini  # noqa: E402
 
 log = logging.getLogger("bi")
 mimetypes.add_type("application/javascript", ".js")
@@ -175,8 +175,11 @@ class Aplicacao:
                                      capas=self.capas)
         self.capas.reanalises = self.reanalises
         self.conversas = Conversas(self.banco)
+        # Os limites do Assistente (gasto total; perguntas e gasto de cada pessoa) são do administrador, na tabela
+        # regras; até ele salvar, valem os de [ia] no config.ini.
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
-                                     conversas=self.conversas, reanalises=self.reanalises)
+                                     conversas=self.conversas, reanalises=self.reanalises,
+                                     limites=LimitesAssistente(self.banco, limites_do_ini(ini)))
         self.gestao = Gestao(self.banco, self.calc, self.assistente)
         # Na página Metas, a meta de venda do dia (a expectativa diária da Gestão) no lugar do "necessário por dia útil"
         self.calc.expectativa = self.gestao.expectativa_do_dia
@@ -478,8 +481,28 @@ class Manipulador(BaseHTTPRequestHandler):
         return self.app.projetor.catalogo()
 
     def _config_assistente(self) -> dict:
-        """Configuração da página Assistente: o uso dos últimos 30 dias."""
-        return {"uso": self.app.assistente.uso(), "data_ref": self.app.cache.info.get("data_ref")}
+        """Configuração da página Assistente: o uso dos últimos 30 dias e os limites, com as pessoas que usam a página
+        (ativas e com o Assistente no acesso), o uso de hoje e do mês de cada uma e o limite que vale para ela."""
+        a = self.app.assistente
+        cfg = a.limites.atual()
+        uso = a.registro.por_pessoa()
+        zero = {"perguntas_dia": 0, "custo_dia": 0.0, "perguntas_mes": 0, "custo_mes": 0.0}
+        pessoas = []
+        for u in self.app.usuarios.listar():
+            if not u["ativo"] or "assistente" not in paginas_permitidas(u):
+                continue
+            vale, proprio = da_pessoa(cfg, u)
+            pessoas.append({"id": u["id"], "login": u["login"], "nome": u["nome"], "papel": u["papel"],
+                            "uso": uso.get(u["id"], zero), "limite": vale, "proprio": proprio})
+        return {"uso": a.uso(), "limites": {"config": cfg, "padrao_ini": a.limites.padrao, "ultima": a.limites.ultima()},
+                "pessoas": pessoas, "data_ref": self.app.cache.info.get("data_ref")}
+
+    def _salvar_config_assistente(self, usuario: dict, corpo: dict):
+        """Os limites do Assistente: valem na próxima pergunta de cada pessoa."""
+        cfg = self.app.assistente.limites.salvar(corpo.get("config") or {}, usuario)
+        log.info("%s salvou os limites do Assistente: total %s/dia e %s/mês, padrão %s, %d com limite próprio",
+                 usuario["login"], cfg["total_dia"], cfg["total_mes"], cfg["padrao"], len(cfg["usuarios"]))
+        return self._json({"ok": True, **self._config_assistente()})
 
     def _config_gestao(self) -> dict:
         """Configuração da página Gestão: os dias de atendimento das áreas comerciais (efetividade)."""
@@ -1447,6 +1470,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json({"ok": True, **self.app.crm.importar_custos(conteudo)})
             if url.path == "/api/assistente":
                 return self._perguntar(usuario, self._corpo_json())
+            if url.path == "/api/assistente/config":  # os limites (só o administrador: ROTAS_ADMIN)
+                return self._salvar_config_assistente(usuario, self._corpo_json())
             if url.path in ("/api/assistente/conversa/renomear", "/api/assistente/conversa/excluir"):
                 return self._mudar_historico(usuario, url.path, self._corpo_json())
             if url.path in ROTAS_GESTAO_MUDAR:

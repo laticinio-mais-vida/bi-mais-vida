@@ -284,13 +284,31 @@ class RegistroFalso:
             raise BancoForaDoAr("banco de teste fora do ar")
         self.registros.append({**r, "quando": dt.datetime.now()})
 
-    def do_dia(self, usuario):
-        hoje = [r for r in self.registros if r["quando"].date() == dt.date.today()]
-        return sum(r["usuario"] == usuario for r in hoje), sum(r["uso"]["custo"] for r in hoje)
+    def contagem(self, usuario):
+        hoje = dt.date.today()
+        mes = [r for r in self.registros if (r["quando"].year, r["quando"].month) == (hoje.year, hoje.month)]
+        dia = [r for r in mes if r["quando"].date() == hoje]
+        custo = lambda rs: sum(r["uso"]["custo"] for r in rs)  # noqa: E731
+        return {"perguntas_dia": sum(r["usuario"] == usuario for r in dia),
+                "custo_dia": custo(r for r in dia if r["usuario"] == usuario),
+                "custo_mes": custo(r for r in mes if r["usuario"] == usuario),
+                "total_dia": custo(dia), "total_mes": custo(mes)}
+
+    def por_pessoa(self):
+        saida = {}
+        for r in self.registros:
+            p = saida.setdefault(r["usuario"], {"perguntas_dia": 0, "custo_dia": 0.0, "perguntas_mes": 0,
+                                                "custo_mes": 0.0})
+            p["perguntas_dia"] += 1
+            p["perguntas_mes"] += 1
+            p["custo_dia"] += r["uso"]["custo"]
+            p["custo_mes"] += r["uso"]["custo"]
+        return saida
 
     def resumo(self, dias):
         por = collections.Counter(r["login"] for r in self.registros)
-        return {"hoje": {"perguntas": len(self.registros), "custo": sum(r["uso"]["custo"] for r in self.registros)},
+        total = {"perguntas": len(self.registros), "custo": sum(r["uso"]["custo"] for r in self.registros)}
+        return {"hoje": total, "mes": dict(total),
                 "por_usuario": [{"login": k, "perguntas": n} for k, n in por.most_common()], "ultimas": []}
 
 

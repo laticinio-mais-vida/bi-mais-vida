@@ -26,8 +26,10 @@ Como funciona:
 - Histórico: entre uma pergunta e outra só volta texto (pergunta, resposta e o resumo das consultas feitas). As
   conversas ficam no PostgreSQL (bi/conversas.py) e o servidor as lê de lá. Dentro de uma pergunta, cada resposta da
   API volta inteira e sem mudança (com os blocos de raciocínio), como a API exige.
-- Registro: cada pergunta vai para a tabela assistente_perguntas (bi/uso.py: quem, o quê, consultas, tokens e
-  custo); os limites do dia (perguntas por pessoa e custo total) são contados nela antes de cada pergunta.
+- Registro e limites: cada pergunta vai para a tabela assistente_perguntas (bi/uso.py: quem, o quê, consultas, tokens
+  e custo). Os limites (o gasto total por dia e por mês; por pessoa, perguntas por dia e gasto por dia e por mês) são
+  do administrador, em Configurações do assistente › Limites (bi/uso.py, LimitesAssistente), e são contados nela antes
+  de cada pergunta.
 """
 from __future__ import annotations
 
@@ -57,6 +59,7 @@ from .indicadores import (BASES as BASES_CAMPANHA, FORMAS as FORMAS_CAMPANHA, ME
                           PERIODOS_BASE, TIPOS as TIPOS_CAMPANHA, semanas_da_frequencia)
 from .metas import MESES, Calculadora, nome_bonito
 from .projecoes import NOME_EQUIPE
+from .uso import LimitesFixos, da_pessoa, limites_do_ini
 
 log = logging.getLogger("bi.assistente")
 
@@ -94,8 +97,6 @@ class ConfigIA:
         self.tempo_total = ini.getfloat("ia", "tempo_total", fallback=100)
         self.tempo_sql = ini.getfloat("ia", "tempo_sql", fallback=10)
         self.max_linhas = ini.getint("ia", "max_linhas", fallback=200)
-        self.limite_diario = ini.getint("ia", "limite_diario", fallback=50)
-        self.limite_custo_dia = ini.getfloat("ia", "limite_custo_dia", fallback=2.0)
         self.simultaneos = ini.getint("ia", "simultaneos", fallback=2)
         self.recortes = max(1, ini.getint("ia", "recortes", fallback=2))
         self.precos = {k: ini.getfloat("ia", f"preco_{k}", fallback=v) for k, v in
@@ -1588,15 +1589,17 @@ escreva esse bloco."""
 # ============================================================================================
 class Assistente:
     def __init__(self, ini: configparser.ConfigParser, calc: Calculadora, nomes_vendedores, registro,
-                 cliente=None, conversas=None, reanalises=None):
+                 cliente=None, conversas=None, reanalises=None, limites=None):
         """nomes_vendedores: função que devolve {id: nome} (o da planilha de metas mais recente, senão o do ERP).
         registro: o registro de uso (bi/uso.py). conversas: o histórico (bi/conversas.py).
         reanalises: as reanálises de crédito (bi/reanalise.py), para quem tem a página de crédito.
+        limites: os limites salvos pelo administrador (bi/uso.py, LimitesAssistente); sem eles, os do config.ini.
         cliente: cliente da API já pronto (os testes passam um falso)."""
         self.cfg = ConfigIA(ini)
         self.calc = calc
         self.nomes_vendedores = nomes_vendedores
         self.registro = registro
+        self.limites = limites or LimitesFixos(limites_do_ini(ini))
         self._cliente = cliente
         self.conversas = conversas
         self.credito = Credito(calc.cache, nomes_vendedores)
@@ -1680,7 +1683,7 @@ class Assistente:
         admin = usuario["papel"] == "admin"
         return {
             "configurado": self.configurado, "pronto": pronto, "data_ref": cache.info.get("data_ref"),
-            "escopo": escopo, "restantes": self.restantes(usuario), "limite_diario": self.cfg.limite_diario,
+            "escopo": escopo, "restantes": self.restantes(usuario),
             **({"modelo": self.cfg.modelo, "esforco": self.cfg.esforco} if admin else {}),
         }
 
@@ -1717,11 +1720,36 @@ class Assistente:
         return lista
 
     # --- limites e registro ------------------------------------------------------------
+    def limites_de(self, usuario: dict) -> dict:
+        """Os limites que valem para a pessoa (os próprios, senão o padrão) e os de todo mundo somado."""
+        cfg = self.limites.atual()
+        return {**da_pessoa(cfg, usuario)[0], "total_dia": cfg["total_dia"], "total_mes": cfg["total_mes"]}
+
     def restantes(self, usuario: dict) -> int | None:
-        if usuario["papel"] == "admin":
+        """Perguntas que a pessoa ainda pode fazer hoje (None: sem limite de perguntas)."""
+        limite = self.limites_de(usuario)["perguntas_dia"]
+        if limite is None:
             return None
-        perguntas, _custo = self.registro.do_dia(usuario["id"])
-        return max(0, self.cfg.limite_diario - perguntas)
+        return max(0, limite - self.registro.contagem(usuario["id"])["perguntas_dia"])
+
+    @staticmethod
+    def _conferir_limites(limites: dict, uso: dict) -> None:
+        """Barra a pergunta se algum limite já chegou (vazio = sem limite; 0 barra tudo)."""
+        chegou = lambda k: limites[k] is not None and uso[k] >= limites[k]  # noqa: E731
+        if chegou("perguntas_dia"):
+            n = limites["perguntas_dia"]
+            if n == 0:
+                raise ErroAssistente("seu acesso está sem perguntas ao Assistente; fale com o administrador", 429)
+            raise ErroAssistente(f"você chegou ao limite de {n} pergunta{'s' if n != 1 else ''} por dia; "
+                                 "amanhã libera de novo", 429)
+        if chegou("custo_dia"):
+            raise ErroAssistente("você chegou ao limite de uso do Assistente de hoje; amanhã libera de novo", 429)
+        if chegou("custo_mes"):
+            raise ErroAssistente("você chegou ao limite de uso do Assistente deste mês; no dia 1º libera de novo", 429)
+        if chegou("total_dia"):
+            raise ErroAssistente("o Assistente chegou ao limite de gasto do dia; fale com o administrador", 429)
+        if chegou("total_mes"):
+            raise ErroAssistente("o Assistente chegou ao limite de gasto do mês; fale com o administrador", 429)
 
     def _registrar(self, registro: dict) -> None:
         """Grava o registro da pergunta. A resposta já foi paga: se o banco falhar aqui, ela segue para a pessoa e o
@@ -1734,8 +1762,7 @@ class Assistente:
 
     def uso(self, dias: int = 30) -> dict:
         """Resumo do uso para a configuração da página: por pessoa nos últimos dias e as últimas perguntas."""
-        return {"dias": dias, "limite_diario": self.cfg.limite_diario, "limite_custo_dia": self.cfg.limite_custo_dia,
-                **self.registro.resumo(dias)}
+        return {"dias": dias, "limites": self.limites.atual(), **self.registro.resumo(dias)}
 
     # --- pergunta ------------------------------------------------------------------------
     def _api(self):
@@ -1872,18 +1899,15 @@ class Assistente:
             raise ErroAssistente("os dados por cliente ainda não chegaram do computador da empresa; tente depois da "
                                  "próxima atualização", 503)
         api_mensagens = self._historico(mensagens)
-        dono, admin = usuario["id"], usuario["papel"] == "admin"
+        dono = usuario["id"]
         with self._trava:  # só a reserva: a contagem no banco fica fora, para um banco lento não segurar ninguém
             if dono in self._ocupados:
                 raise ErroAssistente("espere a resposta da pergunta anterior", 429)
             self._ocupados[dono] = {**(pendente or {}), "inicio": time.time()}
         try:
-            perguntas, custo = self.registro.do_dia(dono)
-            if not admin and perguntas >= self.cfg.limite_diario:
-                raise ErroAssistente(f"você chegou ao limite de {self.cfg.limite_diario} perguntas por dia; "
-                                     "amanhã libera de novo", 429)
-            if custo >= self.cfg.limite_custo_dia:
-                raise ErroAssistente("o Assistente chegou ao limite de gasto do dia; fale com o administrador", 429)
+            limites = self.limites_de(usuario)
+            contagem = self.registro.contagem(dono)
+            self._conferir_limites(limites, contagem)
             if not self._vagas.acquire(timeout=20):
                 raise ErroAssistente("o Assistente está atendendo outras pessoas; tente de novo em instantes", 429)
             try:
@@ -1891,7 +1915,8 @@ class Assistente:
                                     gestao, credito, agenda, sugestao)
             finally:
                 self._vagas.release()
-            r["restantes"] = None if admin else max(0, self.cfg.limite_diario - perguntas - 1)
+            n = limites["perguntas_dia"]
+            r["restantes"] = None if n is None else max(0, n - contagem["perguntas_dia"] - 1)
             if guardar:
                 r["conversa"] = guardar(r)
             return r

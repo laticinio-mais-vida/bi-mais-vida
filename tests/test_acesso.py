@@ -182,7 +182,8 @@ class TestMigracao041(BaseBanco):
                 con.execute("INSERT INTO usuarios (login, nome, papel, senha, paginas) VALUES (%s, %s, %s, 'x', "
                             "%s::text[])", [login, login.title(), papel, paginas])
         self.assertEqual(self.banco.migrar(), ["041_premiacoes_acesso", "042_efetividade_area_varios_dias",
-                                               "043_agenda_dia_util_do_mes", "044_manejo", "045_crm", "046_credito_capas"])
+                                               "043_agenda_dia_util_do_mes", "044_manejo", "045_crm", "046_credito_capas",
+                                               "047_limites_assistente"])
         with self.banco.conexao() as con:
             acessos = dict(con.execute("SELECT login, premiacoes FROM usuarios").fetchall())
         tudo = {"abas": ["vendedores", "supervisores", "comissao"], "supervisores": ["marcos", "ronaldo", "valdirene"]}

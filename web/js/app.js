@@ -121,12 +121,12 @@ const PAGINAS = {
   },
   "config-assistente": {
     titulo: "Configurações do assistente",
-    fixo: "Quanto o assistente foi usado",
+    fixo: "Quanto o assistente foi usado e os limites de cada pessoa",
     pai: "assistente",
     admin: true,
     sempreMonta: true,
     pendente: configAssistenteTemAlteracoes,
-    montar: (el) => montarConfigAssistente(el),
+    montar: (el) => montarConfigAssistente(el, { aoSalvar: () => app.remontar.add("assistente") }),
   },
   gestao: {
     nome: "Gestão",

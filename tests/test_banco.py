@@ -16,7 +16,7 @@ from bi.banco import MIGRACOES, BancoNaoPreparado, inicio_do_dia
 from bi.configuracao import Configuracao, padrao
 from bi.conversas import Conversas
 from bi.projecoes import ConfigProjecoes
-from bi.uso import RegistroUso
+from bi.uso import LimitesAssistente, RegistroUso
 from tests.apoio import BaseBanco
 
 ONTEM = (dt.datetime.now() - dt.timedelta(days=1)).isoformat(timespec="seconds")
@@ -228,13 +228,26 @@ class TestRegistroUso(BaseBanco):
         with self.banco.conexao() as con:  # uma de ontem: conta no resumo, não nos limites de hoje
             con.execute("UPDATE assistente_perguntas SET quando = %s WHERE login = 'bia'",
                         [inicio_do_dia(dt.date.today()) - dt.timedelta(minutes=1)])
-        n, custo = self.r.do_dia(self.ana)
-        self.assertEqual(n, 2)
-        self.assertAlmostEqual(custo, 0.30)
-        self.assertEqual(self.r.do_dia(self.bia)[0], 0)
+        c = self.r.contagem(self.ana)
+        self.assertEqual(c["perguntas_dia"], 2)
+        self.assertAlmostEqual(c["custo_dia"], 0.30)
+        self.assertAlmostEqual(c["total_dia"], 0.30)
+        # a de ontem é deste mês, menos no dia 1º
+        mes_bia = 0.05 if dt.date.today().day > 1 else 0.0
+        self.assertAlmostEqual(c["custo_mes"], 0.30)
+        self.assertAlmostEqual(c["total_mes"], 0.30 + mes_bia)
+        c = self.r.contagem(self.bia)
+        self.assertEqual((c["perguntas_dia"], c["custo_dia"]), (0, 0.0))
+        self.assertAlmostEqual(c["custo_mes"], mes_bia)
+        pessoas = self.r.por_pessoa()
+        self.assertEqual(pessoas[self.ana], {"perguntas_dia": 2, "custo_dia": 0.3, "perguntas_mes": 2, "custo_mes": 0.3})
+        if mes_bia:
+            self.assertEqual(pessoas[self.bia], {"perguntas_dia": 0, "custo_dia": 0.0, "perguntas_mes": 1,
+                                                 "custo_mes": 0.05})
         resumo = self.r.resumo(30)
         json.dumps(resumo)  # vai direto para a página: nada de Decimal nem datetime
         self.assertEqual(resumo["hoje"], {"perguntas": 2, "custo": 0.3})
+        self.assertEqual(resumo["mes"]["perguntas"], 3 if mes_bia else 2)
         self.assertEqual([(p["login"], p["perguntas"], p["custo"]) for p in resumo["por_usuario"]],
                          [("ana", 2, 0.3), ("bia", 1, 0.05)])
         ultima = resumo["ultimas"][0]
@@ -244,6 +257,23 @@ class TestRegistroUso(BaseBanco):
         with self.banco.conexao() as con:
             self.assertEqual(con.execute("SELECT count(*) FROM assistente_perguntas WHERE conversa = %s",
                                          [conversa]).fetchone()[0], 1)
+
+    def test_limites_salvos_com_versao(self):
+        limites = LimitesAssistente(self.banco, {"total_dia": 2.0, "padrao": {"perguntas_dia": 50}})
+        self.assertEqual(limites.atual()["padrao"]["perguntas_dia"], 50)  # nada salvo: o do config.ini
+        self.assertIsNone(limites.ultima())
+        admin = {"id": self.ana, "nome": "Ana"}
+        limites.salvar({"total_dia": 3, "total_mes": None, "padrao": {"perguntas_dia": 20},
+                        "usuarios": {str(self.bia): {"perguntas_dia": None, "custo_dia": 0.5, "custo_mes": 10}}}, admin)
+        # outro painel (ou o mesmo depois de reiniciar) lê do banco
+        outro = LimitesAssistente(self.banco, {"padrao": {"perguntas_dia": 50}})
+        cfg = outro.atual()
+        self.assertEqual((cfg["total_dia"], cfg["padrao"]["perguntas_dia"]), (3.0, 20))
+        self.assertEqual(cfg["usuarios"], {str(self.bia): {"perguntas_dia": None, "custo_dia": 0.5, "custo_mes": 10.0}})
+        self.assertEqual(outro.ultima()["por"], "Ana")
+        with self.assertRaises(ValueError):
+            limites.salvar({"padrao": {"perguntas_dia": "x"}}, admin)
+        self.assertEqual(self.contar("regras", "nome = 'assistente'"), 1)
 
     def test_usuario_excluido_no_meio_da_pergunta(self):
         with self.banco.conexao() as con:

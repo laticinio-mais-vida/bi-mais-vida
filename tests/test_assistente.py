@@ -311,7 +311,7 @@ class TestLaco(Base):
         self.assertEqual(b.restantes(USUARIO_VIS), 0)
         self.assertIsNone(b.restantes(USUARIO_ADMIN))
         self.assertEqual(b.uso()["por_usuario"][0]["perguntas"], 2)
-        self.assertEqual(b.uso()["limite_diario"], 2)
+        self.assertEqual(b.uso()["limites"]["padrao"]["perguntas_dia"], 2)
 
     def test_limite_de_gasto_do_dia(self):
         api = ClienteFalso([resposta(bloco_texto("ok"))] * 2)
@@ -321,11 +321,90 @@ class TestLaco(Base):
             a.responder(USUARIO_ADMIN, [{"papel": "usuario", "texto": "x"}], None, None)
         self.assertIn("limite de gasto", str(e.exception))
 
+    def limites(self, a, **cfg):
+        """Salva os limites como a tela Configurações do assistente › Limites manda."""
+        base = {"total_dia": None, "total_mes": None,
+                "padrao": {"perguntas_dia": None, "custo_dia": None, "custo_mes": None}, "usuarios": {}}
+        return a.limites.salvar({**base, **cfg})
+
+    def test_limite_proprio_vale_no_lugar_do_padrao(self):
+        api = ClienteFalso([resposta(bloco_texto("ok"))] * 5)
+        a = criar_assistente(self.pasta, self.calc, cliente=api)
+        self.limites(a, padrao={"perguntas_dia": 1}, usuarios={str(USUARIO_VIS["id"]): {"perguntas_dia": 3}})
+        pergunta = [{"papel": "usuario", "texto": "x"}]
+        self.assertEqual(a.restantes(USUARIO_VIS), 3)
+        r = a.responder(USUARIO_VIS, pergunta, None, None)
+        self.assertEqual(r["restantes"], 2)
+        outro = {**USUARIO_VIS, "id": 7, "login": "outro"}  # sem limite próprio: o padrão
+        a.responder(outro, pergunta, None, None)
+        with self.assertRaises(ErroAssistente) as e:
+            a.responder(outro, pergunta, None, None)
+        self.assertIn("limite de 1 pergunta por dia", str(e.exception))
+        # o administrador sem limite próprio não tem limite por pessoa; com um, vale o dele
+        self.assertIsNone(a.restantes(USUARIO_ADMIN))
+        a.responder(USUARIO_ADMIN, pergunta, None, None)
+        self.limites(a, usuarios={str(USUARIO_ADMIN["id"]): {"perguntas_dia": 1}})
+        self.assertEqual(a.restantes(USUARIO_ADMIN), 0)
+        with self.assertRaises(ErroAssistente):
+            a.responder(USUARIO_ADMIN, pergunta, None, None)
+        self.assertEqual(len(api.pedidos), 3)
+
+    def test_limite_zero_barra_e_vazio_libera(self):
+        api = ClienteFalso([resposta(bloco_texto("ok"))] * 2)
+        a = criar_assistente(self.pasta, self.calc, cliente=api)
+        self.limites(a, usuarios={str(USUARIO_VIS["id"]): {"perguntas_dia": 0}})
+        with self.assertRaises(ErroAssistente) as e:
+            a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertIn("sem perguntas", str(e.exception))
+        self.limites(a, usuarios={str(USUARIO_VIS["id"]): {"perguntas_dia": ""}})  # vazio: sem limite
+        self.assertIsNone(a.restantes(USUARIO_VIS))
+        r = a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertIsNone(r["restantes"])
+
+    def test_limite_de_gasto_da_pessoa(self):
+        api = ClienteFalso([resposta(bloco_texto("ok"))] * 4)  # cada uma: 1000 de entrada, US$ 0,006
+        a = criar_assistente(self.pasta, self.calc, cliente=api)
+        pergunta = [{"papel": "usuario", "texto": "x"}]
+        self.limites(a, padrao={"custo_dia": 0.005})
+        a.responder(USUARIO_VIS, pergunta, None, None)  # a que começou termina, mesmo passando do limite
+        with self.assertRaises(ErroAssistente) as e:
+            a.responder(USUARIO_VIS, pergunta, None, None)
+        self.assertIn("limite de uso do Assistente de hoje", str(e.exception))
+        self.assertNotIn("US$", str(e.exception))  # quem pergunta não vê o custo
+        outro = {**USUARIO_VIS, "id": 7, "login": "outro"}
+        a.responder(outro, pergunta, None, None)  # o gasto é de cada um
+        self.limites(a, padrao={"custo_mes": 0.01})  # sem limite do dia: o do mês (US$ 0,006 de 0,01)
+        a.responder(USUARIO_VIS, pergunta, None, None)
+        with self.assertRaises(ErroAssistente) as e:
+            a.responder(USUARIO_VIS, pergunta, None, None)
+        self.assertIn("deste mês", str(e.exception))
+        self.assertEqual(len(api.pedidos), 3)
+
+    def test_limite_de_gasto_total_do_mes(self):
+        api = ClienteFalso([resposta(bloco_texto("ok"))] * 2)
+        a = criar_assistente(self.pasta, self.calc, cliente=api)
+        self.limites(a, total_mes=0.001)
+        a.responder(USUARIO_ADMIN, [{"papel": "usuario", "texto": "x"}], None, None)
+        with self.assertRaises(ErroAssistente) as e:  # vale para todo mundo, administrador também
+            a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
+        self.assertIn("limite de gasto do mês", str(e.exception))
+
+    def test_limites_invalidos(self):
+        a = criar_assistente(self.pasta, self.calc)
+        for cfg in ({"padrao": {"perguntas_dia": 1.5}}, {"padrao": {"perguntas_dia": -1}},
+                    {"total_dia": "muito"}, {"usuarios": {"abc": {}}}, {"usuarios": {"3": {"custo_mes": -2}}}):
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                self.limites(a, **cfg)
+        cfg = self.limites(a, total_dia="1,5", usuarios={"3": {"custo_dia": "0,25"}})
+        self.assertEqual((cfg["total_dia"], cfg["usuarios"]["3"]),
+                         (1.5, {"perguntas_dia": None, "custo_dia": 0.25, "custo_mes": None}))
+
     def test_registro_fora_do_ar_nao_perde_a_resposta(self):
         registro = RegistroFalso()
         a = criar_assistente(self.pasta, self.calc, cliente=ClienteFalso([resposta(bloco_texto("R$ 10,00."))]),
                              registro=registro)
-        registro.do_dia = lambda usuario: (0, 0.0)  # a contagem antes da pergunta funcionou
+        registro.contagem = lambda usuario: dict.fromkeys(("perguntas_dia", "custo_dia", "custo_mes", "total_dia",
+                                                            "total_mes"), 0)  # a contagem antes da pergunta funcionou
         registro.fora_do_ar = True                  # e o banco caiu durante a resposta
         with self.assertLogs("bi.assistente", "ERROR") as logs:
             r = a.responder(USUARIO_VIS, [{"papel": "usuario", "texto": "x"}], None, None)
@@ -335,7 +414,7 @@ class TestLaco(Base):
 
     def test_banco_fora_do_ar_antes_da_pergunta(self):
         registro = RegistroFalso()
-        registro.do_dia = lambda usuario: (_ for _ in ()).throw(BancoForaDoAr("fora"))
+        registro.contagem = lambda usuario: (_ for _ in ()).throw(BancoForaDoAr("fora"))
         api = ClienteFalso([])
         a = criar_assistente(self.pasta, self.calc, cliente=api, registro=registro)
         with self.assertRaises(BancoForaDoAr):

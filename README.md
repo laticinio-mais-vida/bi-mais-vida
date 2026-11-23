@@ -768,9 +768,17 @@ nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
   ajuste também os preços em `[ia]`. `esforco = low` deixa as respostas mais rápidas e baratas.
 - **Custo estimado com o Opus 5.5:** de US$ 0,05 a 0,15 por pergunta. As instruções fixas ficam em cache e, na
   repetição, custam 5% do preço normal.
-- **Limites em `[ia]`:**
-  - perguntas por pessoa por dia (`limite_diario`, 50; administradores sem limite);
-  - gasto do dia, para todos (`limite_custo_dia`, US$ 2);
+- **Limites de uso:** o administrador define em **Configurações do assistente › Limites** (salvos no banco, na
+  tabela `regras`, com versões; valem na próxima pergunta):
+  - gasto total de todo mundo por dia e por mês (US$);
+  - por pessoa, perguntas por dia e gasto por dia e por mês: um **padrão** para todos e, se quiser, um limite
+    **próprio** para alguém. Administradores em Padrão ficam sem limite por pessoa (só o gasto total);
+  - campo vazio é sem limite; 0 não deixa perguntar. O limite barra a pergunta seguinte: a que já começou termina,
+    mesmo que passe dele. Quem chega no limite de gasto vê "limite de uso", sem o valor em US$.
+
+  Enquanto ninguém salva a tela, valem `limite_diario` (50 perguntas por pessoa por dia) e `limite_custo_dia`
+  (US$ 2 no total por dia) de `[ia]`.
+- **Outros limites em `[ia]`:**
   - perguntas respondidas ao mesmo tempo (`simultaneos`, 2);
   - consultas por pergunta (`max_passos`, 8).
 - **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente. O de todos os vendedores
@@ -780,8 +788,8 @@ nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
 - **Recusas:** se o classificador de segurança da Anthropic recusar uma pergunta por engano, o próprio servidor
   da Anthropic refaz a pergunta no modelo que ela recomenda (`fallbacks: "default"`).
 - **Registro:** a tabela `assistente_perguntas` do banco guarda uma linha por pergunta (quem, pergunta, resposta,
-  consultas, tokens e custo). Os limites do dia são contados nela, então continuam valendo depois de reiniciar o
-  painel.
+  consultas, tokens e custo). Os limites do dia e do mês são contados nela, então continuam valendo depois de
+  reiniciar o painel.
 
 ### Privacidade
 
@@ -1961,7 +1969,7 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `bi/google_agenda.py` | o Google Agenda, só leitura: o login com o Google (state, PKCE e a autorização cifrada), a lista de agendas de cada conta, a leitura dos eventos pela API do Google Agenda, de tempos em tempos, o que a agenda mostra e os eventos ocupados que o horário ocupado confere (no PostgreSQL) |
 | `bi/indicadores.py` | os indicadores das ações (positivação, com a % da base, mix médio, efetividade, frequência, preço médio, Personalizada) e a conta do andamento |
 | `bi/carteira.py` | o histórico da carteira: a cada extração, os trechos de cada cliente ativo (vendedor, área, segmento), gravados só quando algo muda, no PostgreSQL e no cache |
-| `bi/uso.py` | registro de uso do Assistente: limites do dia e a tela "Uso e custo" (no PostgreSQL) |
+| `bi/uso.py` | registro de uso do Assistente, a tela "Uso e custo" e os limites (gasto total; perguntas e gasto de cada pessoa), no PostgreSQL |
 | `bi/banco.py` | conexão com o PostgreSQL e as migrações |
 | `bi/migracoes/` | tabelas do PostgreSQL, em ordem (`001_conversas.sql`, …), aplicadas sozinhas quando o painel sobe |
 | `bi/calendario.py` | dias úteis e feriados de ES e BA |

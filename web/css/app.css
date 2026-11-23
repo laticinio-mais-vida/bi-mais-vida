@@ -1845,6 +1845,23 @@ table.dados.cc-q td.cc-q-diretoria.marcada { font-style: normal; }
 .ca-ultimas td:first-child { white-space: normal; min-width: 280px; max-width: 520px; }
 .ca-erro { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; color: var(--ruim); }
 .ca-erro .ic { width: 14px; height: 14px; }
+/* Configurações do assistente › Limites: o campo de cada limite (vazio = sem limite) e a tabela por pessoa */
+.ca-lim { width: 84px; height: 34px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--linha); background: var(--surface); color: var(--tinta); font: 600 13px var(--f-texto); text-align: right; font-variant-numeric: tabular-nums; }
+.ca-lim:hover { border-color: var(--linha-forte); }
+.ca-lim:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+.ca-lim::placeholder { color: var(--tinta-3); opacity: .8; font-weight: 500; }
+.ca-lim.mudou { border-color: var(--laranja); background: color-mix(in srgb, var(--laranja) 10%, var(--surface)); }
+.ca-lim.erro { border-color: var(--ruim); background: var(--ruim-bg); }
+.sug-campo .campo .ca-lim { width: 110px; height: 40px; }
+table.dados.ca-pessoas th, table.dados.ca-pessoas td { padding: 8px 9px; vertical-align: middle; }
+table.dados.ca-pessoas th { white-space: normal; line-height: 1.25; }
+table.dados.ca-pessoas td:first-child { white-space: normal; min-width: 150px; }
+table.dados.ca-pessoas th.ca-num { min-width: 84px; }
+table.dados.ca-pessoas td small { display: block; color: var(--tinta-3); font-size: 11.5px; font-weight: 500; }
+table.dados.ca-pessoas th small { font-weight: 500; color: var(--tinta-3); }
+table.dados.ca-pessoas tr.mudou td:first-child { box-shadow: inset 3px 0 0 var(--laranja); }
+.ca-padrao { color: var(--tinta-3); font-size: 13px; white-space: nowrap; }
+.ca-no-limite { color: var(--ruim); font-weight: 700; }
 @media (max-width: 860px) {
   .chat-mensagens { padding: 16px 12px 6px; }
   .chat-msg.ia > .chat-avatar { display: none; }
