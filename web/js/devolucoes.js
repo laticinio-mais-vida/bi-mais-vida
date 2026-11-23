@@ -4,7 +4,8 @@
 // aqui é a apresentação: os cartões com a média dos 6 meses anteriores, o gráfico de 13 meses, as causas com o
 // responsável, as notas do mês, os produtos, segmentos e clientes, a tabela dos vendedores (ordenável, vira imagem para o
 // WhatsApp) e o bloco de cada vendedor como no Parecer.
-import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, irParaLogin, MESES } from "./util.js";
+import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, irParaLogin, MESES,
+  clicarOrdem, ordenarPorNiveis, marcaOrdem, linhaOrdem } from "./util.js";
 import { colunasEmpilhadas } from "./graficos.js";
 import { ligarCaptura } from "./relatorio.js";
 import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
@@ -30,9 +31,10 @@ const plural = (n, um, varios) => `${n1(n)} ${Math.abs(n - 1) < 0.05 ? um : vari
 let ctx = null;
 let ligadoUmaVez = false;
 let CAUSA = {};
+const ORDEM_PADRAO = [{ campo: "pct", desc: true }]; // a ordem com que a tabela dos vendedores abre (util.js: níveis)
 const estado = {
   aba: "resumo", mes: null, regiao: "", vendedor: "", dados: null, pedido: 0,
-  escala: "pct", aberto: null, ordem: { campo: "pct", desc: true }, busca: "", todos: false,
+  escala: "pct", aberto: null, ordens: ORDEM_PADRAO, busca: "", todos: false,
 };
 
 export function montarDevolucoes(container, contexto) {
@@ -271,10 +273,10 @@ function aoClicar(e) {
     desenharEvolucao();
     return;
   }
-  const ordem = e.target.closest("[data-ordem]");
+  const ordem = e.target.closest("[data-ordem], [data-ordem-padrao]");
   if (ordem) {
     const campo = ordem.dataset.ordem;
-    estado.ordem = { campo, desc: estado.ordem.campo === campo ? !estado.ordem.desc : campo !== "nome" };
+    estado.ordens = campo ? clicarOrdem(estado.ordens, campo, campo !== "nome") : ORDEM_PADRAO;
     const sec = document.getElementById("dv-tabela-vend");
     if (sec && estado.dados?.aba === "vendedores") {
       sec.outerHTML = tabelaVendedores(estado.dados, 0, false);
@@ -809,23 +811,31 @@ function celulaVendedor(c, v) {
 
 function tabelaVendedores(d, i, entrar = true) {
   const t = d.tabela, cols = colunasVendedores();
-  const { campo, desc } = estado.ordem;
-  const col = cols.find((c) => c.id === campo) || cols[2];
-  const ordenar = (lista) => [...lista].sort((a, b) => {
-    if ((a.id == null) !== (b.id == null)) return a.id == null ? 1 : -1; // "Outros sem devolução" fica no fim
-    const x = col.val(a), y = col.val(b);
-    if (col.texto) return desc ? String(y).localeCompare(String(x)) : String(x).localeCompare(String(y));
-    const nx = x == null ? -Infinity : x, ny = y == null ? -Infinity : y;
-    return desc ? ny - nx : nx - ny;
-  });
+  // Pelos níveis da ordem (o último clique manda, os anteriores desempatam) e, no fim, pelo nome. "Outros sem
+  // devolução" fica no fim da região em qualquer ordem.
+  const ordenar = (lista) => {
+    const ordenados = ordenarPorNiveis(lista.filter((v) => v.id != null), estado.ordens, (campo, a, b) => {
+      const col = cols.find((c) => c.id === campo);
+      if (!col) return 0;
+      const x = col.val(a), y = col.val(b);
+      if (col.texto) return String(x ?? "").localeCompare(String(y ?? ""), "pt-BR");
+      return (x == null ? -Infinity : x) - (y == null ? -Infinity : y);
+    }, (a, b) => String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR"));
+    return [...ordenados, ...lista.filter((v) => v.id == null)];
+  };
   const grupos = `<tr class="dv-grupos"><th colspan="4"></th>
     <th colspan="3" style="--c:${COR.entrega}"><span class="dv-grupo">${esc(d.familias.find((f) => f.id === "entrega")?.nome || "")}</span></th>
     <th colspan="4" style="--c:${COR.cliente}"><span class="dv-grupo">${esc(d.familias.find((f) => f.id === "cliente")?.nome || "")}</span></th></tr>`;
   const cab = cols.map((c) => {
-    const ativo = c.id === col.id;
-    const sort = ativo ? (desc ? "descending" : "ascending") : "none";
-    return `<th aria-sort="${sort}"><button type="button" class="dv-ordem${ativo ? " ativo" : ""}" data-ordem="${c.id}" title="Ordenar por ${esc(c.rotulo)}">${esc(c.rotulo)}${ativo ? `<span class="dv-seta">${desc ? "▼" : "▲"}</span>` : ""}</button></th>`;
+    const m = marcaOrdem(estado.ordens, c.id, { ativa: "ativo", vazio: "" });
+    return `<th${m.aria || ` aria-sort="none"`}><button type="button" class="dv-ordem${m.classe}" data-ordem="${c.id}" title="Ordenar por ${esc(c.rotulo)}">${esc(c.rotulo)}${m.nivel ? `<span class="dv-seta">${m.seta}</span>` : ""}</button></th>`;
   }).join("");
+  // As colunas da Entrega e do Cliente têm o mesmo rótulo ("% da venda"): na linha da ordem vai o nome da família.
+  const familia = (c) => (c.familia ? ` (${d.familias.find((f) => f.id === c.familia)?.nome || c.familia})` : "");
+  const linha = linhaOrdem(estado.ordens, ORDEM_PADRAO, (id) => {
+    const c = cols.find((x) => x.id === id);
+    return c && { rotulo: `${c.rotulo}${familia(c)}`, tipo: c.texto ? "texto" : "numero" };
+  });
   const subtotal = (r, nome, classe = "dv-subtotal") => `<tr class="${classe}"><td class="rotulo">${esc(nome)}</td>${cols.slice(1).map((c) => `<td>${c.f(c.val(r))}</td>`).join("")}</tr>`;
   const corpo = t.regioes.map((r) => {
     const vs = ordenar(t.vendedores.filter((v) => v.regiao === r.id));
@@ -858,6 +868,7 @@ function tabelaVendedores(d, i, entrar = true) {
         <button class="btn icone" data-captura="baixar" data-arquivo="${arquivo}" title="Baixar a tabela como imagem (PNG)">${icone("abaixo")}</button>
       </div>
     </div>
+    ${linha}
     <div class="tabela-rolagem relatorio-rolagem"><div class="relatorio">${conteudo}</div></div>
   </section>`;
 }

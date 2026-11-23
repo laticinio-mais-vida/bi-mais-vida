@@ -8,7 +8,8 @@
 //
 // Cores: só verde (bom) e vermelho (ruim), num tom cada, pelo que o número é comparado (o que bate exato fica verde);
 // o que não é comparado com nada fica neutro (cinza).
-import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES } from "./util.js";
+import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, guardar, ler, toast, MESES,
+  clicarOrdem, lerNiveis, mesmosNiveis, marcaOrdem, linhaOrdem } from "./util.js";
 import { anel } from "./graficos.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
@@ -35,7 +36,11 @@ const COLUNAS = [
   { chave: "dias", rotulo: "Atraso", dica: "dias de atraso", sentido: "desc" },
   { chave: "situacao", rotulo: "Situação", sentido: "desc", esq: true },
 ];
-const ORDEM_PADRAO = { coluna: "emissao", sentido: "desc" };
+// A ordem em níveis (util.js): [{ campo, desc }], o primeiro manda e os outros desempatam. Vai ao servidor como
+// ordem=valor,cliente&sentido=desc,asc e fica no link e no navegador como o=valor-desc.cliente-asc.
+const ORDEM_PADRAO = [{ campo: "emissao", desc: true }];
+const colunaDe = (chave) => COLUNAS.find((c) => c.chave === chave);
+const textoDaOrdem = (niveis) => niveis.map((n) => `${n.campo}-${n.desc ? "desc" : "asc"}`).join(".");
 const maiuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 let ctx = null;
@@ -44,7 +49,7 @@ let ctx = null;
 // trouxe do cliente (historico: o pedido em andamento); rascunho: o que foi digitado no registro, que fica quando a
 // página é refeita por um filtro e some ao trocar de cliente ou depois de registrar; serasa: o que /api/credito/serasa
 // trouxe do cliente (lendoSerasa: o pedido em andamento; enviandoSerasa: um PDF subindo).
-const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordem: null, limite: null, dados: null, pedido: 0,
+const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordens: ORDEM_PADRAO, limite: null, dados: null, pedido: 0,
   busca: 0, analise: 0, parecer: null, reanalises: null, historico: 0, rascunho: null, serasa: null, lendoSerasa: 0,
   enviandoSerasa: false };
 
@@ -53,20 +58,21 @@ export function montarCredito(container, contexto) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const num = (t) => (t && Number.isInteger(Number(t)) && Number(t) > 0 ? Number(t) : null);
   const valor = (t) => (t && Number.isFinite(Number(t)) && Number(t) > 0 ? Number(t) : null);
-  const ordem = (t) => {
-    const [coluna, sentido] = String(t || "").split("-");
-    return COLUNAS.some((c) => c.chave === coluna) && ["asc", "desc"].includes(sentido) ? { coluna, sentido } : null;
-  };
+  // "valor-desc.cliente-asc" (o link antigo, "valor-desc", é uma coluna só); o que não vale fica de fora
+  const ordem = (t) => lerNiveis(String(t || "").split(".").map((p) => {
+    const [campo, sentido] = p.split("-");
+    return ["asc", "desc"].includes(sentido) ? { campo, desc: sentido === "desc" } : null;
+  }), colunaDe, ORDEM_PADRAO);
   if (["c", "m", "a", "v", "o", "l"].some((k) => q.has(k))) {
     Object.assign(estado, {
       clientes: (q.get("c") || "").split(",").map(num).filter(Boolean).map((id) => ({ id, nome: "" })),
-      mes: num(q.get("m")), ano: num(q.get("a")), vendedor: num(q.get("v")), ordem: ordem(q.get("o")),
+      mes: num(q.get("m")), ano: num(q.get("a")), vendedor: num(q.get("v")), ordens: ordem(q.get("o")),
       limite: valor(q.get("l")),
     });
   } else if (!estado.dados) {
     const s = ler("mv-credito", {});
     Object.assign(estado, { clientes: Array.isArray(s.c) ? s.c.filter((c) => num(c?.id)) : [], mes: num(s.m),
-      ano: num(s.a), vendedor: num(s.v), ordem: ordem(s.o), limite: valor(s.l) });
+      ano: num(s.a), vendedor: num(s.v), ordens: ordem(s.o), limite: valor(s.l) });
   }
   estado.dados = null;
 
@@ -122,32 +128,39 @@ export function montarCredito(container, contexto) {
 }
 
 // Ordenar a tabela: o servidor ordena o filtro inteiro (sem cliente, a tabela mostra só uma parte dos títulos).
-// O clique fica no próprio cartão, que em tela cheia sai de #cr-conteudo.
+// O clique fica no próprio cartão, que em tela cheia sai de #cr-conteudo. A coluna clicada vai para a frente e as
+// clicadas antes continuam desempatando (util.js: clicarOrdem).
 function ligarOrdem(card) {
   card?.addEventListener("click", (e) => {
+    if (e.target.closest("[data-ordem-padrao]")) {
+      estado.ordens = ORDEM_PADRAO;
+      carregar(false, true);
+      return;
+    }
     const b = e.target.closest("[data-ordem]");
     if (!b) return;
-    const atual = estado.ordem || ORDEM_PADRAO, col = COLUNAS.find((c) => c.chave === b.dataset.ordem);
-    estado.ordem = atual.coluna === col.chave
-      ? { coluna: col.chave, sentido: atual.sentido === "asc" ? "desc" : "asc" }
-      : { coluna: col.chave, sentido: col.sentido };
+    const col = colunaDe(b.dataset.ordem);
+    if (!col) return;
+    estado.ordens = clicarOrdem(estado.ordens, col.chave, col.sentido === "desc", (id) => colunaVisivel(id, estado.dados));
     carregar(false, true);
   });
 }
 
+// O Cliente só aparece com nenhum ou vários clientes escolhidos.
+const colunaVisivel = (chave, d) => { const c = colunaDe(chave); return !!c && (!c.soVarios || !d || d.clientes.length !== 1); };
+
 export function recarregarCredito() { if (ctx) carregar(true); }
 
 function atualizarUrl() {
-  const o = estado.ordem;
-  guardar("mv-credito", { c: estado.clientes, m: estado.mes, a: estado.ano, v: estado.vendedor, o: o ? `${o.coluna}-${o.sentido}` : null,
-    l: estado.limite });
+  const o = mesmosNiveis(estado.ordens, ORDEM_PADRAO) ? null : textoDaOrdem(estado.ordens);
+  guardar("mv-credito", { c: estado.clientes, m: estado.mes, a: estado.ano, v: estado.vendedor, o, l: estado.limite });
   if (!location.hash.startsWith("#/credito")) return; // trocou de página enquanto carregava
   const p = new URLSearchParams();
   if (estado.clientes.length) p.set("c", estado.clientes.map((c) => c.id).join(","));
   if (estado.mes) p.set("m", estado.mes);
   if (estado.ano) p.set("a", estado.ano);
   if (estado.vendedor) p.set("v", estado.vendedor);
-  if (o) p.set("o", `${o.coluna}-${o.sentido}`);
+  if (o) p.set("o", o);
   if (estado.limite && estado.clientes.length === 1) p.set("l", estado.limite);
   history.replaceState(null, "", `#/credito${p.toString() ? "?" + p : ""}`);
   const limpar = document.getElementById("cr-limpar");
@@ -169,7 +182,10 @@ async function carregar(silencioso = false, soTabela = false) {
     if (estado.mes) p.set("mes", estado.mes);
     if (estado.ano) p.set("ano", estado.ano);
     if (estado.vendedor) p.set("vendedor", estado.vendedor);
-    if (estado.ordem) { p.set("ordem", estado.ordem.coluna); p.set("sentido", estado.ordem.sentido); }
+    if (!mesmosNiveis(estado.ordens, ORDEM_PADRAO)) {
+      p.set("ordem", estado.ordens.map((n) => n.campo).join(","));
+      p.set("sentido", estado.ordens.map((n) => (n.desc ? "desc" : "asc")).join(","));
+    }
     const d = await api(`/api/credito?${p}`);
     if (pedido !== estado.pedido) return;
     estado.dados = d;
@@ -200,9 +216,9 @@ async function carregar(silencioso = false, soTabela = false) {
     ligarReanalises();
   } catch (e) {
     if (pedido !== estado.pedido) return;
-    if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || estado.ordem)) {
+    if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || !mesmosNiveis(estado.ordens, ORDEM_PADRAO))) {
       // filtro guardado neste navegador que não vale mais (cliente apagado, ano fora dos dados): volta a todos
-      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordem: null, limite: null, rascunho: null });
+      Object.assign(estado, { clientes: [], ano: null, vendedor: null, ordens: ORDEM_PADRAO, limite: null, rascunho: null });
       desenharEscolhidos();
       toast(e.message, "erro");
       return carregar(silencioso);
@@ -560,11 +576,12 @@ function celulaPago(l) {
 
 function tabela(d, i, animar = true) {
   const t = d.titulos, varios = d.clientes.length !== 1;
-  const ordem = d.ordem || ORDEM_PADRAO;
-  const padrao = ordem.coluna === ORDEM_PADRAO.coluna && ordem.sentido === ORDEM_PADRAO.sentido;
+  // a ordem que o servidor usou, só com as colunas que aparecem (o Cliente some com um cliente só)
+  const todas = (d.ordens || (d.ordem ? [d.ordem] : [])).map((o) => ({ campo: o.coluna, desc: o.sentido === "desc" }));
+  const niveis = todas.filter((n) => colunaVisivel(n.campo, d));
+  const padrao = !todas.length || mesmosNiveis(todas, ORDEM_PADRAO);
   const colunas = COLUNAS.filter((c) => varios || !c.soVarios);
-  const col = COLUNAS.find((c) => c.chave === ordem.coluna);
-  const nomeOrdem = col ? col.dica || col.rotulo.toLowerCase() : "";
+  const nomeOrdem = niveis.map((n) => { const c = colunaDe(n.campo); return c.dica || c.rotulo.toLowerCase(); }).join(", depois ");
   const sub = t.total > t.mostrando
     ? `${padrao ? `Os ${fmt.num(t.mostrando)} mais recentes` : `Os ${fmt.num(t.mostrando)} primeiros por ${esc(nomeOrdem)}`} de ${fmt.num(t.total)} títulos · ${esc(descricaoFiltro(d))}`
     : `${fmt.num(t.total)} título${t.total === 1 ? "" : "s"} · ${esc(descricaoFiltro(d))}`;
@@ -579,11 +596,17 @@ function tabela(d, i, animar = true) {
     return `<span class="status ${x.classe}">${icone(x.icone)}${x.rotulo}</span>`;
   };
   const th = (c) => {
-    const ativa = c.chave === ordem.coluna;
-    const aria = ativa ? ` aria-sort="${ordem.sentido === "asc" ? "ascending" : "descending"}"` : "";
-    return `<th class="${c.esq ? "esq" : ""}"${aria}><button type="button" class="cr-ordem${ativa ? " ativa" : ""}" data-ordem="${c.chave}"
-      title="Ordenar por ${esc(c.dica || c.rotulo.toLowerCase())}">${esc(c.rotulo)}<span class="cr-seta" aria-hidden="true">${ativa ? (ordem.sentido === "asc" ? "▲" : "▼") : "↕"}</span></button></th>`;
+    const m = marcaOrdem(niveis, c.chave);
+    return `<th class="${c.esq ? "esq" : ""}"${m.aria}><button type="button" class="cr-ordem${m.classe}" data-ordem="${c.chave}"
+      title="Ordenar por ${esc(c.dica || c.rotulo.toLowerCase())}">${esc(c.rotulo)}<span class="cr-seta" aria-hidden="true">${m.seta}</span></button></th>`;
   };
+  const TIPO = { emissao: "data", vencimento: "data", quitacao: "data", cliente: "texto", vendedor: "texto" };
+  const linha = t.linhas.length ? linhaOrdem(niveis, ORDEM_PADRAO, (id) => {
+    const c = colunaDe(id);
+    if (!c) return null;
+    if (id === "situacao") return { rotulo: c.rotulo, sentidos: ["da melhor para a pior", "da pior para a melhor"] };
+    return { rotulo: c.rotulo, tipo: TIPO[id] || "numero" };
+  }) : "";
   const corpo = t.linhas.length ? `
     <div class="tabela-rolagem"><table class="dados cr-titulos">
       <thead><tr>${colunas.map(th).join("")}</tr></thead>
@@ -601,6 +624,7 @@ function tabela(d, i, animar = true) {
     <div class="cartao-cab">
       <div><h3>${icone("recibo")}Títulos</h3><p class="sub">${sub}</p></div>
     </div>
+    ${linha}
     ${corpo}
   </section>`;
 }
@@ -1279,8 +1303,9 @@ function comoCalcula(d, i) {
             fica verde; o que não tem com o que comparar (compras, ticket, limite, score) fica cinza.</li>
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
-          <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. A ordem vale para todos os
-            títulos do filtro, não só para os que aparecem.</li>
+          <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. As colunas clicadas antes
+            continuam valendo para desempatar (até 3: o número ao lado da seta diz a vez de cada uma). A ordem vale para
+            todos os títulos do filtro, não só para os que aparecem.</li>
         </ol>
       </div>
     </details>

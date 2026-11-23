@@ -2,7 +2,7 @@
 // pagamento, mix ideal do segmento e rentabilidade). As contas, as regras e quem vê o quê ficam no servidor
 // (bi/crm.py): aqui é a apresentação, com os filtros, os cartões, a tabela ordenável e, ao clicar num cliente, o porquê
 // de cada nota (as compras do semestre, os itens do mix que faltam e o lucro bruto mês a mês e por produto).
-import { api, esc, fmt, icone, toast, guardar, ler } from "./util.js";
+import { api, esc, fmt, icone, toast, guardar, ler, clicarOrdem, lerNiveis, ordenarPorNiveis, marcaOrdem, linhaOrdem } from "./util.js";
 import { multiSelecao } from "./multiselecao.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
@@ -31,6 +31,8 @@ const COLUNAS = [
   { id: "lucro", rotulo: "Lucro bruto", valor: (c) => c.rentabilidade?.lucro ?? -Infinity, dica: "Faturamento menos o custo industrial × volume, no período da rentabilidade" },
 ];
 const TEXTO = ["nome", "vendedor", "segmento", "frequencia"];
+const ORDEM_PADRAO = [{ campo: "nota", desc: true }];
+const coluna = (id) => COLUNAS.find((c) => c.id === id);
 
 const faixaDe = (nota) => FAIXAS.find((f) => nota >= f.de) || FAIXAS[FAIXAS.length - 1];
 const semAcento = (t) => String(t ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -50,7 +52,7 @@ let observador = null;   // acompanha a largura da tabela, para o detalhe do cli
 let esperaBusca = 0;
 const estado = {
   dados: null, pedido: 0, vendedores: [], segmento: "", frequencia: "", faixa: "", sinalizados: false, busca: "",
-  ordem: { campo: "nota", desc: true }, aberto: null, detalhes: {}, animar: true,
+  ordens: ORDEM_PADRAO, aberto: null, detalhes: {}, animar: true,  // ordens: os níveis da ordem da tabela (util.js)
 };
 
 export function montarCrm(container, contexto) {
@@ -58,7 +60,7 @@ export function montarCrm(container, contexto) {
   const salvo = ler("mv-crm", {}) || {};
   Object.assign(estado, {
     dados: null, aberto: null, detalhes: {}, busca: "", vendedores: [], segmento: "", frequencia: "", faixa: "", sinalizados: false,
-    ordem: salvo.ordem && COLUNAS.some((c) => c.id === salvo.ordem.campo) ? salvo.ordem : { campo: "nota", desc: true },
+    ordens: lerNiveis(salvo.ordem, coluna, ORDEM_PADRAO),
   });
   container.innerHTML = `
     <div class="controles entra" style="--i:0">
@@ -232,14 +234,14 @@ function cartoes(d, lista) {
   </div>`;
 }
 
+// Pelos níveis da ordem (o último clique manda, os anteriores desempatam) e, no fim, pelo nome.
 function ordenar(lista) {
-  const col = COLUNAS.find((c) => c.id === estado.ordem.campo) || COLUNAS.find((c) => c.id === "nota");
-  const sinal = estado.ordem.desc ? -1 : 1;
-  return [...lista].sort((a, b) => {
+  return ordenarPorNiveis(lista, estado.ordens, (campo, a, b) => {
+    const col = coluna(campo);
+    if (!col) return 0;
     const va = col.valor(a), vb = col.valor(b);
-    const r = typeof va === "string" ? va.localeCompare(vb, "pt-BR") : va - vb;
-    return r * sinal || a.nome.localeCompare(b.nome, "pt-BR");
-  });
+    return typeof va === "string" ? va.localeCompare(vb, "pt-BR") : va - vb;
+  }, (a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 }
 
 function desenharTabela() {
@@ -250,15 +252,16 @@ function desenharTabela() {
   const rolagem = corpo.querySelector(".tabela-rolagem");
   const pos = rolagem ? [rolagem.scrollTop, rolagem.scrollLeft] : null;
   const th = (c) => {
-    const ativa = c.id === estado.ordem.campo;
-    return `<th class="${c.esq ? "esq" : ""}"${ativa ? ` aria-sort="${estado.ordem.desc ? "descending" : "ascending"}"` : ""}${c.dica ? ` title="${esc(c.dica)}"` : ""}>
-      <button type="button" class="crm-ordem${ativa ? " ativa" : ""}" data-ordem="${c.id}">${esc(c.rotulo)}<span class="crm-seta-o" aria-hidden="true">${ativa ? (estado.ordem.desc ? "▼" : "▲") : "↕"}</span></button></th>`;
+    const m = marcaOrdem(estado.ordens, c.id);
+    return `<th class="${c.esq ? "esq" : ""}"${m.aria}${c.dica ? ` title="${esc(c.dica)}"` : ""}>
+      <button type="button" class="crm-ordem${m.classe}" data-ordem="${c.id}">${esc(c.rotulo)}<span class="crm-seta-o" aria-hidden="true">${m.seta}</span></button></th>`;
   };
   let tabela;
   if (!base.length) tabela = `<div class="vazio">${icone("pessoas")}<p>Nenhum cliente do CRM com estes filtros.</p></div>`;
   else if (!lista.length) tabela = `<div class="vazio">${icone("busca")}<p>Nenhum cliente com esta busca.</p></div>`;
   else {
-    tabela = `<div class="tabela-rolagem crm-rolagem"><table class="dados crm-tabela${estado.animar ? " crm-entra" : ""}">
+    tabela = `${linhaOrdem(estado.ordens, ORDEM_PADRAO, (id) => { const c = coluna(id); return c && { rotulo: c.rotulo, tipo: TEXTO.includes(id) ? "texto" : "numero" }; })}
+      <div class="tabela-rolagem crm-rolagem"><table class="dados crm-tabela${estado.animar ? " crm-entra" : ""}">
       <thead><tr>${COLUNAS.map(th).join("")}</tr></thead>
       <tbody>${lista.map((c, i) => linha(c, i)).join("")}</tbody></table></div>`;
   }
@@ -298,8 +301,14 @@ function aoClicarLista(e) {
   const ordem = e.target.closest("[data-ordem]");
   if (ordem) {
     const campo = ordem.dataset.ordem;
-    estado.ordem = { campo, desc: estado.ordem.campo === campo ? !estado.ordem.desc : !TEXTO.includes(campo) };
-    guardar("mv-crm", { ordem: estado.ordem });
+    estado.ordens = clicarOrdem(estado.ordens, campo, !TEXTO.includes(campo));
+    guardar("mv-crm", { ordem: estado.ordens });
+    desenharTabela();
+    return;
+  }
+  if (e.target.closest("[data-ordem-padrao]")) {
+    estado.ordens = ORDEM_PADRAO;
+    guardar("mv-crm", { ordem: estado.ordens });
     desenharTabela();
     return;
   }

@@ -269,3 +269,72 @@ export function irParaLogin() {
 
 export function guardar(chave, valor) { try { localStorage.setItem(chave, JSON.stringify(valor)); } catch { /* sem armazenamento */ } }
 export function ler(chave, padrao = null) { try { const v = localStorage.getItem(chave); return v == null ? padrao : JSON.parse(v); } catch { return padrao; } }
+
+// ---------- a ordem das tabelas, em níveis ----------
+// niveis: [{ campo, desc }]. O primeiro manda; os outros desempatam, do clique mais recente para o mais antigo (a ordem
+// com que a tabela abre conta como um clique). Clicar numa coluna que não está na frente a põe na frente, com o sentido
+// do primeiro clique (desc), e tira ela de onde estava; clicar de novo na que está na frente inverte só ela.
+export const MAX_NIVEIS = 3;
+
+// visivel(campo): as colunas que a tabela mostra agora. As que estão escondidas (o Motivo fora da aba Inativar, o
+// Cliente com um cliente só) passam para o fim e não contam como "a que está na frente".
+export function clicarOrdem(niveis, campo, desc, visivel = () => true) {
+  const lista = [...niveis.filter((n) => visivel(n.campo)), ...niveis.filter((n) => !visivel(n.campo))];
+  const topo = lista[0];
+  if (topo && topo.campo === campo) return [{ campo, desc: !topo.desc }, ...lista.slice(1)];
+  return [{ campo, desc: !!desc }, ...lista.filter((n) => n.campo !== campo)].slice(0, MAX_NIVEIS);
+}
+
+// Os níveis guardados (no navegador ou no link) que ainda valem: campo que existe, sem repetir, até MAX_NIVEIS.
+// Aceita o formato antigo, de uma coluna só ({ campo, desc }). Nada que valha -> padrao.
+export function lerNiveis(salvo, existe, padrao) {
+  const vistos = new Set();
+  const lista = (Array.isArray(salvo) ? salvo : salvo ? [salvo] : [])
+    .filter((n) => n && typeof n.campo === "string" && existe(n.campo) && !vistos.has(n.campo) && vistos.add(n.campo))
+    .map((n) => ({ campo: n.campo, desc: !!n.desc })).slice(0, MAX_NIVEIS);
+  return lista.length ? lista : padrao.map((n) => ({ ...n }));
+}
+
+export const mesmosNiveis = (a, b) => a.length === b.length && a.every((n, i) => n.campo === b[i].campo && n.desc === b[i].desc);
+
+// comparar(campo, a, b): negativo se a vem antes de b do menor para o maior (o sentido do nível inverte); 0, NaN ou
+// um campo que a tabela não tem agora: empate, e decide o nível seguinte. desempate: o final fixo, que não inverte.
+export function ordenarPorNiveis(lista, niveis, comparar, desempate = () => 0) {
+  return [...lista].sort((a, b) => {
+    for (const n of niveis) {
+      const r = comparar(n.campo, a, b);
+      if (r) return n.desc ? -r : r;
+    }
+    return desempate(a, b);
+  });
+}
+
+// O cabeçalho de uma coluna: nivel 1, 2, 3 (0 = fora da ordem); classe para o botão; seta (com o número do nível
+// quando a ordem tem mais de um); aria (o aria-sort, só na coluna que manda).
+export function marcaOrdem(niveis, campo, { ativa = "ativa", vazio = "↕" } = {}) {
+  const i = niveis.findIndex((n) => n.campo === campo), n = niveis[i];
+  if (!n) return { nivel: 0, classe: "", seta: vazio, aria: "" };
+  return {
+    nivel: i + 1,
+    classe: i === 0 ? ` ${ativa}` : " ordem-segue",
+    seta: `${n.desc ? "▼" : "▲"}${niveis.length > 1 ? `<span class="ordem-nivel">${i + 1}</span>` : ""}`,
+    aria: i === 0 ? ` aria-sort="${n.desc ? "descending" : "ascending"}"` : "",
+  };
+}
+
+// A linha acima da tabela com a ordem que vale ("Ordem: Valor (maior primeiro) › Cliente (A a Z)") e, fora da ordem
+// com que a tabela abre, o botão de voltar a ela (data-ordem-padrao: cada página trata o clique).
+// coluna(campo) -> { rotulo, tipo: "texto" | "data" | "numero" (padrão), sentidos?: [crescente, decrescente] } ou null.
+const SENTIDOS = { texto: ["A a Z", "Z a A"], data: ["mais antiga primeiro", "mais recente primeiro"], numero: ["menor primeiro", "maior primeiro"] };
+export function linhaOrdem(niveis, padrao, coluna) {
+  const partes = niveis.map((n) => {
+    const c = coluna(n.campo);
+    if (!c) return null;
+    const s = c.sentidos || SENTIDOS[c.tipo] || SENTIDOS.numero;
+    return `<b>${esc(c.rotulo)}</b> (${esc(s[n.desc ? 1 : 0])})`;
+  }).filter(Boolean);
+  if (!partes.length) return "";
+  const voltar = mesmosNiveis(niveis, padrao) ? ""
+    : `<button type="button" class="ordem-padrao" data-ordem-padrao title="Volta para a ordem com que a tabela abre">${icone("x")}Voltar à ordem padrão</button>`;
+  return `<div class="ordem-linha"><span>Ordem: ${partes.join(" › ")}</span>${voltar}</div>`;
+}

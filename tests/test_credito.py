@@ -173,6 +173,21 @@ class TestTitulos(Base):
         with mock.patch.object(modulo, "MAX_TITULOS", 1):  # a ordem vale para o filtro inteiro, antes de cortar
             self.assertEqual(self.ids(ordem="valor", sentido="desc"), [201])
 
+    def test_ordem_em_niveis(self):
+        # o primeiro manda e os outros desempatam: Rubens (101, 102, 103, 105, 106) e Thais (104), pelo nome mostrado;
+        # dentro de cada vendedor, o maior valor primeiro (só pelo vendedor, o desempate seria a emissão)
+        self.assertEqual(self.ids(clientes=[1], ordem="vendedor", sentido="asc"), [105, 103, 102, 101, 106, 104])
+        self.assertEqual(self.ids(clientes=[1], ordem="vendedor,valor", sentido="asc,desc"), [103, 101, 106, 102, 105, 104])
+        # da pior situação para a melhor; os dois quitados (101 e 106) pelo menor valor, não mais pela emissão
+        self.assertEqual(self.ids(clientes=[1], ordem="situacao,valor", sentido="desc,asc"), [103, 104, 102, 105, 106, 101])
+        d = self.credito.calcular([1], ordem="vendedor,situacao,valor", sentido="desc,desc,desc")
+        self.assertEqual([t["id"] for t in d["titulos"]["linhas"]], [104, 103, 102, 105, 101, 106])
+        self.assertEqual(d["ordem"], {"coluna": "vendedor", "sentido": "desc"})
+        self.assertEqual(d["ordens"], [{"coluna": "vendedor", "sentido": "desc"}, {"coluna": "situacao", "sentido": "desc"},
+                                       {"coluna": "valor", "sentido": "desc"}])
+        self.assertEqual(self.credito.calcular([1])["ordens"], [{"coluna": "emissao", "sentido": "desc"}])
+        self.assertEqual(modulo.niveis_da_ordem("valor", None), [("valor", "asc")])  # sem sentido: crescente, como antes
+
     def test_opcoes(self):
         op = self.credito.calcular()["opcoes"]
         self.assertEqual([v["nome"] for v in op["vendedores"]], ["Edir", "Rubens", "Thais"])
@@ -181,6 +196,10 @@ class TestTitulos(Base):
     def test_parametros_invalidos(self):
         for args in ({"mes": 13}, {"mes": 0}, {"ano": 7190}, {"clientes": [999]}, {"clientes": [1, 999]},
                      {"ordem": "nome; DROP"}, {"ordem": "valor", "sentido": "lado"},
+                     {"ordem": "valor,valor", "sentido": "desc,asc"}, {"ordem": "valor,cliente", "sentido": "desc"},
+                     {"ordem": "valor", "sentido": "desc,asc"}, {"ordem": "valor,", "sentido": "desc,asc"},
+                     {"ordem": "valor,cliente,dias,pago", "sentido": "desc,asc,desc,desc"},
+                     {"ordem": "valor,cliente", "sentido": "desc,lado"},
                      {"clientes": list(range(1, modulo.MAX_CLIENTES + 2))}):
             with self.assertRaises(ValueError, msg=args):
                 self.credito.calcular(**args)

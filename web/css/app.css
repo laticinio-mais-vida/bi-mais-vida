@@ -1468,6 +1468,18 @@ body.sem-rolagem { overflow: hidden; }
 .cr-ordem:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 4px; }
 .cr-seta { font-size: 10px; opacity: .4; }
 .cr-ordem.ativa .cr-seta { opacity: 1; }
+
+/* A ordem das tabelas em níveis (util.js: marcaOrdem e linhaOrdem), no Crédito, CRM, Devoluções e Manejo: o número da
+   vez de cada coluna ao lado da seta, as colunas que desempatam um pouco mais claras e a linha "Ordem: …" */
+.ordem-nivel { position: relative; top: -3px; margin-left: 1px; font-size: 9px; font-weight: 800; }
+.cr-ordem.ordem-segue .cr-seta, .crm-ordem.ordem-segue .crm-seta-o, .mj-ordem.ordem-segue .mj-seta-o,
+.dv-ordem.ordem-segue .dv-seta { opacity: .7; }
+.ordem-linha { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 10px; color: var(--tinta-3); font-size: 12.5px; }
+.ordem-linha b { color: var(--tinta-2); font-weight: 700; }
+.ordem-padrao { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 0; border-radius: 8px; background: none; color: var(--acento-tinta); font: inherit; font-weight: 700; cursor: pointer; }
+.ordem-padrao .ic { width: 12px; height: 12px; }
+.ordem-padrao:hover { background: var(--acento-suave); }
+.ordem-padrao:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
 .cr-pago-cel small { display: block; color: var(--tinta-3); font-size: 11.5px; }
 .cr-pago { color: var(--cr-bom); font-weight: 700; }
 .cr-cliente.cr-cliente-varios { padding: 0 0 14px; }

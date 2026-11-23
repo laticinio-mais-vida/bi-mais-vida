@@ -5,7 +5,7 @@
 // quem pode o quê ficam no servidor (bi/manejo.py); aqui é a apresentação: as duas listas, os filtros, a tabela
 // ordenável, o histórico de cada cliente e as respostas, uma a uma ou de vários clientes de uma vez. A tela não mostra
 // os códigos do ERP: só os nomes (a busca também acha pelo código do cliente).
-import { api, esc, fmt, icone, toast, guardar, ler } from "./util.js";
+import { api, esc, fmt, icone, toast, guardar, ler, clicarOrdem, ordenarPorNiveis, marcaOrdem, linhaOrdem } from "./util.js";
 import { multiSelecao } from "./multiselecao.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
@@ -53,6 +53,7 @@ const FILTROS = [
 ];
 const FILTRO = Object.fromEntries(FILTROS.map((f) => [f.id, f]));
 const NOME_EQUIPE = { ES: "Equipe ES", BA: "Equipe BA", EDIR: "Edir" };
+const ORDEM_PADRAO = [{ campo: "dias", desc: true }]; // a ordem com que a lista abre (util.js: níveis)
 const MIN_TEXTO = 10, MAX_TEXTO = 2000, MAX_LOTE = 500, MAX_RECUSADOS = 10;
 
 const plural = (n, um, varios) => `${fmt.num(n)} ${n === 1 ? um : varios}`;
@@ -73,7 +74,7 @@ let ligadoUmaVez = false;
 // leitura dos dados e a montar a página de novo: o que a pessoa escreveu não se perde.
 const estado = {
   dados: null, pedido: 0, mes: null, aba: "central", filtro: null, vendedores: [], busca: "",
-  ordem: { campo: "dias", desc: true }, marcados: new Set(), aberto: null, rascunhos: {},
+  ordens: ORDEM_PADRAO, marcados: new Set(), aberto: null, rascunhos: {},
   lote: { decisao: null, texto: "" }, historico: {}, recusados: [], enviando: false,
   animar: true,  // os cartões e as linhas só entram animados na primeira vez de cada leitura pedida pela pessoa
 };
@@ -464,15 +465,25 @@ function colunas() {
   return cols;
 }
 
+// Pelos níveis da ordem (o último clique manda, os anteriores desempatam) e, no fim, pelo nome do cliente. Um nível de
+// coluna que esta aba não tem (o Motivo fora da Inativar) é pulado, e volta a valer na aba que tem.
 function ordenar(itens, cols) {
-  const { campo, desc } = estado.ordem;
-  const col = cols.find((c) => c.id === campo) || cols.find((c) => c.id === "dias");
-  const s = desc ? -1 : 1;
-  return [...itens].sort((a, b) => {
+  return ordenarPorNiveis(itens, estado.ordens, (campo, a, b) => {
+    const col = cols.find((c) => c.id === campo);
+    if (!col) return 0;
     const x = col.val(a), y = col.val(b);
-    const r = col.texto ? String(x ?? "").localeCompare(String(y ?? ""), "pt-BR") : (x ?? -Infinity) - (y ?? -Infinity);
-    return r * s || String(a.cliente.nome).localeCompare(String(b.cliente.nome), "pt-BR");
-  });
+    return col.texto ? String(x ?? "").localeCompare(String(y ?? ""), "pt-BR") : (x ?? -Infinity) - (y ?? -Infinity);
+  }, (a, b) => String(a.cliente.nome).localeCompare(String(b.cliente.nome), "pt-BR"));
+}
+
+// A coluna para a linha "Ordem: …" (o tipo diz como ler o sentido).
+function colunaDaOrdem(cols, id) {
+  const c = cols.find((x) => x.id === id);
+  if (!c) return null;
+  if (id === "frequencia") return { rotulo: c.rotulo, sentidos: ["semanal primeiro", "sem frequência primeiro"] };
+  if (id === "situacao") return { rotulo: c.rotulo, sentidos: ["a justificar primeiro", "saíram primeiro"] };
+  if (id === "ultima" || id === "resposta" || id === "veredito") return { rotulo: c.rotulo, tipo: "data" };
+  return { rotulo: c.rotulo, tipo: c.texto ? "texto" : "numero" };
 }
 
 // O que aparece na tabela agora (aba, vendedores, situação e busca), já na ordem escolhida.
@@ -510,11 +521,11 @@ function lista(d, v) {
     return `<button type="button" class="mj-chip${f.id === v.filtro ? " ativo" : ""}${n ? "" : " zero"}" data-filtro="${f.id}" aria-pressed="${f.id === v.filtro}">${esc(f.rotulo)}<b>${fmt.num(n)}</b></button>`;
   }).join("");
   const podem = v.itens.filter(podeAgir).length;
-  const col = v.cols.find((c) => c.id === estado.ordem.campo) || v.cols.find((c) => c.id === "dias");
+  const niveis = estado.ordens.filter((n) => v.cols.some((c) => c.id === n.campo)); // o que vale nesta aba
   const th = (c) => {
-    const ativa = c.id === col.id;
-    return `<th class="${c.esq ? "esq" : ""}"${ativa ? ` aria-sort="${estado.ordem.desc ? "descending" : "ascending"}"` : ""}><button type="button" class="mj-ordem${ativa ? " ativa" : ""}" data-ordem="${c.id}"
-      title="Ordenar por ${esc(c.rotulo.toLowerCase())}">${esc(c.rotulo)}<span class="mj-seta-o" aria-hidden="true">${ativa ? (estado.ordem.desc ? "▼" : "▲") : "↕"}</span></button></th>`;
+    const m = marcaOrdem(niveis, c.id);
+    return `<th class="${c.esq ? "esq" : ""}"${m.aria}><button type="button" class="mj-ordem${m.classe}" data-ordem="${c.id}"
+      title="Ordenar por ${esc(c.rotulo.toLowerCase())}">${esc(c.rotulo)}<span class="mj-seta-o" aria-hidden="true">${m.seta}</span></button></th>`;
   };
   let corpo;
   if (!v.base.length) {
@@ -523,6 +534,7 @@ function lista(d, v) {
     corpo = `<div class="vazio">${icone("busca")}<p>Nenhum cliente com este filtro.</p><p><button type="button" class="btn" data-ver-todos>Ver todos os ${fmt.num(v.base.length)}</button></p></div>`;
   } else {
     corpo = `
+    ${linhaOrdem(niveis, ORDEM_PADRAO, (id) => colunaDaOrdem(v.cols, id))}
     <div class="tabela-rolagem mj-rolagem"><table class="dados mj-tabela${estado.animar ? " mj-entra" : ""}">
       <thead><tr>
         <th class="mj-sel">${podem ? `<label class="mj-marca" title="Marcar todos os que aparecem para responder de uma vez"><input type="checkbox" data-marcar-todos aria-label="Marcar todos os clientes que aparecem"><span class="marca-caixa">${icone("visto")}</span></label>` : ""}</th>
@@ -818,11 +830,12 @@ function aoClicarLista(e) {
   const t = e.target;
   const ordem = t.closest("[data-ordem]");
   if (ordem) {
-    const campo = ordem.dataset.ordem, col = colunas().find((c) => c.id === campo);
-    estado.ordem = { campo, desc: estado.ordem.campo === campo ? !estado.ordem.desc : !col?.asc };
+    const campo = ordem.dataset.ordem, cols = colunas(), col = cols.find((c) => c.id === campo);
+    estado.ordens = clicarOrdem(estado.ordens, campo, !col?.asc, (id) => cols.some((c) => c.id === id));
     desenharLista();
     return;
   }
+  if (t.closest("[data-ordem-padrao]")) { estado.ordens = ORDEM_PADRAO; desenharLista(); return; }
   const chip = t.closest("[data-filtro]");
   if (chip) { estado.filtro = chip.dataset.filtro; desenharLista(); return; }
   if (t.closest("[data-ver-todos]")) {
@@ -1060,8 +1073,9 @@ function metodo(d) {
             na lista do mês seguinte se ainda estiver na regra, com o histórico à vista.</li>
           <li><b>Saída sozinho:</b> antes do veredito, o cliente sai da lista quando volta a comprar, paga o que devia, já
             aparece com a central ou é inativado no ERP. A linha e as respostas ficam no histórico.</li>
-          <li><b>Tabela:</b> clique no nome de uma coluna para ordenar e no cliente para abrir o histórico. As caixas
-            marcam vários clientes para responder de uma vez.</li>
+          <li><b>Tabela:</b> clique no nome de uma coluna para ordenar (de novo, para inverter) e no cliente para abrir o
+            histórico. As colunas clicadas antes continuam valendo para desempatar (até 3: o número ao lado da seta diz
+            a vez de cada uma). As caixas marcam vários clientes para responder de uma vez.</li>
         </ol>
       </div>
     </details>

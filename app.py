@@ -1237,7 +1237,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 if url.path == "/api/credito/serasa":  # cliente=12: o último envio do Serasa e os anteriores
                     self.app.credito.conferir_cliente(q.get("cliente"), ids)
                     return self._json(self.app.serasa.listar(q.get("cliente"), usuario))
-                # clientes=12,15 (os limites somam); ordem=valor&sentido=desc ordena a tabela de títulos
+                # clientes=12,15 (os limites somam); ordem=valor,cliente&sentido=desc,asc ordena a tabela de títulos
+                # (a primeira coluna manda, as outras desempatam)
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
                 d = self.app.credito.calcular(lista("clientes"), inteiro("mes"), inteiro("ano"), inteiro("vendedor"),
                                               permitidos=ids, ordem=q.get("ordem") or None,

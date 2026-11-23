@@ -69,6 +69,7 @@ ORDENS = {
     "vencimento": "x.vencimento", "quitacao": "x.quitacao", "valor": "x.total", "pago": "x.pago", "dias": "x.dias",
     "situacao": "gravidade",  # calculada no SELECT de fora (GRAVIDADE)
 }
+MAX_NIVEIS = 3  # colunas da ordem da tabela: a primeira manda e as outras desempatam (o mesmo de web/js/util.js)
 # A situação ordenada da melhor para a pior (a mesma conta de situacao() abaixo, em SQL).
 GRAVIDADE = (f"CASE WHEN x.quitado = 1 THEN CASE WHEN x.dias > {TOLERANCIA} THEN 2 ELSE 0 END "
              f"WHEN x.dias > {TOLERANCIA} THEN 4 WHEN x.dias > 0 THEN 3 ELSE 1 END")
@@ -76,6 +77,32 @@ GRAVIDADE = (f"CASE WHEN x.quitado = 1 THEN CASE WHEN x.dias > {TOLERANCIA} THEN
 
 def _marcas(ids) -> str:
     return ",".join("?" * len(ids))
+
+
+def niveis_da_ordem(ordem: str | None, sentido: str | None) -> list[tuple[str, str]]:
+    """A ordem da tabela de títulos em níveis: ordem "valor,cliente" e sentido "desc,asc" -> [("valor", "desc"),
+    ("cliente", "asc")]; a primeira coluna manda e as outras desempatam. Sem ordem: pela emissão (mais recente primeiro,
+    se o sentido não vier); ordem sem sentido: crescente em todas. Coluna fora de ORDENS ou repetida, sentido
+    inválido, quantidades diferentes ou mais de MAX_NIVEIS colunas -> ValueError."""
+    if ordem is None:
+        if sentido not in (None, "asc", "desc"):
+            raise ValueError(f"sentido inválido: {sentido}")
+        return [("emissao", sentido or "desc")]
+    colunas = ordem.split(",")
+    sentidos = sentido.split(",") if sentido is not None else ["asc"] * len(colunas)
+    for c in colunas:
+        if c not in ORDENS:
+            raise ValueError(f"coluna inválida para ordenar: {c}")
+    for x in sentidos:
+        if x not in ("asc", "desc"):
+            raise ValueError(f"sentido inválido: {x}")
+    if len(sentidos) != len(colunas):
+        raise ValueError("a ordem precisa de um sentido para cada coluna")
+    if len(set(colunas)) != len(colunas):
+        raise ValueError("coluna repetida na ordem")
+    if len(colunas) > MAX_NIVEIS:
+        raise ValueError(f"ordene por no máximo {MAX_NIVEIS} colunas")
+    return list(zip(colunas, sentidos))
 
 
 def _reais(v: float) -> str:
@@ -258,9 +285,10 @@ class Credito:
                  sentido: str | None = None) -> dict:
         """Cartões e títulos do filtro. clientes: um ou mais códigos (os limites somam); None ou vazio = todos.
         permitidos: os vendedores do acesso, cujos títulos contam (o limite e o em aberto do cliente continuam do
-        cliente inteiro); None = todos. Cliente escolhido que não é deles -> PermissionError. ordem e sentido: a
-        coluna da tabela de títulos (ORDENS) e "asc" ou "desc"; sem ordem, da emissão mais recente para a mais
-        antiga. Parâmetro inválido -> ValueError."""
+        cliente inteiro); None = todos. Cliente escolhido que não é deles -> PermissionError. ordem e sentido: as
+        colunas da tabela de títulos (ORDENS) e "asc" ou "desc", separados por vírgula, até MAX_NIVEIS (a primeira
+        manda, as outras desempatam: niveis_da_ordem); sem ordem, da emissão mais recente para a mais antiga.
+        Parâmetro inválido -> ValueError."""
         self._conferir()
         hoje = self.hoje()
         clientes = list(dict.fromkeys(clientes or []))  # sem repetir, na ordem em que foram escolhidos
@@ -273,10 +301,7 @@ class Credito:
             raise ValueError(f"mês inválido: {mes}")
         if ano is not None and not 1900 <= ano <= hoje.year + 1:
             raise ValueError(f"ano inválido: {ano}")
-        if ordem is not None and ordem not in ORDENS:
-            raise ValueError(f"coluna inválida para ordenar: {ordem}")
-        if sentido not in (None, "asc", "desc"):
-            raise ValueError(f"sentido inválido: {sentido}")
+        niveis = niveis_da_ordem(ordem, sentido)
         nomes = self.nomes_vendedores()
         junta, pago, parcelas, pagas = self._parcelas()
         dados_clientes = self._clientes(clientes, nomes, junta, pago) if clientes else []
@@ -306,16 +331,16 @@ class Credito:
             f"FROM titulos_receber t{where}", [hoje - dt.timedelta(days=TOLERANCIA), *params])[0]
 
         # A tabela: ordenada aqui (e não na página), para valer para o filtro inteiro e não só para as linhas mostradas.
-        sentido = sentido or ("desc" if ordem is None else "asc")
-        ordem = ordem or "emissao"
-        por_nome = [sorted(nomes, key=lambda v: nomes[v].lower())] if ordem == "vendedor" else []
+        # Cada nível com os vazios no fim; o desempate final é o de sempre (emissão mais recente, título maior).
+        por_nome = [sorted(nomes, key=lambda v: nomes[v].lower())] if any(c == "vendedor" for c, _ in niveis) else []
+        ordem_sql = ", ".join(f"{ORDENS[c]} {x.upper()} NULLS LAST" for c, x in niveis)
         linhas = self.cache.consulta(
             f"SELECT x.*, {GRAVIDADE} AS gravidade FROM ("
             "SELECT t.id, t.id_cliente, c.nome AS cliente, t.id_vendedor, t.emissao, t.vencimento, t.quitacao, "
             f"t.quitado, t.total, {pago} AS pago, {parcelas} AS parcelas, {pagas} AS pagas, "
             "datediff('day', t.vencimento, CASE WHEN t.quitado = 1 THEN t.quitacao ELSE ? END) AS dias "
             f"FROM titulos_receber t LEFT JOIN clientes c ON c.id = t.id_cliente{junta}{where}) x "
-            f"ORDER BY {ORDENS[ordem]} {sentido.upper()} NULLS LAST, x.emissao DESC, x.id DESC LIMIT ?",
+            f"ORDER BY {ordem_sql}, x.emissao DESC, x.id DESC LIMIT ?",
             [hoje, *params, *por_nome, MAX_TITULOS])
         titulos = [{
             "id": i, "id_cliente": idc, "cliente": nomec, "vendedor": nomes.get(v) or f"Vendedor {v}",
@@ -335,7 +360,8 @@ class Credito:
             "extraido_em": self.cache.info.get("extraido_em"),
             "hoje": hoje,
             "filtros": {"clientes": clientes, "mes": mes, "ano": ano, "vendedor": vendedor},
-            "ordem": {"coluna": ordem, "sentido": sentido},
+            "ordem": {"coluna": niveis[0][0], "sentido": niveis[0][1]},  # a que manda
+            "ordens": [{"coluna": c, "sentido": x} for c, x in niveis],
             "opcoes": self._opcoes(hoje, nomes, permitidos),
             "clientes": dados_clientes,
             "credito": self._soma(dados_clientes) if dados_clientes else None,
