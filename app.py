@@ -1185,8 +1185,10 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/sugestao":
                 if "sugestao" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página Sugestão de Metas", HTTPStatus.FORBIDDEN)
-                # estado=BA&mes=2026-11 (o mês da meta; o base é o anterior)&vendedor=98&area=170 (vazios = todos)
-                return self._json(self.app.sugestao.calcular(q.get("estado"), q.get("mes"), q.get("vendedor"),
+                # estado=BA&mes=2026-11 (o mês da meta; o base é o anterior)&vendedores=98,113&area=170 (vazios =
+                # todos; vendedor=98, o nome antigo, ainda vale)
+                return self._json(self.app.sugestao.calcular(q.get("estado"), q.get("mes"),
+                                                             q.get("vendedores") or q.get("vendedor"),
                                                              q.get("area"), *escopo_vendedores(usuario),
                                                              admin=eh_admin(usuario)))
             if url.path == "/api/sugestao/config":

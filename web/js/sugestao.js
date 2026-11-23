@@ -6,16 +6,20 @@ import { api, esc, fmt, icone, animarContadores, animarEntradas, ligarTooltips, 
 import { colunasLinha } from "./graficos.js";
 import { ligarCaptura } from "./relatorio.js";
 import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
+import { multiSelecao } from "./multiselecao.js";
 
 const MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 const ORIGEM = { ajuste: "ajustado à mão", fixo: "número fixo", automatico: "pelos dias de atendimento" };
 
 let ctx = null;
 let ligouDocumento = false;
+let filtroV = null, itensV = [];  // a lista de vendedores (multiselecao.js) e as opções dela
+// vendedores: os escolhidos no filtro ([] = todos, a página soma os escolhidos).
 // rasc: os ajustes de volume ainda não salvos ({"vendedor:área:produto": {v, a, p, volume (null = volta à fórmula),
 // formula, salvo, preco, ...}}), do estado e mês de rascDe; linhas: as linhas ajustáveis da tabela desenhada.
-const estado = { estado: null, mes: null, vendedor: null, area: null, visao: "produtos", produto: null,
+const estado = { estado: null, mes: null, vendedores: [], area: null, visao: "produtos", produto: null,
                  abertas: new Set(), dados: null, pedido: 0, rasc: {}, rascDe: null, linhas: {} };
+const escolhidos = (d) => d.filtros.vendedores || [];
 
 export function sugestaoTemAlteracoes() { return Object.keys(estado.rasc).length > 0; }
 
@@ -24,9 +28,10 @@ export function montarSugestao(container, contexto) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const salvo = ler("mv-sugestao", {});
   const inteiro = (t) => (/^\d+$/.test(t || "") ? Number(t) : null);
+  const ids = (t) => [...new Set((t || "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   estado.estado = q.get("e") || salvo.e || null;
   estado.mes = /^\d{4}-\d{2}$/.test(q.get("m") || "") ? q.get("m") : null;
-  estado.vendedor = inteiro(q.get("v"));
+  estado.vendedores = ids(q.get("v"));  // v=98 (o link antigo) ou v=98,113
   estado.area = inteiro(q.get("a"));
   estado.visao = (q.get("t") || salvo.t) === "areas" ? "areas" : "produtos";
   estado.produto = null;
@@ -40,7 +45,7 @@ export function montarSugestao(container, contexto) {
         <div><b>Sugestão de metas</b><small id="s-sub">a meta do mês seguinte, por vendedor e produto</small></div></div>
       <div class="filtros">
         <div class="seg-mini" role="group" aria-label="Estado" id="s-estado"></div>
-        <label class="campo" title="Vendedor"><span class="ic-campo">${icone("usuario")}</span><select id="s-vendedor" aria-label="Vendedor"></select></label>
+        <div id="s-vendedores" title="Vendedores: marque um ou mais (nenhum = todos)"></div>
         <label class="campo" title="Área comercial"><span class="ic-campo">${icone("mapa")}</span><select id="s-area" aria-label="Área comercial"></select></label>
         <label class="campo" title="Mês da meta (o mês base é o anterior)"><span class="ic-campo">${icone("calendario")}</span><select id="s-mes" aria-label="Mês da meta"></select></label>
         <button class="btn btn-limpar" type="button" id="s-limpar" hidden>${icone("x")}Limpar filtros</button>
@@ -62,14 +67,13 @@ export function montarSugestao(container, contexto) {
     const b = e.target.closest("[data-estado]");
     if (!b || b.dataset.estado === estado.estado || !descartarSePreciso()) return;
     estado.estado = b.dataset.estado;
-    estado.vendedor = null;
-    estado.area = null;
-    carregar();
+    escolherVendedores([]);
   });
-  container.querySelector("#s-vendedor").addEventListener("change", (e) => {
-    estado.vendedor = e.target.value ? Number(e.target.value) : null;
-    estado.area = null;
-    carregar();
+  itensV = [];
+  filtroV = multiSelecao(container.querySelector("#s-vendedores"), {
+    rotulo: "Vendedores", icone: "usuario", todos: "Todos os vendedores", plural: "vendedores",
+    busca: "Buscar vendedor ou código", itens: [], selecionados: estado.vendedores, nomesAte: 2,
+    aoAplicar: (lista) => escolherVendedores(lista),
   });
   container.querySelector("#s-area").addEventListener("change", (e) => { estado.area = e.target.value ? Number(e.target.value) : null; carregar(); });
   container.querySelector("#s-mes").addEventListener("change", (e) => {
@@ -77,7 +81,7 @@ export function montarSugestao(container, contexto) {
     estado.mes = e.target.value;
     carregar();
   });
-  container.querySelector("#s-limpar").addEventListener("click", () => { estado.vendedor = null; estado.area = null; carregar(); });
+  container.querySelector("#s-limpar").addEventListener("click", () => escolherVendedores([]));
   container.querySelector("#s-conteudo").addEventListener("click", aoClicar);
   if (!ligouDocumento) {  // no documento: em tela cheia, a tabela sai de #s-conteudo
     ligouDocumento = true;
@@ -110,17 +114,25 @@ function descartarSePreciso() {
 
 export function recarregarSugestao() { if (ctx) carregar(true); }
 
+// Troca os vendedores do filtro (a lista, o resumo, Limpar, o estado) e volta para todas as áreas.
+function escolherVendedores(lista) {
+  estado.vendedores = [...lista].sort((a, b) => a - b);
+  estado.area = null;
+  filtroV?.definir(itensV, estado.vendedores);
+  carregar();
+}
+
 function atualizarUrl() {
   guardar("mv-sugestao", { e: estado.estado, t: estado.visao });
   if (!location.hash.startsWith("#/sugestao")) return; // trocou de página enquanto carregava
   const p = new URLSearchParams();
   if (estado.estado) p.set("e", estado.estado);
   if (estado.mes) p.set("m", estado.mes);
-  if (estado.vendedor) p.set("v", estado.vendedor);
+  if (estado.vendedores.length) p.set("v", estado.vendedores.join(","));
   if (estado.area) p.set("a", estado.area);
   if (estado.visao === "areas") p.set("t", "areas");
   history.replaceState(null, "", `#/sugestao${p.toString() ? "?" + p : ""}`);
-  document.getElementById("s-limpar").hidden = !estado.vendedor && !estado.area;
+  document.getElementById("s-limpar").hidden = !estado.vendedores.length && !estado.area;
 }
 
 async function carregar(silencioso = false) {
@@ -134,14 +146,14 @@ async function carregar(silencioso = false) {
     const p = new URLSearchParams();
     if (estado.estado) p.set("estado", estado.estado);
     if (estado.mes) p.set("mes", estado.mes);
-    if (estado.vendedor) p.set("vendedor", estado.vendedor);
+    if (estado.vendedores.length) p.set("vendedores", estado.vendedores.join(","));
     if (estado.area) p.set("area", estado.area);
     const d = await api(`/api/sugestao?${p}`);
     if (pedido !== estado.pedido) return;
     estado.dados = d;
     estado.estado = d.estado;
     estado.mes = d.mes.meta;
-    estado.vendedor = d.filtros.vendedor;
+    estado.vendedores = escolhidos(d);
     estado.area = d.filtros.area;
     if (estado.rascDe !== `${d.estado}|${d.mes.meta}`) estado.rasc = {};  // os ajustes são do estado e mês
     estado.rascDe = `${d.estado}|${d.mes.meta}`;
@@ -156,9 +168,10 @@ async function carregar(silencioso = false) {
     posRender(conteudo, d);
   } catch (e) {
     if (pedido !== estado.pedido) return;
-    if (e.status === 400 && (estado.vendedor || estado.area || estado.mes)) {
+    if (e.status === 400 && (estado.vendedores.length || estado.area || estado.mes)) {
       // filtro guardado de outro acesso ou de outro estado: volta para o padrão
-      estado.vendedor = null;
+      estado.vendedores = [];
+      filtroV?.limpar();
       estado.area = null;
       estado.mes = null;
       estado.rasc = {};
@@ -181,8 +194,11 @@ function preencherFiltros(d) {
   const op = d.opcoes;
   document.getElementById("s-estado").innerHTML = d.estados.map((e) =>
     `<button type="button" data-estado="${e}" class="${e === d.estado ? "ativo" : ""}" aria-pressed="${e === d.estado}">${e}</button>`).join("");
-  document.getElementById("s-vendedor").innerHTML = `<option value="">Todos os vendedores do ${esc(d.estado)}</option>` +
-    op.vendedores.map((v) => `<option value="${v.id}"${v.id === d.filtros.vendedor ? " selected" : ""}>${esc(v.nome)}${v.equipe === "EDIR" ? " (Edir)" : ""}</option>`).join("");
+  // no BA, as equipes BA e Edir viram grupos (marcar o grupo marca a equipe toda); no ES, uma lista só
+  const equipes = [...new Set(op.vendedores.map((v) => v.equipe))];
+  const nomeEquipe = (e) => `Equipe ${e === "EDIR" ? "Edir" : e}`;
+  itensV = op.vendedores.map((v) => ({ id: v.id, nome: v.nome, grupo: v.equipe, detalhe: `código ${v.id}` }));
+  filtroV.definir(itensV, escolhidos(d), equipes.map((e) => ({ id: e, nome: equipes.length > 1 ? nomeEquipe(e) : "" })));
   document.getElementById("s-area").innerHTML = `<option value="">Todas as áreas</option>` +
     op.areas.map((a) => `<option value="${a.id}"${a.id === d.filtros.area ? " selected" : ""}>${esc(a.nome)}</option>`).join("");
   document.getElementById("s-mes").innerHTML = op.meses.map((m) =>
@@ -201,8 +217,10 @@ function variacao(v) {
 }
 
 function nomeVendedor(d) {
-  if (!d.filtros.vendedor) return `todos os vendedores do ${d.estado}`;
-  return d.opcoes.vendedores.find((v) => v.id === d.filtros.vendedor)?.nome || `vendedor ${d.filtros.vendedor}`;
+  const ids = escolhidos(d);
+  if (!ids.length) return `todos os vendedores do ${d.estado}`;
+  const nomes = ids.map((id) => d.opcoes.vendedores.find((v) => v.id === id)?.nome || `vendedor ${id}`);
+  return nomes.length <= 3 ? nomes.join(", ") : `${nomes.length} vendedores do ${d.estado}`;
 }
 
 function descricaoFiltro(d) {
@@ -240,11 +258,11 @@ function aoClicar(e) {
   if (!d) return;
   if (e.target.closest("input[data-aj], [data-aj-limpar]")) return;  // ajustar a meta não escolhe o produto do gráfico
   const v = e.target.closest("[data-vendedor]");
-  if (v) {
-    const id = Number(v.dataset.vendedor);
-    estado.vendedor = estado.vendedor === id ? null : id;
-    estado.area = null;
-    carregar();
+  if (v) {  // clique: só ele (de novo: todos); Ctrl+clique: junta ao filtro ou tira dele
+    const id = Number(v.dataset.vendedor), atual = estado.vendedores;
+    escolherVendedores(e.ctrlKey || e.metaKey
+      ? (atual.includes(id) ? atual.filter((x) => x !== id) : [...atual, id])
+      : (atual.length === 1 && atual[0] === id ? [] : [id]));
     return;
   }
   const visao = e.target.closest("[data-visao]");
@@ -300,8 +318,11 @@ function kpi({ i, cor, ic, rotulo, valor, contar, meta, rodape = [], extra = "" 
 
 function kpis(d) {
   const c = d.cartoes, p = d.parametros, m = d.mes;
-  const doVendedor = d.filtros.vendedor && !d.filtros.area ? d.resumo.find((r) => r.id === d.filtros.vendedor) : null;
-  const lancada = doVendedor ? doVendedor.meta_lancada : null;
+  // a meta lançada dos escolhidos (sem filtro de área): a soma, quando todos têm uma
+  const sel = d.filtros.area ? [] : d.resumo.filter((r) => escolhidos(d).includes(r.id));
+  const lancada = sel.length && sel.every((r) => r.meta_lancada != null) ? sel.reduce((a, r) => a + r.meta_lancada, 0) : null;
+  const rotuloLancada = sel.every((r) => r.aprovada) ? (sel.length > 1 ? "Metas aprovadas (soma)" : "Meta aprovada")
+    : sel.length > 1 ? "Metas lançadas (soma)" : "Meta lançada na planilha";
   const tt = `<div class='tt-t'>Meta sugerida sobre a base</div>${fmt.moeda(c.meta_rs)} contra ${fmt.moeda(c.base_rs)} em ${esc(m.curto_base)} (volume × o mesmo preço médio)`;
   const meta = kpi({
     i: 1, cor: "var(--s-fat)", ic: "alvo", rotulo: "Meta sugerida", valor: "R$ 0", contar: c.meta_rs,
@@ -309,7 +330,7 @@ function kpis(d) {
     meta: `para <b>${esc(m.rotulo_meta)}</b> · ${esc(descricaoFiltro(d))}`,
     rodape: [
       [`Base de ${esc(m.curto_base)} (mesma conta)`, fmt.moeda(c.base_rs)],
-      ...(lancada != null ? [[doVendedor.aprovada ? "Meta aprovada" : "Meta lançada na planilha", fmt.moeda(lancada)]] : []),
+      ...(lancada != null ? [[rotuloLancada, fmt.moeda(lancada)]] : []),
       ["Produtos com meta", fmt.num(d.produtos.length)],
     ],
   });
@@ -661,7 +682,7 @@ function resumo(d, i) {
     <table class="relatorio-tabela sug-resumo">
       <thead><tr><th>Vendedor</th><th>Base (${esc(m.curto_base)})</th><th class="total">Meta sugerida</th><th>Crescimento</th>
         <th>Meta lançada</th><th>Lançada − sugerida</th></tr></thead>
-      <tbody>${linhas.map((r) => `<tr data-vendedor="${r.id}" class="${r.id === d.filtros.vendedor ? "sel" : ""}" title="Clique para ver só ${esc(r.nome)}">
+      <tbody>${linhas.map((r) => `<tr data-vendedor="${r.id}" class="${escolhidos(d).includes(r.id) ? "sel" : ""}" title="Clique para ver só ${esc(r.nome)} · Ctrl+clique junta ao filtro ou tira dele">
         <td class="rotulo">${esc(r.nome)}${r.equipe === "EDIR" ? " <small>(Edir)</small>" : ""}</td>
         <td>${fmt.moeda(r.base_rs)}</td><td class="total">${fmt.moeda(r.meta_rs)}</td><td>${sinal(r.crescimento)}</td>
         <td>${r.meta_lancada != null ? fmt.moeda(r.meta_lancada) : "—"}${r.aprovada ? ` <span class="sug-aprovada" title="Aprovada no painel (Configurar › Aprovação de metas)">${icone("visto")}</span>` : ""}</td><td>${dif(r.diferenca)}</td></tr>`).join("")}</tbody>
@@ -674,7 +695,7 @@ function resumo(d, i) {
   <section class="cartao secao entra" style="--i:${i}">
     <div class="cartao-cab">
       <div><h3>${icone("pessoas")}Resumo dos vendedores do ${esc(d.estado)}</h3>
-        <p class="sub">Todos os vendedores do seu acesso, sem os filtros de vendedor e área · clique num vendedor para ver só ele · a meta lançada é a aprovada no painel (com ✓) ou a META FATURAMENTO da METAS.xlsx</p></div>
+        <p class="sub">Todos os vendedores do seu acesso, sem os filtros de vendedor e área · clique num vendedor para ver só ele (Ctrl+clique junta ou tira do filtro) · a meta lançada é a aprovada no painel (com ✓) ou a META FATURAMENTO da METAS.xlsx</p></div>
       <div class="acoes-relatorio">
         <button class="btn" data-captura="copiar" data-arquivo="${arquivo}" title="Copia a tabela como imagem para colar no WhatsApp">${icone("disco")}Copiar imagem</button>
         <button class="btn icone" data-captura="baixar" data-arquivo="${arquivo}" title="Baixar a tabela como imagem (PNG)">${icone("abaixo")}</button>

@@ -277,6 +277,27 @@ class TestSugestao(unittest.TestCase):
         self.assertAlmostEqual(resumo[JAMILLE]["diferenca"], 25000.0 - um[0])
         self.assertIsNone(resumo[EDIR]["meta_lancada"])
 
+    def test_varios_vendedores_no_filtro(self):
+        um = {v: self.sug.calcular("BA", "2026-10", v) for v in (JAMILLE, EDIR)}
+        for filtro in ([JAMILLE, EDIR], f"{JAMILLE},{EDIR}", f"{EDIR}, {JAMILLE},{EDIR}"):  # lista ou texto, repetido 1x
+            r = self.sug.calcular("BA", "2026-10", filtro)
+            self.assertEqual(r["filtros"], {"vendedor": None, "vendedores": [EDIR, JAMILLE], "area": None})
+            self.assertAlmostEqual(r["cartoes"]["meta_rs"], sum(x["cartoes"]["meta_rs"] for x in um.values()))
+        # um só (número, texto ou lista): o vendedor continua no filtro, como antes
+        for filtro in (JAMILLE, str(JAMILLE), [JAMILLE]):
+            r = self.sug.calcular("BA", "2026-10", filtro)
+            self.assertEqual((r["filtros"]["vendedor"], r["filtros"]["vendedores"]), (JAMILLE, [JAMILLE]))
+            self.assertAlmostEqual(r["cartoes"]["meta_rs"], um[JAMILLE]["cartoes"]["meta_rs"])
+        self.assertEqual(self.sug.calcular("BA", "2026-10", "")["filtros"]["vendedores"], [])  # vazio = todos
+        # o resumo é sempre de todos, sem o filtro; as áreas do filtro são as dos escolhidos
+        r = self.sug.calcular("BA", "2026-10", [JAMILLE, EDIR], ORLA)
+        self.assertEqual({v["id"] for v in r["resumo"]}, {JAMILLE, EDIR})
+        self.assertEqual({a["id"] for a in r["opcoes"]["areas"]}, {ORLA, SEM_DIA})
+        with self.assertRaises(ValueError):
+            self.sug.calcular("BA", "2026-10", [JAMILLE, RUBENS])  # um deles é do ES
+        with self.assertRaises(ValueError):
+            self.sug.calcular("BA", "2026-10", "98,abc")
+
     def test_por_area(self):
         r = self.sug.calcular("BA", "2026-10")
         orla = next(a for a in r["areas"] if a["id"] == ORLA)

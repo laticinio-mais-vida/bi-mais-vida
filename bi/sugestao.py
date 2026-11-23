@@ -108,6 +108,24 @@ def _fim(i: int) -> dt.date:
     return dt.date(a, m, calendar.monthrange(a, m)[1])
 
 
+def _vendedores_do_filtro(valor) -> list[int]:
+    """Os vendedores do filtro da página, em ordem e sem repetir ([] = todos): um código, "98,113" ou uma lista."""
+    if valor is None or valor == "":
+        return []
+    partes = valor if isinstance(valor, (list, tuple, set)) else str(valor).split(",")
+    ids: list[int] = []
+    for x in partes:
+        if str(x).strip() == "":
+            continue
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            raise ValueError(f"vendedor inválido: {x!r}") from None
+        if v not in ids:
+            ids.append(v)
+    return sorted(ids)
+
+
 # --- regras da página -----------------------------------------------------------------------
 def padrao() -> dict:
     """O que o Power BI fazia: 12% de crescimento no ano, tetos de 20% e as áreas quinzenais da planilha; os prazos de
@@ -531,8 +549,9 @@ class Sugestao:
     def calcular(self, estado: str | None = None, mes: str | None = None, vendedor=None, area=None,
                  permitidos: set[int] | None = None, equipes: set[str] | None = None, admin: bool | None = None) -> dict:
         """estado: ES ou BA (vazio = o primeiro do acesso); mes: o mês da meta, AAAA-MM (vazio = o mês dos dados);
-        vendedor/area: filtros (vazio = todos). permitidos/equipes: o que o usuário vê (None = sem limite). admin: quem
-        vê os avisos do administrador (None = quem não tem limite; um visualizador com todos os vendedores não vê)."""
+        vendedor/area: filtros (vazio = todos; vendedor pode ser um código, "98,113" ou uma lista, e a página soma os
+        escolhidos). permitidos/equipes: o que o usuário vê (None = sem limite). admin: quem vê os avisos do
+        administrador (None = quem não tem limite; um visualizador com todos os vendedores não vê)."""
         self._conferir()
         regras = self.calc.regras()
         d = self._dados(regras)
@@ -555,11 +574,12 @@ class Sugestao:
         todos = self._vendedores(d, regras, estado, permitidos, equipes, i_meta)
         nomes = self.nomes()
         nome = lambda v: nomes.get(v) or f"Vendedor {v}"  # noqa: E731
-        vendedor = int(vendedor) if vendedor not in (None, "") else None
-        if vendedor is not None and vendedor not in todos:
-            raise ValueError(f"o vendedor {vendedor} não está entre os vendedores do {estado} do seu acesso")
+        filtro = _vendedores_do_filtro(vendedor)
+        for v in filtro:
+            if v not in todos:
+                raise ValueError(f"o vendedor {v} não está entre os vendedores do {estado} do seu acesso")
         area = int(area) if area not in (None, "") else None
-        escolhidos = [vendedor] if vendedor is not None else todos
+        escolhidos = filtro or todos
         k = self._contexto(regras, estado)
         linhas, fora = self._linhas(d, k, escolhidos, area, i_meta)
 
@@ -588,7 +608,7 @@ class Sugestao:
 
         # Resumo: todos os vendedores do estado do acesso, sem os filtros de vendedor e área, com a meta lançada (a da
         # METAS.xlsx ou a aprovada no painel, que a substitui).
-        linhas_resumo = linhas if (vendedor is None and area is None) else self._linhas(d, k, todos, None, i_meta)[0]
+        linhas_resumo = linhas if (not filtro and area is None) else self._linhas(d, k, todos, None, i_meta)[0]
         por_vendedor: dict[int, _Soma] = defaultdict(lambda: _Soma("base_rs"))
         for ln in linhas_resumo:
             por_vendedor[ln["v"]].somar(ln)
@@ -649,7 +669,8 @@ class Sugestao:
             "mes": {"meta": texto_mes(i_meta), "base": texto_mes(ib), "rotulo_meta": rotulo_mes(i_meta),
                     "rotulo_base": rotulo_mes(ib), "curto_meta": curto_mes(i_meta), "curto_base": curto_mes(ib),
                     "base_fechado": data_ref >= _fim(ib)},
-            "filtros": {"vendedor": vendedor, "area": area},
+            # vendedores: os escolhidos ([] = todos); vendedor: o escolhido quando é um só (senão None)
+            "filtros": {"vendedor": filtro[0] if len(filtro) == 1 else None, "vendedores": filtro, "area": area},
             "opcoes": {
                 "vendedores": [{"id": v, "nome": nome(v), "equipe": regras.grupo_vendedor(v)} for v in todos],
                 "areas": [{"id": a, "nome": nome_area(a)} for a in areas_opcao],
