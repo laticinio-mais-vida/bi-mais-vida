@@ -453,6 +453,80 @@ class Credito:
         nome, limite, prazo = linhas[0]
         return {"id": cliente, "nome": nome, "limite": float(limite or 0), "prazo": prazo}
 
+    # --- a capa de análise de crédito (bi/capa_credito.py): o CNPJ e o histórico Mais Vida ----
+    def cnpj_de(self, cliente) -> str | None:
+        """Os 14 dígitos do CNPJ do cliente no ERP (tabela clientes_cnpj do cache). None: sem CNPJ (pessoa física), cache
+        sem a tabela (o computador da empresa com o código anterior) ou dados ainda não prontos."""
+        if not self.cache.pronto() or self.cache.sem_cnpj:
+            return None
+        try:
+            cliente = int(cliente)
+        except (TypeError, ValueError):
+            return None
+        linhas = self.cache.consulta("SELECT cnpj FROM clientes_cnpj WHERE id = ? LIMIT 1", [cliente])
+        return linhas[0][0] if linhas else None
+
+    def clientes_dos_cnpjs(self, cnpjs: list[str]) -> dict[str, list[dict]] | None:
+        """Os códigos do ERP de cada CNPJ (14 dígitos), o da compra mais recente primeiro: {cnpj: [{id, nome, carteira,
+        limite, prazo, ultima_compra}]}; CNPJ que não é cliente não aparece. None: o cache ainda não tem o CNPJ dos
+        clientes (o computador da empresa com o código anterior)."""
+        if not self.cache.pronto() or self.cache.sem_cnpj:
+            return None
+        cnpjs = sorted({c for c in cnpjs if c})
+        if not cnpjs:
+            return {}
+        nomes = self.nomes_vendedores()
+        credito = "" if self.cache.sem_credito else " LEFT JOIN clientes_credito l ON l.id = c.id"
+        colunas = "NULL, NULL" if self.cache.sem_credito else "l.limite, l.prazo"
+        linhas = self.cache.consulta(
+            f"SELECT k.cnpj, c.id, c.nome, c.id_vendedor, {colunas}, (SELECT MAX(v.data) FROM vendas_clientes v "
+            "  WHERE v.id_cliente = c.id AND v.tipocliente = 'CLIENTE') AS ultima "
+            f"FROM clientes_cnpj k JOIN clientes c ON c.id = k.id{credito} WHERE k.cnpj IN ({_marcas(cnpjs)}) "
+            "ORDER BY k.cnpj, ultima DESC NULLS LAST, c.id DESC", cnpjs)
+        saida: dict[str, list[dict]] = {}
+        for cnpj, i, n, v, limite, prazo, ultima in linhas:
+            saida.setdefault(cnpj, []).append({"id": i, "nome": n, "carteira": nomes.get(v) if v else None,
+                                               "limite": float(limite or 0), "prazo": prazo, "ultima_compra": ultima})
+        return saida
+
+    def clientes_por_id(self, ids: list[int]) -> dict[int, dict]:
+        """O nome, a carteira, o limite e o prazo de hoje de cada cliente: {id: {id, nome, carteira, limite, prazo}}; o
+        que não existe não aparece. Sem os dados de crédito no cache, limite 0 e prazo vazio."""
+        if not self.cache.pronto():
+            return {}
+        ids = sorted({int(i) for i in ids if i})
+        if not ids:
+            return {}
+        nomes = self.nomes_vendedores()
+        credito = "" if self.cache.sem_credito else " LEFT JOIN clientes_credito l ON l.id = c.id"
+        colunas = "NULL, NULL" if self.cache.sem_credito else "l.limite, l.prazo"
+        return {i: {"id": i, "nome": n, "carteira": nomes.get(v) if v else None, "limite": float(limite or 0),
+                    "prazo": prazo}
+                for i, n, v, limite, prazo in self.cache.consulta(
+                    f"SELECT c.id, c.nome, c.id_vendedor, {colunas} FROM clientes c{credito} "
+                    f"WHERE c.id IN ({_marcas(ids)})", ids)}
+
+    def clientes_do_cnpj(self, cnpj: str | None) -> list[dict] | None:
+        """Os códigos do ERP com esse CNPJ (clientes_dos_cnpjs). None: o cache ainda não tem o CNPJ dos clientes; [] = não
+        é cliente."""
+        todos = self.clientes_dos_cnpjs([cnpj] if cnpj else [])
+        return None if todos is None else todos.get(cnpj, [])
+
+    def historico_mais_vida(self, cliente: int) -> dict:
+        """O que a capa de análise olha no histórico do cliente na Mais Vida (a "histórico Mais Vida" do ERP), até o dia da
+        extração: a pontualidade dos 12 meses (a mesma conta do parecer: pagos até TOLERANCIA dias depois do
+        vencimento ÷ quitados), a última compra e os dias com compra nos últimos 90 (vendas a prazo e à vista)."""
+        self._conferir()
+        h = self._historico(int(cliente))
+        hoje = h["hoje"]
+        ultima, dias_90 = self.cache.consulta(
+            "SELECT MAX(data) FILTER (WHERE data <= ?), COUNT(DISTINCT data) FILTER (WHERE data > ? AND data <= ?) "
+            "FROM vendas_clientes WHERE id_cliente = ? AND tipocliente = 'CLIENTE'",
+            [hoje, hoje - dt.timedelta(days=90), hoje, h["cliente"]["id"]])[0]
+        return {"id": h["cliente"]["id"], "nome": h["cliente"]["nome"], "hoje": hoje, "quitados": h["quitados"],
+                "pontuais": h["pontuais"], "pontualidade": h["pontualidade"], "ultima_compra": ultima,
+                "dias_sem_compra": (hoje - ultima).days if ultima else None, "dias_com_compra_90": dias_90}
+
     # --- parecer de um limite novo ---------------------------------------------------------
     def _historico(self, cliente: int) -> dict:
         """O que a regra do parecer olha no cliente: o cadastro e o que ele tem em aberto hoje (_clientes) e os títulos

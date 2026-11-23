@@ -14,6 +14,8 @@ IA ajudar nas decisões; o Assistente já lê, com a ferramenta reanalises_credi
   aumento de limite só pode ser registrado a partir do dia dela + N dias; redução, corte e manter passam sempre. O
   administrador pode registrar mesmo assim, e a reanálise guarda a regra que valia (coluna bloqueio, migração 038).
 - O retrato leva também o último envio do Serasa do cliente (bi/serasa.py), quando há um.
+- As capas de análise de crédito do cliente (bi/capa_credito.py: as de reanálise dele e as de cadastro novo com o CNPJ
+  dele) aparecem junto das reanálises e contam como a decisão anterior para o prazo mínimo.
 """
 from __future__ import annotations
 
@@ -94,7 +96,8 @@ class ConfigCredito(RegrasNoBanco):
 def texto_bloqueio(b: dict) -> str:
     """O bloqueio que vale (Reanalises._bloqueio), para a mensagem e para a marca da reanálise."""
     ate, dia = dt.date.fromisoformat(b["aumento_a_partir_de"]), dt.date.fromisoformat(b["ultima_em"])
-    return (f"aumento só a partir de {ate:%d/%m/%Y} (prazo mínimo de {b['dias']} dias desde a reanálise de "
+    desde = "a capa de análise de crédito" if b.get("origem") == "capa" else "a reanálise"
+    return (f"aumento só a partir de {ate:%d/%m/%Y} (prazo mínimo de {b['dias']} dias desde {desde} de "
             f"{dia:%d/%m/%Y})")
 
 
@@ -197,30 +200,39 @@ class Reanalises:
     """As reanálises de crédito, na tabela credito_reanalises. ativo: o site, que grava e lê; no PC (False) a página só
     avisa que elas ficam no site."""
 
-    def __init__(self, banco, credito: Credito, ativo: bool, config: ConfigCredito | None = None, serasa=None):
+    def __init__(self, banco, credito: Credito, ativo: bool, config: ConfigCredito | None = None, serasa=None,
+                 capas=None):
         """config: as regras do crédito (None = sem prazo mínimo); serasa: os dados do Serasa (bi/serasa.py), que vão
-        para o retrato (None = o retrato fica sem eles)."""
+        para o retrato (None = o retrato fica sem eles); capas: as capas de análise de crédito
+        (bi/capa_credito.py), que aparecem com as reanálises e contam para o prazo mínimo (None = sem elas)."""
         self.banco = banco
         self.credito = credito
         self.ativo = ativo
         self.config = config
         self.serasa = serasa
+        self.capas = capas
 
     def _bloqueio(self, con, cliente: int) -> dict | None:
-        """O prazo mínimo entre reanálises, se ele vale hoje para o cliente: a última reanálise (sem as excluídas), o
-        prazo e o dia a partir do qual um aumento pode ser registrado. None = não há bloqueio."""
+        """O prazo mínimo entre reanálises, se ele vale hoje para o cliente: a última decisão (a reanálise ou a análise
+        do cadastro com o CNPJ dele, sem as excluídas), o prazo e o dia a partir do qual um aumento pode ser registrado.
+        None = não há bloqueio."""
         dias = self.config.atual()["intervalo_reanalise_dias"] if self.config else 0
         if not dias:
             return None
         linha = con.execute("SELECT id, feita_em FROM credito_reanalises WHERE id_cliente = %s AND excluida_em IS NULL "
                             "ORDER BY feita_em DESC, id DESC LIMIT 1", [cliente]).fetchone()
-        if linha is None:
+        ultima, origem, ultima_id = (linha[1], "reanalise", linha[0]) if linha else (None, None, None)
+        capa = self.capas.ultima_em(con, cliente, self.credito.cnpj_de(cliente)) if self.capas else None
+        if capa is not None and (ultima is None or capa > ultima):
+            ultima, origem, ultima_id = capa, "capa", None
+        if ultima is None:
             return None
-        dia = linha[1].astimezone().date()
+        dia = ultima.astimezone().date()
         ate = dia + dt.timedelta(days=dias)
         if dt.date.today() >= ate:
             return None
-        return {"dias": dias, "ultima_id": linha[0], "ultima_em": dia.isoformat(), "aumento_a_partir_de": ate.isoformat()}
+        return {"dias": dias, "ultima_id": ultima_id, "ultima_em": dia.isoformat(), "aumento_a_partir_de": ate.isoformat(),
+                "origem": origem}
 
     # --- a página ------------------------------------------------------------------------
     def listar(self, cliente, usuario: dict) -> dict:
@@ -240,7 +252,9 @@ class Reanalises:
         if itens:
             itens[0]["erp"] = self._erp(itens[0], cadastro, extraido)
         return {"ativo": True, "aviso": None, "reanalises": itens, "prazos": self.credito.prazos(),
-                "chave": novo_id(), "cadastro": cadastro, "dados_ate": extraido, "bloqueio": bloqueio}
+                "chave": novo_id(), "cadastro": cadastro, "dados_ate": extraido, "bloqueio": bloqueio,
+                # as capas de análise de crédito do cliente (as de cadastro novo, pelo CNPJ dele)
+                "capas": self.capas.do_cliente(cliente, usuario) if self.capas else []}
 
     @staticmethod
     def _item(d: dict, usuario: dict) -> dict:

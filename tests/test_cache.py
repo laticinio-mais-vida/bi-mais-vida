@@ -27,10 +27,11 @@ class TestPedidosNoCache(unittest.TestCase):
         self._tmp.cleanup()
 
     def cache(self, pedidos=True, extras=False, rede=True, credito=True, parcelas=True, carteira=True,
-              brindes=True, comissao=True, pedidos_detalhe=True, devolucoes_notas=True, bloqueios=True) -> Path:
+              brindes=True, comissao=True, pedidos_detalhe=True, devolucoes_notas=True, bloqueios=True,
+              cnpj=True) -> Path:
         calc = criar_calc(self.pasta, pedidos=pedidos, extras=extras, rede=rede, credito=credito, parcelas=parcelas,
                           carteira=carteira, brindes=brindes, comissao=comissao, pedidos_detalhe=pedidos_detalhe,
-                          devolucoes_notas=devolucoes_notas, bloqueios=bloqueios)
+                          devolucoes_notas=devolucoes_notas, bloqueios=bloqueios, cnpj=cnpj)
         calc.cache._con.close()
         return self.pasta / "cache.duckdb"
 
@@ -174,6 +175,36 @@ class TestPedidosNoCache(unittest.TestCase):
         self.assertFalse(c.sem_bloqueio)
         c._con.close()
 
+    def test_cnpj_opcional(self):
+        # sem o CNPJ dos clientes (PC com o código anterior): vale, e o PC extrai de novo uma vez para trazê-lo; se a
+        # leitura falhou, espera a próxima cópia
+        arquivo = self.cache(cnpj=False)
+        Cache.conferir(arquivo)
+        banco = self.pasta / "copia.gdb"
+        banco.write_bytes(b"x")
+        os.utime(banco, (time.time() - 3600, time.time() - 3600))
+        ini = configparser.ConfigParser()
+        ini.read_dict({"cache": {"arquivo": arquivo.name}, "banco": {"arquivo": str(banco)}})
+        con = duckdb.connect(str(arquivo))
+        con.execute("UPDATE info SET valor = ? WHERE chave = 'banco_mtime'", [str(time.time())])
+        con.close()
+        c = Cache(ini, self.pasta)
+        self.assertEqual((c.sem_cnpj, c.sem_bloqueio, c.desatualizado()), (True, False, True))
+        c.info["cnpj_erro"] = "Column unknown CGC"
+        self.assertFalse(c.desatualizado())
+        c._con.close()
+        con = duckdb.connect(str(arquivo))
+        con.execute("CREATE TABLE clientes_cnpj (id INTEGER)")
+        con.close()
+        with self.assertRaises(ValueError) as e:
+            Cache.conferir(arquivo)
+        self.assertIn("clientes_cnpj", str(e.exception))
+        arquivo.unlink()
+        self.cache()
+        c = Cache(ini, self.pasta)
+        self.assertFalse(c.sem_cnpj)
+        c._con.close()
+
     def test_carteira_opcional(self):
         # sem o histórico da carteira (PC com o código anterior): vale, e o PC extrai de novo uma vez para registrá-la;
         # se o registro falhou (banco fora do ar), espera a próxima cópia
@@ -314,6 +345,7 @@ class _ErpFalso:
     falhar_itens = False
     falhar_notas = False
     falhar_bloqueio = False
+    falhar_cnpj = False
     chamadas: list = []
 
     def __init__(self, *a, **k):
@@ -364,6 +396,11 @@ class _ErpFalso:
                 (5754, 0, None, "   \r\n  "),                               # só espaços: fica de fora
                 (4765, None, None, b"AUTORIZA\xc7\xc3O DO FINANCEIRO"),       # texto em bytes (cp1252)
             ]
+        if sql.startswith("SELECT ID_CLIENTE, CGC FROM CLIENTES"):
+            if type(self).falhar_cnpj:
+                raise RuntimeError("Column unknown CGC")
+            return [(11734, "11.222.333/0001-81"), (9300, "123.456.789-09"),  # CPF fica de fora
+                    (10908, b"22333444000155"), (5754, "   "), (4765, "00.000.000/0000-00"), (4766, "11222333000181")]
         if "FROM LISTAPEDIDOVENDA" in sql:
             if type(self).falhar_itens:
                 raise RuntimeError("Table unknown LISTAPEDIDOVENDA")
@@ -384,6 +421,7 @@ class TestPedidosUmAUm(unittest.TestCase):
         self.ini.read_dict({"cache": {"arquivo": "cache.duckdb", "inicio": "2024-01-01"},
                             "banco": {"arquivo": str(banco), "usuario": "SYSDBA", "senha": "x"}})
         _ErpFalso.falhar_itens, _ErpFalso.falhar_notas, _ErpFalso.falhar_bloqueio = False, False, False
+        _ErpFalso.falhar_cnpj = False
         _ErpFalso.chamadas = []
 
     def tearDown(self):
@@ -470,6 +508,24 @@ class TestPedidosUmAUm(unittest.TestCase):
             4765: (False, None, "AUTORIZAÇÃO DO FINANCEIRO"),
         })  # o 5754 (só espaços, sem bloqueio) fica de fora
         self.assertNotIn("bloqueio_erro", c.info)
+        c._con.close()
+
+    def test_cnpj_dos_clientes(self):
+        c = self.atualizar()
+        self.assertFalse(c.sem_cnpj)
+        # só os 14 dígitos; CPF, vazio e zeros ficam de fora; dois códigos podem ter o mesmo CNPJ
+        self.assertEqual(sorted(c.consulta("SELECT id, cnpj FROM clientes_cnpj")),
+                         [(4766, "11222333000181"), (10908, "22333444000155"), (11734, "11222333000181")])
+        self.assertNotIn("cnpj_erro", c.info)
+        c._con.close()
+
+    def test_falha_no_cnpj(self):
+        _ErpFalso.falhar_cnpj = True
+        c = self.atualizar()
+        self.assertTrue(c.sem_cnpj)
+        self.assertIn("CGC", c.info["cnpj_erro"])
+        self.assertIn("clientes_bloqueio", {r[0] for r in c.consulta("SELECT table_name FROM information_schema.tables")})
+        self.assertFalse(c.desatualizado())  # espera a próxima cópia
         c._con.close()
 
     def test_falha_no_bloqueio(self):

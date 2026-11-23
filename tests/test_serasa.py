@@ -225,7 +225,8 @@ class TestLeitura(unittest.TestCase):
         self.assertEqual((d["cnpj"], d["razao_social"], d["nome_fantasia"], d["emitido_em"], d["fundacao"]),
                          ("11.222.333/0001-81", "JOAO COMERCIO LTDA EPP", "MERCADO DO JOAO",
                           dt.datetime(2026, 11, 4, 9, 25), dt.date(2020, 11, 25)))
-        self.assertEqual(d["score"], {"valor": 376, "probabilidade": 0.0212, "risco": "Médio", "alerta": None})
+        self.assertEqual(d["score"], {"valor": 376, "probabilidade": 0.0212, "risco": "Médio", "alerta": None,
+                                      "recomendacao": {"texto": "Venda com garantias adicionais", "chave": "garantias"}})
         self.assertEqual([(f["chave"], f["quantidade"]["de"], f["quantidade"]["ate"], f["percentual"]["de"],
                            f["percentual"]["ate"]) for f in d["faixas"]],
                          [("pontual", 200, 250, 0.91, 0.93), ("8_15", 1, 3, 0.004, 0.01), ("16_30", 10, 15, 0.05, 0.07),
@@ -261,7 +262,8 @@ class TestLeitura(unittest.TestCase):
         anotações com quantidade, período e valor, seguidas do quadro de cada contrato."""
         d = ler_texto(NEGATIVADA)
         self.assertEqual(d["score"], {"valor": 2, "probabilidade": 1.0, "risco": "Iminente",
-                                      "alerta": "DEFAULT - DIVIDA VENCIDA COM INSTITUICAO FINANCEIRA HA MAIS DE 90 DIAS"})
+                                      "alerta": "DEFAULT - DIVIDA VENCIDA COM INSTITUICAO FINANCEIRA HA MAIS DE 90 DIAS",
+                                      "recomendacao": {"texto": "Venda à vista", "chave": "a_vista"}})
         self.assertEqual((d["faixas"], d["pontualidade"], d["faltou"]),
                          ([], [], ["títulos por faixa", "pontualidade em R$"]))
         self.assertEqual((d["razao_social"], d["fundacao"]), ("12 345 678 FULANO DE TAL ME", dt.date(2015, 2, 6)))
@@ -323,6 +325,27 @@ class TestLeitura(unittest.TestCase):
             with self.assertRaises(ValueError, msg=erro) as e:
                 ler_relato(conteudo)
             self.assertIn(erro, str(e.exception))
+
+    def test_sem_nome_fantasia(self):
+        # o Serasa escreve "NÃO INFORMADO" quando a empresa não tem nome fantasia
+        self.assertIsNone(ler_texto(relato(fantasia="NÃO INFORMADO"))["nome_fantasia"])
+        self.assertEqual(ler_texto(relato(fantasia="Mercado Informado"))["nome_fantasia"], "Mercado Informado")
+
+    def test_a_recomendacao_das_praticas_de_mercado(self):
+        """A linha logo abaixo do título "Venda à prazo" (nos 12 PDFs reais: "Venda a prazo", "Venda com garantias" +
+        "adicionais" ou "Venda à vista")."""
+        base = relato()
+        bloco = "Venda à prazo\nVenda com garantias\nadicionais"
+        self.assertIn(bloco, base)
+        casos = {"Venda à prazo\nVenda a prazo": ("Venda a prazo", "a_prazo"),
+                 "Venda à prazo\nVenda à vista": ("Venda à vista", "a_vista"),
+                 bloco: ("Venda com garantias adicionais", "garantias")}
+        for texto, (rotulo, chave) in casos.items():
+            r = ler_texto(base.replace(bloco, texto))["score"]["recomendacao"]
+            self.assertEqual(r, {"texto": rotulo, "chave": chave}, texto)
+        for texto in ("Venda à prazo", "Venda à prazo\nConsulte o Serasa", ""):  # sem a linha, ou outra coisa
+            self.assertIsNone(ler_texto(base.replace(bloco, texto))["score"]["recomendacao"], texto)
+        self.assertEqual(ler_relato(pdf(base))["score"]["recomendacao"]["chave"], "garantias")
 
     def test_o_nome_do_relatorio_contra_o_do_cadastro(self):
         self.assertTrue(mesma_empresa(["MR PAO LTDA EPP", "MR PAO"], ["PADARIA MR PÃO - SERRA"]))
@@ -426,6 +449,28 @@ class TestGravar(Base):
         self.assertFalse(r["ja_existia"])
         self.assertFalse(self.serasa.listar(1, self.ana)["atual"]["pode_excluir"])
         self.assertIsNone(self.serasa.excluir(self.admin, r["id"])["atual"])
+
+    def test_o_pdf_de_um_cadastro_novo_liga_pelo_cnpj(self):
+        # gravado sem código; aparece no cliente cujo CNPJ (no cache) é o do relatório: o 1 tem 11.222.333/0001-81
+        r = self.serasa.enviar_cadastro(self.ana, pdf(relato()))
+        self.assertEqual((r["ja_existia"], r["item"]["do_cadastro"], r["item"]["cnpj_digitos"]),
+                         (False, True, "11222333000181"))
+        with self.banco.conexao() as con:
+            self.assertEqual(con.execute("SELECT id_cliente, cliente FROM credito_serasa").fetchone(),
+                             (None, "MERCADO DO JOAO"))
+        self.assertTrue(self.serasa.enviar_cadastro(self.bia, pdf(relato()))["ja_existia"])
+        self.assertEqual(self.contar("credito_serasa"), 1)
+        x = self.serasa.listar(1, self.ana)["atual"]
+        self.assertEqual((x["id"], x["do_cadastro"]), (r["id"], True))
+        self.assertIsNone(self.serasa.listar(2, self.ana)["atual"])
+        # o mesmo PDF enviado também pelo código do cliente: os dois aparecem
+        self.serasa.enviar(self.ana, 1, pdf(relato()))
+        s = self.serasa.listar(1, self.ana)
+        self.assertEqual(sorted(x["do_cadastro"] for x in (s["atual"], *s["anteriores"])), [False, True])
+        # excluir pela página do cliente devolve a lista dele
+        self.assertEqual(len(self.serasa.excluir(self.ana, r["id"], 1)["anteriores"]), 0)
+        with self.assertRaises(ValueError):
+            self.serasa.enviar_cadastro(self.ana, pdf(relato(cnpj="sem cnpj")))
 
     def test_no_pc_so_avisa(self):
         pc = DadosSerasa(self.banco, self.credito, ativo=False)

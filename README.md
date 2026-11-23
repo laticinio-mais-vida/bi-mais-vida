@@ -786,7 +786,8 @@ nos últimos 30 dias, o gasto de hoje e as últimas perguntas.
 ### Privacidade
 
 Nomes de clientes, cidades, segmentos e valores de venda vão para a API da Anthropic, que não usa o que recebe
-pela API para treinar modelos. CPF/CNPJ, telefone e endereço não estão no cache e não vão. O limite de crédito, o
+pela API para treinar modelos. CPF, telefone e endereço não estão no cache e não vão. O CNPJ dos clientes está no
+cache, numa tabela à parte que a IA não lê (só para ligar a capa de um cadastro novo ao cliente). O limite de crédito, o
 prazo, os títulos a receber e o **bloqueio no ERP** (com a observação do bloqueio, texto livre do cadastro, que às
 vezes tem o nome de quem autorizou) estão no cache, mas só vão para a IA nas perguntas de quem tem a página
 Reavaliação de Crédito; para os outros, esses dados nem existem na cópia que a IA consulta. A IA trata a observação
@@ -794,7 +795,9 @@ como dado, nunca como instrução. O mesmo vale para as reanálises de
 crédito: as decisões e as **justificativas** (texto livre, que a página pede para não ter CPF, telefone ou endereço)
 vão para a IA só nas perguntas de quem tem a página. Dos **dados do Serasa** (veja [Dados do Serasa](#dados-do-serasa)),
 o banco do site guarda só a fundação, o score, o histórico de pagamento, as anotações negativas, o CNPJ e a razão
-social; o PDF não fica guardado (os sócios e o CPF deles não entram), e nada disso vai para a IA. Do **Google Agenda** de cada pessoa (veja
+social; o PDF não fica guardado (os sócios e o CPF deles não entram), e nada disso vai para a IA. O mesmo vale para as
+**capas de análise de crédito** (veja [Capa de análise de crédito](#capa-de-análise-de-crédito)): nada delas vai para
+a IA. Do **Google Agenda** de cada pessoa (veja
 [Google Agenda](#google-agenda-só-leitura)), o banco do site guarda só o título, o horário e se o evento está ocupado
 (sem descrição, local nem convidados), e só o dono vê; o título e o horário vão para a IA só quando ele pergunta da
 própria agenda. A IA trata esses títulos como dado, nunca como instrução: qualquer pessoa pode mandar um convite.
@@ -1512,6 +1515,14 @@ registros, isso vira a base para uma IA ajudar nas decisões de crédito.
 - O retrato leva também o último envio do Serasa do cliente (`serasa`: emissão, idade, fundação, score, faixas,
   pontualidade em R$ e anotações), ou `null` quando não há nenhum.
 
+### CNPJ dos clientes no cache
+
+`clientes_cnpj` (só a Reavaliação de Crédito; a IA não lê): o CNPJ de cada cliente (`CLIENTES.CGC`), só os dígitos, para
+ligar a capa de um cadastro novo ao cliente quando ele entra no ERP. Fica só o que tem 14 dígitos: o CPF de pessoa
+física (11), o vazio e os zeros ficam de fora. Dois códigos podem ter o mesmo CNPJ. O grupo é opcional, como os outros:
+sem a tabela (o PC com o código anterior), `cache.sem_cnpj` faz a análise esperar a próxima atualização para aparecer no
+cliente (ou a leitura falhou, com `cnpj_erro`).
+
 ### Dados do Serasa
 
 Com um cliente escolhido, quem tem a página envia o **PDF do Relato – Pessoa Jurídica** do Serasa (até 10 MB e 20
@@ -1540,6 +1551,74 @@ Regras:
 - **Só no site**, como as reanálises; no painel do PC, a página avisa.
 - Faltando o CNPJ, a data de emissão ou a tabela das anotações, o arquivo é recusado (não é o relatório). Sem score,
   grava e mostra "não veio no relatório"; com o histórico vazio (empresa sem histórico no Serasa), a página diz isso.
+- A **recomendação** das "Práticas de mercado" (Venda a prazo, Venda com garantias adicionais ou Venda à vista) é a
+  linha logo abaixo do título "Venda à prazo". "NÃO INFORMADO" no nome fantasia vale como sem nome fantasia.
+- O PDF da capa de um **cadastro novo** (veja abaixo) fica sem o código do cliente e aparece no cartão do Serasa dele
+  quando o CNPJ chega do ERP, com a marca "na capa de um cadastro novo"; entra também no retrato das reanálises.
+
+### Capa de análise de crédito
+
+O botão **Capa de análise de crédito**, na página de crédito, abre a "Capa de Análise de Crédito" da planilha, para
+qualquer pessoa com a página. Ela serve para um **cadastro novo** (o cliente ainda não está no ERP) e para uma
+**reanálise** (um cliente do ERP). A reanálise pelo parecer ("Analisar novo limite" e "Registrar reanálise") continua
+como era: são as duas opções. O cartão "Reanálises deste cliente" tem o atalho "Fazer a capa de análise", que abre a capa
+como reanálise do cliente (`#/credito-capa?c=12`). As contas ficam em `bi/capa_credito.py`; a tela, em
+`web/js/capacredito.js`.
+
+1. **Cadastro novo ou reanálise.** Na reanálise, o analista busca o cliente (nome ou código, os do acesso).
+2. **PDF do Serasa:** o mesmo Relato PJ.
+   - Cadastro novo: o painel grava os dados sem código do cliente. Se o CNPJ já é cliente no ERP, a página avisa e
+     oferece fazer a capa como reanálise dele.
+   - Reanálise: vale o envio mais recente do Serasa do cliente (do código dele, ou de uma capa de cadastro novo com o
+     CNPJ dele). "Enviar PDF novo" grava no cliente, como na página de crédito; passado da validade, a página avisa.
+3. **Cliente e porte:** no cadastro novo, o nome (vem do PDF) e o vendedor que trouxe o cliente; na reanálise, o
+   cliente com o limite e o prazo de hoje e o vendedor (começa no da carteira). O porte da empresa (Pequena, Pequena
+   para média, Média, Média para grande ou Grande) é escolhido pelo analista.
+4. **A capa:** os 14 itens da planilha, com peso (soma 100):
+
+| Item (peso) | Opções e pontos | De onde vem |
+|---|---|---|
+| Score Serasa (5) | 701–1000: 5 · 501–700: 3 · 301–500: 2 · 0–300: 1 | o score do PDF |
+| Recomendação Serasa (14) | a prazo: 14 · com garantias adicionais: 7 · à vista: 0 | as práticas de mercado |
+| Risco de crédito Serasa (14) | Iminente 0 · Relevante 2 · Baixo a médio 8 · Muito baixo 11 · Risco mínimo 14 | o risco do Serasa, na ordem: Iminente, Alto, Médio, Baixo, Mínimo |
+| Ano de fundação (9) | Novo 0 · Recente 1 · Jovem 3 · Média 6 · Madura 8 · Consolidada 9 | meses completos até o dia da análise: até 3, até 12, até 36, até 60, até 120, mais |
+| Pontualidade 12 meses Serasa (10) | 0–15%: 0 · 16–30%: 2 · 31–50%: 4 · 51–70%: 6 · 71–95%: 8 · 95–100%: 10 | o "Pontual" da pontualidade em R$, pelo menor valor da faixa (95% já é 10); sem histórico: 0 |
+| Anotações negativas (9) | alta 0 · média 3 · baixa 5 · sem anotação 9 | nenhuma: sem anotação; com alguma, o analista escolhe |
+| Histórico Mais Vida: pontualidade em 12 meses (10), compras em 45 dias (2), frequência em 3 meses (5) | as da planilha | na reanálise, o do cliente; no cadastro novo, 0, ou, se o CNPJ já é cliente, o do código com a compra mais recente (a pontualidade da reanálise; os dias com compra, à vista também) |
+| Infraestrutura (5), limpeza e organização (5) | Ótimo 5 · Bom 3 · Médio 2 · Ruim 0 | analista |
+| Ponto próprio (4), tempo de residência do sócio (4) | Sim 4 · Não 0 | analista |
+| N/C jurídico, Mosselo (4) | Nada consta 4 · Consta processo contra 0 | analista |
+
+   Quando o PDF não traz um item do Serasa, o analista escolhe, com o aviso. A página não muda os itens automáticos.
+5. **Indicação**, pelo quadro LIMITES da planilha "Classificação e Limites", na escada do desenho. A pontuação dá a
+   faixa: menos de 40, sem prazo (venda à vista); 40 a 54, faixa 1; 55 a 64, faixa 2; 65 a 74, faixa 3; 75 ou mais,
+   faixas 4 e 5. O porte dá até que bloco o cliente chega: Pequena, o 1º; Pequena para média, até o 2º; Média, até o
+   3º; Média para grande, até o 4º; Grande, até o 5º, que é a negociação com a diretoria.
+   - **Limite:** o sugerido é o menor valor da coluna da faixa nesses blocos; o máximo, o maior.
+   - **Prazo:** as parcelas da faixa (1 a 4), até o máximo do porte (2, 2, 3, 4, 4). O sugerido usa os dias mais baixos
+     de cada parcela (5, 12, 19, 26) e o máximo, os mais altos (7, 14, 21, 29).
+   - A casa vazia da planilha (Pequena com 75 ou mais) vale a da faixa anterior.
+
+| Porte | 40–54 | 55–64 | 65–74 | 75+ |
+|---|---|---|---|---|
+| Pequena | 400 | 400 – 1.000 | 700 – 1.000 | 700 – 1.000 |
+| Pequena para média | 400 – 1.000 | 400 – 1.500 | 700 – 2.000 | 2.000 – 3.000 |
+| Média | 400 – 3.000 | 400 – 3.750 | 700 – 4.500 | 2.000 – 6.000 |
+| Média para grande e Grande | 400 – 6.000 | 400 – 8.250 | 700 – 10.500 | 2.000 – 15.000 |
+
+6. **Registrar:** o limite e o prazo concedidos (os prazos do ERP; os que cabem no indicado ficam marcados), as
+   observações (opcional) e a justificativa. Acima do máximo ou com prazo além do indicado, a página avisa, mas grava.
+   - O servidor recalcula a capa e a indicação a partir do PDF gravado e do cache; se o histórico Mais Vida veio do
+     ERP e chegou uma extração nova no meio, recusa.
+   - Na reanálise, guarda o limite e o prazo de antes, e um aumento esbarra no prazo mínimo entre reanálises como na
+     reanálise pelo parecer (o administrador passa com "Registrar mesmo assim", e a capa fica marcada).
+   - A mesma chave não grava duas vezes; quem registrou ou um administrador exclui.
+
+A lista das capas mostra a situação no ERP: a da reanálise pelo cliente dela; a do cadastro novo pelo CNPJ (ainda não
+está no ERP, ou o cliente com o limite e o prazo aplicados ou diferentes). A página de crédito do cliente mostra as
+capas dele junto das reanálises pelo parecer, da mais nova para a mais antiga; a última de qualquer uma delas conta
+para o prazo mínimo entre reanálises. Só no site; no PC, a página avisa. Os pesos e o quadro ficam fixos no código
+(`REGRA_VERSAO`): mudar a planilha é mudar `bi/capa_credito.py`.
 
 ### Cores da página
 
@@ -1686,6 +1765,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `manejo_rodadas`, `manejo_sugestoes`, `manejo_eventos` | o Manejo da Base, só no site (migração 044): a lista de cada mês com o prazo; uma linha por mês, cliente e lista (central ou inativar), com o vendedor, os números da entrada (`retrato`), os da última atualização (`fatos`) e, quando encerra, o dia e o motivo (no máximo uma em andamento por cliente); e o histórico, só com inclusões, de cada justificativa e cada veredito, com quem, quando e os números do dia. Quem pode justificar fica em `usuarios.manejo` |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em`; a registrada pelo administrador dentro do prazo mínimo guarda a regra em `bloqueio` (migração 038) |
 | `credito_serasa` | os dados do Serasa, só no site (migração 038): uma linha por envio, que não muda depois, com o cliente, o CNPJ e a razão social do relatório, a emissão, o hash do arquivo (o mesmo PDF não grava duas vezes), a fundação, o score e o resto em `dados` (veja [Dados do Serasa](#dados-do-serasa)) e quem enviou; o excluído fica com `excluido_em` |
+| `credito_capas` | as capas de análise de crédito, só no site (migração 046): uma linha por capa, que não muda depois, com o tipo (cadastro novo ou reanálise), o cliente da reanálise (`id_cliente`; vazio no cadastro novo, que liga pelo CNPJ), o CNPJ (só os dígitos), o nome, o vendedor, o PDF do Serasa (`serasa_id`), o porte, as respostas da capa com os pontos e de onde vieram (`respostas`), a pontuação, a faixa, a indicação (`indicacao`, com o limite sugerido e o máximo também em colunas), o limite e o prazo de antes (na reanálise), os concedidos, as observações, a justificativa, o código de onde veio o histórico Mais Vida e a extração, a regra do prazo mínimo que o administrador passou (`bloqueio`) e quem registrou; a excluída fica com `excluida_em`. A 046 também deixa `credito_serasa.id_cliente` vazio para o PDF do cadastro novo |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no

@@ -6,6 +6,7 @@ import { montarMetas, recarregarMetas } from "./metas.js";
 import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
 import { montarConfigCredito, configCreditoTemAlteracoes } from "./configcredito.js";
+import { montarCapaCredito, capaTemAlteracoes } from "./capacredito.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarSugestao, recarregarSugestao, sugestaoTemAlteracoes } from "./sugestao.js";
@@ -161,6 +162,17 @@ const PAGINAS = {
     pendente: configCreditoTemAlteracoes,
     montar: (el) => montarConfigCredito(el, { aoSalvar: () => app.remontar.add("credito") }),
   },
+  // Para quem tem a página de crédito (não só o administrador): a capa de análise de crédito, de um cadastro novo ou de
+  // uma reanálise (#/credito-capa?c=12 abre a reanálise do cliente 12).
+  "credito-capa": {
+    titulo: "Capa de análise de crédito",
+    fixo: "Cadastro novo ou reanálise, com a indicação de prazo e limite",
+    pai: "credito",
+    sempreMonta: true,
+    pendente: capaTemAlteracoes,
+    // remontarCredito: a página de crédito lê o cliente do link (#/credito?c=…) só quando monta
+    montar: (el) => montarCapaCredito(el, { admin: ehAdmin(), remontarCredito: () => app.remontar.add("credito") }),
+  },
   manejo: {
     nome: "Manejo da Base",
     titulo: "Manejo da Base",
@@ -229,7 +241,8 @@ function subtitulo(rota, d) {
 
 function paginasPermitidas() {
   const admin = app.usuario.papel === "admin";
-  return Object.keys(PAGINAS).filter((r) => (PAGINAS[r].admin ? admin : admin || app.usuario.paginas.includes(r)));
+  return Object.keys(PAGINAS).filter((r) => (PAGINAS[r].admin ? admin
+    : admin || app.usuario.paginas.includes(PAGINAS[r].pai || r)));
 }
 
 function rodape() {

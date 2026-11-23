@@ -2,7 +2,9 @@
 // pelos títulos a receber de venda (mês e ano pela emissão, vendedor do título); limite, prazo e restante de um ou
 // mais clientes (os limites somam), com as parcelas já pagas dos boletos divididos. Com um cliente, o parecer de um
 // limite total novo (Indicado, com ressalvas ou Não indicado), o registro da reanálise (o limite e o prazo liberados e
-// a justificativa) e as reanálises anteriores dele, e os dados do Serasa que vieram do PDF. A conta, a regra do parecer,
+// a justificativa) e as reanálises anteriores dele, e os dados do Serasa que vieram do PDF. As capas de análise de crédito
+// (o botão "Capa de análise de crédito", capacredito.js) do cliente aparecem com as reanálises: as de reanálise dele e as de
+// cadastro novo, quando o CNPJ dele chega do ERP. A conta, a regra do parecer,
 // o prazo mínimo entre reanálises, a ordem da tabela, a leitura do PDF e o retrato que a reanálise grava ficam no
 // servidor (bi/credito.py, bi/reanalise.py e bi/serasa.py); aqui é a apresentação.
 //
@@ -94,6 +96,7 @@ export function montarCredito(container, contexto) {
         <label class="campo"><span class="ic-campo">${icone("usuario")}</span><select id="cr-vendedor" aria-label="Vendedor do título">
           <option value="">Todos os vendedores</option></select></label>
         <button class="btn btn-limpar" type="button" id="cr-limpar" hidden>${icone("x")}Limpar filtros</button>
+        <a class="btn cr-novo" href="#/credito-capa" title="A capa de análise de crédito de um cadastro novo ou de uma reanálise">${icone("caderneta")}<span>Capa de análise de crédito</span></a>
         ${ctx.admin ? `<a class="btn btn-config" href="#/config-credito" title="Prazo mínimo entre reanálises e validade dos dados do Serasa">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
       <div class="cr-escolhidos" id="cr-escolhidos" aria-label="Clientes escolhidos" hidden></div>
@@ -688,7 +691,7 @@ function haQuanto(iso) {
   return `há ${plural(anos, "ano", "anos")}${resto ? ` e ${plural(resto, "mês", "meses")}` : ""}`;
 }
 
-const idadeConsulta = (dias) => (dias <= 0 ? "de hoje" : dias === 1 ? "de ontem" : `de ${fmt.num(dias)} dias atrás`);
+export const idadeConsulta = (dias) => (dias <= 0 ? "de hoje" : dias === 1 ? "de ontem" : `de ${fmt.num(dias)} dias atrás`);
 const pctCurto = (v) => fmt.pct(v, Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? 0 : 1);
 const valorCurto = (v) => (v >= 1e6 ? `${fmt.num(v / 1e6, 1)} mi` : v >= 1e3 ? `${fmt.num(v / 1e3, 1)} mil` : fmt.num(v, 2));
 
@@ -706,7 +709,7 @@ function corFaixa(chave, x) {
   return FAIXAS_ATRASO.includes(chave) && (x?.ate || 0) > 0 ? "ruim" : "";
 }
 
-function corpoSerasa(x) {
+export function corpoSerasa(x) {
   const sc = x.score;
   const numeros = `
     <div class="cr-parecer-numeros cr-serasa-topo">
@@ -716,6 +719,7 @@ function corpoSerasa(x) {
       ${numero("Score", sc ? `${fmt.num(sc.valor)} <small class="cr-de">de 1000</small>` : "—",
         sc ? [sc.probabilidade != null ? `probabilidade de inadimplência ${fmt.pct(sc.probabilidade, 2)}` : "",
           sc.risco ? `risco ${esc(sc.risco.toLowerCase())}` : ""].filter(Boolean).join(" · ") : "não veio no relatório")}
+      ${sc?.recomendacao ? numero("Recomendação do Serasa", esc(sc.recomendacao.texto), "nas práticas de mercado") : ""}
     </div>
     ${sc?.alerta ? `<p class="cr-bloqueio cr-serasa-alerta">${icone("alerta")}<span><b>Aviso do Serasa:</b> ${esc(sc.alerta)}</span></p>` : ""}`;
   // O histórico de pagamento numa tabela só: os títulos por faixa e a pontualidade em R$ têm as mesmas faixas (a
@@ -806,7 +810,7 @@ function desenharSerasa() {
   const selo = `<span class="status ${x.desatualizado ? "ruim" : "bom"}" title="${esc(dica)}">${icone("relogio")}${x.desatualizado ? "Desatualizado" : "Atualizado"}: consulta ${idadeConsulta(x.idade_dias)}</span>`;
   const acoes = `<div class="cr-serasa-acoes">${selo}${botao("Enviar PDF novo")}
     ${x.pode_excluir ? `<button type="button" class="btn perigo" data-excluir-serasa="${x.id}">${icone("lixeira")}Excluir</button>` : ""}</div>`;
-  const sub = `Consulta emitida pelo Serasa em <b>${fmt.dataHora(x.emitido_em)}</b> · enviada ao painel em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}`;
+  const sub = `Consulta emitida pelo Serasa em <b>${fmt.dataHora(x.emitido_em)}</b> · enviada ao painel em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}${x.do_cadastro ? " na capa de um cadastro novo" : ""}`;
   card.innerHTML = cabSerasa(sub, acoes) + corpoSerasa(x) + anterioresSerasa(s.anteriores) + arquivo;
 }
 
@@ -838,7 +842,7 @@ async function excluirSerasa(id, botao) {
   const cliente = estado.serasa?.cliente;
   botao.disabled = true;
   try {
-    const r = await api("/api/credito/serasa/excluir", { json: { id } });
+    const r = await api("/api/credito/serasa/excluir", { json: { id, cliente: estado.serasa?.cliente } });
     estado.serasa = { ...r, cliente };
     desenharSerasa();
     toast("Dados do Serasa excluídos.");
@@ -1094,19 +1098,77 @@ function itemReanalise(x) {
   </li>`;
 }
 
+// ---------- a capa de análise de crédito (bi/capa_credito.py; o formulário fica em capacredito.js) ----------
+// A situação no ERP: na página do cliente, contra o cadastro dele; na lista das capas, a reanálise pelo cliente dela e o
+// cadastro novo pelo CNPJ (também quando o cliente ainda não entrou no ERP, ou o ERP ainda não manda o CNPJ).
+function situacaoCapa(x) {
+  const e = x.erp;
+  if (!e) return "";
+  const cliente = () => `<a href="#/credito?c=${e.id}">${esc(e.nome)}</a> (código ${e.id})`;
+  let classe = "", ic = "info", texto;
+  if (e.situacao === "aplicado") {
+    [classe, ic] = ["bom", "certo"];
+    texto = `No ERP: ${cliente()}, já com o limite e o prazo concedidos.`;
+  } else if (e.situacao === "diferente") {
+    [classe, ic] = ["ruim", "alerta"];
+    texto = `No ERP: ${cliente()}, com <b>${fmt.moeda2(e.limite)} · ${esc(e.prazo || "sem prazo")}</b>, diferente do concedido.`;
+  } else if (e.situacao === "fora_do_erp") {
+    ic = "relogio";
+    texto = "Ainda não está no ERP. Quando o cliente for cadastrado lá, a capa e o Serasa aparecem na página de Crédito dele.";
+  } else {
+    texto = "O ERP ainda não manda o CNPJ dos clientes: a ligação com o cadastro aparece depois da próxima atualização do computador da empresa.";
+  }
+  if (e.outros?.length) texto += ` Há mais ${e.outros.length === 1 ? "um código" : `${e.outros.length} códigos`} com este CNPJ (${e.outros.join(", ")}).`;
+  return `<p class="cr-erp ${classe}">${icone(ic)}<span>${texto}</span></p>`;
+}
+
+export function itemCapa(x, { excluir = true } = {}) {
+  const i = x.indicacao;
+  const indicado = i.sem_prazo ? "sem prazo (venda à vista)"
+    : `de ${fmt.moeda(i.limite_sugerido)} em ${esc(i.prazo_sugerido)} até ${fmt.moeda(i.limite_maximo)} em ${esc(i.prazo_maximo)}${i.diretoria ? " (acima disso, negociação com a diretoria)" : ""}`;
+  const avisos = [x.acima_do_maximo && "limite acima do máximo indicado", !x.prazo_dentro && "prazo além do indicado"].filter(Boolean);
+  const capa = x.respostas.map((r) => `<li><span>${esc(r.eixo)}</span><b>${esc(r.rotulo || "—")}</b><em>${r.pontos ?? "—"} de ${r.peso}</em>${r.fonte ? `<small>${esc(r.fonte)}</small>` : ""}</li>`).join("");
+  return `
+  <li class="cr-hist-item">
+    <div class="cr-hist-cab">
+      <span class="cr-hist-quando"><b>${fmt.dataHora(x.feita_em)}</b> · ${esc(x.feita_por)}</span>
+      <span class="cr-hist-tipo">Capa de análise · ${x.tipo === "reanalise" ? "reanálise" : "cadastro novo"}</span>
+      <span class="status neutro">${icone("caderneta")}${x.pontos} pontos · ${esc(x.faixa_rotulo)}</span>
+      ${x.bloqueio ? `<span class="status ruim" title="Registrada pelo administrador dentro do prazo mínimo: ${esc(x.bloqueio)}">${icone("cadeado")}passou do bloqueio</span>` : ""}
+      ${excluir && x.pode_excluir ? `<button type="button" class="btn perigo cr-hist-excluir" data-excluir="${x.id}"
+        aria-label="Excluir a capa de ${esc(x.cliente)}">${icone("lixeira")}Excluir</button>` : ""}
+    </div>
+    <p class="cr-hist-valores"><span><b>${esc(x.cliente)}</b>${x.id_cliente ? ` · código ${x.id_cliente}` : ""} · CNPJ ${esc(x.cnpj)}</span>
+      <span>${x.limite_antes != null ? `Limite ${fmt.moeda2(x.limite_antes)} → ` : "Concedido "}<b>${fmt.moeda2(x.limite_concedido)}</b> · ${x.prazo_antes && x.prazo_antes !== x.prazo_concedido ? `${esc(x.prazo_antes)} → ` : ""}<b>${esc(x.prazo_concedido)}</b>${avisos.length ? ` <span class="cr-v-ruim">(${avisos.join("; ")})</span>` : ""}</span>
+      <small>porte ${esc(x.porte_nome)} · vendedor ${esc(x.vendedor)} · indicado ${indicado}</small></p>
+    ${situacaoCapa(x)}
+    <p class="cr-hist-just">${esc(x.justificativa)}</p>
+    ${x.observacoes ? `<p class="cr-hist-just cc-obs"><b>Observações:</b> ${esc(x.observacoes)}</p>` : ""}
+    <details class="cr-hist-numeros"><summary>Ver a capa</summary><ul class="cc-capa-lista">${capa}</ul></details>
+  </li>`;
+}
+
 function desenharHistorico() {
   const card = document.getElementById("cr-reanalises"), r = estado.reanalises;
   if (!card || !r || estado.clientes.length !== 1 || r.cliente !== estado.clientes[0].id) return;
-  const lista = r.reanalises || [];
+  const lista = r.reanalises || [], capas = r.capas || [];
   let corpo;
   if (r.erro) corpo = `<div class="aviso">${icone("alerta")}<span>Não foi possível ler as reanálises: ${esc(r.erro)}</span></div>`;
   else if (!r.ativo) corpo = `<div class="aviso">${icone("info")}<span>${esc(r.aviso)}</span></div>`;
-  else if (!lista.length) corpo = `<p class="cr-hist-vazio">Nenhuma reanálise registrada para este cliente. Analise um limite e registre a decisão logo abaixo do parecer.</p>`;
-  else corpo = avisoBloqueio(r.bloqueio) + situacaoErp(lista[0]) + `<ol class="cr-hist">${lista.map(itemReanalise).join("")}</ol>`;
-  const sub = lista.length ? `${lista.length} registrada${lista.length === 1 ? "" : "s"}, da mais nova para a mais antiga`
+  else if (!lista.length && !capas.length) corpo = `<p class="cr-hist-vazio">Nenhuma reanálise registrada para este cliente. Analise um limite e registre a decisão logo abaixo do parecer, ou faça a capa de análise de crédito.</p>`;
+  else {
+    // as reanálises pelo parecer e as capas juntas, da mais nova para a mais antiga (excluir uma capa é na página dela)
+    const todas = [...lista.map((x) => [x.feita_em, itemReanalise(x)]), ...capas.map((x) => [x.feita_em, itemCapa(x, { excluir: false })])]
+      .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+    corpo = avisoBloqueio(r.bloqueio) + (lista.length ? situacaoErp(lista[0]) : "") + `<ol class="cr-hist">${todas.map((x) => x[1]).join("")}</ol>`;
+  }
+  const partes = [lista.length && `${lista.length} reanálise${lista.length === 1 ? "" : "s"} pelo parecer`,
+    capas.length && `${capas.length === 1 ? "uma capa" : `${capas.length} capas`} de análise de crédito`].filter(Boolean);
+  const sub = partes.length ? `${partes.join(" e ")}, da mais nova para a mais antiga`
     : "o limite e o prazo liberados em cada reanálise, com a justificativa";
   card.innerHTML = `
-    <div class="cartao-cab"><div><h3>${icone("caderneta")}Reanálises deste cliente</h3><p class="sub">${sub}</p></div></div>
+    <div class="cartao-cab"><div><h3>${icone("caderneta")}Reanálises deste cliente</h3><p class="sub">${sub}</p></div>
+      ${r.ativo ? `<a class="btn cr-novo" href="#/credito-capa?c=${r.cliente}" title="A capa de análise de crédito deste cliente, como reanálise">${icone("caderneta")}<span>Fazer a capa de análise</span></a>` : ""}</div>
     ${corpo}`;
 }
 
@@ -1140,12 +1202,13 @@ function desenharRegistro() {
 }
 
 // ---------- prazo mínimo entre reanálises (a regra é do servidor: Reanalises._bloqueio) ----------
-const textoBloqueio = (b) => `aumento só a partir de ${fmt.data(b.aumento_a_partir_de)} (prazo mínimo de ${b.dias} dias desde a reanálise de ${fmt.data(b.ultima_em)})`;
+const desdeBloqueio = (b) => (b.origem === "capa" ? "a capa de análise de crédito" : "a reanálise");
+const textoBloqueio = (b) => `aumento só a partir de ${fmt.data(b.aumento_a_partir_de)} (prazo mínimo de ${b.dias} dias desde ${desdeBloqueio(b)} de ${fmt.data(b.ultima_em)})`;
 
 function avisoBloqueio(b) {
   if (!b) return "";
   return `<p class="cr-bloqueio">${icone("cadeado")}<span><b>Próximo aumento de limite a partir de ${fmt.data(b.aumento_a_partir_de)}</b>:
-    prazo mínimo de ${b.dias} dias desde a reanálise de ${fmt.data(b.ultima_em)}. Redução, corte e manter o limite podem ser registrados.</span></p>`;
+    prazo mínimo de ${b.dias} dias desde ${desdeBloqueio(b)} de ${fmt.data(b.ultima_em)}. Redução, corte e manter o limite podem ser registrados.</span></p>`;
 }
 
 // Só aumento esbarra no prazo: quem não é administrador não registra; o administrador marca "Registrar mesmo assim".

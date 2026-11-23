@@ -1433,14 +1433,14 @@ body.sem-rolagem { overflow: hidden; }
 /* ---------- Reavaliação de Crédito ---------- */
 /* Só duas cores, num tom cada: verde (bom) e vermelho (ruim), pelo que o número é comparado; o resto é neutro. Os selos
    têm contorno (texto, ícone e borda no mesmo tom), sem fundo claro; os trilhos do anel e da barra ficam cinza. */
-#pagina-credito { --cr-bom: var(--ok); --cr-ruim: var(--ruim); --cr-neutro: var(--tinta-3); }
-#pagina-credito .status.bom { background: transparent; color: var(--cr-bom); box-shadow: inset 0 0 0 1.5px var(--cr-bom); }
-#pagina-credito .status.ruim { background: transparent; color: var(--cr-ruim); box-shadow: inset 0 0 0 1.5px var(--cr-ruim); }
-#pagina-credito .status.neutro { background: transparent; color: var(--tinta-2); box-shadow: inset 0 0 0 1.5px var(--linha-forte); }
+#pagina-credito, #pagina-credito-capa { --cr-bom: var(--ok); --cr-ruim: var(--ruim); --cr-neutro: var(--tinta-3); }
+:is(#pagina-credito, #pagina-credito-capa) .status.bom { background: transparent; color: var(--cr-bom); box-shadow: inset 0 0 0 1.5px var(--cr-bom); }
+:is(#pagina-credito, #pagina-credito-capa) .status.ruim { background: transparent; color: var(--cr-ruim); box-shadow: inset 0 0 0 1.5px var(--cr-ruim); }
+:is(#pagina-credito, #pagina-credito-capa) .status.neutro { background: transparent; color: var(--tinta-2); box-shadow: inset 0 0 0 1.5px var(--linha-forte); }
 #pagina-credito .anel .trilho { stroke: var(--surface-3); }
 #pagina-credito .medidor-trilho { background: var(--surface-3); }
-#pagina-credito .aviso { background: var(--surface-2); border-color: var(--linha); }
-#pagina-credito .aviso .ic { color: var(--tinta-3); }
+:is(#pagina-credito, #pagina-credito-capa) .aviso { background: var(--surface-2); border-color: var(--linha); }
+:is(#pagina-credito, #pagina-credito-capa) .aviso .ic { color: var(--tinta-3); }
 /* Quatro cartões por linha: o valor encolhe pelo número de caracteres (--n) para caber na largura do cartão. */
 #pagina-credito .kpi { container-type: inline-size; }
 #pagina-credito .kpi-simples .kpi-valor[style*="--n"] { font-size: min(40px, 100cqi / (var(--n) * .58)); }
@@ -1626,6 +1626,110 @@ table.dados.cr-serasa-anot td.esq { white-space: normal; }
 .cr-serasa-anteriores ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
 .cr-serasa-anteriores li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--linha); border-radius: 12px; font-size: 13px; }
 .cr-serasa-anteriores li small { display: block; color: var(--tinta-3); font-size: 12px; }
+/* novo cadastro: a capa de análise de crédito (capacredito.js) */
+.cc > .secao:first-child, .cc > .aviso:first-child { margin-top: 0; }
+.cc-num { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 13px; font-weight: 800; color: var(--acento-tinta); background: var(--acento-suave); }
+.cc-passo .cr-bloqueio a, .cc .cr-erp a { color: var(--acento-tinta); font-weight: 700; }
+.cc-passo .cr-bloqueio, .cc-passo > .aviso { margin: 10px 0 0; }
+.cc-portes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; margin-top: 14px; }
+.cc-porte { display: grid; gap: 2px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid var(--linha); background: var(--surface); color: var(--tinta); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.cc-porte b { font-size: 14px; }
+.cc-porte small { color: var(--tinta-3); font-size: 12px; }
+.cc-porte:hover { border-color: var(--linha-forte); }
+/* o passo 1: cadastro novo ou reanálise, a busca do cliente e o cliente escolhido */
+.cc-tipos { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); margin-top: 0; }
+.cc-tipo { padding: 12px 14px; }
+.cc-tipo b { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.cc-tipo b .ic { width: 18px; height: 18px; color: var(--acento); }
+.cc-busca { margin-top: 14px; }
+.cc-busca .campo, .cc-busca .campo input { width: 100%; max-width: 480px; }
+.cc-resultados { display: grid; gap: 6px; max-width: 480px; margin-top: 8px; }
+.cc-resultados:empty { display: none; }
+.cc-resultado { display: grid; gap: 1px; padding: 8px 12px; border: 1px solid var(--linha); border-radius: 12px; background: var(--surface); color: var(--tinta); font: inherit; text-align: left; cursor: pointer; }
+.cc-resultado b { font-size: 13.5px; }
+.cc-resultado small { color: var(--tinta-3); font-size: 12px; }
+.cc-resultado:hover, .cc-resultado:focus-visible { border-color: var(--laranja); outline: none; }
+.cc-cliente { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 14px; padding: 10px 12px; border: 1.5px solid var(--laranja); border-radius: 14px; }
+.cc-cliente .btn { height: 34px; padding: 0 12px; font-size: 13px; }
+.cc-nome-fixo { margin: 0; padding: 9px 0 0; }
+.cc-nome-fixo b { display: block; font-size: 15px; }
+.cc-nome-fixo small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 12.5px; font-weight: 500; }
+.cc-ja-cliente { flex-wrap: wrap; }
+.cc-ja-cliente .btn { height: 32px; padding: 0 12px; font-size: 12.5px; margin-left: auto; }
+.cr-historico .cartao-cab .cr-novo { height: 36px; padding: 0 12px; font-size: 13px; }
+.cc-porte:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.cc-porte[aria-checked="true"] { border-color: var(--laranja); background: color-mix(in srgb, var(--laranja) 12%, var(--surface)); }
+.cr-novo { height: 42px; border-radius: 14px; text-decoration: none; color: var(--tinta-2); }
+.cr-novo .ic { color: var(--acento); }
+.cc .cr-registro-campos .campo, .cc .cr-registro-campos .campo select { width: 100%; }
+.cc-tabela { max-height: none; }
+.cc-de-peso { display: none; }
+table.dados.cc-capa th, table.dados.cc-capa td { padding: 8px 10px; vertical-align: middle; }
+table.dados.cc-capa .esq { text-align: left; }
+table.dados.cc-capa tr.cc-grupo td { position: static; padding: 10px 10px 6px; background: var(--surface-2); color: var(--tinta-2); font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.cc-eixo { white-space: normal !important; min-width: 180px; font-weight: 600; }
+.cc-resposta { white-space: normal !important; min-width: 260px; }
+.cc-resposta .campo, .cc-resposta .campo select { width: 100%; max-width: 360px; }
+.cc-resposta small { display: flex; align-items: flex-start; gap: 5px; margin-top: 4px; color: var(--tinta-3); font-size: 12px; font-weight: 500; }
+.cc-resposta small .ic { flex: none; width: 13px; height: 13px; margin-top: 1px; }
+.cc-resposta .cc-escolha { color: var(--tinta-2); }
+.cc-auto { font-weight: 700; }
+.cc-pontos { font-weight: 700; font-size: 14px; }
+table.dados.cc-capa tfoot td { font-size: 14px; }
+table.dados.cc-capa tfoot td b { color: var(--acento-tinta); }
+.cc-indica { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.cc-indica-caixa { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--linha); background: var(--surface); }
+.cc-indica-caixa.sugerido { border: 1.5px solid var(--laranja); background: color-mix(in srgb, var(--laranja) 8%, var(--surface)); }
+.cc-indica-caixa span { display: block; color: var(--tinta-3); font-size: 12.5px; font-weight: 700; }
+.cc-indica-caixa b { display: block; margin-top: 2px; font-family: var(--f-titulo); font-size: 28px; font-variant-numeric: tabular-nums; }
+.cc-indica-caixa small { display: block; margin-top: 2px; color: var(--tinta-2); font-size: 13px; }
+.cc-porque { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; color: var(--tinta-2); font-size: 13px; }
+.cc-porque .ic { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--tinta-3); }
+.cc-quadro { margin-top: 14px; }
+.cc-quadro .tabela-rolagem { margin-top: 10px; max-height: none; }
+table.dados.cc-q { font-size: 12.5px; }
+table.dados.cc-q th, table.dados.cc-q td { padding: 5px 9px; text-align: center; }
+table.dados.cc-q th.esq { text-align: left; }
+table.dados.cc-q th small { display: block; color: var(--tinta-3); font-size: 11px; font-weight: 500; }
+table.dados.cc-q thead th.cc-q-col { color: var(--acento-tinta); }
+table.dados.cc-q tr.cc-q-prazo th, table.dados.cc-q tr.cc-q-prazo td { position: static; background: var(--surface-2); color: var(--tinta-2); font-size: 11.5px; }
+table.dados.cc-q tbody tr.cc-q-bloco > * { border-top: 2px solid var(--linha-forte); }
+table.dados.cc-q tbody tr:not(.no-porte) td { color: var(--tinta-3); }
+table.dados.cc-q td.marcada { background: color-mix(in srgb, var(--laranja) 16%, var(--surface)); color: var(--tinta); font-weight: 700; }
+table.dados.cc-q td.sugerido, table.dados.cc-q td.maximo { box-shadow: inset 0 0 0 2px var(--laranja); }
+table.dados.cc-q td.cc-q-diretoria { font-style: italic; }
+table.dados.cc-q td.cc-q-diretoria.marcada { font-style: normal; }
+.cc-capa-lista { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.cc-capa-lista li { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; gap: 2px 12px; padding: 6px 10px; border-radius: 10px; background: var(--surface-2); }
+.cc-capa-lista li span { color: var(--tinta-2); }
+.cc-capa-lista li em { font-style: normal; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-capa-lista li small { grid-column: 1 / -1; color: var(--tinta-3); font-size: 11.5px; }
+.cc-obs { color: var(--tinta-3); }
+/* no celular, cada item da capa vira um bloco: o item e os pontos ("5 de 5") em cima, a resposta embaixo */
+@media (max-width: 640px) {
+  .cc-tabela { overflow: visible; }
+  table.dados.cc-capa, table.dados.cc-capa tbody, table.dados.cc-capa tfoot { display: block; }
+  table.dados.cc-capa thead { display: none; }
+  table.dados.cc-capa tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 10px; padding: 9px 10px; border-bottom: 1px solid var(--linha); }
+  table.dados.cc-capa tr:last-child { border-bottom: 0; }
+  table.dados.cc-capa td { position: static; padding: 0; border: 0; background: none; white-space: normal; text-align: left; }
+  table.dados.cc-capa .cc-eixo, table.dados.cc-capa .cc-resposta { min-width: 0; }
+  table.dados.cc-capa .cc-peso { display: none; }
+  table.dados.cc-capa .cc-pontos { grid-column: 2; grid-row: 1; text-align: right; white-space: nowrap; }
+  table.dados.cc-capa .cc-resposta { grid-column: 1 / -1; }
+  table.dados.cc-capa .cc-de-peso { display: inline; color: var(--tinta-3); font-size: 11.5px; font-weight: 500; }
+  table.dados.cc-capa tr.cc-grupo { display: block; padding: 8px 10px 5px; background: var(--surface-2); }
+  table.dados.cc-capa tr.cc-grupo td { padding: 0; }
+  table.dados.cc-capa tfoot tr { background: var(--surface-3); }
+  table.dados.cc-capa tfoot td { position: static; border: 0; background: none; }
+  table.dados.cc-capa tfoot td:last-child { text-align: right; }
+}
+@media (max-width: 860px) {
+  .cc-capa-lista li { grid-template-columns: minmax(0, 1fr) auto; }
+  .cc-capa-lista li span { grid-column: 1 / -1; }
+  .cc-indica-caixa b { font-size: 24px; }
+}
+
 @media (max-width: 860px) {
   .cr-busca, .cr-busca .campo, .cr-busca .campo input, #pagina-credito .filtros .campo, #pagina-credito .filtros .campo select { width: 100%; }
   .cr-sugestoes { width: 100%; }

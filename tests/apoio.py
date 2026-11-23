@@ -24,8 +24,8 @@ import duckdb
 
 from bi.assistente import Assistente
 from bi.banco import Banco, BancoForaDoAr
-from bi.cache import (TABELAS, TABELAS_BLOQUEIOS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_COMISSAO, TABELAS_CREDITO,
-                      TABELAS_DETALHE, TABELAS_DEVOLUCOES_NOTAS, TABELAS_PARCELAS, TABELAS_PEDIDOS,
+from bi.cache import (TABELAS, TABELAS_BLOQUEIOS, TABELAS_BRINDES, TABELAS_CARTEIRA, TABELAS_CNPJ, TABELAS_COMISSAO,
+                      TABELAS_CREDITO, TABELAS_DETALHE, TABELAS_DEVOLUCOES_NOTAS, TABELAS_PARCELAS, TABELAS_PEDIDOS,
                       TABELAS_PEDIDOS_DETALHE, TABELAS_REDE, Cache)
 from bi.configuracao import _valida, padrao
 from bi.conversas import DETALHES, id_valido, titulo_de
@@ -88,6 +88,9 @@ PARCELAS = [(102, 2, 2, 500.0), (103, 2, 1, 650.0), (105, 1, 0, 100.0)]
 BLOQUEIOS = [(2, True, D(2026, 9, 20), "BLOQUEADO POR PERDA DE RECEBIMENTO DA NF 640001."),
              (3, False, D(2024, 4, 19), "VENDA SOMENTE A VISTA.\nAUTORIZADO PELO FINANCEIRO.")]
 
+# O CNPJ (só os dígitos) de cada cliente no ERP: o do mercado (1) é o do Relato de tests/test_serasa.py.
+CNPJS = [(1, "11222333000181"), (2, "22333444000155")]
+
 
 def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pedidos: bool = True,
                redes: dict[int, str] | None = None, rede: bool = True, credito: bool = True,
@@ -96,7 +99,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                linhas_comissao=(), percentuais=(), pedidos_detalhe: bool = True, linhas_pedidos_detalhe=(),
                pedidos_extras=(), devolucoes_notas: bool = True, bloqueios: bool = True,
                linhas_bloqueios=BLOQUEIOS, vendas_extras=(), titulos_extras=(), parcelas_extras=(),
-               clientes_extras=(), vendedores_extras=()) -> Calculadora:
+               clientes_extras=(), vendedores_extras=(), cnpj: bool = True, linhas_cnpj=CNPJS) -> Calculadora:
     """extras: mais clientes (hotel, padaria, bloqueado, inativo, área sem dia), vendas de julho e pedidos de
     setembro, para os indicadores das campanhas. pedidos: False = cache sem a tabela de pedidos (versão anterior).
     redes: {cliente: nome da rede} (padrão: todos SEMANAL); rede: False = cache sem a tabela das redes.
@@ -110,6 +113,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
     (vazias quando não vêm). pedidos_extras: mais linhas do resumo dos pedidos (com extras), no formato de lá.
     devolucoes_notas: False = cache sem as devoluções nota a nota (com ela, cada devolução abaixo é uma nota).
     bloqueios: False = cache sem o bloqueio dos clientes no ERP; linhas_bloqueios: as linhas dela (ver BLOQUEIOS).
+    cnpj: False = cache sem o CNPJ dos clientes; linhas_cnpj: as linhas dele (ver CNPJS).
     Para o Manejo da Base: vendas_extras (no formato das vendas daqui), titulos_extras e parcelas_extras (como TITULOS
     e PARCELAS), vendedores_extras (id, nome, id do supervisor, supervisor, inativo) e clientes_extras (id, nome,
     vendedor, cidade, UF, inativo, data do cadastro)."""
@@ -120,7 +124,7 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
                           **(TABELAS_BRINDES if brindes else {}), **(TABELAS_COMISSAO if comissao else {}),
                           **(TABELAS_PEDIDOS_DETALHE if pedidos_detalhe else {}),
                           **(TABELAS_DEVOLUCOES_NOTAS if devolucoes_notas else {}),
-                          **(TABELAS_BLOQUEIOS if bloqueios else {})}.items():
+                          **(TABELAS_BLOQUEIOS if bloqueios else {}), **(TABELAS_CNPJ if cnpj else {})}.items():
         con.execute(f"CREATE TABLE {nome} ({colunas})")
     # (data, vendedor, cliente, tipo, produto, valor, quantidade)
     vendas = [
@@ -228,6 +232,8 @@ def criar_calc(pasta: Path, fora: tuple[int, ...] = (), extras: bool = False, pe
         con.executemany("INSERT INTO comissoes_percentuais VALUES (?, ?, ?)", list(percentuais))
     if bloqueios and linhas_bloqueios:
         con.executemany("INSERT INTO clientes_bloqueio VALUES (?, ?, ?, ?)", list(linhas_bloqueios))
+    if cnpj and linhas_cnpj:
+        con.executemany("INSERT INTO clientes_cnpj VALUES (?, ?)", list(linhas_cnpj))
     con.executemany("INSERT INTO info VALUES (?, ?)", [
         ("data_ref", "2026-09-30"), ("extraido_em", "2026-10-01T08:00:00"), ("banco_mtime", "0"),
         ("banco_copia", "2026-10-01T07:00"), ("inicio", "2026-01-01")])

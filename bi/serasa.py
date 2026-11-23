@@ -12,6 +12,9 @@ relatório não ficam no painel.
 - A idade dos dados conta da data em que o Serasa emitiu o relatório (pode chegar hoje um PDF antigo); passando da
   validade das regras do crédito (ConfigCredito, bi/reanalise.py), a página avisa que está desatualizado.
 - Só no site (ativo), como as reanálises. O último envio entra no retrato de cada reanálise registrada.
+- O PDF da capa de um cadastro novo (bi/capa_credito.py) é gravado sem o código do cliente, que ainda não está no ERP
+  (id_cliente vazio, migração 046). Ele aparece na página do cliente quando o CNPJ dele chega do ERP (tabela
+  clientes_cnpj do cache): a ligação é feita na leitura, pelos dígitos do CNPJ, e não é gravada.
 """
 from __future__ import annotations
 
@@ -110,6 +113,13 @@ def percentual(texto: str | None) -> dict | None:
     return {"texto": texto.strip(), "de": round(de, 6), "ate": round(ate, 6)}
 
 
+def _fantasia(texto: str | None) -> str | None:
+    """O nome fantasia do relatório; "NÃO INFORMADO" (empresa sem nome fantasia) ou "-" -> None."""
+    if texto is None or _sem_acento(texto) in ("", "-", "NAO INFORMADO"):
+        return None
+    return texto
+
+
 def _data(texto: str) -> dt.date | None:
     try:
         return dt.datetime.strptime(texto, "%d/%m/%Y").date()
@@ -183,7 +193,7 @@ def ler_texto(texto: str) -> dict:
     fundacao = _data(fundacao_txt.strip()) if fundacao_txt else None
     saida = {
         "versao": VERSAO, "cnpj": cnpj, "razao_social": depois("RAZAO SOCIAL"),
-        "nome_fantasia": depois("NOME FANTASIA"), "emitido_em": emitido, "fundacao": fundacao,
+        "nome_fantasia": _fantasia(depois("NOME FANTASIA")), "emitido_em": emitido, "fundacao": fundacao,
         "score": _score(norm, linhas, tudo), "faixas": _faixas(norm, linhas), "pontualidade": _pontualidade(norm, linhas),
         "anotacoes": _anotacoes(norm, linhas, inicio_anotacoes),
     }
@@ -192,6 +202,12 @@ def ler_texto(texto: str) -> dict:
                                             ("pontualidade em R$", saida["pontualidade"])) if not v]
     return saida
 
+
+# A prática de mercado que o Serasa recomenda: chave e a palavra que a identifica no texto (sem acento), na ordem em que
+# são conferidas ("VENDA COM GARANTIAS ADICIONAIS" também tem "VENDA").
+RECOMENDACOES = (("garantias", "GARANTIA"), ("a_vista", "VISTA"), ("a_prazo", "PRAZO"))
+_FIM_DA_RECOMENDACAO = ("INTERPRETACAO", "HISTORICO DE PAGAMENTO", "LEGENDA", "QUADRO SOCIAL", "ANOTACOES NEGATIVAS",
+                        "SERASA SCORE")
 
 _FIM_DO_AVISO = ("PRATICAS DE MERCADO", "PROBABILIDADE DE INADIMPLENCIA", "RISCO DE CREDITO", "INTERPRETACAO",
                  "LEGENDA", "HISTORICO DE PAGAMENTO")
@@ -221,7 +237,29 @@ def _score(norm: list[str], linhas: list[str], tudo: str) -> dict | None:
             aviso.append(linhas[i])
     alerta = " ".join(aviso)[:300] or None
     return {"valor": int(m.group(1)), "probabilidade": round(float(p.group(1).replace(",", ".")) / 100, 6) if p else None,
-            "risco": risco, "alerta": alerta}
+            "risco": risco, "alerta": alerta, "recomendacao": _recomendacao(norm, linhas)}
+
+
+def _recomendacao(norm: list[str], linhas: list[str]) -> dict | None:
+    """A recomendação das "Práticas de mercado": depois do risco vem o título "Venda à prazo" e, logo abaixo, a
+    recomendação ("Venda a prazo", "Venda com garantias" + "adicionais" na linha seguinte, ou "Venda à vista").
+    {"texto", "chave" (RECOMENDACOES)}; None se o quadro não tem a linha ou ela não é uma das três."""
+    risco = next((i for i, x in enumerate(norm) if x == "RISCO DE CREDITO"), None)
+    if risco is None:
+        return None
+    titulo = next((i for i in range(risco + 1, min(risco + 5, len(norm))) if norm[i] == "VENDA A PRAZO"), None)
+    if titulo is None:
+        return None
+    partes = []
+    for i in range(titulo + 1, min(titulo + 4, len(norm))):
+        if norm[i].startswith(_FIM_DA_RECOMENDACAO):
+            break
+        partes.append(i)
+    junto = " ".join(norm[i] for i in partes)
+    chave = next((c for c, palavra in RECOMENDACOES if palavra in junto), None) if junto.startswith("VENDA") else None
+    if chave is None:
+        return None
+    return {"texto": " ".join(linhas[i] for i in partes), "chave": chave}
 
 
 def _secao(norm: list[str], titulo: str) -> range | None:
@@ -353,6 +391,13 @@ def _json(d: dict) -> dict:
 
 CAMPOS = ("id", "id_cliente", "cliente", "cnpj", "razao_social", "emitido_em", "fundacao", "score", "dados",
           "enviado_em", "enviado_por", "enviado_por_nome")
+CNPJ_SQL = "regexp_replace(cnpj, '[^0-9]', '', 'g')"  # o CNPJ do relatório só com os dígitos, como no cache
+
+
+def digitos(cnpj: str | None) -> str | None:
+    """"11.222.333/0001-81" -> "11222333000181" (None se não tiver 14 dígitos)."""
+    d = re.sub(r"\D", "", cnpj or "")
+    return d if len(d) == 14 else None
 
 
 class DadosSerasa:
@@ -369,17 +414,25 @@ class DadosSerasa:
         return self.config.atual()["serasa_validade_dias"] if self.config else VALIDADE_PADRAO
 
     def _linhas(self, con, cliente: int, limite: int = MAX_LISTA) -> list[dict]:
-        """Os envios do cliente (sem os excluídos), da emissão mais recente para a mais antiga."""
+        """Os envios do cliente (sem os excluídos), da emissão mais recente para a mais antiga: os do código dele e os de
+        uma capa de cadastro novo (sem código) com o CNPJ dele, quando o CNPJ já chegou do ERP."""
+        cnpj = self.credito.cnpj_de(cliente)
+        onde, params = "id_cliente = %s", [cliente]
+        if cnpj:
+            onde = f"({onde} OR (id_cliente IS NULL AND {CNPJ_SQL} = %s))"
+            params.append(cnpj)
         return [dict(zip(CAMPOS, r)) for r in con.execute(
-            f"SELECT {', '.join(CAMPOS)} FROM credito_serasa WHERE id_cliente = %s AND excluido_em IS NULL "
-            "ORDER BY emitido_em DESC, id DESC LIMIT %s", [cliente, limite]).fetchall()]
+            f"SELECT {', '.join(CAMPOS)} FROM credito_serasa WHERE {onde} AND excluido_em IS NULL "
+            "ORDER BY emitido_em DESC, id DESC LIMIT %s", [*params, limite]).fetchall()]
 
     @staticmethod
     def _item(r: dict, usuario: dict, validade: int, hoje: dt.date) -> dict:
         d = r["dados"]
         idade = (hoje - r["emitido_em"].date()).days
         return {
-            "id": r["id"], "cnpj": r["cnpj"], "razao_social": r["razao_social"], "nome_fantasia": d.get("nome_fantasia"),
+            "id": r["id"], "cnpj": r["cnpj"], "razao_social": r["razao_social"],
+            "nome_fantasia": _fantasia(d.get("nome_fantasia")),
+            "do_cadastro": r["id_cliente"] is None,  # enviado na capa de um cadastro novo (ligado pelo CNPJ)
             "emitido_em": r["emitido_em"].isoformat(timespec="minutes"), "enviado_em": hora(r["enviado_em"]),
             "enviado_por": r["enviado_por_nome"] or "usuário excluído",
             "pode_excluir": eh_admin(usuario) or r["enviado_por"] == usuario["id"],
@@ -440,9 +493,11 @@ class DadosSerasa:
                 id_, ja_existia = linha[0], False
         return {"id": id_, "ja_existia": ja_existia, **self.listar(cliente, usuario)}
 
-    def excluir(self, usuario: dict, id_) -> dict:
+    def excluir(self, usuario: dict, id_, cliente=None) -> dict:
         """Tira um envio da página e do retrato das próximas reanálises; a linha fica, com quem excluiu e quando. Só quem
-        enviou ou um administrador. Não existe ou já saiu -> NaoEncontrada; de outra pessoa -> PermissionError."""
+        enviou ou um administrador. Não existe ou já saiu -> NaoEncontrada; de outra pessoa -> PermissionError.
+        cliente: o da página, para a resposta (o envio de uma capa de cadastro novo não tem código); sem ele, a lista do
+        código do envio (ou vazia)."""
         if not self.ativo:
             raise ValueError(AVISO_PC)
         try:
@@ -459,7 +514,59 @@ class DadosSerasa:
             con.execute("UPDATE credito_serasa SET excluido_em = now(), excluido_por = "
                         "(SELECT id FROM usuarios WHERE id = %s), excluido_por_nome = %s WHERE id = %s",
                         [usuario["id"], usuario["nome"], id_])
-        return self.listar(linha[0], usuario)
+        alvo = cliente if cliente not in (None, "") else linha[0]
+        return self.listar(alvo, usuario) if alvo is not None else {"ativo": True, "atual": None, "anteriores": []}
+
+    # --- a capa de análise de crédito (bi/capa_credito.py) -----------------------------------
+    def enviar_cadastro(self, usuario: dict, conteudo: bytes) -> dict:
+        """Lê o PDF e grava os dados sem o código do cliente (que ainda não está no ERP). O mesmo PDF de novo não grava
+        outra vez (ja_existia). PDF que não é o Relato -> ValueError. Devolve {"id", "ja_existia", "item"} (o item no
+        formato da página, com cnpj_digitos)."""
+        if not self.ativo:
+            raise ValueError(AVISO_PC)
+        d = ler_relato(conteudo)
+        if not digitos(d["cnpj"]):
+            raise ValueError(f"o CNPJ do relatório não tem 14 dígitos ({d['cnpj']})")
+        sha = hashlib.sha256(conteudo).hexdigest()
+        score = (d["score"] or {}).get("valor")
+        nome = d["nome_fantasia"] or d["razao_social"] or d["cnpj"]
+        with self.banco.conexao() as con:
+            linha = con.execute(
+                "INSERT INTO credito_serasa (id_cliente, cliente, cnpj, razao_social, emitido_em, arquivo_sha256, "
+                "fundacao, score, dados, enviado_por, enviado_por_nome) VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, "
+                "%s::jsonb, (SELECT id FROM usuarios WHERE id = %s), %s) "
+                "ON CONFLICT (arquivo_sha256) WHERE id_cliente IS NULL AND excluido_em IS NULL DO NOTHING RETURNING id",
+                [nome, d["cnpj"], d["razao_social"], d["emitido_em"], sha, d["fundacao"], score,
+                 json.dumps(_json(d), ensure_ascii=False), usuario["id"], usuario["nome"]]).fetchone()
+            if linha is None:  # o mesmo PDF de novo
+                id_ = con.execute("SELECT id FROM credito_serasa WHERE arquivo_sha256 = %s AND id_cliente IS NULL "
+                                  "AND excluido_em IS NULL", [sha]).fetchone()[0]
+                ja_existia = True
+            else:
+                id_, ja_existia = linha[0], False
+        return {"id": id_, "ja_existia": ja_existia, "item": self.envio(id_, usuario)}
+
+    def envio(self, id_, usuario: dict, cliente: int | None = None) -> dict:
+        """Um envio para a capa de análise, no formato da página, com cnpj_digitos. Sem cliente (cadastro novo): um envio
+        sem código. Com cliente (reanálise): um dos envios dele (_linhas: do código dele ou ligado pelo CNPJ). Não
+        existe, já saiu ou é de outro -> NaoEncontrada."""
+        if not self.ativo:
+            raise ValueError(AVISO_PC)
+        try:
+            id_ = int(id_)
+        except (TypeError, ValueError):
+            raise NaoEncontrada("envie o PDF do Serasa") from None
+        with self.banco.conexao() as con:
+            if cliente is None:
+                r = con.execute(f"SELECT {', '.join(CAMPOS)} FROM credito_serasa WHERE id = %s AND id_cliente IS NULL "
+                                "AND excluido_em IS NULL", [id_]).fetchone()
+                r = dict(zip(CAMPOS, r)) if r else None
+            else:
+                r = next((x for x in self._linhas(con, int(cliente)) if x["id"] == id_), None)
+        if r is None:
+            raise NaoEncontrada("os dados do Serasa não foram encontrados; envie o PDF de novo")
+        item = self._item(r, usuario, self.validade(), dt.date.today())
+        return {**item, "cnpj_digitos": digitos(item["cnpj"])}
 
     def ultimo(self, cliente: int) -> dict | None:
         """O envio mais recente do cliente, para o retrato de uma reanálise (None = nenhum, ou no PC)."""

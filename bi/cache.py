@@ -144,6 +144,13 @@ TABELAS_COMISSAO = {
 TABELAS_BLOQUEIOS = {
     "clientes_bloqueio": "id INTEGER, bloqueado BOOLEAN, data DATE, observacao VARCHAR",
 }
+# O CNPJ de cada cliente (CLIENTES.CGC, só os 14 dígitos), para ligar a análise de um cadastro novo da Reavaliação de
+# Crédito (bi/capa_credito.py) ao cliente quando ele entra no ERP. O CPF de pessoa física (11 dígitos) fica de fora.
+# Tabela à parte, que o Assistente não lê: CPF e CNPJ não vão para a IA. Opcional como os pedidos: sem ela, a análise
+# espera a próxima atualização para aparecer na página do cliente.
+TABELAS_CNPJ = {
+    "clientes_cnpj": "id INTEGER, cnpj VARCHAR",
+}
 MAX_OBSERVACAO = 2000  # caracteres da observação do bloqueio (no ERP, a maior tem menos de 300)
 
 
@@ -157,6 +164,16 @@ def _data_erp(v):
     """Uma data de cadastro do ERP: sem a hora, e o "zero" dele (30/12/1899) ou outra de antes de 1901 vira nulo."""
     d = _data(v)
     return d if isinstance(d, dt.date) and d.year > 1900 else None
+
+
+def cnpj_digitos(v) -> str | None:
+    """Os 14 dígitos de um CNPJ ("12.345.678/0001-90", digitado com ou sem pontos); CPF, vazio ou outra coisa -> None."""
+    if v is None:
+        return None
+    if isinstance(v, bytes):
+        v = v.decode("cp1252", "replace")
+    digitos = "".join(c for c in str(v) if c.isdigit())
+    return digitos if len(digitos) == 14 and digitos != "0" * 14 else None
 
 
 def _observacao(v) -> str | None:
@@ -220,6 +237,7 @@ class Cache:
         self.sem_comissao = False  # falta a comissão das vendas e os percentuais (só a aba Comissão precisa)
         self.sem_devolucoes_notas = False  # faltam as devoluções nota a nota: a página Devoluções conta por cliente e dia
         self.sem_bloqueio = False  # falta o bloqueio dos clientes no ERP (só a Reavaliação de Crédito mostra)
+        self.sem_cnpj = False  # falta o CNPJ dos clientes: a análise de um cadastro novo não liga ao cliente
         # O registro da carteira na extração (bi/carteira.py Carteira, que o painel do PC entrega depois de criar o
         # banco): (ativos, cadastro, data, tabelas do cache anterior) -> as tabelas para o cache novo. None: leva as do
         # cache anterior.
@@ -263,6 +281,7 @@ class Cache:
         sem_comissao = _tabela_diferente(con, TABELAS_COMISSAO) is not None
         sem_devolucoes_notas = _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS) is not None
         sem_bloqueio = _tabela_diferente(con, TABELAS_BLOQUEIOS) is not None
+        sem_cnpj = _tabela_diferente(con, TABELAS_CNPJ) is not None
         with self._trava:
             if self._con is not None:
                 self._con.close()
@@ -280,6 +299,7 @@ class Cache:
             self.sem_comissao = sem_comissao
             self.sem_devolucoes_notas = sem_devolucoes_notas
             self.sem_bloqueio = sem_bloqueio
+            self.sem_cnpj = sem_cnpj
 
     def data_ref(self) -> dt.date | None:
         v = self.info.get("data_ref")
@@ -299,7 +319,7 @@ class Cache:
     def conferir(arquivo: Path) -> dict[str, str]:
         """Abre um cache vindo de fora e confere se tem todas as tabelas; devolve a tabela info. O detalhe por
         cliente, os pedidos (resumo e um a um), a rede, o crédito, a carteira, os brindes, a comissão, as devoluções
-        nota a nota e o bloqueio dos clientes podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de
+        nota a nota, o bloqueio e o CNPJ dos clientes podem faltar (pacote do PC com o código anterior), mas, se vierem, têm de
         estar no formato atual."""
         con = duckdb.connect(str(arquivo), read_only=True)
         try:
@@ -313,7 +333,8 @@ class Cache:
                     or _tabela_diferente(con, TABELAS_BRINDES, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_COMISSAO, faltar_pode=True)
                     or _tabela_diferente(con, TABELAS_DEVOLUCOES_NOTAS, faltar_pode=True)
-                    or _tabela_diferente(con, TABELAS_BLOQUEIOS, faltar_pode=True))
+                    or _tabela_diferente(con, TABELAS_BLOQUEIOS, faltar_pode=True)
+                    or _tabela_diferente(con, TABELAS_CNPJ, faltar_pode=True))
             if nome:
                 raise ValueError(f"a tabela {nome} do cache recebido não tem as colunas esperadas")
             info = dict(con.execute("SELECT chave, valor FROM info").fetchall())
@@ -334,9 +355,10 @@ class Cache:
 
     def desatualizado(self) -> bool:
         """True se a cópia do banco é mais nova que a usada no cache, ou se o cache é de uma versão anterior. Pedidos,
-        redes, crédito, parcelas, a carteira, os brindes, a comissão, as notas de devolução ou o bloqueio que não deu
-        para ler ou registrar (pedidos_erro, pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro,
-        carteira_erro, brindes_erro, comissao_erro, devolucoes_notas_erro, bloqueio_erro) esperam a próxima cópia, em
+        redes, crédito, parcelas, a carteira, os brindes, a comissão, as notas de devolução, o bloqueio ou o CNPJ que não
+        deu para ler ou registrar (pedidos_erro, pedidos_detalhe_erro, rede_erro, credito_erro, parcelas_erro,
+        carteira_erro, brindes_erro, comissao_erro, devolucoes_notas_erro, bloqueio_erro, cnpj_erro) esperam a próxima
+        cópia, em
         vez de extrair tudo de novo a cada minuto."""
         try:
             mtime = self.banco.stat().st_mtime
@@ -353,6 +375,7 @@ class Cache:
                 or (self.sem_comissao and not self.info.get("comissao_erro"))
                 or (self.sem_devolucoes_notas and not self.info.get("devolucoes_notas_erro"))
                 or (self.sem_bloqueio and not self.info.get("bloqueio_erro"))
+                or (self.sem_cnpj and not self.info.get("cnpj_erro"))
                 or float(self.info.get("banco_mtime", 0)) < mtime - 1)
 
     # --- extração ------------------------------------------------------------------------
@@ -376,12 +399,12 @@ class Cache:
             if novo.exists():
                 novo.unlink()
             con = duckdb.connect(str(novo))
-            # pedidos, rede, crédito, parcelas, carteira, brindes, comissão, notas de devolução e bloqueio: a leitura
-            # (ou o registro) pode ter falhado
+            # pedidos, rede, crédito, parcelas, carteira, brindes, comissão, notas de devolução, bloqueio e CNPJ: a
+            # leitura (ou o registro) pode ter falhado
             opcionais = {k: v for k, v in {**TABELAS_PEDIDOS, **TABELAS_PEDIDOS_DETALHE, **TABELAS_REDE,
                                            **TABELAS_CREDITO, **TABELAS_PARCELAS, **TABELAS_CARTEIRA,
                                            **TABELAS_BRINDES, **TABELAS_COMISSAO, **TABELAS_DEVOLUCOES_NOTAS,
-                                           **TABELAS_BLOQUEIOS}.items()
+                                           **TABELAS_BLOQUEIOS, **TABELAS_CNPJ}.items()
                          if k in dados}
             pedidos = "pedidos_venda" in opcionais
             for nome, colunas in {**TABELAS, **TABELAS_DETALHE, **opcionais}.items():
@@ -705,6 +728,16 @@ class Cache:
             except Exception as e:
                 log.warning("não deu para ler o bloqueio dos clientes (a Reavaliação de Crédito fica sem ele): %s", e)
                 bloqueio_erro = str(e)[:300]
+            # O CNPJ dos clientes (a análise de um cadastro novo liga ao cliente por ele), também à parte.
+            self.estado["etapa"] = "Lendo o CNPJ dos clientes"
+            cnpj_erro = None
+            try:
+                dados["clientes_cnpj"] = [(i, c) for i, c in (
+                    (i, cnpj_digitos(g)) for i, g in bd.consulta("SELECT ID_CLIENTE, CGC FROM CLIENTES "
+                                                                 "WHERE CGC IS NOT NULL")) if c]
+            except Exception as e:
+                log.warning("não deu para ler o CNPJ dos clientes (a capa de um cadastro novo não liga ao cliente): %s", e)
+                cnpj_erro = str(e)[:300]
         # Conectar regrava o cabeçalho do .GDB e muda a data do arquivo. Guardar a data de antes fazia cada
         # extração parecer uma cópia nova (e o painel extraía de novo a cada minuto); a de depois fica parada.
         banco_mtime = self.banco.stat().st_mtime
@@ -724,5 +757,6 @@ class Cache:
             *([("comissao_erro", comissao_erro)] if comissao_erro else []),
             *([("devolucoes_notas_erro", devolucoes_notas_erro)] if devolucoes_notas_erro else []),
             *([("bloqueio_erro", bloqueio_erro)] if bloqueio_erro else []),
+            *([("cnpj_erro", cnpj_erro)] if cnpj_erro else []),
         ]
         return dados

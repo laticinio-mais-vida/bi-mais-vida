@@ -52,6 +52,7 @@ from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.carteira import Carteira  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
+from bi.capa_credito import CapasCredito  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
 from bi.devolucoes import Devolucoes  # noqa: E402
@@ -167,7 +168,12 @@ class Aplicacao:
         # regras do crédito (o prazo mínimo entre reanálises e a validade do Serasa) são do administrador.
         self.config_credito = ConfigCredito(self.banco)
         self.serasa = DadosSerasa(self.banco, self.credito, self.vps, self.config_credito)
-        self.reanalises = Reanalises(self.banco, self.credito, self.vps, config=self.config_credito, serasa=self.serasa)
+        # As capas de análise de crédito (cadastro novo ou reanálise), também só no site. Ligadas às reanálises nos
+        # dois sentidos: a página do cliente mostra as capas, e a capa de reanálise respeita o prazo mínimo.
+        self.capas = CapasCredito(self.banco, self.credito, self.serasa, self.vps)
+        self.reanalises = Reanalises(self.banco, self.credito, self.vps, config=self.config_credito, serasa=self.serasa,
+                                     capas=self.capas)
+        self.capas.reanalises = self.reanalises
         self.conversas = Conversas(self.banco)
         self.assistente = Assistente(ini, self.calc, self.projetor._nomes_vendedores, RegistroUso(self.banco),
                                      conversas=self.conversas, reanalises=self.reanalises)
@@ -601,7 +607,9 @@ class Manipulador(BaseHTTPRequestHandler):
             return
         if caminho == "/api/credito/serasa/excluir":  # quem enviou ou um administrador (bi/serasa.py)
             corpo = self._corpo_json()
-            r = self.app.serasa.excluir(usuario, corpo.get("id"))
+            if corpo.get("cliente") not in (None, ""):  # a lista que volta é a do cliente da página
+                self.app.credito.conferir_cliente(corpo.get("cliente"), self._ids(usuario))
+            r = self.app.serasa.excluir(usuario, corpo.get("id"), corpo.get("cliente"))
             log.info("%s excluiu os dados do Serasa %s", usuario["login"], corpo.get("id"))
             return self._json({"ok": True, **r})
         tamanho = int(self.headers.get("Content-Length") or 0)
@@ -614,6 +622,35 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json({"ok": False, **r})
         if not r["ja_existia"]:
             log.info("%s enviou os dados do Serasa %s (cliente %s)", usuario["login"], r["id"], q.get("cliente"))
+        return self._json({"ok": True, **r})
+
+    def _mudar_capa(self, usuario: dict, caminho: str):
+        """A capa de análise de crédito (bi/capa_credito.py), para quem tem a página de crédito: enviar o PDF do Serasa
+        de um cadastro novo (o corpo é o PDF; na reanálise, vale o envio do Serasa do cliente), calcular a capa sem
+        gravar, registrar ou excluir (quem registrou ou um administrador)."""
+        if not self._pode_credito(usuario):
+            return
+        ids = self._ids(usuario)
+        if caminho == "/api/credito/capa/serasa":
+            tamanho = int(self.headers.get("Content-Length") or 0)
+            if tamanho > MAX_PDF_SERASA:
+                raise ValueError(f"o arquivo passou de {MAX_PDF_SERASA // (1024 * 1024)} MB")
+            conteudo = self.rfile.read(tamanho) if tamanho else b""
+            r = self.app.capas.enviar_serasa(usuario, conteudo, ids)
+            if not r["ja_existia"]:
+                log.info("%s enviou o Serasa %s de um cadastro novo (capa)", usuario["login"], r["serasa"]["id"])
+            return self._json({"ok": True, **r})
+        corpo = self._corpo_json()
+        if caminho == "/api/credito/capa/calcular":
+            return self._json(self.app.capas.analisar(corpo, usuario, ids))
+        if caminho == "/api/credito/capa/excluir":
+            r = self.app.capas.excluir(usuario, corpo.get("id"), ids)
+            log.info("%s excluiu a capa de análise de crédito %s", usuario["login"], corpo.get("id"))
+            return self._json({"ok": True, **r})
+        r = self.app.capas.registrar(usuario, corpo, ids)
+        if not r["ja_existia"]:
+            log.info("%s registrou a capa de análise de crédito %s (%s)", usuario["login"], r["id"],
+                     corpo.get("tipo") or "cadastro")
         return self._json({"ok": True, **r})
 
     def _pode_manejo(self, usuario: dict) -> bool:
@@ -1252,6 +1289,10 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(d)
             if url.path == "/api/credito/config":  # as regras do crédito (só o administrador)
                 return self._json({"config": self.app.config_credito.atual(), "ativo": self.app.vps})
+            if url.path == "/api/credito/capas":  # as capas de análise de crédito e o que o formulário usa
+                if not self._pode_credito(usuario):
+                    return
+                return self._json(self.app.capas.listar(usuario, self._ids(usuario)))
             if url.path in ("/api/manejo", "/api/manejo/historico"):
                 if not self._pode_manejo(usuario):
                     return
@@ -1383,6 +1424,9 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._mudar_reanalise(usuario, url.path, self._corpo_json())
             if url.path in ("/api/credito/serasa", "/api/credito/serasa/excluir"):
                 return self._mudar_serasa(usuario, url.path, {k: v[-1] for k, v in parse_qs(url.query).items()})
+            if url.path in ("/api/credito/capa", "/api/credito/capa/serasa", "/api/credito/capa/calcular",
+                            "/api/credito/capa/excluir"):
+                return self._mudar_capa(usuario, url.path)
             if url.path == "/api/credito/config":
                 cfg = self.app.config_credito.salvar(self._corpo_json().get("config") or {}, usuario)
                 log.info("%s salvou as regras do crédito: %s", usuario["login"], cfg)
