@@ -3435,6 +3435,8 @@ table.dados.mj-tabela tr.mj-detalhe > td, table.dados.mj-tabela tr.mj-detalhe:ho
 #pagina-crm .crm-marca:has(input:checked) { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 45%, var(--linha)); color: var(--acento-tinta); }
 .crm-bolinha { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: var(--c); }
 .crm-lista .crm-rolagem { max-height: min(74vh, 780px); }
+/* enquanto a tabela não desenhou todos os clientes (as linhas entram ao rolar) */
+.crm-lista .crm-mais { margin: 10px 2px 0; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; text-align: center; }
 table.dados.crm-tabela { font-size: 13px; }
 table.dados.crm-tabela th, table.dados.crm-tabela td { padding: 9px 10px; }
 table.dados.crm-tabela th.esq, table.dados.crm-tabela td.esq { text-align: left; }

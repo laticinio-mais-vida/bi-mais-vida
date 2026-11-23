@@ -493,6 +493,7 @@ class Crm:
         self.config = config
         self.nomes_vendedores = nomes_vendedores  # função: {vendedor: nome} (o da planilha de metas)
         self._trava = threading.Lock()
+        self._trava_conta = threading.Lock()  # uma conta por vez (ver _dados)
         self._memo: tuple = (None, None)
 
     # ---------- o cálculo (todos os clientes de uma vez) ----------
@@ -525,9 +526,15 @@ class Crm:
         with self._trava:
             if self._memo[0] == chave:
                 return self._memo[1]
-        dados = self._calcular(cfg)
-        with self._trava:
-            self._memo = (chave, dados)
+        # Uma conta por vez: quem chega enquanto ela roda (várias pessoas abrindo a página logo depois de uma cópia nova
+        # do ERP) espera e usa o resultado, em vez de cada um refazer a conta inteira.
+        with self._trava_conta:
+            with self._trava:
+                if self._memo[0] == chave:
+                    return self._memo[1]
+            dados = self._calcular(cfg)
+            with self._trava:
+                self._memo = (chave, dados)
         return dados
 
     def _calcular(self, cfg: dict) -> dict:

@@ -50,6 +50,13 @@ let ctx = null;
 let filtroV = null;
 let observador = null;   // acompanha a largura da tabela, para o detalhe do cliente caber na parte visível
 let esperaBusca = 0;
+// A tabela desenha só o começo da lista, e as próximas linhas entram quando a pessoa rola até perto do fim. Com 1.900
+// clientes, refazer todas as linhas a cada filtro, ordem, busca ou clique num cliente travava a tela por segundos.
+const LOTE = 100;       // quantas linhas entram por vez
+const FOLGA = 25;       // quando uma das últimas FOLGA linhas desenhadas aparece na tela, entram as próximas
+let listaAtual = [];    // os clientes da tabela (com os filtros, a busca e a ordem), desenhados até `desenhadas`
+let desenhadas = 0;
+let vigia = null;       // IntersectionObserver nas últimas FOLGA linhas (vigiar)
 const estado = {
   dados: null, pedido: 0, vendedores: [], segmento: "", frequencia: "", faixa: "", sinalizados: false, busca: "",
   ordens: ORDEM_PADRAO, aberto: null, detalhes: {}, animar: true,  // ordens: os níveis da ordem da tabela (util.js)
@@ -62,6 +69,10 @@ export function montarCrm(container, contexto) {
     dados: null, aberto: null, detalhes: {}, busca: "", vendedores: [], segmento: "", frequencia: "", faixa: "", sinalizados: false,
     ordens: lerNiveis(salvo.ordem, coluna, ORDEM_PADRAO),
   });
+  vigia?.disconnect();
+  vigia = null;
+  listaAtual = [];
+  desenhadas = 0;
   container.innerHTML = `
     <div class="controles entra" style="--i:0">
       <div class="filtros crm-filtros">
@@ -157,7 +168,7 @@ function desenhar() {
   const metodoAberto = !!document.querySelector("#crm-metodo details")?.open;
   document.getElementById("crm-metodo").innerHTML = metodo(d);
   if (metodoAberto) document.querySelector("#crm-metodo details").open = true;
-  desenharDados();
+  desenharDados(true);  // na releitura dos dados, a tabela fica onde estava
   estado.animar = false;
 }
 
@@ -185,11 +196,11 @@ function filtrados(d, comBusca = true) {
     && (!termo || semAcento(`${c.nome} ${c.cidade || ""} ${c.id} ${c.vendedor.nome}`).includes(termo)));
 }
 
-function desenharDados() {
+function desenharDados(manter = false) {
   const d = estado.dados, topo = document.getElementById("crm-topo");
   if (!d || !topo) return;
   topo.innerHTML = cartoes(d, filtrados(d, false));
-  desenharTabela();
+  desenharTabela(manter);
   ligarTelaCheia(document.getElementById("crm-conteudo"));
 }
 
@@ -244,13 +255,19 @@ function ordenar(lista) {
   }, (a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 }
 
-function desenharTabela() {
+// manter: a releitura dos dados (cópia nova do banco), que deixa a tabela onde estava, com as linhas que já tinha.
+// Sem ele (outro filtro, outra busca, outra ordem), a tabela volta para o começo.
+function desenharTabela(manter = false) {
   const d = estado.dados, corpo = document.getElementById("crm-lista-corpo");
   if (!d || !corpo) return;
   const base = filtrados(d, false), lista = ordenar(filtrados(d));
-  if (estado.aberto != null && !lista.some((c) => c.id === estado.aberto)) estado.aberto = null;
+  const iAberto = estado.aberto == null ? -1 : lista.findIndex((c) => c.id === estado.aberto);
+  if (iAberto < 0) estado.aberto = null;
   const rolagem = corpo.querySelector(".tabela-rolagem");
-  const pos = rolagem ? [rolagem.scrollTop, rolagem.scrollLeft] : null;
+  const pos = rolagem ? [manter === true ? rolagem.scrollTop : 0, rolagem.scrollLeft] : null;
+  // Só o começo da lista (as próximas linhas entram ao rolar: maisLinhas). Com um cliente aberto, vai até a linha dele.
+  listaAtual = lista;
+  desenhadas = Math.min(lista.length, Math.max(LOTE, manter === true ? desenhadas : 0, Math.ceil((iAberto + 1) / LOTE) * LOTE));
   const th = (c) => {
     const m = marcaOrdem(estado.ordens, c.id);
     return `<th class="${c.esq ? "esq" : ""}"${m.aria}${c.dica ? ` title="${esc(c.dica)}"` : ""}>
@@ -263,7 +280,8 @@ function desenharTabela() {
     tabela = `${linhaOrdem(estado.ordens, ORDEM_PADRAO, (id) => { const c = coluna(id); return c && { rotulo: c.rotulo, tipo: TEXTO.includes(id) ? "texto" : "numero" }; })}
       <div class="tabela-rolagem crm-rolagem"><table class="dados crm-tabela${estado.animar ? " crm-entra" : ""}">
       <thead><tr>${COLUNAS.map(th).join("")}</tr></thead>
-      <tbody>${lista.map((c, i) => linha(c, i)).join("")}</tbody></table></div>`;
+      <tbody>${lista.slice(0, desenhadas).map((c, i) => linha(c, i)).join("")}</tbody></table></div>
+      <p class="crm-mais" hidden></p>`;
   }
   const contagem = lista.length === base.length ? plural(base.length, "cliente", "clientes") : `${fmt.num(lista.length)} de ${plural(base.length, "cliente", "clientes")}`;
   corpo.innerHTML = `<div class="cartao-cab"><div><h3>${icone("estrela")}Nota de cada cliente</h3>
@@ -277,9 +295,51 @@ function desenharTabela() {
     observador = new ResizeObserver(medir);
     observador.observe(nova);
   }
+  avisoMais();
+  vigiar();
   reajustarTelaCheia();
   if (estado.aberto != null) carregarDetalhe(estado.aberto);
 }
+
+const corpoDaTabela = () => document.querySelector("#crm-lista-corpo table.crm-tabela > tbody");
+
+// Embaixo da tabela, enquanto faltam linhas: quantas já estão desenhadas.
+function avisoMais() {
+  const p = document.querySelector("#crm-lista-corpo .crm-mais");
+  if (!p) return;
+  p.hidden = desenhadas >= listaAtual.length;
+  p.textContent = p.hidden ? "" : `Mostrando ${fmt.num(desenhadas)} de ${plural(listaAtual.length, "cliente", "clientes")} · role para ver os próximos`;
+}
+
+// As próximas linhas entram quando qualquer uma das últimas FOLGA aparece na tela: rolando a tabela aos poucos, pulando
+// direto para o fim dela ou, em tela cheia, rolando a página. Se depois de entrarem as novas últimas já estiverem à
+// vista (tela muito alta), entram mais.
+function vigiar() {
+  vigia?.disconnect();
+  vigia = null;
+  const tbody = corpoDaTabela();
+  if (!tbody || desenhadas >= listaAtual.length) return;
+  vigia = new IntersectionObserver((entradas) => { if (entradas.some((e) => e.isIntersecting)) maisLinhas(); });
+  let tr = tbody.lastElementChild;
+  for (let n = 0; tr && n < FOLGA; tr = tr.previousElementSibling) {
+    if (tr.classList.contains("crm-linha")) { vigia.observe(tr); n += 1; }
+  }
+}
+
+// Acrescenta o lote seguinte no fim da tabela, sem refazer as linhas que já estão.
+function maisLinhas() {
+  const tbody = corpoDaTabela();
+  if (!tbody || desenhadas >= listaAtual.length) return;
+  tbody.parentElement.classList.remove("crm-entra");  // a animação de entrada é só de quando a página abre
+  const de = desenhadas;
+  desenhadas = Math.min(listaAtual.length, de + LOTE);
+  tbody.insertAdjacentHTML("beforeend", listaAtual.slice(de, desenhadas).map((c, i) => linha(c, de + i)).join(""));
+  avisoMais();
+  vigiar();
+  reajustarTelaCheia();
+}
+
+const linhaDetalhe = (c) => `<tr class="crm-detalhe"><td colspan="${COLUNAS.length}"><div class="crm-det-caixa" id="crm-det-${c.id}">${detalhe(c)}</div></td></tr>`;
 
 function linha(c, i) {
   const f = faixaDe(c.nota), aberto = c.id === estado.aberto;
@@ -294,7 +354,7 @@ function linha(c, i) {
       <td><span class="crm-nota" style="--c:${f.cor}" title="${esc(`Nota exata: ${fmt.num(c.nota_exata, 2)}`)}">${fmt.num(c.nota)}</span></td>
       ${INDICADORES.map((ind) => `<td class="crm-pts">${pts(c[ind.id]?.pontos)}</td>`).join("")}
       <td>${c.rentabilidade ? fmt.moeda(c.rentabilidade.lucro) : "—"}</td>
-    </tr>${aberto ? `<tr class="crm-detalhe"><td colspan="${COLUNAS.length}"><div class="crm-det-caixa" id="crm-det-${c.id}">${detalhe(c)}</div></td></tr>` : ""}`;
+    </tr>${aberto ? linhaDetalhe(c) : ""}`;
 }
 
 function aoClicarLista(e) {
@@ -317,10 +377,27 @@ function aoClicarLista(e) {
   if (tr) alternar(Number(tr.dataset.cliente));
 }
 
+// Abre o quadro do cliente (ou fecha, se já era ele) mexendo só nas linhas dele: a tabela não é refeita.
 function alternar(id) {
-  estado.aberto = estado.aberto === id ? null : id;
-  desenharTabela();
-  document.querySelector(`tr[data-cliente="${id}"]`)?.focus({ preventScroll: true });
+  const tbody = corpoDaTabela();
+  if (!tbody) return;
+  tbody.parentElement.classList.remove("crm-entra");  // o quadro não entra com a animação da abertura da página
+  tbody.querySelectorAll(":scope > tr.crm-aberta").forEach((tr) => {
+    tr.classList.remove("crm-aberta");
+    tr.setAttribute("aria-expanded", "false");
+  });
+  tbody.querySelectorAll(":scope > tr.crm-detalhe").forEach((tr) => tr.remove());
+  const tr = tbody.querySelector(`:scope > tr[data-cliente="${id}"]`);
+  const c = estado.aberto === id ? null : listaAtual.find((x) => x.id === id);
+  estado.aberto = c && tr ? id : null;
+  if (estado.aberto != null) {
+    tr.classList.add("crm-aberta");
+    tr.setAttribute("aria-expanded", "true");
+    tr.insertAdjacentHTML("afterend", linhaDetalhe(c));
+    carregarDetalhe(id);
+  }
+  reajustarTelaCheia();
+  tr?.focus({ preventScroll: true });
 }
 
 async function carregarDetalhe(id) {

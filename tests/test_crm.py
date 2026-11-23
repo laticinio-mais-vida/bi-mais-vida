@@ -7,6 +7,8 @@ import copy
 import datetime as dt
 import io
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -400,6 +402,49 @@ class TestCalculo(unittest.TestCase):
 
     def test_guarda_o_calculo(self):
         self.assertIs(self.crm._dados(), self.crm._dados())
+
+    def test_uma_conta_so_para_quem_chega_junto(self):
+        # quatro pedidos ao mesmo tempo, sem nada guardado: o primeiro calcula, os outros esperam e usam o resultado
+        crm = Crm(self.crm.calc, self.crm.config, self.crm.nomes_vendedores)
+        contas, calcular = [], crm._calcular
+
+        def devagar(cfg):
+            contas.append(1)
+            time.sleep(0.2)
+            return calcular(cfg)
+
+        crm._calcular = devagar
+        saidas, erros = [], []
+
+        def pedir():
+            try:
+                saidas.append(crm._dados())
+            except Exception as e:  # noqa: BLE001
+                erros.append(e)
+
+        pedidos_juntos = [threading.Thread(target=pedir) for _ in range(4)]
+        for t in pedidos_juntos:
+            t.start()
+        for t in pedidos_juntos:
+            t.join(30)
+        self.assertEqual(erros, [])
+        self.assertEqual(len(contas), 1)
+        self.assertEqual(len(saidas), 4)
+        self.assertTrue(all(s is saidas[0] for s in saidas))
+        self.assertEqual(sorted(saidas[0]["clientes"]), sorted(self.c))
+
+    def test_a_conta_que_falha_nao_trava_a_seguinte(self):
+        crm = Crm(self.crm.calc, self.crm.config, self.crm.nomes_vendedores)
+        calcular = crm._calcular
+
+        def quebra(cfg):
+            raise RuntimeError("falhou")
+
+        crm._calcular = quebra
+        with self.assertRaises(RuntimeError):
+            crm._dados()
+        crm._calcular = calcular
+        self.assertEqual(sorted(crm._dados()["clientes"]), sorted(self.c))
 
 
 class TestPlanilhaCustos(unittest.TestCase):

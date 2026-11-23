@@ -97,7 +97,15 @@ export function preencherIcones(raiz = document) {
 }
 
 // ---------- formatação ----------
-const nf = (min, max) => new Intl.NumberFormat("pt-BR", { minimumFractionDigits: min, maximumFractionDigits: max });
+// Um formatador por par (mínimo, máximo) de casas, criado uma vez: criar um a cada número (o fmt.num e o fmt.pct de uma
+// tabela grande) custa centenas de vezes mais que formatar.
+const formatadores = new Map();
+const nf = (min, max) => {
+  const chave = `${min}/${max}`;
+  let f = formatadores.get(chave);
+  if (!f) formatadores.set(chave, f = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: min, maximumFractionDigits: max }));
+  return f;
+};
 const NF0 = nf(0, 0), NF1 = nf(1, 1), NF2 = nf(2, 2), NF01 = nf(0, 1);
 
 export const fmt = {
