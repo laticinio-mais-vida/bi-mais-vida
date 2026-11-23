@@ -850,6 +850,25 @@ frequência, a pontualidade de pagamento, o mix ideal do segmento e a rentabilid
   `DELETE FROM migracoes WHERE versao = '045_crm'`. Os custos e o mix editados vão junto: tire um dump antes.
 - **PC:** recebe a 045 quando o código for atualizado lá; o CRM do PC tem as regras dele (o banco do PC é outro).
 
+#### Limites do Assistente por pessoa (migração 047)
+
+Os limites do Assistente saem do `config.ini` para Configurações do assistente › Limites (veja o README, "Chave, custo
+e limites"): gasto total por dia e por mês e, por pessoa, perguntas por dia e gasto por dia e por mês, com um padrão e
+limites próprios.
+
+- **Ordem:** qualquer uma; nada muda no que o PC manda.
+- **A migração 047** só acrescenta o nome `assistente` ao `regras_nome_check`. Não cria tabela nem mexe em dado
+  nenhum. Ensaie em BEGIN/ROLLBACK.
+- **Sem limites gravados, nada muda:** valem `limite_diario` e `limite_custo_dia` de `[ia]` no `config.ini` do site,
+  como antes. O primeiro Salvar na tela grava a versão 1 na tabela `regras` e, dali em diante, o `config.ini` não
+  conta mais para os limites.
+- **Depois de publicar:** abra Assistente › Configurações › Limites, confira as pessoas da tabela (quem tem o
+  Assistente no acesso) e o uso de hoje e do mês, e salve os limites.
+- **Voltar atrás:** o código anterior ignora os limites gravados (podem ficar) e volta a usar os do `config.ini`.
+  Para apagar de vez: `DELETE FROM regras WHERE nome = 'assistente'`, voltar o `regras_nome_check` sem `'assistente'`
+  e `DELETE FROM migracoes WHERE versao = '047_limites_assistente'`.
+- **PC:** recebe a 047 quando o código for atualizado lá; os limites do PC são outros (o banco do PC é outro).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›
