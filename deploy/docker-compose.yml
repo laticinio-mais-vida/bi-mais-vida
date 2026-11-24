@@ -15,7 +15,9 @@ services:
       # A pasta inteira, e não arquivo por arquivo: o cache e as planilhas recebidos do PC são trocados com troca
       # atômica (os.replace), que não funciona num arquivo montado sozinho.
       - ..:/app
-    mem_limit: 512m
+    # 1 GB: com 512 MB o painel batia no teto várias vezes por hora (contador "max" em /sys/fs/cgroup/memory.events,
+    # de dentro do container) e, com dias no ar, ia para o swap. O docker stats não mostra isso.
+    mem_limit: 1g
     depends_on:
       banco:
         condition: service_healthy

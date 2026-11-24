@@ -161,7 +161,7 @@ outros sistemas dependem deles.
 | O quê | Onde |
 |---|---|
 | Painel: código, `config.ini` (modo vps, a chave de envio, a chave da API do Assistente e a senha do banco), `banco.env`, `dados/`, `logs/` (e, só como cópia, `usuarios.json` e `config_*.json`, de antes do banco) | `/opt/bi-mais-vida` |
-| Container `bi_metas` (Python 3.12, usuário 10001, até 512 MB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
+| Container `bi_metas` (Python 3.12, usuário 10001, até 1 GB, horário de Brasília) | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
 | Container `bi_banco` (PostgreSQL 18, até 256 MB; só o painel enxerga), com os usuários, as regras, as conversas e o uso do Assistente. Os dados ficam no volume Docker `bi-mais-vida_bi_banco_dados` | `/opt/bi-mais-vida/deploy/docker-compose.yml` |
 | Cópias de segurança do banco (uma por dia, 14 dias) | `/opt/backups/bi-banco/` |
 | HTTPS de `bi.maisvida.cloud`, encaminhado para `bi_metas:8050` | bloco no fim de `/opt/app-promotoria/Caddyfile` (container `estoque_caddy`) |
@@ -252,8 +252,10 @@ O que acompanhar:
 
 - **Memória:** os dados de cada acesso ficam na memória enquanto ele usa o assistente. O de todos os vendedores
   (uns 60 MB) tem vaga própria e fica carregado, porque a página Gestão usa ele sempre; além dele, até 2 acessos ao
-  mesmo tempo (`recortes` em `[ia]`). Confira com `docker stats bi_metas`; o limite do container é 512 MB. Se
-  apertar, use `recortes = 1`.
+  mesmo tempo (`recortes` em `[ia]`). Confira com `docker stats bi_metas`; o limite do container é 1 GB (era
+  512 MB até 24/11/2026, e o painel batia no teto). Para ver se ele bate no teto, o `docker stats` não basta:
+  `docker exec bi_metas sh -c 'cat /sys/fs/cgroup/memory.peak; grep "^max " /sys/fs/cgroup/memory.events'` mostra o
+  maior uso desde que o container subiu e quantas vezes ele chegou ao limite. Se apertar, use `recortes = 1`.
 - **Perguntas longas:** uma pergunta pode levar até uns 100 s (`tempo_total`). O `reverse_proxy` do Caddy não tem
   tempo limite de resposta por padrão, então o Caddyfile não precisa mudar. Mesmo assim, depois de publicar, faça
   uma pergunta que exija várias consultas e confira que a resposta chega.
