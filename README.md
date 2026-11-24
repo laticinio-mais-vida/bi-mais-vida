@@ -1088,7 +1088,8 @@ python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
 
 - **Só o administrador** lança, edita, encerra, prorroga e exclui campanhas, cria objetivos e escreve observações.
 - A **agenda** do topo é de cada um: quem tem a página cria, conclui e dá feedback nas próprias atividades. As
-  **tarefas** são vistas por quem criou e pelos participantes (o administrador só vê as de que participa).
+  **atividades com outras pessoas** e as **tarefas** são vistas por quem criou e por quem participa (o administrador
+  só vê as de que participa).
 - Quem tem a página liberada **acompanha**: vê as campanhas, os objetivos e o histórico (com as observações) dos
   vendedores do acesso dela na Gestão, e só as regiões desses vendedores.
 - Os vendedores de cada pessoa são os do acesso dela, escolhidos em **Usuários** (os mesmos de todas as páginas e da
@@ -1106,8 +1107,9 @@ python app.py --simular "ricardo eu" --meta 100000 --planilha simulacao.xlsx
 
 ### Minha agenda
 
-No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê e mexe só nas próprias atividades (nem o
-administrador vê as dos outros) e vê as tarefas que criou ou de que participa (veja [Tarefas](#tarefas)) e, se
+No topo da Gestão fica a agenda de quem está vendo: cada pessoa vê as atividades que criou ou que faz (nem o
+administrador vê as dos outros; veja [Atividade com outras pessoas](#atividade-com-outras-pessoas)), as tarefas que
+criou ou de que participa (veja [Tarefas](#tarefas)) e, se
 conectar, os eventos do Google Agenda dela, só para ver (veja [Google Agenda](#google-agenda-só-leitura)). Quem tem a
 página Gestão tem a agenda, inclusive o visualizador, que na equipe só acompanha. O botão **−** minimiza a agenda e deixa só o título; o **+** mostra de novo (a escolha fica
 guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** troca a faixa de dias pelo
@@ -1115,7 +1117,8 @@ guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** tro
 
 - **Os dias do mês** ficam na mesma faixa do "Ritmo do mês" da página Metas, na largura toda do cartão, com hoje num
   quadrado maior. Em cada quadrado:
-  - o número em cima é quantas atividades e tarefas o dia tem;
+  - o número em cima é quantas atividades e tarefas o dia tem (na atividade com outras pessoas, quem criou conta uma
+    por pessoa; quem faz, só a dele);
   - a barrinha embaixo do dia mostra as feitas (verde) e as que faltam (laranja; vermelho se o dia já passou), um
     pedaço por item (com mais de 6, só as duas partes);
   - a cor do quadrado diz como está o dia: com algo marcado, tudo feito ou com algo que ficou sem concluir;
@@ -1167,10 +1170,11 @@ guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** tro
   horário.
 - **Histórico de feedbacks** (o ícone de caderneta, nas atividades que se repetem ou duram vários dias): cada dia
   concluído com o feedback, quantas vezes ela aconteceu até hoje, quantas foram concluídas e os dias que ficaram sem
-  concluir.
+  concluir. Com outras pessoas, os números de cada uma e, em cada dia concluído, de quem é.
 - **Editar** muda a atividade sem apagar o que já foi feito. **Encerrar** faz a atividade parar de se repetir depois
   de hoje (a de vários dias, terminar hoje) e mantém o histórico. **Excluir** apaga a atividade e todo o histórico
-  dela.
+  dela. Na atividade com outras pessoas, editar é de quem criou e de quem tem autonomia; encerrar e excluir, só de
+  quem criou.
 - **Pelo Assistente** (para quem tem a Gestão), com a agenda de quem pergunta:
   - **resumos**, como "o que fiz esta semana?", "o que ficou atrasado?" ou "como foram as visitas ao Mercado do
     João?", com os feedbacks;
@@ -1181,7 +1185,37 @@ guardada no navegador), e o link de um dia também abre. **Agenda | Kanban** tro
   O Assistente nunca grava sozinho: a resposta traz a proposta com um botão (**Adicionar à agenda**, **Salvar a
   mudança**, **Encerrar**, **Excluir** ou **Marcar como feita**), e só o clique aplica, uma vez só. Depois, o cartão
   mostra que foi feito e o link **Ver na agenda**, que abre a Gestão no dia. O Assistente ainda não vê as tarefas; os
-  eventos do Google Agenda de quem pergunta, ele vê só para ler.
+  eventos do Google Agenda de quem pergunta, ele vê só para ler. Ele vê também as atividades com outras pessoas, com
+  as mesmas permissões da página, mas só cria atividades para quem pergunta (pôr outras pessoas é no formulário).
+
+#### Atividade com outras pessoas
+
+Como na tarefa, a atividade pode ser de outras pessoas. No formulário, **Quem faz** começa com você; **Adicionar
+pessoa** põe quem tem a página Gestão, e cada pessoa tem o botão **Autonomia** (quem entra começa sem) e o **×**. Com
+outras pessoas, **Também faço** escolhe se você também faz ou só acompanha (sem outras pessoas, a atividade é sua).
+
+- **Cada pessoa tem o próprio dia:** o próprio check e o próprio feedback. Todos veem, embaixo da atividade, o dia de
+  cada uma das outras pessoas.
+- **Quem criou** edita, muda quem faz, encerra, exclui e marca (ou desfaz) o dia no lugar de quem faz. O feedback que
+  a pessoa escreveu, só ela muda. Se só acompanha, no lugar do check aparece o ícone das pessoas, verde quando todos
+  fizeram.
+- **Com autonomia**, a pessoa também edita a atividade (o título, a descrição, os dias e o horário), e a mudança vale
+  para todos. Sem autonomia, ela só marca o próprio dia.
+- **Quem entra numa atividade que já começou** faz a partir do dia em que entrou: os dias de antes não são dela. Quem
+  sai deixa o que fez guardado (quem criou vê no histórico), e volta a ver se voltar.
+- **Horário ocupado:** vale para cada pessoa que faz. A atividade com horário não pode cair no horário ocupado de quem
+  faz, e a mensagem sobre outra pessoa vem sem o título. Um compromisso ocupado no Google de outra pessoa não impede:
+  quem grava só recebe o aviso (numa atividade que se repete, quase sempre haveria algum).
+- **Sino:** avisa quem foi incluído ou ganhou a autonomia, todos quando os dias ou o horário mudam ou a atividade é
+  encerrada, e quem criou quando alguém conclui o próprio dia. Clicar no aviso abre a agenda no dia.
+
+Exemplo: Marcos cria "Ligar para os clientes inativos", toda segunda e quarta, para a Ana e o Beto, e só acompanha.
+
+| Dia | Ana | Beto | Na agenda do Marcos |
+|---|---|---|---|
+| seg 16/11 | feita: "liguei para 12" | feita | 2 de 2 (verde) |
+| qua 18/11 | feita | não fez | 1 de 2 (vermelho) |
+| seg 23/11 | feita | marcada pelo Marcos | 2 de 2 (verde) |
 
 #### Tarefas
 

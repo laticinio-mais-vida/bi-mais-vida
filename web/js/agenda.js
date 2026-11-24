@@ -3,7 +3,11 @@
 // maior. Cada quadrado mostra quantos itens o dia tem e, numa barrinha, os feitos (verde) e os que faltam (laranja;
 // vermelho se o dia passou). Clicar num dia amplia o painel com o que há nele (os com horário primeiro).
 // - Atividade: concluir (com o feedback, obrigatório quando a atividade pede), editar o feedback, desfazer e, nas que
-//   se repetem, o histórico de tudo o que foi feito.
+//   se repetem, o histórico de tudo o que foi feito. Como a tarefa, ela pode ser de outras pessoas (o formulário tem
+//   "Quem faz": você, se também faz, e as pessoas, com ou sem autonomia): cada pessoa marca o próprio dia e vê, embaixo,
+//   o dia de cada uma das outras. Quem criou e não faz só acompanha (no lugar do check, o ícone das pessoas) e marca ou
+//   desfaz o dia no lugar de quem faz; com autonomia, a pessoa também edita a atividade. No número e na barrinha do dia,
+//   quem criou conta um por pessoa; quem faz, só o dele (conta e feitas vêm do servidor).
 // - Tarefa: aparece no dia do prazo; cada subtarefa, no dia do prazo dela (quem criou vê todas; o participante, as
 //   dele). A janela da tarefa mostra a situação dela (A fazer, Fazendo, Concluída) e um card por pessoa com as
 //   subtarefas dela, de todos: cada um muda a situação das suas e, com autonomia, edita o texto delas e cria
@@ -61,12 +65,13 @@ const CHAVE_RECOLHIDA = "mv-agenda-recolhida";
 const CHAVE_VISTA = "mv-agenda-vista";
 
 let raiz = null, dlg = null, tela = null; // tela: a janela em tela cheia do formulário (dentro de #ag-raiz)
-// tipo: o do formulário (atividade ou tarefa); tf: os participantes e as subtarefas do formulário da tarefa;
+// tipo: o do formulário (atividade ou tarefa); tf: os participantes e as subtarefas do formulário da tarefa; af: quem
+// faz, no formulário da atividade;
 // pessoas: quem pode participar ({eu, pessoas}, carregado na primeira tarefa); editando: {tipo, ...o item}; formDia: o
 // dia em que o formulário abriu. vista: agenda ou quadro (o kanban, com as tarefas de estado.quadro). meses: a
 // contagem de cada dia dos meses já vistos, para escolher o dia.
 const estado = { mes: null, dados: null, aberto: null, editando: null, concluindo: null, form: null, formInicial: null, pedido: 0,
-                 tipo: "atividade", tf: null, pessoas: null, formDia: null, vista: "agenda", quadro: null, pedidoQuadro: 0,
+                 tipo: "atividade", tf: null, af: null, pessoas: null, formDia: null, vista: "agenda", quadro: null, pedidoQuadro: 0,
                  meses: new Map() };
 // A janela da tarefa: a tarefa aberta, a subtarefa em edição (id, "nova" ou null), a justificativa de atraso sendo
 // escrita ("tarefa", o id da subtarefa ou null; uma edição de cada vez), como o que está aberto começou, na subtarefa
@@ -85,8 +90,19 @@ const subDe = (t, id) => t.subtarefas.find((s) => s.id === id);
 const ehDia = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t || "");
 const plural = (n, um, varios) => `${fmt.num(n)} ${n === 1 ? um : varios}`;
 const curto = (t, n) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
-// Tudo o que o dia tem (atividades e tarefas), para as contas: os dois carregam o feita.
-const todos = (x) => [...x.itens, ...(x.tarefas || [])];
+// Quanto o dia conta (no número, na barrinha e nas cores): a tarefa e cada subtarefa, um; a atividade, o que o servidor
+// diz (conta e feitas: um por pessoa para quem criou, que vê todas; só o dele para quem faz).
+function contas(x) {
+  let total = 0, feitas = 0;
+  for (const i of x.itens) { total += i.conta ?? 1; feitas += i.feitas ?? (i.feita ? 1 : 0); }
+  for (const r of x.tarefas || []) { total += 1; feitas += r.feita ? 1 : 0; }
+  return { total, feitas, faltam: total - feitas };
+}
+// As pessoas da atividade: o nome de uma; e se ela é de mais alguém além de quem vê (mostra quem faz e o dia de cada um).
+const nomeDe = (a, id) => a.pessoas.find((p) => p.id === id)?.nome || "Alguém";
+// Quem marcou o dia de outra pessoa: "você" ou o nome (já escapado).
+const quem = (u) => (u.id === estado.dados?.eu ? "você" : esc(u.nome));
+const comOutros = (a) => !a.faz || a.pessoas.length > 1;
 
 function hojeLocal() {
   const d = new Date();
@@ -174,7 +190,7 @@ export function montarAgenda(el, { dia, tarefa } = {}) {
   tela.addEventListener("cancel", (e) => { if (formMudou() && !confirm(DESCARTAR_FORM)) e.preventDefault(); });
   tela.addEventListener("close", () => {
     tela.innerHTML = "";
-    Object.assign(estado, { editando: null, tf: null, formInicial: null });
+    Object.assign(estado, { editando: null, tf: null, af: null, formInicial: null });
   });
   const valido = ehDia(dia);
   Object.assign(estado, { mes: null, dados: null, aberto: null, editando: null, concluindo: null, tipo: "atividade", tf: null,
@@ -273,9 +289,8 @@ async function carregar(mes = estado.mes, { aberto } = {}) {
 function contagemDoMes(d) {
   const r = {};
   for (const x of d.dias) {
-    const lista = todos(x);
-    const faltam = lista.filter((i) => !i.feita).length;
-    if (lista.length) r[x.data] = { n: lista.length, classe: !faltam ? "feita" : x.data < d.hoje ? "atrasada" : "tem" };
+    const { total, faltam } = contas(x);
+    if (total) r[x.data] = { n: total, classe: !faltam ? "feita" : x.data < d.hoje ? "atrasada" : "tem" };
   }
   return r;
 }
@@ -320,10 +335,11 @@ function escreverCabecalho() {
   titulo.textContent = `${capitalizar(MESES[m - 1])} de ${ano}`;
   let atividades = 0, tarefas = 0, feitas = 0, atrasadas = 0;
   for (const x of d.dias) {
-    atividades += x.itens.length;
+    const c = contas(x);
+    atividades += c.total - x.tarefas.length;
     tarefas += x.tarefas.length;
-    feitas += todos(x).filter((i) => i.feita).length;
-    if (x.data < d.hoje) atrasadas += todos(x).filter((i) => !i.feita).length;
+    feitas += c.feitas;
+    if (x.data < d.hoje) atrasadas += c.faltam;
   }
   const partes = [atividades && plural(atividades, "atividade", "atividades"), tarefas && plural(tarefas, "tarefa", "tarefas")].filter(Boolean);
   resumo.textContent = partes.length
@@ -371,8 +387,7 @@ function desenharFaixa(quieta) {
       const dia = Number(x.data.slice(8));
       const dow = new Date(x.data + "T12:00").getDay();
       const lista = doDia(x);
-      const total = lista.length;
-      const pendentes = todos(x).filter((i) => !i.feita).length, feitasDia = total - pendentes;
+      const { total, faltam: pendentes, feitas: feitasDia } = contas(x);
       const hoje = x.data === d.hoje;
       const classes = ["dia", total ? "tem" : "", total && !pendentes ? "feita" : "",
         pendentes && x.data < d.hoje ? "atrasada" : "", hoje ? "hoje" : "", x.data === estado.aberto ? "aberto" : "",
@@ -382,7 +397,7 @@ function desenharFaixa(quieta) {
       const tt = `<div class='tt-t'>${fmt.dataCurta(x.data)} · ${fmt.semana(x.data)}${hoje ? " · hoje" : ""}</div>` +
         (total ? linhaTT("No dia", fmt.num(total)) + linhaTT("Feitas", fmt.num(feitasDia)) + linhaTT("Faltam", fmt.num(pendentes)) +
           lista.slice(0, MAX_TOOLTIP).map((e) => linhaDoDia(e)).join("") +
-          (total > MAX_TOOLTIP ? `<div class='tt-l'><span>e mais ${total - MAX_TOOLTIP}</span></div>` : "")
+          (lista.length > MAX_TOOLTIP ? `<div class='tt-l'><span>e mais ${lista.length - MAX_TOOLTIP}</span></div>` : "")
           : g.length ? "" : linhaTT("No dia", "nada marcado")) + linhasGoogle(g);
       const rotulo = `${dia} de ${MESES[m - 1]}${hoje ? ", hoje" : ""}: ${total ? `${plural(total, "item", "itens")}, ${plural(feitasDia, "feito", "feitos")}, faltam ${pendentes}` : "nada marcado"}${g.length ? `; ${plural(g.length, "evento", "eventos")} do Google` : ""}`;
       return `<button type="button" class="${classes}" style="--i:${n}${col}" data-dia="${x.data}" data-tt="${esc(tt)}"
@@ -417,7 +432,7 @@ function linhasGoogle(g) {
 // Uma linha do tooltip do dia: a atividade, a tarefa ou a subtarefa (de quem, se não for minha).
 function linhaDoDia(e) {
   let nome;
-  if (e.i) nome = atividade(e.i.atividade).titulo;
+  if (e.i) nome = atividade(e.i.atividade).titulo + (e.i.conta > 1 ? ` (${e.i.feitas} de ${e.i.conta})` : "");
   else {
     const { t, s } = daRef(e.r);
     nome = s ? `${curto(s.titulo, MAX_DICA)} (${s.minha ? "subtarefa" : `de ${s.responsavel.nome}`})` : `Tarefa: ${t.titulo}`;
@@ -446,10 +461,10 @@ function desenharDia(animar) {
   if (!x) { el.innerHTML = ""; return; }
   const futuro = x.data > d.hoje;
   const lista = doDia(x);
-  const pendentes = todos(x).filter((i) => !i.feita).length;
+  const { total, faltam: pendentes } = contas(x);
   const situacao = !lista.length ? "" : !pendentes ? "tudo concluído"
     : futuro ? plural(pendentes, "item", "itens")
-    : `${pendentes} ${pendentes === 1 ? "pendente" : "pendentes"} de ${lista.length}`;
+    : `${pendentes} ${pendentes === 1 ? "pendente" : "pendentes"} de ${total}`;
   const atrasadas = x.data === d.hoje ? d.atrasadas : [];
   const google = x.google || [];
   el.innerHTML = `<div class="ag-dia ${animar ? "abre" : ""}">
@@ -474,46 +489,79 @@ function desenharDia(animar) {
 
 const LIMITE_DIA_UTIL = 17; // a partir deste dia útil, o formulário avisa que algum mês pode não ter o dia
 
+// O feedback sendo escrito (o meu ou, com pessoa, o de quem faz, por quem criou): a caixa e os botões.
+const escrevendoEm = (a, dia, pessoa = null) => estado.concluindo?.atividade === a.id && estado.concluindo?.dia === dia
+  && (estado.concluindo.pessoa || null) === pessoa;
+function caixaFeedback(a, x, rotulo) {
+  return `<div class="ag-fb">
+      <textarea rows="2" maxlength="2000" aria-label="${esc(rotulo)}"
+        placeholder="${a.exige_feedback ? "Conte como foi (obrigatório para concluir)" : "Conte como foi (opcional)"}">${esc(x.feedback || "")}</textarea>
+      <div class="ag-fb-acoes"><button class="btn" type="button" data-cancelar-fb>Cancelar</button>
+        <button class="btn primario" type="button" data-confirmar>${icone("visto")}${x.feita ? "Salvar feedback" : "Concluir"}</button></div>
+    </div>`;
+}
+
 function itemHtml(i, dia, futuro, n) {
   const a = atividade(i.atividade);
   const repete = a.repeticao !== "nenhuma", varios = variosDias(a);
-  const escrevendo = estado.concluindo?.atividade === a.id && estado.concluindo?.dia === dia;
   const dica = futuro ? "Este dia ainda não chegou" : i.feita ? "Desfazer a conclusão" : "Marcar como concluída";
   const encerravel = varios && a.inicio <= estado.dados.hoje && (!a.fim || a.fim > estado.dados.hoje);
   let rodape = "";
-  if (escrevendo) {
-    rodape = `<div class="ag-fb">
-      <textarea rows="2" maxlength="2000" aria-label="Feedback de ${esc(a.titulo)}"
-        placeholder="${a.exige_feedback ? "Conte como foi (obrigatório para concluir)" : "Conte como foi (opcional)"}">${esc(i.feedback || "")}</textarea>
-      <div class="ag-fb-acoes"><button class="btn" type="button" data-cancelar-fb>Cancelar</button>
-        <button class="btn primario" type="button" data-confirmar>${icone("visto")}${i.feita ? "Salvar feedback" : "Concluir"}</button></div>
-    </div>`;
-  } else if (i.feita) {
+  if (i.eu_faz && escrevendoEm(a, dia)) {
+    rodape = caixaFeedback(a, i, `Feedback de ${a.titulo}`);
+  } else if (i.eu_faz && i.feita) {
     rodape = `<div class="ag-feito">
       ${i.feedback ? `<p>${icone("conversa")}<span>${esc(i.feedback)}</span></p>` : ""}
-      <small><span>Concluída ${quando(i.concluida_em, dia)}</span>
+      <small><span>Concluída ${quando(i.concluida_em, dia)}${i.concluida_por ? ` · marcada por ${esc(i.concluida_por.nome)}` : ""}</span>
         <button type="button" class="ge-link" data-editar-fb>${i.feedback ? "Editar feedback" : "Adicionar feedback"}</button>
         <button type="button" class="ge-link" data-desfazer>Desfazer</button></small>
     </div>`;
   }
+  // quem faz marca o dele; quem criou e não faz, só acompanha (o andamento, no lugar do check)
+  const check = i.eu_faz
+    ? `<button type="button" class="ag-check ${i.feita ? "feita" : ""}" data-check ${futuro ? "disabled" : ""}
+      aria-pressed="${i.feita}" title="${dica}" aria-label="${dica}: ${esc(a.titulo)}">${icone("visto")}</button>`
+    : `<span class="ag-check ag-check-grupo ${i.feita ? "feita" : ""}" title="Você acompanha: ${i.feitas} de ${plural(i.conta, "pessoa fez", "pessoas fizeram")}">${icone("pessoas")}</span>`;
+  const outros = comOutros(a) ? i.pessoas.filter((p) => p.id !== estado.dados.eu) : [];
+  const pessoas = comOutros(a) ? `<span class="chip" title="${esc(a.pessoas.map((p) => p.nome).join(", "))}">${icone("pessoas")}${
+    a.faz ? plural(a.pessoas.length, "pessoa", "pessoas") : `Para ${plural(a.pessoas.length, "pessoa", "pessoas")}`}</span>` : "";
   return `<li class="ag-item ${i.feita ? "feita" : ""}" style="--i:${n}" data-atividade="${a.id}" data-dia="${dia}">
-    <button type="button" class="ag-check ${i.feita ? "feita" : ""}" data-check ${futuro ? "disabled" : ""}
-      aria-pressed="${i.feita}" title="${dica}" aria-label="${dica}: ${esc(a.titulo)}">${icone("visto")}</button>
+    ${check}
     <div class="ag-item-t">
       <b>${a.hora ? `<span class="ag-hora">${icone("relogio")}${horario(a)}</span>` : ""}${esc(a.titulo)}</b>
       ${a.descricao ? `<p>${esc(a.descricao)}</p>` : ""}
       ${i.ajuste ? `<p class="ag-ajuste">${icone("alerta")}<span>Data ajustada: ${esc(i.ajuste)}.</span></p>` : ""}
       <div class="ag-chips"><span class="chip">${icone(repete ? "atualizar" : "calendario")}${esc(a.quando)}</span>
-        ${a.ocupado ? `<span class="chip ag-c-ocupado" title="Ninguém marca outra coisa para você nesse horário">${icone("cadeado")}Horário ocupado</span>` : ""}
-        ${a.exige_feedback ? `<span class="chip laranja">${icone("conversa")}Pede feedback</span>` : ""}</div>
+        ${a.ocupado ? `<span class="chip ag-c-ocupado" title="Ninguém marca outra coisa nesse horário para quem faz">${icone("cadeado")}Horário ocupado</span>` : ""}
+        ${a.exige_feedback ? `<span class="chip laranja">${icone("conversa")}Pede feedback</span>` : ""}
+        ${a.eu_criador ? "" : `<span class="chip">${icone("usuario")}De ${esc(a.criador.nome)}</span>`}
+        ${pessoas}</div>
       ${rodape}
+      ${outros.length ? `<ul class="ag-quem" aria-label="O dia de cada pessoa">${outros.map((p) => pessoaHtml(a, p, dia, futuro)).join("")}</ul>` : ""}
     </div>
     <div class="ag-item-acoes">
       ${varios ? `<button type="button" data-historico title="Histórico de feedbacks" aria-label="Histórico de feedbacks de ${esc(a.titulo)}">${icone("caderneta")}</button>` : ""}
-      <button type="button" data-editar title="Editar a atividade" aria-label="Editar ${esc(a.titulo)}">${icone("lapis")}</button>
-      ${encerravel ? `<button type="button" data-encerrar title="${repete ? "Parar de repetir depois de hoje" : "Terminar hoje"}" aria-label="Encerrar ${esc(a.titulo)}">${icone("bandeira")}</button>` : ""}
-      <button type="button" class="perigo" data-excluir title="Excluir a atividade" aria-label="Excluir ${esc(a.titulo)}">${icone("lixeira")}</button>
+      ${a.pode.editar ? `<button type="button" data-editar title="Editar a atividade" aria-label="Editar ${esc(a.titulo)}">${icone("lapis")}</button>` : ""}
+      ${encerravel && a.pode.encerrar ? `<button type="button" data-encerrar title="${repete ? "Parar de repetir depois de hoje" : "Terminar hoje"}" aria-label="Encerrar ${esc(a.titulo)}">${icone("bandeira")}</button>` : ""}
+      ${a.pode.excluir ? `<button type="button" class="perigo" data-excluir title="Excluir a atividade" aria-label="Excluir ${esc(a.titulo)}">${icone("lixeira")}</button>` : ""}
     </div>
+  </li>`;
+}
+
+// O dia de outra pessoa na atividade: feita (quando, com o feedback) ou não; quem criou marca e desfaz no lugar dela.
+function pessoaHtml(a, p, dia, futuro) {
+  const nome = nomeDe(a, p.id);
+  const pode = a.pode.concluir_outros && !futuro;
+  const texto = p.feita ? `concluiu ${quando(p.concluida_em, dia)}${p.concluida_por ? ` · marcado por ${quem(p.concluida_por)}` : ""}`
+    : futuro ? "ainda não chegou" : dia < estado.dados.hoje ? "não concluiu" : "ainda não concluiu";
+  const dica = !pode ? (futuro ? "Este dia ainda não chegou" : `Só ${nome} (ou quem criou a atividade) marca`)
+    : p.feita ? `Desfazer o dia de ${nome}` : `Marcar como feita por ${nome}`;
+  return `<li class="ag-quem-l ${p.feita ? "feita" : !futuro && dia < estado.dados.hoje ? "atrasada" : ""}" data-pessoa="${p.id}">
+    <button type="button" class="ag-check mini ${p.feita ? "feita" : ""}" data-check ${pode ? "" : "disabled"}
+      aria-pressed="${p.feita}" title="${esc(dica)}" aria-label="${esc(dica)}">${icone("visto")}</button>
+    <div><b>${esc(nome)}</b><small>${texto}</small>
+      ${p.feedback ? `<p>${icone("conversa")}<span>${esc(p.feedback)}</span></p>` : ""}
+      ${escrevendoEm(a, dia, p.id) ? caixaFeedback(a, p, `Feedback de ${nome}`) : ""}</div>
   </li>`;
 }
 
@@ -659,6 +707,8 @@ async function aoClicar(e) {
     b.parentElement.querySelectorAll("button").forEach((x) => { x.classList.toggle("ativo", x === b); x.setAttribute("aria-pressed", String(x === b)); });
     return mostrarDiaUtil();
   }
+  // quem faz a atividade (no formulário dela); os mesmos botões, na tarefa, ficam embaixo
+  if (estado.af && b.closest("#ag-quem") && ("euFaz" in b.dataset || b.dataset.autonomia || b.dataset.tirarPessoa)) return mexerQuem(b);
   if (b.dataset.autonomia) {
     lerSubs();
     const p = estado.tf.participantes.find((x) => x.id === Number(b.dataset.autonomia));
@@ -686,15 +736,18 @@ async function aoClicar(e) {
   const id = Number(li.dataset.atividade), dia = li.dataset.dia;
   const a = atividade(id);
   const item = estado.dados.dias.find((x) => x.data === dia).itens.find((i) => i.atividade === id);
+  // o dia de outra pessoa (a linha dela, embaixo; só quem criou mexe) ou, fora dela, o meu
+  const pessoa = b.closest("[data-pessoa]") ? Number(b.closest("[data-pessoa]").dataset.pessoa) : null;
+  const dela = pessoa ? item.pessoas.find((p) => p.id === pessoa) : item;
   if ("check" in b.dataset) {
-    if (item.feita) return desfazer(a, dia, item);
-    if (a.exige_feedback) return escreverFeedback(id, dia);
-    return concluir(a, dia, "");
+    if (dela.feita) return desfazer(a, dia, dela, pessoa);
+    if (a.exige_feedback) return escreverFeedback(id, dia, pessoa);
+    return concluir(a, dia, "", null, pessoa);
   }
-  if ("editarFb" in b.dataset) return escreverFeedback(id, dia);
+  if ("editarFb" in b.dataset) return escreverFeedback(id, dia, pessoa);
   if ("cancelarFb" in b.dataset) { estado.concluindo = null; return desenharDia(false); }
-  if ("confirmar" in b.dataset) return concluir(a, dia, li.querySelector(".ag-fb textarea").value, b);
-  if ("desfazer" in b.dataset) return desfazer(a, dia, item);
+  if ("confirmar" in b.dataset) return concluir(a, dia, b.closest(".ag-fb").querySelector("textarea").value, b, pessoa);
+  if ("desfazer" in b.dataset) return desfazer(a, dia, dela, pessoa);
   if ("historico" in b.dataset) return abrirHistorico(a);
   if ("editar" in b.dataset) return editar(a);
   if ("encerrar" in b.dataset) return encerrar(a);
@@ -728,7 +781,7 @@ function aoTeclar(e) {
     return focarDia(t.closest(".ag-sub-linha").querySelector('[data-campo="prazo"]'));
   }
   if (!t.matches(".ag-fb textarea")) return;
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); t.closest(".ag-item").querySelector("[data-confirmar]").click(); }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); t.closest(".ag-fb").querySelector("[data-confirmar]").click(); }
   if (e.key === "Escape") { estado.concluindo = null; desenharDia(false); }
 }
 
@@ -751,21 +804,23 @@ function ajustarTitulo(t) {
   t.style.overflowY = t.scrollHeight > t.clientHeight ? "auto" : "hidden";
 }
 
-function escreverFeedback(id, dia) {
+// pessoa: o feedback de outra pessoa que faz (quem criou marca no lugar dela); sem ela, o meu.
+function escreverFeedback(id, dia, pessoa = null) {
   if (feedbackEscrito() && !confirm(DESCARTAR_FB)) return;
-  estado.concluindo = { atividade: id, dia };
+  estado.concluindo = { atividade: id, dia, pessoa };
   desenharDia(false);
 }
 
-async function concluir(a, dia, feedback, botao) {
+async function concluir(a, dia, feedback, botao, pessoa = null) {
   if (a.exige_feedback && !feedback.trim()) {
     toast("Escreva o feedback para concluir esta atividade", "erro");
     return raiz.querySelector(".ag-fb textarea")?.focus();
   }
   if (botao) botao.disabled = true;
   try {
-    await api("/api/agenda/concluir", { json: { id: a.id, dia, feedback } });
+    await api("/api/agenda/concluir", { json: { id: a.id, dia, feedback, ...(pessoa ? { pessoa } : {}) } });
     estado.concluindo = null;
+    if (pessoa) toast(`Marcada como feita por ${nomeDe(a, pessoa)}`);
     await carregar();
   } catch (e) {
     if (botao) botao.disabled = false;
@@ -773,10 +828,11 @@ async function concluir(a, dia, feedback, botao) {
   }
 }
 
-async function desfazer(a, dia, item) {
-  if (item.feedback && !confirm(`Desfazer a conclusão de "${a.titulo}" em ${dataCurta(dia)}? O feedback deste dia sai junto.`)) return;
+async function desfazer(a, dia, item, pessoa = null) {
+  const de = pessoa ? ` de ${nomeDe(a, pessoa)}` : "";
+  if ((item.feedback || pessoa) && !confirm(`Desfazer a conclusão${de} de "${a.titulo}" em ${dataCurta(dia)}?${item.feedback ? " O feedback deste dia sai junto." : ""}`)) return;
   try {
-    await api("/api/agenda/desfazer", { json: { id: a.id, dia } });
+    await api("/api/agenda/desfazer", { json: { id: a.id, dia, ...(pessoa ? { pessoa } : {}) } });
     estado.concluindo = null;
     await carregar();
   } catch (e) { toast(e.message, "erro"); }
@@ -794,7 +850,9 @@ async function encerrar(a) {
 
 async function excluir(a) {
   const aviso = !variosDias(a) ? "" : " Todo o histórico de feedbacks dela também é apagado; para só parar antes, use Encerrar.";
-  if (!confirm(`Excluir "${a.titulo}"?${aviso}`)) return;
+  const outros = a.pessoas.filter((p) => p.id !== a.criador.id).length;
+  const deles = outros ? ` Ela some da agenda de ${outros === 1 ? nomeDe(a, a.pessoas.find((p) => p.id !== a.criador.id).id) : `${outros} pessoas`}.` : "";
+  if (!confirm(`Excluir "${a.titulo}"?${deles}${aviso}`)) return;
   try {
     await api("/api/agenda/atividade/excluir", { json: { id: a.id } });
     toast("Atividade excluída");
@@ -910,19 +968,28 @@ async function abrirHistorico(a) {
   dlg.className = "dialogo camp-dialogo ag-historico";
   dlg.setAttribute("aria-labelledby", "ag-hist-titulo");
   const at = h.atividade;
-  const faltas = h.faltas.length ? `<div class="ag-hist-faltas">
+  const varias = comOutros(at); // com outras pessoas: os números de cada uma e, em cada registro, de quem é
+  const chipsFaltas = (dias) => `<div class="feriados-lista">${dias.map((d) => `<span class="chip">${dataCurta(d)} · ${fmt.semana(d).slice(0, 3)}</span>`).join("")}</div>`;
+  const faltas = varias ? `<div class="ag-hist-faltas"><span class="cf-rotulo">Cada pessoa <small>(os dias que ficaram sem concluir, os mais recentes)</small></span>
+    <div class="ag-hist-pessoas">${h.pessoas.map((p) => `<div class="ag-hist-pessoa">
+      <div><b>${esc(p.nome)}${p.id === h.atividade.criador.id ? " <small>(criou)</small>" : ""}</b>
+        <small>${fmt.num(p.feitas)} de ${plural(p.ocorrencias, "dia feito", "dias feitos")} · ${plural(p.faltas_total, "sem concluir", "sem concluir")}${p.desde ? ` · faz desde ${dataCurta(p.desde)}` : ""}</small></div>
+      ${p.faltas.length ? chipsFaltas(p.faltas) : ""}
+    </div>`).join("")}</div></div>`
+    : h.faltas.length ? `<div class="ag-hist-faltas">
       <span class="cf-rotulo">Dias que ficaram sem concluir${h.faltas_total > h.faltas.length ? ` <small>(os ${h.faltas.length} mais recentes)</small>` : ""}</span>
-      <div class="feriados-lista">${h.faltas.map((d) => `<span class="chip">${dataCurta(d)} · ${fmt.semana(d).slice(0, 3)}</span>`).join("")}</div>
+      ${chipsFaltas(h.faltas)}
     </div>` : "";
   const registros = h.registros.length ? h.registros.map((r) => `<li>
       <div class="ag-hist-data"><b>${dataCurta(r.dia)}</b><small>${fmt.semana(r.dia)}</small></div>
-      <div class="ag-hist-txt">${r.feedback ? `<p>${esc(r.feedback)}</p>` : `<p class="fraco">Concluída sem feedback</p>`}
-        <small>Concluída ${quando(r.concluida_em, r.dia)}${r.editada_em ? ` · feedback editado ${quando(r.editada_em, r.dia)}` : ""}</small></div>
+      <div class="ag-hist-txt">${varias ? `<b class="ag-hist-quem">${icone("usuario")}${esc(r.pessoa.nome)}</b>` : ""}
+        ${r.feedback ? `<p>${esc(r.feedback)}</p>` : `<p class="fraco">Concluída sem feedback</p>`}
+        <small>Concluída ${quando(r.concluida_em, r.dia)}${r.concluida_por ? ` · marcada por ${quem(r.concluida_por)}` : ""}${r.editada_em ? ` · feedback editado ${quando(r.editada_em, r.dia)}` : ""}</small></div>
     </li>`).join("") : `<li class="ag-vazio">${icone("info")}Nada concluído ainda.</li>`;
   dlg.innerHTML = `<div class="ag-hist">
     <div class="ag-hist-cab">
       <div><h2 id="ag-hist-titulo">${icone("caderneta")}${esc(at.titulo)}</h2>
-        <p class="sub">${esc(at.quando)}${at.hora ? ` · ${horario(at)}` : ""} · desde ${dataCurta(at.inicio)}</p></div>
+        <p class="sub">${esc(at.quando)}${at.hora ? ` · ${horario(at)}` : ""} · desde ${dataCurta(at.inicio)}${at.eu_criador ? "" : ` · criada por ${esc(at.criador.nome)}`}</p></div>
       <button class="btn icone" type="button" data-fechar title="Fechar" aria-label="Fechar">${icone("x")}</button>
     </div>
     <div class="ag-hist-resumo">
@@ -1189,7 +1256,7 @@ async function enviarJust(f, t, texto) {
 // Atividade ou tarefa nova (no dia `dia`) ou a edição de uma (item, com o tipo), numa janela que cobre a tela. modelo:
 // os campos com que a atividade nova já abre (o evento do Google trazido como atividade).
 async function abrirForm(item = null, tipo = item ? item.tipo : estado.tipo, dia = estado.aberto || hojeLocal(), modelo = null) {
-  if (tipo === "tarefa" && !(await garantirPessoas())) return;
+  if (!(await garantirPessoas())) return; // a tarefa e a atividade escolhem as pessoas
   desenharForm(item, tipo, dia, modelo);
   if (!tela.open) tela.showModal();
   tela.querySelector('[name="titulo"]').focus();
@@ -1202,12 +1269,13 @@ function fecharForm(salvo = false) {
 }
 
 function desenharForm(item, tipo, dia, modelo = null) {
-  Object.assign(estado, { tipo, editando: item, formDia: dia, tf: null }); // formTarefa monta o tf da tarefa
+  // formTarefa monta o tf da tarefa; formAtividade, o af da atividade
+  Object.assign(estado, { tipo, editando: item, formDia: dia, tf: null, af: null });
   const ehTarefa = tipo === "tarefa";
   const nome = ehTarefa ? "tarefa" : "atividade";
   const dica = ehTarefa
     ? (item ? "Quem participa vê as mudanças na agenda; só você muda os prazos." : "Com prazo, participantes e subtarefas para cada um.")
-    : (item ? "O que já foi concluído continua no histórico." : "Só você vê as atividades da sua agenda.");
+    : (item ? "O que já foi concluído continua no histórico; quem faz vê as mudanças na agenda." : "Para você ou para outras pessoas: cada uma marca o próprio dia.");
   tela.innerHTML = `<form id="ag-form" class="ag-form" novalidate>
     <header class="ag-tela-cab">
       <div class="ag-tela-tit"><h2 id="ag-tela-titulo">${icone(item ? "lapis" : ehTarefa ? "tarefa" : "calendario")}${item ? `Editar ${nome}` : `Nova ${nome}`}</h2>
@@ -1225,16 +1293,24 @@ function desenharForm(item, tipo, dia, modelo = null) {
   </form>`;
   tela.querySelector("form").addEventListener("submit", aoEnviar);
   prepararDias(tela);
-  if (ehTarefa) desenharPessoas(); else mostrarCampos();
+  if (ehTarefa) desenharPessoas();
+  else {
+    mostrarCampos();
+    desenharQuem();
+  }
   estado.formInicial = JSON.stringify(coletar());
 }
 
-// Duas partes, uma embaixo da outra: o que é (e se pede feedback) e quando (a repetição, os dias e o horário, que
-// pode ficar ocupado).
+// Três partes, uma embaixo da outra: o que é (e se pede feedback), quando (a repetição, os dias e o horário, que pode
+// ficar ocupado) e quem faz. Quem faz fica em estado.af (desenharQuem): pode (só quem criou muda as pessoas), euFaz
+// (quem cria também faz; sem outras pessoas, faz) e os participantes, com a autonomia de cada um.
 function formAtividade(a, dia, modelo = null) {
   const v = a || { titulo: "", descricao: "", inicio: dia, hora: null, hora_fim: null, ocupado: false, repeticao: "nenhuma",
                    dias_semana: null, dia_mes: null, dia_util: null, intervalo: null, so_dias_uteis: false, regiao: null,
                    fim: null, exige_feedback: false, ...modelo };
+  const pode = !a || a.pode.pessoas;
+  estado.af = { pode, euFaz: a ? a.faz : true, criador: a ? a.criador : estado.pessoas.eu, todas: a ? a.pessoas : [],
+                participantes: a ? a.pessoas.filter((p) => p.id !== a.criador.id).map((p) => ({ id: p.id, nome: p.nome, autonomia: p.autonomia })) : [] };
   // na mensal: o dia fixo ou o dia útil, contado do começo do mês ou do fim
   estado.form = { repeticao: v.repeticao, dias: new Set(v.dias_semana || []), regiao: v.regiao || "ES",
                   mesModo: v.dia_util ? "util" : "fixo", mesDe: v.dia_util < 0 ? "fim" : "inicio" };
@@ -1293,9 +1369,67 @@ function formAtividade(a, dia, modelo = null) {
           <label><small>Termina às</small><input type="time" name="hora_fim" value="${v.hora_fim || ""}"></label>
         </div>
         <label class="vend-op" data-ocupado ${v.hora ? "" : "hidden"}><input type="checkbox" name="ocupado" ${v.ocupado ? "checked" : ""}><span class="marca-caixa">${icone("visto")}</span>
-          <span class="n">Horário ocupado<small>Ninguém marca outra coisa para você nesse horário: nem você, nem quem cria tarefas. Precisa do fim do horário.</small></span></label>
+          <span class="n">Horário ocupado<small>Ninguém marca outra coisa nesse horário para quem faz: nem a própria pessoa, nem quem cria tarefas ou atividades. Precisa do fim do horário.</small></span></label>
+      </div>
+    </div>
+    <div class="ag-tela-col">
+      <div class="campo-form"><span>Quem faz</span>
+        <div class="ag-pessoas" id="ag-quem"></div>
+        ${pode ? `<span class="campo"><select data-add-pessoa aria-label="Adicionar pessoa"></select></span>
+        <small>Cada pessoa marca o próprio dia, com o próprio feedback, e todos veem o dia de todos. Com autonomia, a pessoa
+          também edita a atividade (o título, a descrição, os dias e o horário), e a mudança vale para todos. Quem entra
+          numa atividade que já começou faz a partir de hoje. Só você muda quem faz, encerra e exclui, e você pode marcar
+          o dia no lugar de quem faz.</small>`
+          : `<small>Só ${esc(a.criador.nome)}, que criou a atividade, muda quem faz. O que você mudar aqui vale para todos.</small>`}
       </div>
     </div>`;
+}
+
+// Quem faz a atividade, no formulário: você (fazendo também ou só acompanhando; sem outras pessoas, a atividade é sua)
+// e um card por pessoa, com a autonomia e o x. Para quem tem autonomia (e não criou), só a lista.
+function desenharQuem() {
+  const f = raiz.querySelector("#ag-form");
+  const { pode, euFaz, criador, todas, participantes } = estado.af;
+  const lista = f.querySelector("#ag-quem");
+  const card = (conteudo) => `<div class="ag-pessoa-card recolhido"><div class="ag-pessoa-cab">${conteudo}</div></div>`;
+  const nome = (n, papel) => `<span class="ag-pessoa-nome ag-pessoa-fixo">${icone("usuario")}<b>${esc(n)}</b>${papel ? `<small>${papel}</small>` : ""}</span>`;
+  if (!pode) {
+    const quem = todas.map((p) => card(nome(p.id === estado.pessoas.eu.id ? `${p.nome} (você)` : p.nome,
+      [p.id === criador.id ? "· criou" : "", p.autonomia ? "· autonomia" : ""].join(" ").trim())));
+    lista.innerHTML = (todas.some((p) => p.id === criador.id) ? [] : [card(nome(criador.nome, "· criou e acompanha"))]).concat(quem).join("");
+    return;
+  }
+  const sozinho = !participantes.length;
+  const faz = euFaz || sozinho;
+  const dicaEu = sozinho ? "Sem outras pessoas, a atividade é sua" : faz
+    ? "Você também faz: tem o seu check em cada dia. Clique para só acompanhar."
+    : "Você só acompanha: vê o dia de cada pessoa e pode marcar no lugar dela. Clique para fazer também.";
+  lista.innerHTML = [card(`${nome(`${estado.pessoas.eu.nome} (você)`, faz ? "· faz" : "· só acompanha")}
+      <button type="button" class="ag-pessoa-op ${faz ? "ativo" : ""}" data-eu-faz aria-pressed="${faz}" ${sozinho ? "disabled" : ""}
+        title="${dicaEu}">${icone("visto")}Também faço</button>`),
+    ...participantes.map((p) => card(`${nome(p.nome)}
+      <button type="button" class="ag-pessoa-op ${p.autonomia ? "ativo" : ""}" data-autonomia="${p.id}" aria-pressed="${p.autonomia}"
+        title="${p.autonomia ? "Com autonomia: edita a atividade (o título, a descrição, os dias e o horário). Clique para tirar." : "Sem autonomia: só marca o próprio dia. Clique para dar autonomia."}">${icone("chave")}Autonomia</button>
+      <button type="button" class="ag-pessoa-op ag-pessoa-x" data-tirar-pessoa="${p.id}" title="Tirar ${esc(p.nome)} da atividade (o que ela já fez fica guardado)" aria-label="Tirar ${esc(p.nome)} da atividade">${icone("x")}</button>`))].join("");
+  const livres = estado.pessoas.pessoas.filter((p) => !participantes.some((q) => q.id === p.id));
+  const sel = f.querySelector("[data-add-pessoa]");
+  sel.innerHTML = `<option value="">${livres.length ? "Adicionar pessoa…" : "Ninguém mais com acesso à Gestão"}</option>` +
+    livres.map((p) => `<option value="${p.id}">${esc(p.nome)}</option>`).join("");
+  sel.disabled = !livres.length;
+}
+
+// Os botões dos cards de quem faz: você também faz, a autonomia de uma pessoa e tirar a pessoa (sem ninguém, você faz).
+function mexerQuem(b) {
+  const af = estado.af;
+  if ("euFaz" in b.dataset) af.euFaz = !af.euFaz;
+  else if (b.dataset.autonomia) {
+    const p = af.participantes.find((x) => x.id === Number(b.dataset.autonomia));
+    p.autonomia = !p.autonomia;
+  } else {
+    af.participantes = af.participantes.filter((x) => x.id !== Number(b.dataset.tirarPessoa));
+    if (!af.participantes.length) af.euFaz = true;
+  }
+  desenharQuem();
 }
 
 // O formulário da tarefa: o que é e o prazo; embaixo, as pessoas e as subtarefas. Participantes e subtarefas ficam em
@@ -1579,6 +1713,12 @@ function aoMudar(e) {
     const s = linha && estado.tf.subtarefas[Number(linha.dataset.n)];
     if (s?.compondo && !linha.querySelector('[data-campo="titulo"]').value.trim()) s.prazo = t.value;
   }
+  if (t.matches("[data-add-pessoa]") && t.value && estado.af) { // na atividade, quem entra começa sem autonomia
+    const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));
+    estado.af.participantes.push({ id: p.id, nome: p.nome, autonomia: false });
+    estado.af.participantes.sort((a, b) => a.nome.localeCompare(b.nome));
+    return desenharQuem();
+  }
   if (t.matches("[data-add-pessoa]") && t.value) {
     lerSubs();
     const p = estado.pessoas.pessoas.find((x) => x.id === Number(t.value));
@@ -1609,6 +1749,9 @@ function coletarAtividade() {
     so_dias_uteis: uteis, regiao: uteis ? estado.form.regiao : null,
     fim: f.elements.fim.value || null, // na única, o último dia de uma atividade de vários dias
     exige_feedback: f.elements.exige_feedback.checked,
+    // quem faz: só quem criou manda (para quem tem autonomia, as pessoas ficam como estão)
+    ...(estado.af?.pode ? { eu_faz: estado.af.euFaz || !estado.af.participantes.length,
+                            participantes: estado.af.participantes.map((p) => ({ id: p.id, autonomia: p.autonomia })) } : {}),
   };
 }
 

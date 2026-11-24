@@ -894,6 +894,30 @@ limites próprios.
   e `DELETE FROM migracoes WHERE versao = '047_limites_assistente'`.
 - **PC:** recebe a 047 quando o código for atualizado lá; os limites do PC são outros (o banco do PC é outro).
 
+#### Atividade com outras pessoas (migração 048)
+
+A atividade da agenda passa a ter "Quem faz", como as pessoas da tarefa (veja o README, "Atividade com outras
+pessoas"): quem cria escolhe as pessoas, com ou sem autonomia, e cada uma marca o próprio dia.
+
+- **Ordem:** qualquer uma; nada muda no que o PC manda.
+- **A migração 048:**
+  - cria `agenda_atividade_pessoas` (quem faz cada atividade, a autonomia e `desde`, o dia em que entrou) e põe nela o
+    dono de cada atividade que já existe;
+  - acrescenta `usuario` (de quem é o dia) e `concluida_por` em `agenda_registros`, preenchidos com o dono, e troca a
+    regra de um registro por atividade e dia (`agenda_registros_dia_unico`) por um por atividade, pessoa e dia;
+  - acrescenta `atividade` e `dia` em `notificacoes` (o aviso de uma atividade e o dia em que a agenda abre).
+- **Ensaio:** no banco do site, em BEGIN/ROLLBACK, confira depois da migração que o número de linhas de
+  `agenda_atividade_pessoas` é o de `agenda_atividades` e que nenhum registro ficou sem `usuario`.
+- **Nada muda nas atividades de antes:** cada uma continua só do dono, com o histórico dele.
+- **Depois de publicar:** crie uma atividade para outra pessoa e confira o aviso no sino dela e o dia na agenda das
+  duas; o histórico mostra cada pessoa.
+- **Voltar atrás exige o dump:** o código anterior conclui com `ON CONFLICT (atividade, dia)`, regra que não existe
+  mais, e daria erro ao concluir. À mão: apagar os registros de quem não é o dono, recriar a regra
+  `UNIQUE (atividade, dia)`, `DROP COLUMN usuario, concluida_por` em `agenda_registros`,
+  `DROP TABLE agenda_atividade_pessoas`, `DROP COLUMN atividade, dia` em `notificacoes` e
+  `DELETE FROM migracoes WHERE versao = '048_agenda_atividade_pessoas'`.
+- **PC:** recebe a 048 quando o código for atualizado lá (o iniciar.bat aplica); a agenda do PC é outra.
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

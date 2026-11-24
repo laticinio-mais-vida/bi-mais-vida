@@ -46,8 +46,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .agenda import (MAX_TEXTO, _curto, _data, _dm, _hhmm, _hora, _id, _texto, _titulo, calendario, conferir_pontos,
-                     travar_horarios)
+from .agenda import (COM_GESTAO, MAX_TEXTO, _curto, _data, _dm, _hhmm, _hora, _id, _pessoa, _texto, _titulo,
+                     calendario, conferir_pontos, travar_horarios)
 from .banco import Banco, hora
 from .conversas import NaoEncontrada
 from .notificacoes import avisar, limpar
@@ -69,8 +69,7 @@ TITULO_PLANEJAR = "Crie as suas subtarefas para programar a execução desta tar
 DESCRICAO_PLANEJAR = ("Divida a sua parte em subtarefas, cada uma no dia em que você vai fazer (até o prazo da "
                       "tarefa). Esta subtarefa aparece em dois dias; concluída num deles, fica feita nos dois.")
 _AUTOMATICA = "a subtarefa automática não se edita: ela sai quando quem criou a tarefa tira a autonomia"
-# Quem pode participar: os usuários ativos com a página Gestão, onde fica a agenda (o administrador tem todas).
-_COM_GESTAO = "ativo AND (papel = 'admin' OR 'gestao' = ANY(coalesce(paginas, '{}')))"
+_COM_GESTAO = COM_GESTAO  # quem pode participar (bi/agenda.py): ativo e com a página Gestão
 _T = ("id", "criador", "criador_nome", "titulo", "descricao", "prazo", "hora", "iniciada_em", "concluida_em", "versao",
       "concluida_por", "concluida_por_nome")
 _S = ("id", "titulo", "descricao", "prazo", "hora", "responsavel", "responsavel_nome", "iniciada_em", "concluida_em",
@@ -162,13 +161,6 @@ def _local(momento: dt.datetime) -> dt.datetime:
 def _venceu(prazo: dt.date, h: dt.time | None, concluida_em: dt.datetime | None, agora: dt.datetime) -> bool:
     """Passou do prazo sem concluir, ou foi concluída depois dele: o atraso pode ser justificado."""
     return (_local(concluida_em) if concluida_em else agora) > _vence_em(prazo, h)
-
-
-def _pessoa(valor) -> int:
-    try:
-        return int(valor)
-    except (TypeError, ValueError):
-        raise ValueError(f"pessoa inválida: {valor!r}") from None
 
 
 def _ate_o_prazo(prazo: dt.date, h: dt.time | None, prazo_tarefa: dt.date, h_tarefa: dt.time | None) -> bool:

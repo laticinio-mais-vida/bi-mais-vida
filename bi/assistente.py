@@ -576,7 +576,11 @@ FERRAMENTAS = [
                         f"entre de e ate (até {MAX_PERIODO_AGENDA} dias), dia a dia, com o horário (começo e fim), a "
                         "situação (feita; "
                         "atrasada = o dia passou sem concluir; hoje; prevista) e o feedback das feitas, os totais e a "
-                        "repetição de cada atividade (quando). Em google, os eventos do Google Agenda da pessoa no "
+                        "repetição de cada atividade (quando). Entram também as que outra pessoa criou para quem "
+                        "pergunta (criada_por; pode_editar: tem autonomia) e as que ele criou para outras pessoas "
+                        "(pessoas; voce_faz falso: ele só acompanha). Nelas, cada pessoa tem o próprio dia: a situação "
+                        "é a de quem pergunta (da que ele só acompanha, feita quando todos fizeram) e, no item, "
+                        "pessoas traz a de cada uma. Em google, os eventos do Google Agenda da pessoa no "
                         "dia (título, horário, ocupado), só para ler: não se concluem nem se mudam pelo BI. texto "
                         "filtra pelo título e pela descrição. Use para os resumos e para achar o código de uma "
                         "atividade antes de propor uma mudança."),
@@ -590,9 +594,9 @@ FERRAMENTAS = [
     {
         "name": "historico_atividade",
         "description": ("O histórico de uma atividade da agenda de quem pergunta: cada dia concluído com o feedback "
-                        "(do mais recente para o mais antigo), quantas vezes ela aconteceu até hoje, quantas foram "
-                        "concluídas e os dias que ficaram sem concluir. Use para resumir o que foi feito numa "
-                        "atividade que se repete."),
+                        "e quem fez (do mais recente para o mais antigo), quantas vezes ela aconteceu até hoje, quantas "
+                        "foram concluídas e os dias que ficaram sem concluir; em pessoas, os números de cada pessoa "
+                        "que faz. Use para resumir o que foi feito numa atividade que se repete."),
         "input_schema": _objeto({
             "atividade": {"type": "integer", "description": "código da atividade (de ver_agenda)"},
         }, ["atividade"]),
@@ -601,10 +605,12 @@ FERRAMENTAS = [
     {
         "name": "propor_agenda",
         "description": ("Monta uma PROPOSTA para a agenda de quem pergunta, sem gravar: a pessoa confirma no botão "
-                        "que aparece abaixo da sua resposta. acao: criar (titulo e inicio; o resto é opcional), editar "
-                        "(atividade e só os campos que mudam), encerrar (a repetição para depois de hoje; o histórico "
-                        "fica), excluir (apaga a atividade e todo o histórico) ou concluir (atividade, dia e "
-                        "feedback). Devolve a proposta conferida, ou o erro para corrigir."),
+                        "que aparece abaixo da sua resposta. acao: criar (titulo e inicio; o resto é opcional; só para "
+                        "quem pergunta: pôr outras pessoas se faz na página), editar (atividade e só os campos que "
+                        "mudam; na que ele criou ou em que tem autonomia), encerrar (a repetição para depois de hoje; o "
+                        "histórico fica) e excluir (apaga a atividade e todo o histórico, de todos), só na que ele "
+                        "criou, ou concluir (o dia de quem pergunta: atividade, dia e feedback). Devolve a proposta "
+                        "conferida, ou o erro para corrigir."),
         "input_schema": _objeto({
             "acao": {"type": "string", "enum": list(ACOES_AGENDA)},
             "atividade": {"type": "integer", "description": "código da atividade (de ver_agenda); não vai no criar"},
@@ -822,7 +828,7 @@ class Ferramentas:
             if extras:
                 raise ValueError(f"argumento desconhecido: {', '.join(sorted(extras))}")
             resultado = metodo(passo, **args)
-        except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada) as e:
+        except (ValueError, RuntimeError, duckdb.Error, NaoEncontrada, PermissionError) as e:  # ex.: só quem criou
             passo["erro"] = str(e).split("\n")[0][:500] if isinstance(e, duckdb.Error) else str(e)
             resultado = {"erro": passo["erro"]}
         except BancoForaDoAr as e:  # as campanhas, a agenda e as reanálises de crédito ficam no PostgreSQL
@@ -1269,7 +1275,8 @@ class Ferramentas:
         if len(r["registros"]) > MAX_REGISTROS_AGENDA:
             r["aviso"] = f"os {MAX_REGISTROS_AGENDA} registros mais recentes, de {len(r['registros'])}"
             r["registros"] = r["registros"][:MAX_REGISTROS_AGENDA]
-        passo.update(colunas=["dia", "feedback"], amostra=[[x["dia"], x["feedback"]] for x in r["registros"][:10]],
+        passo.update(colunas=["dia", "pessoa", "feedback"],
+                     amostra=[[x["dia"], x["pessoa"]["nome"], x["feedback"]] for x in r["registros"][:10]],
                      linhas=len(r["registros"]), resumo=f"#{r['atividade']['id']} {r['atividade']['titulo']}")
         return r
 

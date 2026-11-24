@@ -89,9 +89,9 @@ ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gest
                       "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
                       "/api/gestao/notas", "/api/gestao/nota/excluir", "/api/gestao/base"}
-# Agenda, no topo da página Gestão: quem tem a Gestão lê e muda só a própria agenda (bi/agenda.py filtra pelo
-# usuário) e as tarefas de que participa (bi/tarefas.py confere quem pode o quê). Por isso não entra em ROTAS_ADMIN,
-# como as rotas que mudam a Gestão.
+# Agenda, no topo da página Gestão: quem tem a Gestão lê e muda só as atividades que criou ou faz (bi/agenda.py filtra
+# pelo usuário e confere quem pode o quê) e as tarefas de que participa (bi/tarefas.py confere quem pode o quê). Por
+# isso não entra em ROTAS_ADMIN, como as rotas que mudam a Gestão.
 ROTAS_AGENDA_LER = ("/api/agenda", "/api/agenda/historico", "/api/agenda/pessoas", "/api/agenda/tarefa",
                     "/api/agenda/quadro", "/api/agenda/google")
 ROTAS_AGENDA_MUDAR = {"/api/agenda/atividades", "/api/agenda/atividade/editar", "/api/agenda/atividade/encerrar",
@@ -968,7 +968,9 @@ class Manipulador(BaseHTTPRequestHandler):
             log.info("%s excluiu a atividade %s da agenda", usuario["login"], id_)
             return self._json({"ok": True})
         if caminho == "/api/agenda/concluir":
-            return self._json({"ok": True, "item": agenda.concluir(eu, id_, corpo.get("dia"), corpo.get("feedback"))})
+            # pessoa: o dia de outra pessoa que faz a atividade (só quem criou marca); sem ela, o de quem pede
+            return self._json({"ok": True, "item": agenda.concluir(eu, id_, corpo.get("dia"), corpo.get("feedback"),
+                                                                    corpo.get("pessoa"))})
         if caminho == "/api/agenda/proposta":  # o botão de uma proposta do Assistente (criar, editar, concluir…)
             proposta = self.app.conversas.proposta_agenda(eu, id_)
             if proposta is None:
@@ -978,7 +980,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s aplicou na agenda uma proposta do Assistente (%s, atividade %s)", usuario["login"],
                          r["acao"], r["atividade"])
             return self._json({"ok": True, **r})
-        agenda.desfazer(eu, id_, corpo.get("dia"))  # /api/agenda/desfazer
+        agenda.desfazer(eu, id_, corpo.get("dia"), corpo.get("pessoa"))  # /api/agenda/desfazer
         return self._json({"ok": True})
 
     def _mudar_tarefa(self, usuario: dict, caminho: str, corpo: dict):

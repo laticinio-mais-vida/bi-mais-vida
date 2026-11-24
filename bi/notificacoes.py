@@ -1,9 +1,10 @@
 """Notificações do painel: o sino no topo (web/js/avisos.js), para quem tem a página Gestão, com o que acontece nas
-tarefas da agenda (bi/tarefas.py). Uma linha por aviso e por pessoa (notificacoes, migração 028).
+tarefas da agenda (bi/tarefas.py) e nas atividades com outras pessoas (bi/agenda.py, migração 048). Uma linha por
+aviso e por pessoa (notificacoes, migração 028).
 
-- Avisos de ação, gravados por bi/tarefas.py na transação da própria ação (avisar): incluído numa tarefa, subtarefa
-  nova (ou passada) para você, prazo mudado, concluída e justificativa enviada. Ninguém recebe aviso do que ele mesmo
-  fez.
+- Avisos de ação, gravados por bi/tarefas.py e bi/agenda.py na transação da própria ação (avisar): incluído numa
+  tarefa ou atividade, subtarefa nova (ou passada) para você, prazo (ou os dias da atividade) mudado, concluída e
+  justificativa enviada. Ninguém recebe aviso do que ele mesmo fez. O da atividade leva o dia em que a agenda abre.
 - Avisos de prazo (vence em breve, venceu): o servidor do site não tem nada rodando de tempos em tempos, então eles
   nascem quando o painel de quem recebe pergunta (Tarefas.gerar_avisos), uma vez só por item e por prazo (chave).
 - Ficam DIAS_GUARDAR dias (limpar). A lista traz os MAX_LISTA mais recentes; ler um aviso (ou todos) marca como lido.
@@ -20,18 +21,19 @@ DIAS_GUARDAR = 90
 
 
 def avisar(con, para, tipo: str, texto: str, autor: int | None, tarefa: int | None, subtarefa: int | None = None,
-           chave: str | None = None) -> int:
+           chave: str | None = None, *, atividade: int | None = None, dia=None) -> int:
     """Grava o aviso para cada pessoa de `para` (menos o autor), na transação de quem chama. Com a chave, o aviso que
-    a pessoa já recebeu não se repete. Devolve quantos entraram."""
+    a pessoa já recebeu não se repete. Devolve quantos entraram. atividade e dia: o aviso de uma atividade da agenda
+    (no lugar da tarefa) e o dia em que ela abre."""
     if tipo not in TIPOS:
         raise ValueError(f"tipo de aviso desconhecido: {tipo!r}")
     para = sorted(set(para) - {autor})
     entraram = 0
     for p in para:
         entraram += con.execute(
-            "INSERT INTO notificacoes (usuario, tipo, tarefa, subtarefa, autor, texto, chave) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (usuario, chave) DO NOTHING",
-            [p, tipo, tarefa, subtarefa, autor, texto, chave]).rowcount
+            "INSERT INTO notificacoes (usuario, tipo, tarefa, subtarefa, atividade, dia, autor, texto, chave) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (usuario, chave) DO NOTHING",
+            [p, tipo, tarefa, subtarefa, atividade, dia, autor, texto, chave]).rowcount
     return entraram
 
 
@@ -48,16 +50,18 @@ class Notificacoes:
         """As MAX_LISTA mais recentes, da mais nova para a mais antiga, e quantas não foram lidas."""
         with self.banco.conexao() as con:
             linhas = con.execute(
-                "SELECT n.id, n.tipo, n.texto, n.tarefa, n.subtarefa, n.autor, u.nome, n.criada_em, n.lida_em "
+                "SELECT n.id, n.tipo, n.texto, n.tarefa, n.subtarefa, n.atividade, n.dia, n.autor, u.nome, n.criada_em, "
+                "n.lida_em "
                 "FROM notificacoes n LEFT JOIN usuarios u ON u.id = n.autor WHERE n.usuario = %s "
                 "AND n.excluida_em IS NULL ORDER BY n.criada_em DESC, n.id DESC LIMIT %s",
                 [usuario, MAX_LISTA]).fetchall()
             nao_lidas = _nao_lidas(con, usuario)
         return {"nao_lidas": nao_lidas,
                 "itens": [{"id": i, "tipo": tipo, "texto": texto, "tarefa": tarefa, "subtarefa": sub,
+                           "atividade": atividade, "dia": dia.isoformat() if dia else None,
                            "autor": {"id": autor, "nome": nome} if autor else None, "criada_em": hora(criada),
                            "lida": lida is not None}
-                          for i, tipo, texto, tarefa, sub, autor, nome, criada, lida in linhas]}
+                          for i, tipo, texto, tarefa, sub, atividade, dia, autor, nome, criada, lida in linhas]}
 
     def marcar_lidas(self, usuario: int, ids=None, todas: bool = False) -> int:
         """Marca como lidas as notificações ids da pessoa (as de outra pessoa ficam como estão), ou todas; devolve

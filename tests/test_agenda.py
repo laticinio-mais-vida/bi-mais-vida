@@ -15,6 +15,7 @@ from bi.assistente import Ferramentas
 from bi.calendario import Calendario
 from bi.configuracao import padrao
 from bi.conversas import Conversas, NaoEncontrada
+from bi.notificacoes import Notificacoes
 from bi.tarefas import Tarefas
 from tests.apoio import (BaseBanco, ClienteFalso, ConfiguracaoFixa, bloco_ferramenta, bloco_texto, criar_assistente,
                          criar_calc, resposta)
@@ -596,3 +597,199 @@ class TestAgendaNoAssistente(BaseBanco):
         self.assertFalse(self.agenda.aplicar(self.id_ana, guardada)["ja_aplicada"])
         self.assertTrue(self.agenda.aplicar(self.id_ana, guardada)["ja_aplicada"])
         self.assertEqual(self.contar("agenda_atividades"), 1)
+
+
+class TestAtividadeComPessoas(BaseBanco):
+    """Atividade com outras pessoas (migração 048), como as pessoas da tarefa. Hoje é segunda, 26/10/2026. Marcos cria
+    "Ligar para os inativos", toda segunda e quarta desde 19/10, para Ana (sem autonomia) e Beto (com autonomia); ele
+    mesmo não faz. Carla tem a Gestão e fica de fora."""
+
+    def setUp(self):
+        super().setUp()
+        self.agenda = Agenda(self.banco, ConfiguracaoFixa(padrao()), hoje=lambda: HOJE)
+        self.marcos, self.ana, self.beto, self.carla = (self.criar_usuario(n, paginas=["metas", "gestao"])
+                                                        for n in ("marcos", "ana", "beto", "carla"))
+        self.dados = {"titulo": "Ligar para os inativos", "inicio": "2026-10-19", "repeticao": "semanal",
+                      "dias_semana": [1, 3], "eu_faz": False,
+                      "participantes": [{"id": self.ana}, {"id": self.beto, "autonomia": True}]}
+        self.id = self.agenda.criar(self.marcos, self.dados)["id"]
+
+    def item(self, quem: int, dia: str, mes: str = "2026-10") -> dict | None:
+        m = self.agenda.mes(quem, mes)
+        return next((i for d in m["dias"] if d["data"] == dia for i in d["itens"] if i["atividade"] == self.id), None)
+
+    def atividade(self, quem: int) -> dict:
+        return next(a for a in self.agenda.mes(quem, "2026-10")["atividades"] if a["id"] == self.id)
+
+    def avisos(self, quem: int) -> list[dict]:
+        return Notificacoes(self.banco).listar(quem)["itens"]
+
+    def test_cada_um_tem_o_seu_dia(self):
+        # quem criou e não faz: um por pessoa no dia; quem faz: só o dele, vendo o dos outros
+        i = self.item(self.marcos, "2026-10-19")
+        self.assertEqual((i["conta"], i["feitas"], i["feita"], [p["id"] for p in i["pessoas"]]),
+                         (2, 0, False, [self.ana, self.beto]))
+        self.assertEqual((self.item(self.ana, "2026-10-19")["conta"], self.item(self.ana, "2026-10-20")), (1, None))
+        a = self.atividade(self.ana)
+        self.assertEqual((a["eu_criador"], a["faz"], a["criador"]["nome"], a["pode"]["editar"], a["pode"]["excluir"]),
+                         (False, True, "Marcos", False, False))
+        a = self.atividade(self.marcos)
+        self.assertEqual((a["eu_criador"], a["faz"], a["pode"]["editar"], a["pode"]["concluir_outros"]),
+                         (True, False, True, True))
+        # a Ana conclui o dela: o Marcos vê, o Beto também; o Marcos recebe o aviso
+        self.agenda.concluir(self.ana, self.id, "2026-10-19", "liguei para 12")
+        i = self.item(self.marcos, "2026-10-19")
+        self.assertEqual((i["feitas"], i["feita"]), (1, False))
+        ana = next(p for p in self.item(self.beto, "2026-10-19")["pessoas"] if p["id"] == self.ana)
+        self.assertEqual((ana["feita"], ana["feedback"], ana["concluida_por"]), (True, "liguei para 12", None))
+        self.assertFalse(self.item(self.beto, "2026-10-19")["feita"])  # o dele ainda não
+        aviso = self.avisos(self.marcos)[0]
+        self.assertEqual((aviso["tipo"], aviso["atividade"], aviso["dia"], aviso["texto"]),
+                         ("concluida", self.id, "2026-10-19",
+                          "Ana concluiu a atividade “Ligar para os inativos” (19/10)"))
+        # quem criou marca no lugar do Beto (sem aviso para ninguém) e o dia fica feito para todos
+        self.agenda.concluir(self.marcos, self.id, "2026-10-19", "", pessoa=self.beto)
+        i = self.item(self.marcos, "2026-10-19")
+        self.assertEqual((i["feitas"], i["feita"]), (2, True))
+        i = self.item(self.beto, "2026-10-19")
+        self.assertEqual((i["feita"], i["concluida_por"]), (True, {"id": self.marcos, "nome": "Marcos"}))
+        self.assertEqual(len(self.avisos(self.beto)), 1)  # só o de quando entrou
+        # o que não pode
+        with self.assertRaisesRegex(ValueError, "você não faz esta atividade"):
+            self.agenda.concluir(self.marcos, self.id, "2026-10-21", "")
+        with self.assertRaisesRegex(PermissionError, "só quem criou a atividade"):
+            self.agenda.concluir(self.ana, self.id, "2026-10-21", "", pessoa=self.beto)
+        with self.assertRaisesRegex(PermissionError, "só Ana muda"):
+            self.agenda.concluir(self.marcos, self.id, "2026-10-19", "outro texto", pessoa=self.ana)
+        with self.assertRaisesRegex(ValueError, "essa pessoa não faz"):
+            self.agenda.concluir(self.marcos, self.id, "2026-10-21", "", pessoa=self.carla)
+        with self.assertRaises(NaoEncontrada):
+            self.agenda.historico(self.carla, self.id)
+        self.assertEqual(self.agenda.mes(self.carla, "2026-10")["atividades"], [])
+        # quem criou desfaz o dia de outra pessoa
+        self.agenda.desfazer(self.marcos, self.id, "2026-10-19", pessoa=self.ana)
+        self.assertEqual(self.item(self.marcos, "2026-10-19")["feitas"], 1)
+
+    def test_avisos_de_quem_entrou(self):
+        ana, beto = self.avisos(self.ana), self.avisos(self.beto)
+        self.assertEqual((ana[0]["tipo"], ana[0]["atividade"], ana[0]["dia"]), ("incluido", self.id, "2026-10-26"))
+        self.assertEqual(ana[0]["texto"], "Marcos incluiu você na atividade “Ligar para os inativos” "
+                                          "(Toda segunda e quarta)")
+        self.assertTrue(beto[0]["texto"].endswith(", com autonomia para editá-la"))
+        self.assertEqual(self.avisos(self.marcos), [])
+
+    def test_autonomia_edita_e_so_quem_criou_muda_as_pessoas(self):
+        editar = {**self.dados, "titulo": "Ligar para os clientes inativos"}
+        with self.assertRaisesRegex(PermissionError, "autonomia"):
+            self.agenda.editar(self.ana, self.id, editar)
+        # o Beto (com autonomia) muda os dias e o horário; as pessoas que ele mandar não contam
+        self.agenda.editar(self.beto, self.id, {**editar, "dias_semana": [1], "hora": "08:00",
+                                                "participantes": [], "eu_faz": True})
+        a = self.atividade(self.marcos)
+        self.assertEqual((a["titulo"], a["dias_semana"], a["hora"], [p["id"] for p in a["pessoas"]]),
+                         ("Ligar para os clientes inativos", [1], "08:00", [self.ana, self.beto]))
+        texto = "Beto mudou os dias ou o horário da atividade “Ligar para os clientes inativos”: Toda segunda, 08:00"
+        self.assertEqual([x["texto"] for x in self.avisos(self.marcos)], [texto])
+        self.assertEqual(self.avisos(self.ana)[0]["texto"], texto)
+        self.assertEqual(len(self.avisos(self.beto)), 1)  # o que ele mesmo fez não avisa
+        for chamada in (lambda: self.agenda.encerrar(self.beto, self.id),
+                        lambda: self.agenda.excluir(self.beto, self.id)):
+            with self.assertRaisesRegex(PermissionError, r"só quem criou a atividade \(Marcos\)"):
+                chamada()
+        # o Marcos tira a Ana, põe a Carla e entra ele mesmo
+        self.agenda.concluir(self.ana, self.id, "2026-10-19", "liguei para 12")
+        editar = {**editar, "dias_semana": [1], "hora": "08:00"}
+        self.agenda.editar(self.marcos, self.id, {**editar, "eu_faz": True,
+                                                  "participantes": [{"id": self.beto, "autonomia": True},
+                                                                    {"id": self.carla}]})
+        with self.assertRaises(NaoEncontrada):
+            self.agenda.historico(self.ana, self.id)
+        self.assertIsNone(self.item(self.ana, "2026-10-26"))
+        # quem entrou numa atividade que já começou faz de hoje em diante
+        self.assertIsNone(self.item(self.carla, "2026-10-19"))
+        self.assertEqual(self.item(self.carla, "2026-10-26")["conta"], 1)
+        self.assertEqual([p["id"] for p in self.item(self.marcos, "2026-10-19")["pessoas"]], [self.beto])
+        self.assertEqual(self.item(self.marcos, "2026-10-26")["conta"], 3)
+        with self.assertRaisesRegex(ValueError, "entrou na atividade em 26/10"):
+            self.agenda.concluir(self.carla, self.id, "2026-10-19", "")
+        self.assertEqual(self.avisos(self.carla)[0]["texto"], "Marcos incluiu você na atividade “Ligar para os "
+                                                              "clientes inativos” (Toda segunda, 08:00)")
+        # o que a Ana fez fica no histórico (de quem vê) e volta com ela, agora com autonomia
+        h = self.agenda.historico(self.marcos, self.id)
+        self.assertEqual([(r["dia"], r["pessoa"]["nome"], r["feedback"]) for r in h["registros"]],
+                         [("2026-10-19", "Ana", "liguei para 12")])
+        self.assertEqual({p["nome"]: (p["ocorrencias"], p["feitas"], p["faltas"]) for p in h["pessoas"]},
+                         {"Beto": (2, 0, ["2026-10-19"]), "Carla": (1, 0, []), "Marcos": (1, 0, [])})
+        self.agenda.editar(self.marcos, self.id, {**editar, "eu_faz": True, "participantes": [
+            {"id": self.beto, "autonomia": True}, {"id": self.carla}, {"id": self.ana, "autonomia": True}]})
+        self.assertTrue(self.item(self.ana, "2026-10-19")["feita"])
+        self.assertTrue(self.atividade(self.ana)["pode"]["editar"])
+        # o Marcos dá a autonomia à Carla, que já estava: ela recebe o aviso
+        self.agenda.editar(self.marcos, self.id, {**editar, "eu_faz": True, "participantes": [
+            {"id": self.beto, "autonomia": True}, {"id": self.carla, "autonomia": True}, {"id": self.ana}]})
+        self.assertEqual(self.avisos(self.carla)[0]["texto"], "Marcos deu autonomia a você na atividade “Ligar para "
+                                                              "os clientes inativos”: agora você pode editá-la")
+        # sem ninguém para fazer, recusa; quem não tem a Gestão não entra
+        with self.assertRaisesRegex(ValueError, "escolha quem faz a atividade"):
+            self.agenda.editar(self.marcos, self.id, {**editar, "eu_faz": False, "participantes": []})
+        sem_gestao = self.criar_usuario("davi")
+        with self.assertRaisesRegex(ValueError, "sem a página Gestão"):
+            self.agenda.editar(self.marcos, self.id, {**editar, "participantes": [{"id": sem_gestao}]})
+        # encerrar avisa quem faz; excluir apaga para todos, com os avisos
+        self.agenda.encerrar(self.marcos, self.id)
+        self.assertEqual(self.avisos(self.beto)[0]["texto"], "Marcos encerrou a atividade “Ligar para os clientes "
+                                                             "inativos”: o último dia é 26/10")
+        self.agenda.excluir(self.marcos, self.id)
+        self.assertEqual((self.contar("agenda_atividade_pessoas"), self.contar("agenda_registros"),
+                          self.contar("notificacoes", "atividade IS NOT NULL")), (0, 0, 0))
+
+    def test_horario_ocupado_de_quem_faz(self):
+        self.agenda.criar(self.ana, {"titulo": "Reunião com fornecedor", "inicio": "2026-10-30", "hora": "14:00",
+                                     "hora_fim": "15:00", "ocupado": True})
+        para_ana = {"titulo": "Ligar para o João", "inicio": "2026-10-30", "hora": "14:30", "eu_faz": False,
+                    "participantes": [{"id": self.ana}]}
+        with self.assertRaises(ValueError) as e:
+            self.agenda.criar(self.marcos, para_ana)
+        self.assertEqual(str(e.exception), "Ana está com o horário ocupado em 30/10, das 14:00 às 15:00")
+        self.agenda.criar(self.marcos, {**para_ana, "participantes": [{"id": self.beto}]})  # o Beto está livre
+        # ocupada para quem faz: trava o horário de cada um (não o de quem criou e não faz)
+        equipe = {"titulo": "Reunião de equipe", "inicio": "2026-10-26", "repeticao": "semanal", "dias_semana": [1],
+                  "hora": "08:00", "hora_fim": "09:00", "ocupado": True, "eu_faz": False,
+                  "participantes": [{"id": self.ana}, {"id": self.beto}]}
+        self.agenda.criar(self.marcos, equipe)
+        with self.assertRaisesRegex(ValueError, "ocupado por “Reunião de equipe” \\(02/11, 08:00–09:00\\)"):
+            self.agenda.criar(self.ana, {"titulo": "Visita", "inicio": "2026-11-02", "hora": "08:30"})
+        self.agenda.criar(self.marcos, {"titulo": "Visita", "inicio": "2026-11-02", "hora": "08:30"})
+        tarefas = Tarefas(self.banco, ConfiguracaoFixa(padrao()), hoje=lambda: HOJE)
+        with self.assertRaisesRegex(ValueError, "Beto está com o horário ocupado em 02/11, das 08:00 às 09:00"):
+            tarefas.criar(self.carla, {"titulo": "Feira", "prazo": "2026-11-02", "hora": "08:30",
+                                       "participantes": [{"id": self.beto}]})
+        # marcar como ocupado para quem já tem algo no horário: o que é da outra pessoa vai sem o título
+        with self.assertRaises(ValueError) as e:
+            self.agenda.criar(self.marcos, {"titulo": "Treino", "inicio": "2026-10-30", "hora": "14:30",
+                                            "hora_fim": "16:00", "ocupado": True, "eu_faz": False,
+                                            "participantes": [{"id": self.beto}]})
+        self.assertEqual(str(e.exception), "Beto já tem algo nesse horário em 30/10 (14:30). Mude o horário ou "
+                                           "desmarque o ocupado")
+
+    def test_assistente(self):
+        r = self.agenda.periodo(self.ana, "2026-10-19", "2026-10-21")
+        a, = r["atividades"]
+        self.assertEqual((a["criada_por"], a["pode_editar"], a["pessoas"], a["voce_faz"]),
+                         ("Marcos", False, ["Ana", "Beto"], True))
+        dia = r["dias"][0]["itens"][0]
+        self.assertEqual((dia["situacao"], [p["nome"] for p in dia["pessoas"]]), ("atrasada", ["Ana", "Beto"]))
+        with self.assertRaisesRegex(PermissionError, "autonomia"):
+            self.agenda.propor(self.ana, "editar", atividade=self.id, dados={"titulo": "Outro"})
+        with self.assertRaisesRegex(PermissionError, "só quem criou"):
+            self.agenda.propor(self.beto, "excluir", atividade=self.id)
+        p = self.agenda.propor(self.ana, "concluir", atividade=self.id, dia="2026-10-21", feedback="liguei")
+        self.agenda.aplicar(self.ana, p)
+        self.assertTrue(self.item(self.ana, "2026-10-21")["feita"])
+        # o Beto (com autonomia) edita pelo Assistente: as pessoas ficam
+        p = self.agenda.propor(self.beto, "editar", atividade=self.id, dados={"hora": "09:00"})
+        self.agenda.aplicar(self.beto, p)
+        a = self.atividade(self.marcos)
+        self.assertEqual((a["hora"], [x["id"] for x in a["pessoas"]]), ("09:00", [self.ana, self.beto]))
+        with self.assertRaisesRegex(ValueError, "você não faz"):
+            self.agenda.propor(self.marcos, "concluir", atividade=self.id, dia="2026-10-21")

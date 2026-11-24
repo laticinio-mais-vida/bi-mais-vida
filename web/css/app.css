@@ -2691,6 +2691,36 @@ tr.ge-clicavel:hover td, tr.ge-clicavel:focus-visible td { background: var(--sur
 .ag-hist-data small { color: var(--tinta-3); font-size: 11.5px; }
 .ag-hist-txt p { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ag-hist-txt small { display: block; margin-top: 4px; color: var(--tinta-3); font-size: 12px; }
+/* a atividade com outras pessoas: no histórico, cada pessoa (os números e os dias sem concluir) e, em cada registro,
+   de quem é */
+.ag-hist-pessoas { display: grid; gap: 6px; margin-top: 6px; }
+.ag-hist-pessoa { display: grid; gap: 6px; padding: 8px 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--linha); }
+.ag-hist-pessoa b { font-size: 13.5px; }
+.ag-hist-pessoa b small, .ag-hist-pessoa > div > small { font-size: 12px; font-weight: 600; color: var(--tinta-3); }
+.ag-hist-pessoa > div > small { margin-left: 6px; }
+.ag-hist-quem { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; font-size: 13px; }
+.ag-hist-quem .ic { width: 13px; height: 13px; color: var(--tinta-3); }
+
+/* a atividade com outras pessoas, no dia: quem criou e não faz só acompanha (o ícone no lugar do check) e, embaixo, o
+   dia de cada uma das outras pessoas, com o check pequeno (quem criou marca no lugar dela) */
+.ag-check-grupo { cursor: default; }
+.ag-check-grupo .ic { opacity: 1; transform: none; stroke-width: 2; color: var(--tinta-3); }
+.ag-check-grupo.feita .ic { color: #fff; }
+.ag-check.mini { width: 22px; height: 22px; margin-top: 0; }
+.ag-check.mini .ic { width: 12px; height: 12px; }
+.ag-quem { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.ag-quem-l { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 6px 9px; border-radius: 11px; background: var(--surface-2); }
+.ag-quem-l b { font-size: 13px; }
+.ag-quem-l small { margin-left: 6px; font-size: 12px; color: var(--tinta-3); }
+.ag-quem-l.atrasada small { color: var(--ruim); font-weight: 600; }
+.ag-quem-l p { display: flex; align-items: flex-start; gap: 5px; margin: 3px 0 0; font-size: 12.5px; color: var(--tinta-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ag-quem-l p .ic { width: 13px; height: 13px; flex: none; margin-top: 2px; color: var(--ok); }
+.ag-quem-l .ag-fb { margin-top: 6px; }
+/* no formulário da atividade, o nome da pessoa não abre nada (não tem subtarefas) */
+.ag-pessoa-nome.ag-pessoa-fixo { cursor: default; }
+.ag-pessoa-nome.ag-pessoa-fixo:hover { background: none; }
+.ag-pessoa-op:disabled { opacity: .55; cursor: not-allowed; }
+.ag-pessoa-op:disabled:hover { background: none; color: var(--tinta-3); }
 
 /* tarefas: no formulário (Atividade | Tarefa, um card por pessoa com as subtarefas dela), no dia (faixa azul à
    esquerda), as atrasadas de hoje e a janela da tarefa */

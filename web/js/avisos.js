@@ -7,9 +7,10 @@
 //   já terminou), e o aviso de pedir a prorrogação a quem criou a tarefa. O que estava sendo escrito na página de trás
 //   fica como estava.
 // - O sino (no topo, à esquerda do nome): o número de notificações não lidas (bi/notificacoes.py) e, clicando, o painel
-//   com as mais recentes. Clicar numa abre a tarefa na Gestão (#/gestao?tarefa=…) e marca como lida; a lixeira (ao
-//   passar o mouse) tira ela do sino, e Excluir todas, depois de confirmar, tira todas.
-import { abrirTarefaNaAgenda, atualizarTarefaAberta, recarregarAgenda } from "./agenda.js";
+//   com as mais recentes. Clicar numa abre a tarefa na Gestão (#/gestao?tarefa=…), ou a agenda no dia da atividade
+//   (#/gestao?dia=…), e marca como lida; a lixeira (ao passar o mouse) tira ela do sino, e Excluir todas, depois de
+//   confirmar, tira todas.
+import { abrirNaAgenda, abrirTarefaNaAgenda, atualizarTarefaAberta, recarregarAgenda } from "./agenda.js";
 import { api, esc, fmt, icone, toast } from "./util.js";
 
 const INTERVALO = 60000; // um minuto
@@ -103,7 +104,7 @@ function desenharPainel(d) {
 }
 
 function itemAviso(n) {
-  return `<li class="pa-linha"><button type="button" class="pa-item ${n.lida ? "" : "nova"}" data-aviso="${n.id}" data-tarefa="${n.tarefa || ""}">
+  return `<li class="pa-linha"><button type="button" class="pa-item ${n.lida ? "" : "nova"}" data-aviso="${n.id}" data-tarefa="${n.tarefa || ""}" data-dia="${n.dia || ""}">
     <span class="pa-ic pa-${n.tipo}">${icone(ICONE_AVISO[n.tipo] || "info")}</span>
     <span class="pa-txt"><span>${esc(n.texto)}</span><small>${quandoFoi(n.criada_em)}</small></span>
   </button>
@@ -143,6 +144,7 @@ async function aoClicarPainel(e) {
   fecharPainel();
   if (b.classList.contains("nova")) mudar("lidas", { ids: [Number(b.dataset.aviso)] });
   if (b.dataset.tarefa) irParaTarefa(Number(b.dataset.tarefa));
+  else if (b.dataset.dia) irParaDia(b.dataset.dia); // uma atividade da agenda
 }
 
 // Tira a notificação do sino; o foco vai para a que ficou no lugar dela (ou para o sino, se não sobrou nenhuma).
@@ -174,6 +176,13 @@ async function mudar(acao, json) {
 function irParaTarefa(id) {
   const destino = `#/gestao?tarefa=${id}`;
   if (location.hash === destino) abrirTarefaNaAgenda(id);
+  else location.hash = destino;
+}
+
+// A atividade: a agenda abre no dia do aviso (o link é o das propostas do Assistente); se o link já é esse, abre direto.
+function irParaDia(dia) {
+  const destino = `#/gestao?dia=${dia}`;
+  if (location.hash === destino) abrirNaAgenda(dia);
   else location.hash = destino;
 }
 
