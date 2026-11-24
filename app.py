@@ -664,8 +664,16 @@ class Manipulador(BaseHTTPRequestHandler):
                 log.info("%s enviou o Serasa %s de um cadastro novo (capa)", usuario["login"], r["serasa"]["id"])
             return self._json({"ok": True, **r})
         corpo = self._corpo_json()
-        if caminho == "/api/credito/capa/calcular":
+        if caminho == "/api/credito/capa/calcular":  # com "editar": a capa registrada que está sendo editada
+            if corpo.get("editar") not in (None, ""):
+                return self._json(self.app.capas.analisar_edicao(corpo, usuario, ids))
             return self._json(self.app.capas.analisar(corpo, usuario, ids))
+        if caminho == "/api/credito/capa/editar":  # quem registrou ou um administrador (bi/capa_credito.py)
+            r = self.app.capas.editar(usuario, corpo, ids)
+            if not r["ja_existia"]:
+                log.info("%s editou a capa de análise de crédito %s (versão nova %s)", usuario["login"], corpo.get("id"),
+                         r["id"])
+            return self._json({"ok": True, **r})
         if caminho == "/api/credito/capa/excluir":
             r = self.app.capas.excluir(usuario, corpo.get("id"), ids)
             log.info("%s excluiu a capa de análise de crédito %s", usuario["login"], corpo.get("id"))
@@ -1315,7 +1323,8 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path == "/api/credito/capas":  # as capas de análise de crédito e o que o formulário usa
                 if not self._pode_credito(usuario):
                     return
-                return self._json(self.app.capas.listar(usuario, self._ids(usuario)))
+                # busca=texto: o nome do cliente, a razão social, o CNPJ ou o código; id=12: só essa capa
+                return self._json(self.app.capas.listar(usuario, self._ids(usuario), q.get("busca"), q.get("id")))
             if url.path in ("/api/manejo", "/api/manejo/historico"):
                 if not self._pode_manejo(usuario):
                     return
@@ -1448,7 +1457,7 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path in ("/api/credito/serasa", "/api/credito/serasa/excluir"):
                 return self._mudar_serasa(usuario, url.path, {k: v[-1] for k, v in parse_qs(url.query).items()})
             if url.path in ("/api/credito/capa", "/api/credito/capa/serasa", "/api/credito/capa/calcular",
-                            "/api/credito/capa/excluir"):
+                            "/api/credito/capa/editar", "/api/credito/capa/excluir"):
                 return self._mudar_capa(usuario, url.path)
             if url.path == "/api/credito/config":
                 cfg = self.app.config_credito.salvar(self._corpo_json().get("config") or {}, usuario)

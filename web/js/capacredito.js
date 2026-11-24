@@ -6,6 +6,9 @@
 // concedido e a justificativa. A reanálise pelo parecer, na página de crédito, continua igual.
 // As contas, a leitura do PDF e a gravação ficam no servidor (bi/capa_credito.py); aqui é a apresentação: a cada escolha
 // a página pede a capa de novo (/api/credito/capa/calcular). #/credito-capa?c=12 abre a reanálise do cliente 12.
+// Uma capa registrada pode ser editada (quem registrou ou um administrador): o formulário abre com ela, e os itens
+// automáticos (Serasa e histórico Mais Vida) ficam como foram registrados; #/credito-capa?e=7 abre a edição da capa 7.
+// A lista das capas busca pelo cliente, pelo CNPJ ou pelo código (no servidor).
 import { api, esc, fmt, icone, toast } from "./util.js";
 import { corpoSerasa, idadeConsulta, itemCapa } from "./credito.js";
 
@@ -20,9 +23,11 @@ let ctx = null, raiz = null;
 // lista: o que /api/credito/capas trouxe (as capas e o que o formulário usa); tipo: "cadastro" ou "reanalise";
 // cliente: o da reanálise ({id, nome, carteira}); serasaCliente: os envios do Serasa dele (/api/credito/serasa);
 // serasaId: o envio da capa; analise: a capa (a última resposta do servidor); respostas: o que o analista escolheu;
-// porte; rascunho: o que foi digitado; pedido e busca: o cálculo e a busca em andamento (o mais novo vale).
+// porte; rascunho: o que foi digitado; pedido e busca: o cálculo e a busca em andamento (o mais novo vale);
+// edicao: a capa registrada que está sendo editada; buscaLista: o que está na busca da lista (pedidoLista: o pedido dela).
 const estado = { lista: null, tipo: null, cliente: null, serasaCliente: null, serasaId: null, analise: null,
-  respostas: {}, porte: null, rascunho: null, pedido: 0, busca: 0, lendoCliente: 0, enviando: false, registrando: false };
+  respostas: {}, porte: null, rascunho: null, pedido: 0, busca: 0, lendoCliente: 0, enviando: false, registrando: false,
+  edicao: null, buscaLista: "", pedidoLista: 0 };
 
 export function capaTemAlteracoes() { return !!estado.analise; }
 
@@ -30,7 +35,9 @@ export async function montarCapaCredito(container, contexto) {
   ctx = contexto;
   raiz = container;
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const c = Number(q.get("c"));
+  const c = Number(q.get("c")), e = Number(q.get("e"));
+  // ?e=7 (o Editar da página do cliente): lido uma vez; o link sai do endereço para não reabrir a edição depois
+  if (Number.isInteger(e) && e > 0) history.replaceState(null, "", "#/credito-capa");
   if (Number.isInteger(c) && c > 0 && !(estado.tipo === "reanalise" && estado.cliente?.id === c)) {
     limpar();
     Object.assign(estado, { tipo: "reanalise", cliente: { id: c, nome: "", carteira: null } });
@@ -42,14 +49,17 @@ export async function montarCapaCredito(container, contexto) {
     container.innerHTML = `<div class="cartao vazio">${icone("alerta")}<p>Não foi possível abrir a capa de análise: ${esc(e.message)}</p></div>`;
     return;
   }
+  if (estado.buscaLista) await buscarNaLista(estado.buscaLista, true); // a busca da lista continua de antes
   render();
+  if (Number.isInteger(e) && e > 0 && estado.edicao?.id !== e) { editarCapa(e); return; }
+  if (estado.edicao) return;
   if (estado.cliente && !estado.cliente.nome) completarCliente();
   if (estado.cliente && !estado.serasaCliente) carregarCliente();
 }
 
 function limpar() {
   Object.assign(estado, { tipo: null, cliente: null, serasaCliente: null, serasaId: null, analise: null, respostas: {},
-    porte: null, rascunho: null });
+    porte: null, rascunho: null, edicao: null });
 }
 
 function render() {
@@ -90,6 +100,14 @@ function ligar() {
     if (e.target.closest("[data-descartar]") && confirm("Descartar esta capa? O PDF lido continua gravado.")) descartar();
     const x = e.target.closest("[data-excluir]");
     if (x) excluir(Number(x.dataset.excluir), x);
+    const ed = e.target.closest("[data-editar]");
+    if (ed) editarCapa(Number(ed.dataset.editar));
+    if (e.target.closest("[data-cancelar-edicao]")) cancelarEdicao();
+    if (e.target.closest("[data-limpar-busca]")) {
+      const b = raiz.querySelector("#cc-busca-lista");
+      if (b) b.value = "";
+      buscarNaLista("");
+    }
     const p = e.target.closest("[data-porte]");
     if (p) { estado.porte = p.dataset.porte; marcarPorte(); calcular(); }
     // o link para o cliente no Crédito: a página de crédito monta de novo para ler o cliente do link
@@ -113,6 +131,7 @@ function ligar() {
   });
   cc.addEventListener("input", (e) => {
     if (e.target.id === "cc-busca") { buscar(e.target.value); return; }
+    if (e.target.id === "cc-busca-lista") { esperarBuscaNaLista(e.target.value); return; }
     if (e.target.id === "cc-nome") guardarRascunho({ nome: e.target.value });
     if (e.target.closest("#cc-registro-form")) {
       if (e.target.name === "limite") guardarRascunho({ digitou: true });
@@ -132,6 +151,18 @@ const cabecalho = (n, titulo, sub, acoes = "") =>
 // ---------- 1. cadastro novo ou reanálise (e o cliente da reanálise) ----------
 function desenharTipo() {
   const card = raiz.querySelector("#cc-tipo");
+  if (estado.edicao) {
+    const ed = estado.analise?.edicao || estado.edicao;
+    card.innerHTML = cabecalho(1, "Editando uma capa registrada",
+      "O Serasa, o histórico Mais Vida e o cliente ficam como foram registrados. Mude as respostas, o porte, o concedido e os textos; a versão de antes fica guardada.") + `
+      <div class="cc-cliente cc-editando">
+        <span class="cr-cliente-icone">${icone("lapis")}</span>
+        <div class="cr-cliente-nome"><b>${esc(ed.cliente)}</b>
+          <small>${esc(ed.tipo_nome || (estado.edicao.tipo === "reanalise" ? "Reanálise" : "Cadastro novo"))} · registrada em ${fmt.dataHora(ed.feita_em)} por ${esc(ed.feita_por)}</small></div>
+        <button type="button" class="btn" data-cancelar-edicao>${icone("x")}Cancelar a edição</button>
+      </div>`;
+    return;
+  }
   const botoes = TIPOS.map((t) => `<button type="button" class="cc-porte cc-tipo" role="radio" data-tipo="${t.chave}"
       aria-checked="${estado.tipo === t.chave}"><b>${icone(t.icone)}${t.nome}</b><small>${t.dica}</small></button>`).join("");
   let cliente = "";
@@ -243,6 +274,13 @@ function desenharSerasa() {
   const botao = (rotulo, primario) => `<button type="button" class="btn${primario ? " primario" : ""}" data-enviar-pdf${estado.enviando ? " disabled" : ""}>
     ${icone("arquivo")}${estado.enviando ? "Lendo o PDF…" : rotulo}</button>`;
   const titulo = "PDF do Serasa";
+  if (estado.edicao) {
+    if (!a) { card.innerHTML = cabecalho(2, titulo, "") + `<div class="esqueleto" style="height:90px"></div>`; return; }
+    const s = a.serasa;
+    card.innerHTML = cabecalho(2, titulo, `O mesmo da capa: consulta emitida pelo Serasa em <b>${fmt.dataHora(s.emitido_em)}</b> · CNPJ ${esc(s.cnpj)}. Para usar outro PDF, faça uma capa nova.`)
+      + corpoSerasa(s);
+    return;
+  }
   if (!estado.tipo || (estado.tipo === "reanalise" && !estado.cliente)) {
     card.innerHTML = cabecalho(2, titulo, "") + `<p class="cr-hist-vazio">${estado.tipo ? "Escolha o cliente da reanálise acima." : "Escolha acima se a capa é de um cadastro novo ou de uma reanálise."}</p>`;
     return;
@@ -346,12 +384,14 @@ function descartar() {
 
 // ---------- 3 a 5. o cliente e o porte, a capa e a indicação ----------
 async function calcular(semDesenhar = false) {
-  if (!estado.serasaId) return;
+  if (!estado.serasaId && !estado.edicao) return;
   const pedido = ++estado.pedido, primeira = !estado.analise;
   try {
-    const r = await api("/api/credito/capa/calcular", { json: { tipo: estado.tipo, cliente: estado.cliente?.id ?? null,
-      serasa_id: estado.serasaId, porte: estado.porte, respostas: estado.respostas } });
-    if (pedido !== estado.pedido || !estado.serasaId) return;
+    const corpo = estado.edicao ? { editar: estado.edicao.id, porte: estado.porte, respostas: estado.respostas }
+      : { tipo: estado.tipo, cliente: estado.cliente?.id ?? null, serasa_id: estado.serasaId, porte: estado.porte,
+        respostas: estado.respostas };
+    const r = await api("/api/credito/capa/calcular", { json: corpo });
+    if (pedido !== estado.pedido || (!estado.serasaId && !estado.edicao)) return;
     estado.analise = { ...r, ja_existia: estado.analise?.ja_existia };
   } catch (e) {
     if (pedido === estado.pedido) toast(e.message, "erro");
@@ -372,10 +412,13 @@ function desenharForm() {
   const vendedor = r.vendedor ?? (reanalise && a.cliente?.id_vendedor && l.vendedores.some((v) => v.id === a.cliente.id_vendedor)
     ? String(a.cliente.id_vendedor) : "");
   if (reanalise && vendedor && !r.vendedor) guardarRascunho({ vendedor });
-  const vendedores = l.vendedores.map((v) => `<option value="${v.id}"${String(v.id) === String(vendedor) ? " selected" : ""}>${esc(v.nome)}</option>`).join("");
+  // na edição, o vendedor da capa vale mesmo que não esteja mais na lista (inativo ou fora do acesso)
+  const ed = estado.edicao, lista = ed && !l.vendedores.some((v) => v.id === ed.id_vendedor)
+    ? [...l.vendedores, { id: ed.id_vendedor, nome: ed.vendedor }] : l.vendedores;
+  const vendedores = lista.map((v) => `<option value="${v.id}"${String(v.id) === String(vendedor) ? " selected" : ""}>${esc(v.nome)}</option>`).join("");
   const nome = reanalise
     ? `<div class="campo-form"><span>Cliente</span><p class="cc-nome-fixo"><b>${esc(a.cliente.nome)}</b>
-        <small>código ${a.cliente.id} · limite de hoje ${fmt.moeda2(a.cliente.limite)} · prazo ${esc(a.cliente.prazo || "não informado")}</small></p></div>`
+        <small>código ${a.cliente.id} · limite ${estado.edicao ? "de antes da capa" : "de hoje"} ${fmt.moeda2(a.cliente.limite)} · prazo ${esc(a.cliente.prazo || "não informado")}</small></p></div>`
     : `<label class="campo-form"><span>Nome do cliente</span>
         <input type="text" id="cc-nome" maxlength="200" autocomplete="off" value="${esc(r.nome || "")}"></label>`;
   alvo.innerHTML = `
@@ -537,15 +580,20 @@ function lerValor(texto) {
 function desenharRegistro() {
   const alvo = raiz.querySelector("#cc-registro"), a = estado.analise, l = estado.lista;
   if (!alvo || !a) return;
-  const cab = cabecalho(6, "Registrar a capa", "Grava a capa, a indicação e o que foi concedido. O painel não muda o ERP: depois de registrar, mude o limite e o prazo lá.");
+  const cab = estado.edicao
+    ? cabecalho(6, "Salvar a edição", "Grava uma versão nova da capa; a de antes fica guardada. O painel não muda o ERP: se o concedido mudou, mude o limite e o prazo lá.")
+    : cabecalho(6, "Registrar a capa", "Grava a capa, a indicação e o que foi concedido. O painel não muda o ERP: depois de registrar, mude o limite e o prazo lá.");
   const i = a.indicacao;
   if (!i) { alvo.innerHTML = cab + `<p class="cr-hist-vazio">Termine a capa e escolha o porte para registrar.</p>`; return; }
   const r = estado.rascunho || {};
   // o limite começa no sugerido; o prazo, no sugerido se ele existe no ERP
   const limite = r.digitou ? r.limite : fmt.num(i.limite_sugerido, 2);
-  const prazo = r.escolheuPrazo && l.prazos.includes(r.prazo) ? r.prazo : l.prazos.includes(i.prazo_sugerido) ? i.prazo_sugerido : "";
+  // na edição, o prazo da capa vale mesmo que nenhum cliente o use mais no ERP
+  const prazos = estado.edicao && !l.prazos.includes(estado.edicao.prazo_concedido)
+    ? [...l.prazos, estado.edicao.prazo_concedido] : l.prazos;
+  const prazo = r.escolheuPrazo && prazos.includes(r.prazo) ? r.prazo : prazos.includes(i.prazo_sugerido) ? i.prazo_sugerido : "";
   const dentro = new Set(a.prazos_dentro);
-  const opcoes = l.prazos.map((x) => `<option value="${esc(x)}"${x === prazo ? " selected" : ""}>${esc(x)}${dentro.has(x) ? " · dentro do indicado" : ""}${a.cliente?.prazo === x ? " (de hoje)" : ""}</option>`).join("");
+  const opcoes = prazos.map((x) => `<option value="${esc(x)}"${x === prazo ? " selected" : ""}>${esc(x)}${dentro.has(x) ? " · dentro do indicado" : ""}${a.cliente?.prazo === x ? " (de hoje)" : ""}</option>`).join("");
   alvo.innerHTML = cab + `
     <form class="cr-registro-form" id="cc-registro-form" novalidate>
       <div class="cr-registro-campos">
@@ -561,7 +609,8 @@ function desenharRegistro() {
         <small>Não escreva CPF, telefone ou endereço.</small></label>
       <p class="cr-registro-resumo" id="cc-resumo" aria-live="polite"></p>
       <div id="cc-bloqueio" aria-live="polite"></div>
-      <div><button class="btn primario" type="submit"${estado.registrando ? " disabled" : ""}>${icone("certo")}Registrar capa</button></div>
+      <div class="cc-acoes-registro"><button class="btn primario" type="submit"${estado.registrando ? " disabled" : ""}>${icone("certo")}${estado.edicao ? "Salvar a edição" : "Registrar capa"}</button>
+        ${estado.edicao ? `<button type="button" class="btn" data-cancelar-edicao>${icone("x")}Cancelar</button>` : ""}</div>
     </form>`;
   resumo();
 }
@@ -597,7 +646,7 @@ function resumo() {
     alvo.innerHTML = `
       <div class="cr-bloqueio">${icone("cadeado")}<span>Este cliente está no prazo mínimo entre reanálises: <b>aumento só a partir de ${fmt.data(b.aumento_a_partir_de)}</b>
         (prazo mínimo de ${b.dias} dias desde ${desdeBloqueio(b)} de ${fmt.data(b.ultima_em)}).
-        ${ctx.admin ? "Como administrador, você pode registrar mesmo assim, e a capa fica marcada como “passou do bloqueio”."
+        ${estado.edicao ? "Na edição, vale o prazo de quando a capa foi registrada. " : ""}${ctx.admin ? "Como administrador, você pode registrar mesmo assim, e a capa fica marcada como “passou do bloqueio”."
           : "Redução, corte ou manter o limite podem ser registrados."}</span></div>
       ${ctx.admin ? `<label class="cr-passar"><input type="checkbox" name="passar">Registrar mesmo assim</label>` : ""}`;
   }
@@ -623,23 +672,28 @@ async function registrar(f) {
   estado.registrando = true;
   f.querySelector('button[type="submit"]').disabled = true;
   try {
-    const r = await api("/api/credito/capa", { json: {
-      chave: l.chave, tipo: a.tipo, cliente: a.cliente?.id ?? null, serasa_id: estado.serasaId,
-      nome: reanalise ? null : nome.value.trim(), id_vendedor: Number(vendedor.value), porte: estado.porte,
-      respostas: estado.respostas, limite, prazo: f.prazo.value, observacoes: f.observacoes.value, justificativa,
-      dados_ate: a.dados_ate, passar_bloqueio: !!f.passar?.checked } });
+    const comum = { chave: l.chave, nome: reanalise ? null : nome.value.trim(), id_vendedor: Number(vendedor.value),
+      porte: estado.porte, respostas: estado.respostas, limite, prazo: f.prazo.value, observacoes: f.observacoes.value,
+      justificativa, passar_bloqueio: !!f.passar?.checked };
+    const editando = !!estado.edicao;
+    const r = editando ? await api("/api/credito/capa/editar", { json: { ...comum, id: estado.edicao.id } })
+      : await api("/api/credito/capa", { json: { ...comum, tipo: a.tipo, cliente: a.cliente?.id ?? null,
+        serasa_id: estado.serasaId, dados_ate: a.dados_ate } });
     estado.lista = r;
     ctx.remontarCredito?.(); // a página de crédito do cliente mostra a capa
     limpar();
     desenharTipo();
     desenharSerasa();
     desenharForm();
+    if (estado.buscaLista) await buscarNaLista(estado.buscaLista, true);
     desenharLista();
-    toast(r.ja_existia ? "Esta capa já estava registrada." : "Capa registrada. Agora mude o limite e o prazo no ERP.");
+    toast(editando ? (r.ja_existia ? "Esta edição já estava salva." : "Capa editada. Se o concedido mudou, mude o limite e o prazo no ERP.")
+      : r.ja_existia ? "Esta capa já estava registrada." : "Capa registrada. Agora mude o limite e o prazo no ERP.");
     raiz.querySelector("#cc-lista")?.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     toast(e.message, "erro");
     if (e.status === 400 && /atualizados|prazo mínimo/.test(e.message)) calcular(); // dados novos ou o bloqueio: de novo
+    else if (e.status === 404 && estado.edicao) recarregarLista(); // editada ou excluída por outra pessoa
   } finally {
     estado.registrando = false;
     if (raiz.querySelector("#cc-registro-form")) resumo();
@@ -647,14 +701,97 @@ async function registrar(f) {
 }
 
 // ---------- as capas registradas (o item é o mesmo da página do cliente: credito.js) ----------
+// O cartão das capas registradas: o cabeçalho com a busca é desenhado uma vez (o campo não perde o foco); a lista,
+// a cada busca.
 function desenharLista() {
-  const card = raiz.querySelector("#cc-lista"), lista = estado.lista.capas;
-  const sub = lista.length ? `${lista.length} registrada${lista.length === 1 ? "" : "s"}, da mais nova para a mais antiga`
-    : "a capa, a indicação e o que foi concedido em cada uma";
+  const card = raiz.querySelector("#cc-lista");
   card.innerHTML = `
-    <div class="cartao-cab"><div><h3>${icone("caderneta")}Capas registradas</h3><p class="sub">${sub}</p></div></div>
-    ${lista.length ? `<ol class="cr-hist">${lista.map((x) => itemCapa(x)).join("")}</ol>`
-      : `<p class="cr-hist-vazio">Nenhuma capa registrada ainda.</p>`}`;
+    <div class="cartao-cab cc-lista-cab"><div><h3>${icone("caderneta")}Capas registradas</h3><p class="sub" id="cc-lista-sub"></p></div>
+      <div class="cc-busca-lista">
+        <label class="campo sem-seta"><span class="ic-campo">${icone("busca")}</span>
+          <input type="search" id="cc-busca-lista" placeholder="Buscar pelo cliente, CNPJ ou código" autocomplete="off" spellcheck="false"
+            aria-label="Buscar nas capas registradas" value="${esc(estado.buscaLista)}"></label>
+      </div></div>
+    <div id="cc-lista-corpo" aria-live="polite"></div>`;
+  desenharCorpoLista();
+}
+
+function desenharCorpoLista() {
+  const corpo = raiz.querySelector("#cc-lista-corpo"), sub = raiz.querySelector("#cc-lista-sub");
+  if (!corpo) return;
+  const lista = estado.lista.capas, busca = estado.buscaLista, n = lista.length;
+  const limite = n >= 100 ? " (as 100 mais novas)" : "";
+  sub.textContent = busca ? `${n} encontrada${n === 1 ? "" : "s"} para “${busca}”${limite}`
+    : n ? `${n} registrada${n === 1 ? "" : "s"}${limite}, da mais nova para a mais antiga` : "a capa, a indicação e o que foi concedido em cada uma";
+  corpo.innerHTML = n ? `<ol class="cr-hist">${lista.map((x) => itemCapa(x)).join("")}</ol>`
+    : busca ? `<p class="cr-hist-vazio">Nenhuma capa encontrada para “${esc(busca)}”. <button type="button" class="link-botao" data-limpar-busca>Limpar a busca</button></p>`
+      : `<p class="cr-hist-vazio">Nenhuma capa registrada ainda.</p>`;
+}
+
+let esperaLista = null;
+function esperarBuscaNaLista(texto) {
+  clearTimeout(esperaLista);
+  esperaLista = setTimeout(() => buscarNaLista(texto), 300);
+}
+
+// A busca é no servidor (o nome do cliente, a razão social, o CNPJ ou o código); só a lista muda.
+async function buscarNaLista(texto, semDesenhar = false) {
+  const busca = String(texto || "").trim(), pedido = ++estado.pedidoLista;
+  try {
+    const r = await api(`/api/credito/capas${busca ? `?busca=${encodeURIComponent(busca)}` : ""}`);
+    if (pedido !== estado.pedidoLista) return;
+    estado.lista = { ...estado.lista, capas: r.capas };
+    estado.buscaLista = busca;
+  } catch (e) {
+    if (pedido === estado.pedidoLista) toast(e.message, "erro");
+    return;
+  }
+  if (!semDesenhar) desenharCorpoLista();
+}
+
+async function recarregarLista() {
+  await buscarNaLista(estado.buscaLista, true);
+  desenharCorpoLista();
+}
+
+// ---------- editar uma capa registrada ----------
+async function editarCapa(id) {
+  if (estado.edicao?.id === id) return;
+  if (estado.analise && !confirm("Editar esta capa? O que está no formulário agora sai.")) return;
+  let x = estado.lista.capas.find((c) => c.id === id);
+  try {
+    if (!x) x = (await api(`/api/credito/capas?id=${id}`)).capas[0];
+  } catch (e) {
+    toast(e.message, "erro");
+    return;
+  }
+  if (!x) { toast("Capa não encontrada: ela pode ter sido excluída ou editada; recarregue a página.", "erro"); return; }
+  if (!x.pode_editar) { toast("Só quem registrou a capa ou um administrador pode editá-la.", "erro"); return; }
+  limpar();
+  Object.assign(estado, {
+    edicao: x, tipo: x.tipo, porte: x.porte,
+    cliente: x.tipo === "reanalise" ? { id: x.id_cliente, nome: x.cliente, carteira: null } : null,
+    respostas: Object.fromEntries(x.respostas.filter((r) => !r.auto && r.opcao).map((r) => [r.chave, r.opcao])),
+    rascunho: { nome: x.cliente, vendedor: String(x.id_vendedor), limite: fmt.num(x.limite_concedido, 2), digitou: true,
+      prazo: x.prazo_concedido, escolheuPrazo: true, observacoes: x.observacoes || "", justificativa: x.justificativa },
+  });
+  desenharTipo();
+  desenharSerasa();
+  desenharForm();
+  raiz.querySelector("#cc-tipo")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  await calcular(true);
+  if (estado.edicao?.id !== id) return;
+  desenharTipo();
+  desenharSerasa();
+  desenharForm();
+}
+
+function cancelarEdicao() {
+  if (!confirm("Cancelar a edição? O que mudou no formulário sai; a capa fica como estava.")) return;
+  limpar();
+  desenharTipo();
+  desenharSerasa();
+  desenharForm();
 }
 
 async function excluir(id, botao) {
@@ -663,7 +800,9 @@ async function excluir(id, botao) {
   try {
     estado.lista = { ...estado.lista, ...(await api("/api/credito/capa/excluir", { json: { id } })) };
     ctx.remontarCredito?.();
-    desenharLista();
+    if (estado.edicao?.id === id) { limpar(); desenharTipo(); desenharSerasa(); desenharForm(); }
+    if (estado.buscaLista) await buscarNaLista(estado.buscaLista, true);
+    desenharCorpoLista();
     toast("Capa excluída.");
   } catch (e) {
     toast(e.message, "erro");

@@ -13,8 +13,12 @@ reanálise de antes, pelo parecer da página de crédito (bi/reanalise.py), cont
   - O limite sugerido é o menor valor da coluna da faixa nesses blocos, e o máximo é o maior.
   - O prazo tem as parcelas da faixa, até o máximo do porte. O sugerido usa os dias mais baixos de cada parcela (5, 12,
     19, 26) e o máximo, os mais altos (7, 14, 21, 29).
-- Cada capa é uma linha nova na tabela credito_capas (migração 046) e não muda depois. Um engano se corrige excluindo
-  (quem registrou ou um administrador); a linha fica guardada (excluida_em). Só no site (ativo).
+- Cada capa é uma linha nova na tabela credito_capas (migração 046) e não muda depois. Quem registrou ou um
+  administrador pode excluir (a linha fica guardada, com excluida_em) ou editar: a edição grava uma versão nova e a de
+  antes fica guardada como substituída (migração 049). Na edição, os itens automáticos (Serasa e histórico Mais Vida)
+  ficam como foram registrados; mudam as respostas do analista, o porte, o vendedor, o concedido e os textos. Só no
+  site (ativo).
+- A lista das capas busca pelo nome do cliente, pela razão social, pelo CNPJ ou pelo código do cliente.
 - A capa de cadastro novo liga ao cliente pelo CNPJ quando ele entra no ERP (tabela clientes_cnpj do cache), na
   leitura, sem gravar. A página do cliente mostra as capas dele (reanálise e cadastro novo) com as reanálises, e o prazo
   mínimo entre reanálises conta a partir da última (bi/reanalise.py); um aumento na capa de reanálise esbarra nele
@@ -394,7 +398,31 @@ TIPOS = {"cadastro": "Cadastro novo", "reanalise": "Reanálise"}
 CAMPOS = ("id", "tipo", "id_cliente", "cnpj", "cliente", "razao_social", "id_vendedor", "vendedor", "serasa_id", "porte",
           "respostas", "pontos", "faixa", "indicacao", "limite_sugerido", "limite_maximo", "limite_antes", "prazo_antes",
           "limite_concedido", "prazo_concedido", "observacoes", "justificativa", "id_cliente_historico", "dados_ate",
-          "regra_versao", "bloqueio", "feita_em", "feita_por", "feita_por_nome")
+          "regra_versao", "bloqueio", "feita_em", "feita_por", "feita_por_nome", "versao_anterior", "editada_em",
+          "editada_por", "editada_por_nome")
+MAX_BUSCA = 100  # letras da busca da lista
+# Minúsculas e sem acento, no SQL, para a busca comparar o nome como _norm faz aqui.
+_SEM_ACENTO_SQL = "translate(lower(coalesce({}, '')), 'áàâãäåéèêëíìîïóòôõöúùûüçñ', 'aaaaaaeeeeiiiiooooouuuucn')"
+NAO_ENCONTRADA = ("capa não encontrada: ela pode ter sido excluída ou editada por outra pessoa; recarregue a "
+                  "página")
+
+
+def _busca(texto: str) -> tuple[str, list]:
+    """A condição SQL (sobre a capa c) da busca da lista: o nome do cliente ou a razão social (sem caixa nem acento), os
+    dígitos do CNPJ (3 ou mais) ou o código do cliente (só dígitos)."""
+    t = _norm(texto).lower()
+    parecido = "%" + re.sub(r"([%_\\])", r"\\\1", t) + "%"
+    condicoes = [f"{_SEM_ACENTO_SQL.format('c.cliente')} LIKE %s ESCAPE '\\'",
+                 f"{_SEM_ACENTO_SQL.format('c.razao_social')} LIKE %s ESCAPE '\\'"]
+    params: list = [parecido, parecido]
+    digitos = re.sub(r"\D", "", texto)
+    if len(digitos) >= 3:
+        condicoes.append("c.cnpj LIKE %s")
+        params.append(f"%{digitos}%")
+    if digitos and digitos == texto.strip() and len(digitos) <= 9:
+        condicoes.append("c.id_cliente = %s")
+        params.append(int(digitos))
+    return " OR ".join(condicoes), params
 _VALORES = ("limite_sugerido", "limite_maximo", "limite_antes", "limite_concedido")
 
 
@@ -467,12 +495,13 @@ class CapasCredito:
             return clientes, None
         return clientes, self.credito.historico_mais_vida(clientes[0]["id"])
 
-    def _bloqueio(self, cliente: int) -> dict | None:
-        """O prazo mínimo entre reanálises que vale hoje para o cliente (Reanalises._bloqueio), para a página avisar."""
+    def _bloqueio(self, cliente: int, ate: dt.datetime | None = None, ignorar: int | None = None) -> dict | None:
+        """O prazo mínimo entre reanálises que vale hoje para o cliente (Reanalises._bloqueio), para a página avisar. Na
+        edição, o que valia na data em que a capa foi registrada (ate), sem contar a própria capa (ignorar)."""
         if self.reanalises is None:
             return None
         with self.banco.conexao() as con:
-            return self.reanalises._bloqueio(con, cliente)
+            return self.reanalises._bloqueio(con, cliente, ate=ate, ignorar_capa=ignorar)
 
     def enviar_serasa(self, usuario: dict, conteudo: bytes, permitidos=None) -> dict:
         """Cadastro novo: lê e grava o PDF (sem código) e devolve a capa dele como está (analisar, sem as respostas do
@@ -618,9 +647,9 @@ class CapasCredito:
             raise NaoEncontrada("capa não encontrada") from None
         with self.banco.conexao() as con:
             linha = con.execute("SELECT feita_por FROM credito_capas WHERE id = %s AND excluida_em IS NULL "
-                                "FOR UPDATE", [id_]).fetchone()
+                                "AND substituida_em IS NULL FOR UPDATE", [id_]).fetchone()
             if linha is None:
-                raise NaoEncontrada("capa não encontrada; ela pode ter sido excluída")
+                raise NaoEncontrada(NAO_ENCONTRADA)
             if not eh_admin(usuario) and linha[0] != usuario["id"]:
                 raise PermissionError("só quem registrou a capa ou um administrador pode excluí-la")
             con.execute("UPDATE credito_capas SET excluida_em = now(), excluida_por = "
@@ -633,7 +662,8 @@ class CapasCredito:
         with self.banco.conexao() as con:
             linhas = con.execute(
                 f"SELECT {', '.join('c.' + x for x in CAMPOS)}, s.emitido_em, s.score FROM credito_capas c "
-                f"JOIN credito_serasa s ON s.id = c.serasa_id WHERE c.excluida_em IS NULL AND {onde} "
+                f"JOIN credito_serasa s ON s.id = c.serasa_id WHERE c.excluida_em IS NULL AND c.substituida_em IS NULL "
+                f"AND {onde} "
                 "ORDER BY c.id DESC LIMIT %s", [*params, limite]).fetchall()
         saida = []
         for r in linhas:
@@ -651,8 +681,12 @@ class CapasCredito:
             "id": d["id"], "tipo": d["tipo"], "tipo_nome": TIPOS[d["tipo"]], "id_cliente": d["id_cliente"],
             "feita_em": hora(d["feita_em"]), "feita_por": d["feita_por_nome"] or "usuário excluído",
             "pode_excluir": eh_admin(usuario) or d["feita_por"] == usuario["id"],
+            "pode_editar": eh_admin(usuario) or d["feita_por"] == usuario["id"],
+            "editada_em": hora(d["editada_em"]), "editada_por": (d["editada_por_nome"] or "usuário excluído")
+            if d["editada_em"] else None,
             "cliente": d["cliente"], "cnpj": cnpj_formatado(d["cnpj"]), "razao_social": d["razao_social"],
-            "vendedor": d["vendedor"], "porte": d["porte"], "porte_nome": PORTES[d["porte"]]["nome"],
+            "id_vendedor": d["id_vendedor"], "vendedor": d["vendedor"], "porte": d["porte"],
+            "porte_nome": PORTES[d["porte"]]["nome"],
             "pontos": d["pontos"], "faixa": d["faixa"], "faixa_rotulo": FAIXAS[d["faixa"]]["rotulo"], "indicacao": ind,
             "limite_antes": d["limite_antes"], "prazo_antes": d["prazo_antes"],
             "limite_concedido": d["limite_concedido"], "prazo_concedido": d["prazo_concedido"],
@@ -671,16 +705,30 @@ class CapasCredito:
         return {"situacao": "aplicado" if igual else "diferente", "id": cliente["id"], "nome": cliente["nome"],
                 "carteira": cliente["carteira"], "limite": cliente["limite"], "prazo": cliente["prazo"]}
 
-    def listar(self, usuario: dict, permitidos=None) -> dict:
-        """As capas para a página do formulário, das mais novas para as mais antigas (sem as excluídas), com a situação
-        no ERP de cada uma: a reanálise pelo cliente dela; o cadastro novo pelo CNPJ. Com acesso só a alguns vendedores:
-        as deles e as que a pessoa registrou. Junto, o que o formulário usa (opcoes)."""
+    def listar(self, usuario: dict, permitidos=None, busca: str | None = None, id_=None) -> dict:
+        """As capas para a página do formulário, das mais novas para as mais antigas (sem as excluídas e as versões
+        substituídas por uma edição), com a situação no ERP de cada uma: a reanálise pelo cliente dela; o cadastro novo
+        pelo CNPJ. Com acesso só a alguns vendedores: as deles e as que a pessoa registrou. busca: o nome do cliente, a
+        razão social, o CNPJ ou o código do cliente (_busca); id_: só essa capa. Junto, o que o formulário usa
+        (opcoes)."""
         if not self.ativo:
             return {"ativo": False, "aviso": AVISO_PC, "capas": []}
         if permitidos is None:
             onde, params = "TRUE", []
         else:
             onde, params = "(c.id_vendedor = ANY(%s) OR c.feita_por = %s)", [sorted(permitidos), usuario["id"]]
+        if id_ not in (None, ""):
+            try:
+                id_ = int(id_)
+            except (TypeError, ValueError):
+                raise ValueError("capa inválida") from None
+            onde += " AND c.id = %s"
+            params.append(id_)
+        busca = (busca or "").strip()[:MAX_BUSCA]
+        if busca:
+            condicao, mais = _busca(busca)
+            onde += f" AND ({condicao})"
+            params += mais
         linhas = self._linhas(onde, params)
         por_cnpj = self.credito.clientes_dos_cnpjs([d["cnpj"] for d in linhas if d["tipo"] == "cadastro"])
         por_id = self.credito.clientes_por_id([d["id_cliente"] for d in linhas if d["id_cliente"]])
@@ -698,7 +746,7 @@ class CapasCredito:
                 clientes = por_cnpj[d["cnpj"]]
                 x["erp"] = {**self._erp(d, clientes[0]), "outros": [c["id"] for c in clientes[1:]]}
             itens.append(x)
-        return {"ativo": True, "aviso": None, "capas": itens, **self.opcoes(permitidos)}
+        return {"ativo": True, "aviso": None, "capas": itens, "busca": busca or None, **self.opcoes(permitidos)}
 
     def do_cliente(self, cliente: int, usuario: dict) -> list[dict]:
         """As capas do cliente (para a página dele), das mais novas para as mais antigas: as reanálises dele e as de
@@ -716,12 +764,167 @@ class CapasCredito:
         dele = self.credito.clientes_por_id([cliente]).get(cliente)
         return [{**self._item(d, usuario), **({"erp": self._erp(d, dele)} if dele else {})} for d in linhas]
 
-    def ultima_em(self, con, cliente: int, cnpj: str | None) -> dt.datetime | None:
-        """Quando foi a última capa do cliente (sem as excluídas): as reanálises dele e as de cadastro novo com o CNPJ
-        dele. Para o prazo mínimo entre reanálises (bi/reanalise.py)."""
+    def ultima_em(self, con, cliente: int, cnpj: str | None, antes: dt.datetime | None = None,
+                  ignorar: int | None = None) -> dt.datetime | None:
+        """Quando foi a última capa do cliente (sem as excluídas; a editada conta pela data em que foi registrada): as
+        reanálises dele e as de cadastro novo com o CNPJ dele. Para o prazo mínimo entre reanálises (bi/reanalise.py).
+        antes: só as registradas antes dessa hora; ignorar: uma capa que não conta (a que está sendo editada)."""
         onde, params = "id_cliente = %s", [cliente]
         if cnpj:
             onde, params = "id_cliente = %s OR cnpj = %s", [cliente, cnpj]
-        linha = con.execute(f"SELECT MAX(feita_em) FROM credito_capas WHERE excluida_em IS NULL AND ({onde})",
-                            params).fetchone()
+        extra = ""
+        if antes is not None:
+            extra += " AND feita_em < %s"
+            params.append(antes)
+        if ignorar is not None:
+            extra += " AND id <> %s"
+            params.append(ignorar)
+        linha = con.execute(f"SELECT MAX(feita_em) FROM credito_capas WHERE excluida_em IS NULL "
+                            f"AND substituida_em IS NULL AND ({onde}){extra}", params).fetchone()
         return linha[0] if linha else None
+
+    # --- a edição ------------------------------------------------------------------------
+    def _atual(self, con, id_, travar: bool = False) -> dict:
+        """A versão em vigor de uma capa (sem as excluídas e as substituídas). Não existe -> NaoEncontrada."""
+        try:
+            id_ = int(id_)
+        except (TypeError, ValueError):
+            raise NaoEncontrada(NAO_ENCONTRADA) from None
+        r = con.execute(f"SELECT {', '.join(CAMPOS)} FROM credito_capas WHERE id = %s AND excluida_em IS NULL "
+                        f"AND substituida_em IS NULL{' FOR UPDATE' if travar else ''}", [id_]).fetchone()
+        if r is None:
+            raise NaoEncontrada(NAO_ENCONTRADA)
+        d = dict(zip(CAMPOS, r))
+        for k in _VALORES:
+            d[k] = None if d[k] is None else float(d[k])
+        return d
+
+    @staticmethod
+    def _pode_editar(usuario: dict, d: dict) -> None:
+        if not eh_admin(usuario) and d["feita_por"] != usuario["id"]:
+            raise PermissionError("só quem registrou a capa ou um administrador pode editá-la")
+
+    def _capa_editada(self, d: dict, dados: dict, usuario: dict) -> dict:
+        """A capa d com as respostas, o porte e o resto que a página mandou: os itens automáticos ficam como foram
+        registrados; os do analista vêm da página. O mesmo formato de analisar, com "edicao"."""
+        salvas = {r["chave"]: r for r in d["respostas"]}
+        da_pagina = dados.get("respostas") if isinstance(dados.get("respostas"), dict) else {}
+        respostas = {}
+        for x in CAPA:
+            r = salvas.get(x["chave"]) or {}
+            if r.get("auto"):
+                respostas[x["chave"]] = {"opcao": r.get("opcao"), "auto": True, "fonte": r.get("fonte") or ""}
+            else:
+                escolha = da_pagina.get(x["chave"])
+                validas = {o["chave"] for o in x["opcoes"]}
+                respostas[x["chave"]] = {"opcao": escolha if escolha in validas else None, "auto": False,
+                                         "fonte": r.get("fonte") or ""}
+        p = pontuar(respostas)
+        porte = dados.get("porte") if dados.get("porte") in PORTES else None
+        completa = not p["faltam"]
+        ind = indicar(faixa(p["pontos"])["faixa"], porte) if completa and porte else None
+        cliente = bloqueio = None
+        if d["tipo"] == "reanalise":
+            cliente = {"id": d["id_cliente"], "nome": d["cliente"], "limite": d["limite_antes"], "prazo": d["prazo_antes"],
+                       "id_vendedor": d["id_vendedor"], "carteira": None}
+            bloqueio = self._bloqueio(d["id_cliente"], ate=d["feita_em"], ignorar=d["id"])
+        return {
+            "tipo": d["tipo"], "cliente": cliente, "bloqueio": bloqueio,
+            "serasa": self.serasa.por_id(d["serasa_id"], usuario), "ja_cliente": [],
+            "historico_de": {"id": d["id_cliente_historico"], "nome": None} if d["id_cliente_historico"] else None,
+            "dados_ate": None, **p, "completa": completa, "porte": porte,
+            "faixa": faixa(p["pontos"]) if completa else None, "indicacao": ind,
+            "prazos_dentro": [x for x in self.credito.prazos() if prazo_dentro(x, ind)] if ind else [],
+            "edicao": {"id": d["id"], "tipo_nome": TIPOS[d["tipo"]], "cliente": d["cliente"],
+                       "feita_em": hora(d["feita_em"]), "feita_por": d["feita_por_nome"] or "usuário excluído"},
+        }
+
+    def analisar_edicao(self, dados: dict, usuario: dict, permitidos=None) -> dict:
+        """A capa em edição: {editar (o id da capa), porte, respostas}, como analisar. Só quem registrou ou um
+        administrador (senão PermissionError). Não grava."""
+        if not self.ativo:
+            raise ValueError(AVISO_PC)
+        with self.banco.conexao() as con:
+            d = self._atual(con, dados.get("editar"))
+        self._pode_editar(usuario, d)
+        return self._capa_editada(d, dados, usuario)
+
+    def editar(self, usuario: dict, dados: dict, permitidos=None) -> dict:
+        """Grava a edição de uma capa: {id, chave, nome (cadastro novo), id_vendedor, porte, respostas, limite, prazo,
+        observacoes, justificativa, passar_bloqueio}. A versão nova repete quando e por quem a capa foi registrada e o
+        que não muda (o tipo, o cliente, o Serasa, os itens automáticos, o limite e o prazo de antes); a de antes fica
+        guardada como substituída. Na reanálise, um aumento esbarra no prazo mínimo que valia quando a capa foi
+        registrada, como no registro. Só quem registrou ou um administrador. A mesma chave de novo não grava outra vez
+        (ja_existia). Devolve o id da versão nova e a lista nova (listar)."""
+        if not self.ativo:
+            raise ValueError(AVISO_PC)
+        chave = id_valido(dados.get("chave"))
+        if not chave:
+            raise ValueError("o formulário expirou; recarregue a página")
+        with self.banco.conexao() as con:
+            antiga = con.execute("SELECT id, editada_por FROM credito_capas WHERE chave = %s", [chave]).fetchone()
+            if antiga is not None:  # a mesma chave de novo: clique duplo, ou a rede repetiu o envio
+                if antiga[1] != usuario["id"]:
+                    raise ValueError("o formulário expirou; recarregue a página")
+                return {"id": antiga[0], "ja_existia": True, **self.listar(usuario, permitidos)}
+            d = self._atual(con, dados.get("id"))
+        self._pode_editar(usuario, d)
+        nome = d["cliente"] if d["tipo"] == "reanalise" else _texto(dados.get("nome"), "o nome do cliente", 1, MAX_NOME)
+        try:
+            vendedor = int(dados.get("id_vendedor"))
+        except (TypeError, ValueError):
+            raise ValueError("escolha o vendedor do cliente") from None
+        vendedores = {v["id"]: v["nome"] for v in self.vendedores(permitidos)}
+        vendedores.setdefault(d["id_vendedor"], d["vendedor"])  # o de antes vale, mesmo inativo ou fora do acesso
+        if vendedor not in vendedores:
+            if permitidos is not None and vendedor not in permitidos:
+                raise PermissionError("o vendedor escolhido não é do seu acesso")
+            raise ValueError("escolha o vendedor do cliente (os vendedores ativos)")
+        if dados.get("porte") not in PORTES:
+            raise ValueError("escolha o porte da empresa")
+        a = self._capa_editada(d, dados, usuario)
+        if not a["completa"]:
+            raise ValueError(f"responda todos os itens da capa (faltam: {', '.join(a['faltam'])})")
+        limite = _reais_da_pagina(dados.get("limite"))
+        prazo = dados.get("prazo")
+        if not isinstance(prazo, str) or (prazo not in self.credito.prazos() and prazo != d["prazo_concedido"]):
+            raise ValueError("escolha o prazo concedido na lista (os prazos do ERP)")
+        observacoes = _texto(dados.get("observacoes"), "as observações", 0, MAX_TEXTO) or None
+        justificativa = _texto(dados.get("justificativa"), "a justificativa", MIN_JUSTIFICATIVA, MAX_TEXTO)
+        ind = a["indicacao"]
+        respostas = [{k: x[k] for k in ("chave", "grupo", "eixo", "peso", "opcao", "rotulo", "pontos", "auto", "fonte")}
+                     for x in a["itens"]]
+        reanalise = d["tipo"] == "reanalise"
+        aumento = reanalise and limite > (d["limite_antes"] or 0) + 0.005
+        with self.banco.conexao() as con:
+            if reanalise:  # uma decisão de cada vez por cliente
+                con.execute("SELECT pg_advisory_xact_lock(%s::int, %s::int)", [TRAVA, d["id_cliente"]])
+            d = self._atual(con, d["id"], travar=True)  # ninguém editou ou excluiu no meio
+            marca = None
+            b = (self.reanalises._bloqueio(con, d["id_cliente"], ate=d["feita_em"], ignorar_capa=d["id"])
+                 if aumento and self.reanalises else None)
+            if b:
+                texto = texto_bloqueio(b)
+                if not eh_admin(usuario):
+                    raise ValueError(f"este cliente estava no prazo mínimo entre reanálises quando a capa foi registrada: "
+                                     f"{texto}. Redução, corte ou manter o limite podem ser registrados")
+                if dados.get("passar_bloqueio") is not True:
+                    raise ValueError(f"este cliente estava no prazo mínimo entre reanálises quando a capa foi registrada: "
+                                     f"{texto}. Para registrar mesmo assim, marque “Registrar mesmo assim”")
+                marca = texto
+            id_ = con.execute(
+                "INSERT INTO credito_capas (chave, tipo, id_cliente, cnpj, cliente, razao_social, id_vendedor, vendedor, "
+                "serasa_id, porte, respostas, pontos, faixa, indicacao, limite_sugerido, limite_maximo, limite_antes, "
+                "prazo_antes, limite_concedido, prazo_concedido, observacoes, justificativa, id_cliente_historico, "
+                "dados_ate, regra_versao, bloqueio, feita_em, feita_por, feita_por_nome, versao_anterior, editada_em, "
+                "editada_por, editada_por_nome) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, "
+                "%s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, (SELECT id FROM usuarios WHERE id = %s), "
+                "%s, %s, now(), (SELECT id FROM usuarios WHERE id = %s), %s) RETURNING id",
+                [chave, d["tipo"], d["id_cliente"], d["cnpj"], nome, d["razao_social"], vendedor, vendedores[vendedor],
+                 d["serasa_id"], dados["porte"], json.dumps(respostas, ensure_ascii=False), a["pontos"], ind["faixa"],
+                 json.dumps(ind, ensure_ascii=False), ind["limite_sugerido"], ind["limite_maximo"], d["limite_antes"],
+                 d["prazo_antes"], limite, prazo, observacoes, justificativa, d["id_cliente_historico"], d["dados_ate"],
+                 REGRA_VERSAO, marca, d["feita_em"], d["feita_por"], d["feita_por_nome"], d["id"], usuario["id"],
+                 usuario["nome"]]).fetchone()[0]
+            con.execute("UPDATE credito_capas SET substituida_em = now() WHERE id = %s", [d["id"]])
+        return {"id": id_, "ja_existia": False, **self.listar(usuario, permitidos)}

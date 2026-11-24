@@ -212,25 +212,31 @@ class Reanalises:
         self.serasa = serasa
         self.capas = capas
 
-    def _bloqueio(self, con, cliente: int) -> dict | None:
-        """O prazo mínimo entre reanálises, se ele vale hoje para o cliente: a última decisão (a reanálise ou a análise
-        do cadastro com o CNPJ dele, sem as excluídas), o prazo e o dia a partir do qual um aumento pode ser registrado.
-        None = não há bloqueio."""
+    def _bloqueio(self, con, cliente: int, ate: dt.datetime | None = None, ignorar_capa: int | None = None
+                  ) -> dict | None:
+        """O prazo mínimo entre reanálises, se ele vale hoje para o cliente: a última decisão (a reanálise ou a capa de
+        análise de crédito do cliente, sem as excluídas), o prazo e o dia a partir do qual um aumento pode ser
+        registrado. None = não há bloqueio. ate: o que valia nessa hora, com as decisões de antes dela (a edição de uma
+        capa olha a data em que ela foi registrada); ignorar_capa: a capa que está sendo editada."""
         dias = self.config.atual()["intervalo_reanalise_dias"] if self.config else 0
         if not dias:
             return None
-        linha = con.execute("SELECT id, feita_em FROM credito_reanalises WHERE id_cliente = %s AND excluida_em IS NULL "
-                            "ORDER BY feita_em DESC, id DESC LIMIT 1", [cliente]).fetchone()
+        antes, params = ("", [cliente]) if ate is None else (" AND feita_em < %s", [cliente, ate])
+        linha = con.execute("SELECT id, feita_em FROM credito_reanalises WHERE id_cliente = %s AND excluida_em IS NULL"
+                            f"{antes} ORDER BY feita_em DESC, id DESC LIMIT 1", params).fetchone()
         ultima, origem, ultima_id = (linha[1], "reanalise", linha[0]) if linha else (None, None, None)
-        capa = self.capas.ultima_em(con, cliente, self.credito.cnpj_de(cliente)) if self.capas else None
+        capa = (self.capas.ultima_em(con, cliente, self.credito.cnpj_de(cliente), antes=ate, ignorar=ignorar_capa)
+                if self.capas else None)
         if capa is not None and (ultima is None or capa > ultima):
             ultima, origem, ultima_id = capa, "capa", None
         if ultima is None:
             return None
         dia = ultima.astimezone().date()
-        ate = dia + dt.timedelta(days=dias)
-        if dt.date.today() >= ate:
+        ate_dia = dia + dt.timedelta(days=dias)
+        hoje = ate.astimezone().date() if ate is not None else dt.date.today()
+        if hoje >= ate_dia:
             return None
+        ate = ate_dia
         return {"dias": dias, "ultima_id": ultima_id, "ultima_em": dia.isoformat(), "aumento_a_partir_de": ate.isoformat(),
                 "origem": origem}
 

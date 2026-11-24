@@ -509,6 +509,130 @@ class TestReanalise(Base):
                                             "dados_ate": "2026-10-01T08:00:00"})
 
 
+class TestEditar(Base):
+    """A edição grava uma versão nova; a de antes fica guardada como substituída."""
+
+    def edicao(self, id_, **mudar) -> dict:
+        return {"id": id_, "chave": novo_id(), "nome": "MERCADO NOVO", "id_vendedor": ES, "porte": "C",
+                "respostas": dict(ANALISTA), "limite": 400, "prazo": "07 DIAS", "observacoes": "",
+                "justificativa": "Cliente novo indicado pelo Rubens; loja bem montada.", **mudar}
+
+    def test_versao_nova_e_a_antiga_guardada(self):
+        r = self.cad.registrar(self.ana, self.dados(self.enviar()["serasa"]["id"]))
+        original = r["capas"][0]
+        self.assertTrue(original["pode_editar"])
+        self.assertIsNone(original["editada_em"])
+        # a capa em edição: os itens automáticos ficam como foram registrados; o porte e as respostas vêm da página
+        a = self.cad.analisar_edicao({"editar": r["id"], "porte": "B", "respostas": {**ANALISTA, "limpeza": "ruim"}},
+                                     self.ana)
+        self.assertEqual((a["edicao"]["id"], a["edicao"]["cliente"], a["pontos"], a["indicacao"]["limite_maximo"]),
+                         (r["id"], "MERCADO NOVO", 45, 6000.0))
+        self.assertEqual({x["chave"]: x["opcao"] for x in a["itens"] if x["auto"]}["fundacao"], "jovem")
+        self.cad.hoje = lambda: dt.date(2030, 1, 1)  # a idade da empresa mudaria hoje: na edição, fica a registrada
+        e = self.cad.editar(self.admin, self.edicao(r["id"], nome="MERCADO NOVO LTDA", porte="B", id_vendedor=BA,
+                                                    respostas={**ANALISTA, "limpeza": "ruim"}, limite=1500,
+                                                    prazo="28 DIAS", observacoes="Corrigido o porte.",
+                                                    justificativa="O porte era Média para grande; o limite subiu."))
+        self.assertFalse(e["ja_existia"])
+        self.assertEqual(len(e["capas"]), 1)
+        x = e["capas"][0]
+        self.assertEqual((x["id"], x["cliente"], x["porte"], x["vendedor"], x["pontos"], x["limite_concedido"],
+                          x["prazo_concedido"], x["observacoes"], x["feita_em"], x["feita_por"], x["editada_por"]),
+                         (e["id"], "MERCADO NOVO LTDA", "B", "Thais", 45, 1500.0, "28 DIAS", "Corrigido o porte.",
+                          original["feita_em"], "Ana", "Chefe"))
+        self.assertIsNotNone(x["editada_em"])
+        self.assertEqual(next(i for i in x["respostas"] if i["chave"] == "fundacao")["opcao"], "jovem")
+        with self.banco.conexao() as con:
+            linhas = con.execute("SELECT id, versao_anterior, substituida_em IS NOT NULL, cnpj, serasa_id "
+                                 "FROM credito_capas ORDER BY id").fetchall()
+        self.assertEqual([(l[0], l[1], l[2]) for l in linhas], [(r["id"], None, True), (e["id"], r["id"], False)])
+        self.assertEqual(linhas[0][3:], linhas[1][3:])  # o CNPJ e o Serasa não mudam
+        # a versão de antes não se edita nem se exclui mais; a nova sim
+        with self.assertRaises(NaoEncontrada):
+            self.cad.editar(self.ana, self.edicao(r["id"]))
+        with self.assertRaises(NaoEncontrada):
+            self.cad.excluir(self.ana, r["id"])
+        self.assertEqual(self.cad.excluir(self.ana, e["id"])["capas"], [])
+
+    def test_quem_pode_e_a_mesma_chave(self):
+        r = self.cad.registrar(self.ana, self.dados(self.enviar()["serasa"]["id"]))
+        with self.assertRaises(PermissionError):
+            self.cad.editar(self.bia, self.edicao(r["id"]))
+        with self.assertRaises(PermissionError):
+            self.cad.analisar_edicao({"editar": r["id"]}, self.bia)
+        self.assertFalse(self.cad.listar(self.bia)["capas"][0]["pode_editar"])
+        d = self.edicao(r["id"], limite=500)
+        primeira = self.cad.editar(self.ana, d)
+        segunda = self.cad.editar(self.ana, d)  # clique duplo
+        self.assertEqual((segunda["ja_existia"], segunda["id"]), (True, primeira["id"]))
+        self.assertEqual(self.contar("credito_capas"), 2)
+        for mudar, erro in (({"respostas": {}}, "responda todos os itens"), ({"porte": "Z"}, "porte"),
+                            ({"justificativa": "curta"}, "justificativa"), ({"prazo": "15 DIAS"}, "prazo concedido"),
+                            ({"nome": " "}, "nome do cliente"), ({"id_vendedor": 999}, "vendedores ativos")):
+            with self.assertRaises(ValueError, msg=erro) as e:
+                self.cad.editar(self.ana, self.edicao(primeira["id"], **mudar))
+            self.assertIn(erro, str(e.exception))
+
+    def test_reanalise_e_o_prazo_minimo_da_data_da_capa(self):
+        sid = self.serasa.enviar(self.ana, 1, pdf(texto_30_09(cnpj="99.888.777/0001-66")), confirmar=True)["id"]
+        self.config.salvar({"intervalo_reanalise_dias": 30, "serasa_validade_dias": 90}, self.admin)
+        reanalises = Reanalises(self.banco, self.credito, ativo=True, config=self.config, serasa=self.serasa,
+                                capas=self.cad)
+        self.cad.reanalises = reanalises
+        base = {"tipo": "reanalise", "cliente": 1, "limite": 5000, "prazo": "28 DIAS", "dados_ate": "2026-10-01T08:00:00"}
+        r = self.cad.registrar(self.ana, self.dados(sid, **base))  # manteve: a primeira decisão do cliente
+        # editar para aumentar: antes da capa não havia decisão, então passa (a própria capa não conta)
+        e = self.cad.editar(self.ana, self.edicao(r["id"], limite=7000, prazo="28 DIAS",
+                                                                         nome="ignorado"))
+        x = e["capas"][0]
+        self.assertEqual((x["cliente"], x["limite_antes"], x["limite_concedido"], x["bloqueio"]),
+                         ("MERCADO DO JOAO", 5000.0, 7000.0, None))
+        a = self.cad.analisar_edicao({"editar": e["id"], "porte": "C", "respostas": ANALISTA}, self.ana)
+        self.assertEqual((a["cliente"]["limite"], a["cliente"]["prazo"], a["bloqueio"]), (5000.0, "28 DIAS", None))
+        # editar não reabre o prazo mínimo: ele conta da data em que a capa foi registrada
+        self.assertEqual(reanalises.listar(1, self.ana)["bloqueio"]["origem"], "capa")
+        # uma capa registrada depois, dentro do prazo, esbarra na primeira; e a edição dela também
+        with self.assertRaises(ValueError):
+            self.cad.registrar(self.ana, self.dados(sid, **{**base, "limite": 8000}))
+        s = self.cad.registrar(self.ana, self.dados(sid, **{**base, "limite": 4000}))  # redução passa
+        with self.assertRaises(ValueError) as erro:
+            self.cad.editar(self.ana, self.edicao(s["id"], limite=9000, prazo="28 DIAS", nome="x"))
+        self.assertIn("quando a capa foi registrada", str(erro.exception))
+        with self.assertRaises(ValueError):
+            self.cad.editar(self.admin, self.edicao(s["id"], limite=9000, prazo="28 DIAS", nome="x"))
+        f = self.cad.editar(self.admin, self.edicao(s["id"], limite=9000, prazo="28 DIAS", nome="x",
+                                                    passar_bloqueio=True))
+        self.assertTrue(f["capas"][0]["bloqueio"].startswith("aumento só a partir de"))
+        # na página do cliente, só as versões em vigor
+        self.assertEqual(len(reanalises.listar(1, self.ana)["capas"]), 2)
+
+
+class TestBusca(Base):
+    def test_pelo_nome_cnpj_e_codigo(self):
+        sid = self.enviar()["serasa"]["id"]
+        self.cad.registrar(self.ana, self.dados(sid, nome="Padaria São João"))
+        self.cad.registrar(self.ana, self.dados(sid, nome="MERCEARIA BOA VISTA"))
+        sid1 = self.serasa.enviar(self.ana, 1, pdf(texto_30_09(cnpj="99.888.777/0001-66")), confirmar=True)["id"]
+        self.cad.registrar(self.ana, self.dados(sid1, tipo="reanalise", cliente=1, limite=5000, prazo="28 DIAS",
+                                                dados_ate="2026-10-01T08:00:00"))
+
+        def achou(busca):
+            return [x["cliente"] for x in self.cad.listar(self.ana, busca=busca)["capas"]]
+
+        self.assertEqual(achou("sao joao"), ["Padaria São João"])  # sem acento e sem caixa
+        self.assertEqual(achou("PADARIA SÃO"), ["Padaria São João"])
+        self.assertEqual(achou("comercio"), ["MERCADO DO JOAO", "MERCEARIA BOA VISTA", "Padaria São João"])  # razão social
+        self.assertEqual(achou("62.237.700/0001-51"), ["MERCEARIA BOA VISTA", "Padaria São João"])  # CNPJ com pontos
+        self.assertEqual(achou("99888777"), ["MERCADO DO JOAO"])  # só os dígitos
+        self.assertEqual(achou("1"), ["MERCADO DO JOAO"])  # o código do cliente
+        self.assertEqual(achou("100%"), [])  # o % não vira curinga
+        self.assertEqual(len(achou("")), 3)
+        r = self.cad.listar(self.ana, busca="  boa vista ")
+        self.assertEqual((r["busca"], len(r["capas"])), ("boa vista", 1))
+        um = self.cad.listar(self.ana, id_=r["capas"][0]["id"])["capas"]
+        self.assertEqual([x["cliente"] for x in um], ["MERCEARIA BOA VISTA"])
+
+
 class TestDoisCodigos(Base):
     linhas_cnpj = [(1, "11222333000181"), (3, "11222333000181")]
 

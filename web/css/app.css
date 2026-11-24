@@ -1657,6 +1657,15 @@ table.dados.cr-serasa-anot td.esq { white-space: normal; }
 .cc-ja-cliente { flex-wrap: wrap; }
 .cc-ja-cliente .btn { height: 32px; padding: 0 12px; font-size: 12.5px; margin-left: auto; }
 .cr-historico .cartao-cab .cr-novo { height: 36px; padding: 0 12px; font-size: 13px; }
+/* editar uma capa e a busca da lista */
+.cc-editando { border-style: dashed; }
+.cc-editada { color: var(--tinta-3); font-size: 12px; }
+a.cr-hist-excluir { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.cc-acoes-registro { display: flex; flex-wrap: wrap; gap: 8px; }
+.cc-lista-cab { flex-wrap: wrap; }
+.cc-busca-lista { flex: 1 1 260px; display: flex; justify-content: flex-end; }
+.cc-busca-lista .campo, .cc-busca-lista .campo input { width: 100%; max-width: 360px; }
+.link-botao { padding: 0; border: 0; background: none; color: var(--acento-tinta); font: inherit; font-weight: 700; cursor: pointer; text-decoration: underline; }
 .cc-porte:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .cc-porte[aria-checked="true"] { border-color: var(--laranja); background: color-mix(in srgb, var(--laranja) 12%, var(--surface)); }
 .cr-novo { height: 42px; border-radius: 14px; text-decoration: none; color: var(--tinta-2); }

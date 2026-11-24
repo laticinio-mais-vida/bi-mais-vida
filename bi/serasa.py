@@ -568,6 +568,18 @@ class DadosSerasa:
         item = self._item(r, usuario, self.validade(), dt.date.today())
         return {**item, "cnpj_digitos": digitos(item["cnpj"])}
 
+    def por_id(self, id_, usuario: dict) -> dict:
+        """Um envio pelo id, mesmo excluído ou de outro cliente: o Serasa de uma capa já registrada (que não muda). Não
+        existe -> NaoEncontrada."""
+        if not self.ativo:
+            raise ValueError(AVISO_PC)
+        with self.banco.conexao() as con:
+            r = con.execute(f"SELECT {', '.join(CAMPOS)} FROM credito_serasa WHERE id = %s", [int(id_)]).fetchone()
+        if r is None:
+            raise NaoEncontrada("os dados do Serasa da capa não foram encontrados")
+        item = self._item(dict(zip(CAMPOS, r)), usuario, self.validade(), dt.date.today())
+        return {**item, "pode_excluir": False, "cnpj_digitos": digitos(item["cnpj"])}
+
     def ultimo(self, cliente: int) -> dict | None:
         """O envio mais recente do cliente, para o retrato de uma reanálise (None = nenhum, ou no PC)."""
         if not self.ativo:

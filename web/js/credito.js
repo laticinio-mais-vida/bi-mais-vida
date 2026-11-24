@@ -1122,6 +1122,8 @@ function situacaoCapa(x) {
   return `<p class="cr-erp ${classe}">${icone(ic)}<span>${texto}</span></p>`;
 }
 
+// Na página da capa, Editar e Excluir são botões dela; na página do cliente (excluir: false), Editar leva à página da
+// capa (#/credito-capa?e=…).
 export function itemCapa(x, { excluir = true } = {}) {
   const i = x.indicacao;
   const indicado = i.sem_prazo ? "sem prazo (venda à vista)"
@@ -1131,10 +1133,14 @@ export function itemCapa(x, { excluir = true } = {}) {
   return `
   <li class="cr-hist-item">
     <div class="cr-hist-cab">
-      <span class="cr-hist-quando"><b>${fmt.dataHora(x.feita_em)}</b> · ${esc(x.feita_por)}</span>
+      <span class="cr-hist-quando"><b>${fmt.dataHora(x.feita_em)}</b> · ${esc(x.feita_por)}${x.editada_em
+        ? ` <small class="cc-editada">· editada em ${fmt.dataHora(x.editada_em)} por ${esc(x.editada_por)}</small>` : ""}</span>
       <span class="cr-hist-tipo">Capa de análise · ${x.tipo === "reanalise" ? "reanálise" : "cadastro novo"}</span>
       <span class="status neutro">${icone("caderneta")}${x.pontos} pontos · ${esc(x.faixa_rotulo)}</span>
       ${x.bloqueio ? `<span class="status ruim" title="Registrada pelo administrador dentro do prazo mínimo: ${esc(x.bloqueio)}">${icone("cadeado")}passou do bloqueio</span>` : ""}
+      ${x.pode_editar ? (excluir ? `<button type="button" class="btn cr-hist-excluir" data-editar="${x.id}"
+        aria-label="Editar a capa de ${esc(x.cliente)}">${icone("lapis")}Editar</button>`
+        : `<a class="btn cr-hist-excluir" href="#/credito-capa?e=${x.id}" aria-label="Editar a capa de ${esc(x.cliente)}">${icone("lapis")}Editar</a>`) : ""}
       ${excluir && x.pode_excluir ? `<button type="button" class="btn perigo cr-hist-excluir" data-excluir="${x.id}"
         aria-label="Excluir a capa de ${esc(x.cliente)}">${icone("lixeira")}Excluir</button>` : ""}
     </div>

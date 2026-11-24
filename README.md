@@ -1628,6 +1628,20 @@ capas dele junto das reanálises pelo parecer, da mais nova para a mais antiga; 
 para o prazo mínimo entre reanálises. Só no site; no PC, a página avisa. Os pesos e o quadro ficam fixos no código
 (`REGRA_VERSAO`): mudar a planilha é mudar `bi/capa_credito.py`.
 
+**Buscar e editar.** O cartão "Capas registradas" busca pelo nome do cliente, pela razão social, pelo CNPJ (com ou sem
+pontos) ou pelo código do cliente, sem diferença de maiúsculas e acentos. A busca é feita no servidor e mostra até as
+100 mais novas. Quem registrou a capa, ou um administrador, pode **editá-la**: pelo botão Editar da lista ou da página
+do cliente (`#/credito-capa?e=7`). O formulário abre com a capa registrada:
+
+- o cliente, o PDF do Serasa e os itens automáticos (Serasa e histórico Mais Vida) ficam como foram registrados; para
+  outro PDF, faz-se uma capa nova;
+- mudam as respostas do analista, o porte, o nome (no cadastro novo), o vendedor, o concedido, as observações e a
+  justificativa. O vendedor e o prazo de antes valem mesmo que não estejam mais nas listas;
+- salvar grava uma **versão nova**. A de antes fica guardada no banco como substituída (migração 049) e sai das páginas;
+- a capa continua com a data e o autor do registro, mais "editada em … por …". O prazo mínimo entre reanálises segue
+  contando da data do registro;
+- na reanálise, um aumento esbarra no prazo mínimo que valia quando a capa foi registrada, sem contar a própria capa.
+
 ### Cores da página
 
 Só verde (bom) e vermelho (ruim), num tom cada, pelo que cada número é comparado: pontualidade com o "ok" da regra do
@@ -1773,7 +1787,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `manejo_rodadas`, `manejo_sugestoes`, `manejo_eventos` | o Manejo da Base, só no site (migração 044): a lista de cada mês com o prazo; uma linha por mês, cliente e lista (central ou inativar), com o vendedor, os números da entrada (`retrato`), os da última atualização (`fatos`) e, quando encerra, o dia e o motivo (no máximo uma em andamento por cliente); e o histórico, só com inclusões, de cada justificativa e cada veredito, com quem, quando e os números do dia. Quem pode justificar fica em `usuarios.manejo` |
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em`; a registrada pelo administrador dentro do prazo mínimo guarda a regra em `bloqueio` (migração 038) |
 | `credito_serasa` | os dados do Serasa, só no site (migração 038): uma linha por envio, que não muda depois, com o cliente, o CNPJ e a razão social do relatório, a emissão, o hash do arquivo (o mesmo PDF não grava duas vezes), a fundação, o score e o resto em `dados` (veja [Dados do Serasa](#dados-do-serasa)) e quem enviou; o excluído fica com `excluido_em` |
-| `credito_capas` | as capas de análise de crédito, só no site (migração 046): uma linha por capa, que não muda depois, com o tipo (cadastro novo ou reanálise), o cliente da reanálise (`id_cliente`; vazio no cadastro novo, que liga pelo CNPJ), o CNPJ (só os dígitos), o nome, o vendedor, o PDF do Serasa (`serasa_id`), o porte, as respostas da capa com os pontos e de onde vieram (`respostas`), a pontuação, a faixa, a indicação (`indicacao`, com o limite sugerido e o máximo também em colunas), o limite e o prazo de antes (na reanálise), os concedidos, as observações, a justificativa, o código de onde veio o histórico Mais Vida e a extração, a regra do prazo mínimo que o administrador passou (`bloqueio`) e quem registrou; a excluída fica com `excluida_em`. A 046 também deixa `credito_serasa.id_cliente` vazio para o PDF do cadastro novo |
+| `credito_capas` | as capas de análise de crédito, só no site (migração 046): uma linha por capa, que não muda depois, com o tipo (cadastro novo ou reanálise), o cliente da reanálise (`id_cliente`; vazio no cadastro novo, que liga pelo CNPJ), o CNPJ (só os dígitos), o nome, o vendedor, o PDF do Serasa (`serasa_id`), o porte, as respostas da capa com os pontos e de onde vieram (`respostas`), a pontuação, a faixa, a indicação (`indicacao`, com o limite sugerido e o máximo também em colunas), o limite e o prazo de antes (na reanálise), os concedidos, as observações, a justificativa, o código de onde veio o histórico Mais Vida e a extração, a regra do prazo mínimo que o administrador passou (`bloqueio`) e quem registrou; a excluída fica com `excluida_em`. A edição (migração 049) grava uma linha nova com `versao_anterior` (a que ela substitui) e `editada_em/por/por_nome`, repetindo o `feita_em/por` do registro; a de antes fica com `substituida_em`. A 046 também deixa `credito_serasa.id_cliente` vazio para o PDF do cadastro novo |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
