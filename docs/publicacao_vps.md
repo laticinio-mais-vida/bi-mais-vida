@@ -850,6 +850,31 @@ frequência, a pontualidade de pagamento, o mix ideal do segmento e a rentabilid
   `DELETE FROM migracoes WHERE versao = '045_crm'`. Os custos e o mix editados vão junto: tire um dump antes.
 - **PC:** recebe a 045 quando o código for atualizado lá; o CRM do PC tem as regras dele (o banco do PC é outro).
 
+#### Capa de análise de crédito (migrações 046 e 049)
+
+Página filha do Crédito (veja o README, "Capa de análise de crédito"): a capa de um cadastro novo ou de uma reanálise,
+com a indicação de prazo e limite, o concedido e a justificativa. As capas registradas podem ser buscadas e editadas.
+
+- **Ordem:** o site primeiro, depois o PC. A capa funciona com o cache de hoje; só a ligação da capa de cadastro novo
+  ao cliente, pelo CNPJ, espera o PC mandar a tabela `clientes_cnpj` (o iniciar.bat com o código novo).
+- **A migração 046** deixa `credito_serasa.id_cliente` vazio para o PDF do cadastro novo, com o índice único
+  `credito_serasa_mesmo_arquivo_sem_cliente`, e cria `credito_capas`. **A 049** acrescenta a edição em versões:
+  `versao_anterior`, `substituida_em` e `editada_em/por/por_nome`. Nenhuma das duas mexe em dado que já existe. Ensaie
+  em BEGIN/ROLLBACK.
+- **Depois de publicar:** abra Crédito › Capa de análise de crédito. Faça uma capa de cadastro novo com um PDF do Serasa
+  e uma de reanálise, busque pelo cliente e pelo CNPJ e edite uma delas. A página do cliente mostra as capas junto das
+  reanálises.
+- **Voltar só a 049:** o código anterior mostraria também as versões substituídas. Tire um dump e rode
+  `UPDATE credito_capas SET versao_anterior = NULL`, `DELETE FROM credito_capas WHERE substituida_em IS NOT NULL`,
+  `ALTER TABLE credito_capas DROP COLUMN versao_anterior, DROP COLUMN substituida_em, DROP COLUMN editada_em,
+  DROP COLUMN editada_por, DROP COLUMN editada_por_nome` e
+  `DELETE FROM migracoes WHERE versao = '049_credito_capas_edicao'`.
+- **Voltar a 046 também:** o código anterior ignora as capas. Para apagar de vez, depois do dump: `DROP TABLE
+  credito_capas`, `DELETE FROM credito_serasa WHERE id_cliente IS NULL`, `DROP INDEX
+  credito_serasa_mesmo_arquivo_sem_cliente`, `ALTER TABLE credito_serasa ALTER COLUMN id_cliente SET NOT NULL` e
+  `DELETE FROM migracoes WHERE versao = '046_credito_capas'`.
+- **PC:** recebe a 046 e a 049 quando o código for atualizado lá; as capas ficam só no site (no PC, a página avisa).
+
 #### Limites do Assistente por pessoa (migração 047)
 
 Os limites do Assistente saem do `config.ini` para Configurações do assistente › Limites (veja o README, "Chave, custo
