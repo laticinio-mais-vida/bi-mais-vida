@@ -1496,6 +1496,9 @@ body.sem-rolagem { overflow: hidden; }
 .cr-titulos .cr-quebra { white-space: normal; min-width: 160px; max-width: 220px; line-height: 1.3; }
 table.dados.cr-titulos { font-size: 13px; }
 table.dados.cr-titulos th, table.dados.cr-titulos td { padding: 8px; }
+/* Só as 20 primeiras linhas entram animadas: com as 500 animando juntas, o navegador refaz o estilo da tabela inteira
+   quando a animação começa e quando termina, e a página trava por 1 s ou mais (o Serasa e as reanálises atrasam). */
+table.dados.cr-titulos tbody tr:nth-child(n+21) { animation: none; }
 .cr-titulos td .status { white-space: normal; line-height: 1.2; }
 .cr-titulos .cr-nome small { display: block; color: var(--tinta-3); font-weight: 500; font-size: 11.5px; }
 .cr-titulos td:last-child, .cr-titulos th:last-child { text-align: left; }

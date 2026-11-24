@@ -1477,6 +1477,8 @@ dia, quanto deve e quanto ainda cabe no limite.
   - **Ordenar:** clique no nome de qualquer coluna; de novo, para inverter. A ordem vale para todos os títulos do
     filtro, não só para os que aparecem. Sem ordem escolhida, vai do mais recente ao mais antigo.
   - Sem cliente escolhido, mostra os 500 primeiros do filtro na ordem escolhida.
+  - Só as 20 primeiras linhas entram animadas; as outras aparecem de uma vez. Com as 500 animando juntas, o
+    navegador travava por 1 segundo ou mais e os dados do Serasa e as reanálises demoravam a aparecer.
 - **Valor já pago** (não existe no Power BI): nos boletos divididos (7, 14, 21 dias…), o valor das parcelas já
   quitadas mais o que entrou numa parcela paga em parte, com "1 de 3 parcelas". Juros e abatimento não contam. O
   vencimento do título é o da última parcela.
