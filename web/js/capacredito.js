@@ -10,7 +10,7 @@
 // automáticos (Serasa e histórico Mais Vida) ficam como foram registrados; #/credito-capa?e=7 abre a edição da capa 7.
 // A lista das capas busca pelo cliente, pelo CNPJ ou pelo código (no servidor).
 import { api, esc, fmt, icone, toast } from "./util.js";
-import { corpoSerasa, idadeConsulta, itemCapa } from "./credito.js";
+import { consultaSerasa, corpoSerasa, itemCapa } from "./credito.js";
 
 const MAX_PDF = 10 * 1024 * 1024;
 const ORIGEM = { serasa: "do Serasa", erp: "do ERP", analista: "" };
@@ -277,8 +277,8 @@ function desenharSerasa() {
   if (estado.edicao) {
     if (!a) { card.innerHTML = cabecalho(2, titulo, "") + `<div class="esqueleto" style="height:90px"></div>`; return; }
     const s = a.serasa;
-    card.innerHTML = cabecalho(2, titulo, `O mesmo da capa: consulta emitida pelo Serasa em <b>${fmt.dataHora(s.emitido_em)}</b> · CNPJ ${esc(s.cnpj)}. Para usar outro PDF, faça uma capa nova.`)
-      + corpoSerasa(s);
+    card.innerHTML = cabecalho(2, titulo, `O mesmo da capa · CNPJ ${esc(s.cnpj)}. Para usar outro PDF, faça uma capa nova.`)
+      + consultaSerasa(s, { validade: l.validade_dias }) + corpoSerasa(s);
     return;
   }
   if (!estado.tipo || (estado.tipo === "reanalise" && !estado.cliente)) {
@@ -305,15 +305,11 @@ function desenharSerasa() {
     return;
   }
   const s = a.serasa;
-  const dica = `Os dados do Serasa valem por ${l.validade_dias} dias, contados da emissão do relatório`;
-  const selo = `<span class="status ${s.desatualizado ? "ruim" : "bom"}" title="${esc(dica)}">${icone("relogio")}${s.desatualizado ? "Desatualizado" : "Atualizado"}: consulta ${idadeConsulta(s.idade_dias)}</span>`;
-  const acoes = `<div class="cr-serasa-acoes">${selo}${botao(reanalise ? "Enviar PDF novo" : "Trocar o PDF")}
+  const acoes = `<div class="cr-serasa-acoes">${botao(reanalise ? "Enviar PDF novo" : "Trocar o PDF")}
     <button type="button" class="btn" data-descartar>${icone("x")}Descartar</button></div>`;
-  const sub = `Consulta emitida pelo Serasa em <b>${fmt.dataHora(s.emitido_em)}</b> · CNPJ ${esc(s.cnpj)}${reanalise
-    ? ` · enviada ao painel em ${fmt.dataHora(s.enviado_em)} por ${esc(s.enviado_por)}` : ""}`;
-  const velho = reanalise && s.desatualizado
-    ? `<p class="cr-bloqueio">${icone("relogio")}<span>Estes dados do Serasa passaram da validade (${l.validade_dias} dias). Se puder, envie um PDF novo.</span></p>` : "";
-  card.innerHTML = cabecalho(2, titulo, sub, acoes) + velho + (reanalise ? "" : avisoCliente(a)) + corpoSerasa(s) + arquivo;
+  const sub = `CNPJ ${esc(s.cnpj)}${reanalise ? ` · PDF enviado ao painel em ${fmt.dataHora(s.enviado_em)} por ${esc(s.enviado_por)}` : ""}`;
+  const consulta = consultaSerasa(s, { validade: l.validade_dias, dica: reanalise ? "Se puder, envie um PDF novo do Serasa." : "" });
+  card.innerHTML = cabecalho(2, titulo, sub, acoes) + consulta + (reanalise ? "" : avisoCliente(a)) + corpoSerasa(s) + arquivo;
 }
 
 // Cadastro novo com um CNPJ que já é cliente no ERP (de antes): o histórico Mais Vida sai do histórico dele, e a capa

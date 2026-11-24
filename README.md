@@ -1586,8 +1586,9 @@ Regras:
 
 - **O PDF não fica guardado:** é lido na memória e descartado. O atraso médio mês a mês, os fornecedores, os sócios e
   as consultas ao Serasa ficam de fora.
-- **Idade:** conta da data em que o Serasa emitiu o relatório (pode chegar hoje um PDF antigo). Passando da validade
-  (em Configurar; padrão 90 dias), a página mostra "Desatualizado". Aparecem também quando e por quem foi enviado.
+- **Idade:** conta da data em que o Serasa emitiu o relatório (pode chegar hoje um PDF antigo). Essa data, a da
+  **consulta**, fica em destaque no alto dos dados (letra grande, há quantos dias e até quando vale), em verde dentro
+  da validade e em vermelho fora dela (em Configurar; padrão 90 dias). Aparecem também quando e por quem foi enviado.
 - **Cliente certo:** se a razão social e o nome fantasia do relatório não batem com o nome e a razão social do
   cadastro (sem LTDA, EPP…), a página pergunta antes de gravar.
 - **Vários envios:** cada envio é uma linha nova; a página mostra o de emissão mais recente e os anteriores. O mesmo
@@ -1661,7 +1662,9 @@ como reanálise do cliente (`#/credito-capa?c=12`). As contas ficam em `bi/capa_
 A lista das capas mostra a situação no ERP: a da reanálise pelo cliente dela; a do cadastro novo pelo CNPJ (ainda não
 está no ERP, ou o cliente com o limite e o prazo aplicados ou diferentes). A página de crédito do cliente mostra as
 capas dele junto das reanálises pelo parecer, da mais nova para a mais antiga; a última de qualquer uma delas conta
-para o prazo mínimo entre reanálises. Só no site; no PC, a página avisa. Os pesos e o quadro ficam fixos no código
+para o prazo mínimo entre reanálises. Em "Ver a capa", nas duas páginas, vêm também os dados do Serasa da capa: a
+consulta em destaque (quantos dias ela tinha no dia da capa e se ainda valia), o histórico de pagamento e as anotações
+negativas, como no cartão do Serasa do cliente. São só para ver: os pontos continuam os dos itens. Só no site; no PC, a página avisa. Os pesos e o quadro ficam fixos no código
 (`REGRA_VERSAO`): mudar a planilha é mudar `bi/capa_credito.py`.
 
 **Buscar e editar.** O cartão "Capas registradas" busca pelo nome do cliente, pela razão social, pelo CNPJ (com ou sem

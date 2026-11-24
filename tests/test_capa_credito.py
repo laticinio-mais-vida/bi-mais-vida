@@ -318,6 +318,25 @@ class TestRegistrar(Base):
         self.assertEqual(self.contar("credito_capas"), 2)
         self.assertTrue(self.cad.listar(self.ana)["capas"][0]["acima_do_maximo"])  # 5.000 passa dos 3.000
 
+    def test_a_capa_registrada_traz_o_serasa_dela(self):
+        """O Serasa da capa vem inteiro (o histórico de pagamento e as anotações, só para ver junto da capa), com a
+        idade da consulta no dia em que a capa foi registrada."""
+        sid = self.cad.enviar_serasa(self.ana, pdf(relato(cnpj=NOVO_CNPJ)))["serasa"]["id"]  # emitido em 04/11/2026
+        self.cad.registrar(self.ana, self.dados(sid))
+        with self.banco.conexao() as con:
+            con.execute("UPDATE credito_capas SET feita_em = '2026-11-14 15:00:00-03'")
+        s = self.cad.listar(self.ana)["capas"][0]["serasa"]
+        lido = self.serasa.envio(sid, self.ana)
+        for k in ("id", "emitido_em", "cnpj", "score", "faixas", "pontualidade", "anotacoes", "faltou"):
+            self.assertEqual(s[k], lido[k], k)
+        self.assertTrue(s["faixas"] and s["pontualidade"] and s["anotacoes"])
+        self.assertEqual((s["idade_na_capa"], s["desatualizado_na_capa"], s["pode_excluir"]), (10, False, False))
+        # registrada 98 dias depois da consulta: já tinha passado da validade (90 dias)
+        with self.banco.conexao() as con:
+            con.execute("UPDATE credito_capas SET feita_em = '2027-02-10 15:00:00-03'")
+        s = self.cad.listar(self.admin)["capas"][0]["serasa"]
+        self.assertEqual((s["idade_na_capa"], s["desatualizado_na_capa"]), (98, True))
+
     def test_conferencias(self):
         sid = self.enviar()["serasa"]["id"]
         casos = [

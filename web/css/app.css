@@ -1629,6 +1629,26 @@ table.dados.cr-serasa-anot td.esq { white-space: normal; }
 .cr-serasa-anteriores ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
 .cr-serasa-anteriores li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--linha); border-radius: 12px; font-size: 13px; }
 .cr-serasa-anteriores li small { display: block; color: var(--tinta-3); font-size: 12px; }
+/* a data da consulta ao Serasa em destaque (consultaSerasa em credito.js): verde dentro da validade, vermelho fora */
+.cr-consulta { --cr-cor: var(--cr-bom); display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 10px 0 4px; padding: 12px 16px; border-radius: 14px; border: 1.5px solid var(--cr-cor); background: color-mix(in srgb, var(--cr-cor) 7%, var(--surface)); }
+.cr-consulta.ruim { --cr-cor: var(--cr-ruim); }
+.cr-consulta-ic { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--cr-cor); background: color-mix(in srgb, var(--cr-cor) 14%, var(--surface)); }
+.cr-consulta-ic .ic { width: 22px; height: 22px; }
+.cr-consulta-data { display: grid; gap: 1px; min-width: 0; }
+.cr-consulta-data span { font-size: 12px; font-weight: 600; color: var(--tinta-2); }
+.cr-consulta-data b { font-size: 24px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--tinta); }
+.cr-consulta-data small { font-size: 12.5px; color: var(--tinta-3); }
+.cr-consulta-idade { display: grid; justify-items: end; gap: 4px; margin-left: auto; text-align: right; }
+.cr-consulta-idade > b { font-size: 16px; font-weight: 700; color: var(--cr-cor); }
+.cr-consulta-idade .status { padding: 2px 9px 2px 6px; font-size: 12px; }
+.cr-consulta-idade small { font-size: 12px; color: var(--tinta-3); }
+.cr-consulta-dica { flex-basis: 100%; margin: 0; font-size: 13px; font-weight: 600; color: var(--cr-ruim); }
+/* o Serasa dentro de "Ver a capa" (capa registrada) */
+.cc-capa-serasa { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--linha); }
+.cc-capa-serasa h4 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: 13.5px; }
+.cc-capa-serasa h4 .ic { width: 16px; height: 16px; color: var(--tinta-3); }
+.cc-capa-serasa h4 small { font-size: 12px; font-weight: 500; color: var(--tinta-3); }
+.cc-capa-serasa .cr-serasa-blocos { margin-top: 12px; padding-top: 0; border-top: 0; }
 /* novo cadastro: a capa de análise de crédito (capacredito.js) */
 .cc > .secao:first-child, .cc > .aviso:first-child { margin-top: 0; }
 .cc-num { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 13px; font-weight: 800; color: var(--acento-tinta); background: var(--acento-suave); }
@@ -1750,6 +1770,7 @@ table.dados.cc-q td.cc-q-diretoria.marcada { font-style: normal; }
   .cr-analise-form .campo, .cr-analise-form .campo input { width: 100%; }
   .cr-analise-form .btn { flex: 1; justify-content: center; }
   .cr-serasa-blocos { grid-template-columns: minmax(0, 1fr); }
+  .cr-consulta-idade { justify-items: start; margin-left: 0; text-align: left; flex-basis: 100%; }
 }
 
 /* ---------- Assistente (chat) ---------- */

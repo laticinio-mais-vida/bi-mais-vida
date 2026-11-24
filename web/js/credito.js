@@ -691,7 +691,35 @@ function haQuanto(iso) {
   return `há ${plural(anos, "ano", "anos")}${resto ? ` e ${plural(resto, "mês", "meses")}` : ""}`;
 }
 
-export const idadeConsulta = (dias) => (dias <= 0 ? "de hoje" : dias === 1 ? "de ontem" : `de ${fmt.num(dias)} dias atrás`);
+const idadeConsulta = (dias) => (dias <= 0 ? "hoje" : dias === 1 ? "ontem" : `há ${fmt.num(dias)} dias`);
+
+// AAAA-MM-DD mais n dias, em AAAA-MM-DD.
+function somarDias(iso, n) {
+  const [a, m, d] = iso.split("-").map(Number), x = new Date(a, m - 1, d + n);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+
+// Quando a consulta ao Serasa foi feita (o "Emitido em" do Relato), em destaque: a data, há quanto tempo e se os dados
+// ainda valem. validade: os dias que eles valem (Configurar do crédito); naCapa: uma capa registrada, em que vale a idade
+// da consulta no dia em que a capa foi registrada; dica: uma frase a mais quando passou da validade.
+export function consultaSerasa(x, { validade = null, naCapa = false, dica = "" } = {}) {
+  const [dia, horario] = x.emitido_em.split("T");
+  const velho = naCapa ? x.desatualizado_na_capa : x.desatualizado;
+  const idade = !naCapa ? idadeConsulta(x.idade_dias)
+    : x.idade_na_capa <= 0 ? "no mesmo dia da capa" : `${fmt.num(x.idade_na_capa)} dia${x.idade_na_capa === 1 ? "" : "s"} antes da capa`;
+  const ate = validade == null ? "" : naCapa ? `validade de ${fmt.num(validade)} dias`
+    : `${velho ? "valia até" : "vale até"} ${fmt.data(somarDias(dia, validade))} (${fmt.num(validade)} dias)`;
+  return `
+    <div class="cr-consulta ${velho ? "ruim" : "bom"}">
+      <span class="cr-consulta-ic">${icone("relogio")}</span>
+      <div class="cr-consulta-data"><span>Consulta ao Serasa feita em</span><b>${fmt.data(dia)}</b><small>às ${horario.slice(0, 5)}</small></div>
+      <div class="cr-consulta-idade"><b>${idade}</b>
+        <span class="status ${velho ? "ruim" : "bom"}">${icone(velho ? "alerta" : "certo")}${velho ? "Passou da validade" : "Dentro da validade"}</span>
+        ${ate ? `<small>${ate}</small>` : ""}</div>
+      ${dica && velho ? `<p class="cr-consulta-dica">${dica}</p>` : ""}
+    </div>`;
+}
+
 const pctCurto = (v) => fmt.pct(v, Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? 0 : 1);
 const valorCurto = (v) => (v >= 1e6 ? `${fmt.num(v / 1e6, 1)} mi` : v >= 1e3 ? `${fmt.num(v / 1e3, 1)} mil` : fmt.num(v, 2));
 
@@ -709,9 +737,11 @@ function corFaixa(chave, x) {
   return FAIXAS_ATRASO.includes(chave) && (x?.ate || 0) > 0 ? "ruim" : "";
 }
 
-export function corpoSerasa(x) {
+// Os dados de um envio do Serasa. topo: a empresa, a fundação, o score e a recomendação (na capa registrada eles já são
+// itens da capa e ficam de fora; o aviso do Serasa fica).
+export function corpoSerasa(x, { topo = true } = {}) {
   const sc = x.score;
-  const numeros = `
+  const numeros = `${topo ? `
     <div class="cr-parecer-numeros cr-serasa-topo">
       ${numero("Empresa no relatório", esc(x.razao_social || x.nome_fantasia || "—"),
         `CNPJ ${esc(x.cnpj)}${x.nome_fantasia && x.razao_social ? ` · ${esc(x.nome_fantasia)}` : ""}`)}
@@ -720,7 +750,7 @@ export function corpoSerasa(x) {
         sc ? [sc.probabilidade != null ? `probabilidade de inadimplência ${fmt.pct(sc.probabilidade, 2)}` : "",
           sc.risco ? `risco ${esc(sc.risco.toLowerCase())}` : ""].filter(Boolean).join(" · ") : "não veio no relatório")}
       ${sc?.recomendacao ? numero("Recomendação do Serasa", esc(sc.recomendacao.texto), "nas práticas de mercado") : ""}
-    </div>
+    </div>` : ""}
     ${sc?.alerta ? `<p class="cr-bloqueio cr-serasa-alerta">${icone("alerta")}<span><b>Aviso do Serasa:</b> ${esc(sc.alerta)}</span></p>` : ""}`;
   // O histórico de pagamento numa tabela só: os títulos por faixa e a pontualidade em R$ têm as mesmas faixas (a
   // pontualidade traz também o total do mês).
@@ -806,12 +836,12 @@ function desenharSerasa() {
         guarda só a fundação, o score, o histórico de pagamento e as anotações negativas; o PDF não fica guardado.</p>${arquivo}`;
     return;
   }
-  const dica = `Os dados do Serasa valem por ${s.validade_dias} dias, contados da emissão do relatório`;
-  const selo = `<span class="status ${x.desatualizado ? "ruim" : "bom"}" title="${esc(dica)}">${icone("relogio")}${x.desatualizado ? "Desatualizado" : "Atualizado"}: consulta ${idadeConsulta(x.idade_dias)}</span>`;
-  const acoes = `<div class="cr-serasa-acoes">${selo}${botao("Enviar PDF novo")}
+  const acoes = `<div class="cr-serasa-acoes">${botao("Enviar PDF novo")}
     ${x.pode_excluir ? `<button type="button" class="btn perigo" data-excluir-serasa="${x.id}">${icone("lixeira")}Excluir</button>` : ""}</div>`;
-  const sub = `Consulta emitida pelo Serasa em <b>${fmt.dataHora(x.emitido_em)}</b> · enviada ao painel em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}${x.do_cadastro ? " na capa de um cadastro novo" : ""}`;
-  card.innerHTML = cabSerasa(sub, acoes) + corpoSerasa(x) + anterioresSerasa(s.anteriores) + arquivo;
+  const sub = `PDF enviado ao painel em ${fmt.dataHora(x.enviado_em)} por ${esc(x.enviado_por)}${x.do_cadastro ? " na capa de um cadastro novo" : ""}`;
+  card.innerHTML = cabSerasa(sub, acoes)
+    + consultaSerasa(x, { validade: s.validade_dias, dica: "Se puder, envie um PDF novo do Serasa." })
+    + corpoSerasa(x) + anterioresSerasa(s.anteriores) + arquivo;
 }
 
 async function enviarSerasa(arquivo, confirmar = false) {
@@ -1150,8 +1180,21 @@ export function itemCapa(x, { excluir = true } = {}) {
     ${situacaoCapa(x)}
     <p class="cr-hist-just">${esc(x.justificativa)}</p>
     ${x.observacoes ? `<p class="cr-hist-just cc-obs"><b>Observações:</b> ${esc(x.observacoes)}</p>` : ""}
-    <details class="cr-hist-numeros"><summary>Ver a capa</summary><ul class="cc-capa-lista">${capa}</ul></details>
+    <details class="cr-hist-numeros"><summary>Ver a capa</summary><ul class="cc-capa-lista">${capa}</ul>
+      ${serasaDaCapa(x.serasa)}</details>
   </li>`;
+}
+
+// O Serasa da capa registrada: a consulta em destaque, o histórico de pagamento e as anotações negativas, como na
+// página do cliente. Só para ver: os pontos da capa são os dos itens acima.
+function serasaDaCapa(s) {
+  if (!s?.faixas) return "";
+  return `
+    <div class="cc-capa-serasa">
+      <h4>${icone("arquivo")}Dados do Serasa desta capa <small>só para consulta: não mudam os pontos</small></h4>
+      ${consultaSerasa(s, { naCapa: true })}
+      ${corpoSerasa(s, { topo: false })}
+    </div>`;
 }
 
 function desenharHistorico() {

@@ -38,6 +38,7 @@ from .banco import hora
 from .conversas import NaoEncontrada, id_valido, novo_id
 from .credito import dias_prazo
 from .reanalise import TRAVA, texto_bloqueio
+from .serasa import CAMPOS as CAMPOS_SERASA
 
 REGRA_VERSAO = 1
 AVISO_PC = ("As capas de análise de crédito ficam no site (bi.maisvida.cloud), junto com as reanálises: faça e consulte "
@@ -659,9 +660,12 @@ class CapasCredito:
 
     # --- as listas -------------------------------------------------------------------------
     def _linhas(self, onde: str, params: list, limite: int = MAX_LISTA) -> list[dict]:
+        """As capas e, de cada uma, o envio do Serasa dela inteiro (em "serasa_linha"; o envio não muda depois, mesmo
+        excluído da página do cliente)."""
         with self.banco.conexao() as con:
             linhas = con.execute(
-                f"SELECT {', '.join('c.' + x for x in CAMPOS)}, s.emitido_em, s.score FROM credito_capas c "
+                f"SELECT {', '.join('c.' + x for x in CAMPOS)}, {', '.join('s.' + x for x in CAMPOS_SERASA)} "
+                f"FROM credito_capas c "
                 f"JOIN credito_serasa s ON s.id = c.serasa_id WHERE c.excluida_em IS NULL AND c.substituida_em IS NULL "
                 f"AND {onde} "
                 "ORDER BY c.id DESC LIMIT %s", [*params, limite]).fetchall()
@@ -670,12 +674,21 @@ class CapasCredito:
             d = dict(zip(CAMPOS, r[:len(CAMPOS)]))
             for k in _VALORES:
                 d[k] = None if d[k] is None else float(d[k])
-            d["serasa_emitido_em"], d["serasa_score"] = r[len(CAMPOS):]
+            d["serasa_linha"] = dict(zip(CAMPOS_SERASA, r[len(CAMPOS):]))
             saida.append(d)
         return saida
 
-    @staticmethod
-    def _item(d: dict, usuario: dict) -> dict:
+    def _serasa_da_capa(self, d: dict, usuario: dict, validade: int, hoje: dt.date) -> dict:
+        """O Serasa de uma capa registrada, no formato da página do cliente (bi/serasa.py), para mostrar o histórico de
+        pagamento e as anotações junto da capa (não muda os pontos). idade_na_capa: quantos dias a consulta tinha
+        quando a capa foi registrada; desatualizado_na_capa: se ela já tinha passado da validade de hoje."""
+        s = d["serasa_linha"]
+        idade = (d["feita_em"].astimezone().date() - s["emitido_em"].date()).days
+        return {**self.serasa._item(s, usuario, validade, hoje), "pode_excluir": False,
+                "idade_na_capa": idade, "desatualizado_na_capa": idade > validade}
+
+    def _item(self, d: dict, usuario: dict, validade: int, hoje: dt.date) -> dict:
+        """Uma capa registrada para a página. validade: a dos dados do Serasa (dias); hoje: a data de hoje."""
         ind = d["indicacao"]
         return {
             "id": d["id"], "tipo": d["tipo"], "tipo_nome": TIPOS[d["tipo"]], "id_cliente": d["id_cliente"],
@@ -694,8 +707,7 @@ class CapasCredito:
             "prazo_dentro": prazo_dentro(d["prazo_concedido"], ind),
             "observacoes": d["observacoes"], "justificativa": d["justificativa"], "respostas": d["respostas"],
             "historico_de": d["id_cliente_historico"], "bloqueio": d["bloqueio"],
-            "serasa": {"id": d["serasa_id"], "emitido_em": d["serasa_emitido_em"].isoformat(timespec="minutes"),
-                       "score": d["serasa_score"]},
+            "serasa": self._serasa_da_capa(d, usuario, validade, hoje),
         }
 
     @staticmethod
@@ -732,9 +744,9 @@ class CapasCredito:
         linhas = self._linhas(onde, params)
         por_cnpj = self.credito.clientes_dos_cnpjs([d["cnpj"] for d in linhas if d["tipo"] == "cadastro"])
         por_id = self.credito.clientes_por_id([d["id_cliente"] for d in linhas if d["id_cliente"]])
-        itens = []
+        itens, validade, hoje = [], self.serasa.validade(), dt.date.today()
         for d in linhas:
-            x = self._item(d, usuario)
+            x = self._item(d, usuario, validade, hoje)
             if d["tipo"] == "reanalise":
                 c = por_id.get(d["id_cliente"])
                 x["erp"] = self._erp(d, c) if c else {"situacao": "fora_do_erp"}
@@ -762,7 +774,9 @@ class CapasCredito:
         if not linhas:
             return []
         dele = self.credito.clientes_por_id([cliente]).get(cliente)
-        return [{**self._item(d, usuario), **({"erp": self._erp(d, dele)} if dele else {})} for d in linhas]
+        validade, hoje = self.serasa.validade(), dt.date.today()
+        return [{**self._item(d, usuario, validade, hoje), **({"erp": self._erp(d, dele)} if dele else {})}
+                for d in linhas]
 
     def ultima_em(self, con, cliente: int, cnpj: str | None, antes: dt.datetime | None = None,
                   ignorar: int | None = None) -> dt.datetime | None:
