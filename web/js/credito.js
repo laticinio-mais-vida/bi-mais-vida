@@ -1159,6 +1159,8 @@ export function itemCapa(x, { excluir = true } = {}) {
   const indicado = i.sem_prazo ? "sem prazo (venda à vista)"
     : `de ${fmt.moeda(i.limite_sugerido)} em ${esc(i.prazo_sugerido)} até ${fmt.moeda(i.limite_maximo)} em ${esc(i.prazo_maximo)}${i.diretoria ? " (acima disso, negociação com a diretoria)" : ""}`;
   const avisos = [x.acima_do_maximo && "limite acima do máximo indicado", !x.prazo_dentro && "prazo além do indicado"].filter(Boolean);
+  // à vista ou 01 dia, acima do máximo: o servidor não avisa (venda antecipada, qualquer limite vale); a capa diz o porquê
+  const livre = x.antecipada && !i.diretoria && x.limite_concedido > i.limite_maximo + 0.005;
   const capa = x.respostas.map((r) => `<li><span>${esc(r.eixo)}</span><b>${esc(r.rotulo || "—")}</b><em>${r.pontos ?? "—"} de ${r.peso}</em>${r.fonte ? `<small>${esc(r.fonte)}</small>` : ""}</li>`).join("");
   return `
   <li class="cr-hist-item">
@@ -1175,7 +1177,7 @@ export function itemCapa(x, { excluir = true } = {}) {
         aria-label="Excluir a capa de ${esc(x.cliente)}">${icone("lixeira")}Excluir</button>` : ""}
     </div>
     <p class="cr-hist-valores"><span><b>${esc(x.cliente)}</b>${x.id_cliente ? ` · código ${x.id_cliente}` : ""} · CNPJ ${esc(x.cnpj)}</span>
-      <span>${x.limite_antes != null ? `Limite ${fmt.moeda2(x.limite_antes)} → ` : "Concedido "}<b>${fmt.moeda2(x.limite_concedido)}</b> · ${x.prazo_antes && x.prazo_antes !== x.prazo_concedido ? `${esc(x.prazo_antes)} → ` : ""}<b>${esc(x.prazo_concedido)}</b>${avisos.length ? ` <span class="cr-v-ruim">(${avisos.join("; ")})</span>` : ""}</span>
+      <span>${x.limite_antes != null ? `Limite ${fmt.moeda2(x.limite_antes)} → ` : "Concedido "}<b>${fmt.moeda2(x.limite_concedido)}</b> · ${x.prazo_antes && x.prazo_antes !== x.prazo_concedido ? `${esc(x.prazo_antes)} → ` : ""}<b>${esc(x.prazo_concedido)}</b>${avisos.length ? ` <span class="cr-v-ruim">(${avisos.join("; ")})</span>` : ""}${livre ? ` <span class="cr-v-bom">(venda antecipada: qualquer limite vale)</span>` : ""}</span>
       <small>porte ${esc(x.porte_nome)} · vendedor ${esc(x.vendedor)} · indicado ${indicado}</small></p>
     ${situacaoCapa(x)}
     <p class="cr-hist-just">${esc(x.justificativa)}</p>

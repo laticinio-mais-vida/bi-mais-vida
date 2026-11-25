@@ -7,12 +7,17 @@ reanálise de antes, pelo parecer da página de crédito (bi/reanalise.py), cont
   Vida" saem do ERP: na reanálise, do próprio cliente; no cadastro novo, só quando o CNPJ já é cliente (senão valem 0).
   Os comerciais e o jurídico (Mosselo) são do analista. Quando há anotações negativas, ou o PDF não traz um item, quem
   escolhe é o analista.
-- A pontuação dá a faixa (menos de 40 = sem faixa: venda à vista). O porte da empresa, escolhido pelo analista, dá até
-  que bloco do quadro o cliente chega, em escada como no desenho da planilha: Pequena = 1º bloco, Pequena para média =
-  1º e 2º… Grande = até a negociação com a diretoria.
-  - O limite sugerido é o menor valor da coluna da faixa nesses blocos, e o máximo é o maior.
+- A pontuação dá a faixa (menos de 40 = sem faixa: venda à vista). O porte da empresa, escolhido pelo analista, dá o
+  bloco do quadro: Pequena = 1º bloco, Pequena para média = 2º, Média = 3º, Média para grande = 4º; Grande = o 4º e,
+  acima dele, a negociação com a diretoria (decisão do usuário, 2026-11-25: até então valiam os blocos de cima também,
+  e a Pequena para média com 55 pontos saía com R$ 400 sugeridos, do 1º bloco, em vez de R$ 1.000).
+  - O limite sugerido é o menor valor da coluna da faixa no bloco do porte, e o máximo é o maior.
   - O prazo tem as parcelas da faixa, até o máximo do porte. O sugerido usa os dias mais baixos de cada parcela (5, 12,
     19, 26) e o máximo, os mais altos (7, 14, 21, 29).
+  - O prazo concedido está dentro do indicado quando não tem mais parcelas que ele e o último dia não passa do último
+    dia do máximo: com "07 E 14 DIAS", 12 ou 14 dias estão dentro e 15 não.
+  - À vista ou 01 dia é venda antecipada (o cliente paga antes de o pedido ser faturado): qualquer limite vale, e o
+    prazo está sempre dentro, mesmo sem faixa.
 - Cada capa é uma linha nova na tabela credito_capas (migração 046) e não muda depois. Quem registrou ou um
   administrador pode excluir (a linha fica guardada, com excluida_em) ou editar: a edição grava uma versão nova e a de
   antes fica guardada como substituída (migração 049). Na edição, os itens automáticos (Serasa e histórico Mais Vida)
@@ -40,7 +45,7 @@ from .credito import dias_prazo
 from .reanalise import TRAVA, texto_bloqueio
 from .serasa import CAMPOS as CAMPOS_SERASA
 
-REGRA_VERSAO = 1
+REGRA_VERSAO = 2  # 2 (2026-11-25): o limite sai só do bloco do porte; prazo pelo último dia; venda antecipada
 AVISO_PC = ("As capas de análise de crédito ficam no site (bi.maisvida.cloud), junto com as reanálises: faça e consulte "
             "por lá.")
 DADOS_NOVOS = ("os dados do ERP foram atualizados enquanto você analisava: confira a capa de novo antes de registrar")
@@ -110,8 +115,8 @@ FAIXAS = (
     {"faixa": 3, "rotulo": "Faixa 3", "de": 65, "ate": 74, "parcelas": 3},
     {"faixa": 4, "rotulo": "Faixas 4 e 5", "de": 75, "ate": 100, "parcelas": 4},
 )
-# O porte da empresa (a "classificação ABC" do quadro, com a letra dele): até quantas parcelas e até que bloco do quadro
-# (a escada das barras da direita). Na tela, só o nome.
+# O porte da empresa (a "classificação ABC" do quadro, com a letra dele): até quantas parcelas e o bloco do quadro (as
+# barras da direita; o 5º, da Grande, é a negociação com a diretoria). Na tela, só o nome.
 PORTES = {
     "E": {"nome": "Pequena", "descricao": "Pequenas empresas", "parcelas": 2, "blocos": 1},
     "D": {"nome": "Pequena para média", "descricao": "Pequenas para médias empresas", "parcelas": 2, "blocos": 2},
@@ -330,45 +335,60 @@ def nome_prazo(dias: list[int]) -> str:
 
 def indicar(numero_faixa: int, porte: str) -> dict:
     """O prazo e o limite do quadro para a faixa e o porte: o sugerido (o menor) e até onde pode chegar (o maior).
-    A coluna da faixa, do 1º bloco até o último do porte; casa vazia nessa coluna inteira (Pequena com 75+) -> vale a
-    coluna da faixa anterior (faixa_vazia). Porte que não existe -> ValueError."""
+    O limite sai da coluna da faixa no bloco do porte (bloco: 1 a 4; a Grande usa o 4º, com a diretoria acima dele);
+    casa vazia nessa coluna do bloco (Pequena com 75+) -> vale a coluna da faixa anterior (faixa_vazia). Porte que não
+    existe -> ValueError."""
     if porte not in PORTES:
         raise ValueError("escolha o porte da empresa")
     p, f = PORTES[porte], FAIXAS[numero_faixa]
     base = {"faixa": numero_faixa, "faixa_rotulo": f["rotulo"], "porte": porte, "porte_nome": p["nome"],
             "parcelas_da_faixa": f["parcelas"], "parcelas_do_porte": p["parcelas"], "blocos": p["blocos"]}
     if numero_faixa == 0:
-        return {**base, "sem_prazo": True, "parcelas": 0, "coluna": None, "faixa_vazia": False, "diretoria": False,
-                "limite_sugerido": 0.0, "limite_maximo": 0.0, "dias_sugeridos": [], "dias_maximos": [],
-                "prazo_sugerido": "A VISTA", "prazo_maximo": "A VISTA"}
-    blocos = QUADRO[:p["blocos"]]
+        return {**base, "sem_prazo": True, "parcelas": 0, "coluna": None, "bloco": None, "faixa_vazia": False,
+                "diretoria": False, "limite_sugerido": 0.0, "limite_maximo": 0.0, "dias_sugeridos": [],
+                "dias_maximos": [], "prazo_sugerido": "A VISTA", "prazo_maximo": "A VISTA"}
+    com_valores = [b for b in QUADRO[:p["blocos"]] if not b.get("diretoria")]
+    linhas = com_valores[-1]["linhas"]
     valores, coluna = [], numero_faixa
     while coluna >= 1:
-        valores = [linha[coluna - 1] for b in blocos if not b.get("diretoria") for linha in b["linhas"]
-                   if linha[coluna - 1] is not None]
+        valores = [linha[coluna - 1] for linha in linhas if linha[coluna - 1] is not None]
         if valores:
             break
         coluna -= 1
     n = min(f["parcelas"], p["parcelas"])
     sugeridos, maximos = [j[0] for j in JANELAS[:n]], [j[1] for j in JANELAS[:n]]
-    return {**base, "sem_prazo": False, "parcelas": n, "coluna": coluna, "faixa_vazia": coluna != numero_faixa,
-            "diretoria": any(b.get("diretoria") for b in blocos), "limite_sugerido": float(min(valores)),
-            "limite_maximo": float(max(valores)), "dias_sugeridos": sugeridos, "dias_maximos": maximos,
+    return {**base, "sem_prazo": False, "parcelas": n, "coluna": coluna, "bloco": len(com_valores),
+            "faixa_vazia": coluna != numero_faixa, "diretoria": p["blocos"] > len(com_valores),
+            "limite_sugerido": float(min(valores)), "limite_maximo": float(max(valores)),
+            "dias_sugeridos": sugeridos, "dias_maximos": maximos,
             "prazo_sugerido": nome_prazo(sugeridos), "prazo_maximo": nome_prazo(maximos)}
 
 
+def antecipada(nome: str | None) -> bool:
+    """À vista ou 01 dia: venda antecipada, em que o cliente paga antes de o pedido ser faturado. Nela qualquer limite
+    vale (o concedido nunca fica acima do máximo indicado) e o prazo está sempre dentro, mesmo sem faixa (decisão do
+    usuário, 2026-11-25)."""
+    return dias_prazo(nome) in ([0], [1])
+
+
 def prazo_dentro(nome: str | None, ind: dict) -> bool:
-    """Um prazo do ERP cabe no indicado: não tem mais parcelas que ele e nenhum dia passa do máximo daquela parcela
-    ("A VISTA" sempre cabe; sem faixa, só ela). Prazo sem número -> False."""
+    """Um prazo do ERP cabe no indicado: não tem mais parcelas que ele e o último dia não passa do último dia do máximo
+    (com "07 E 14 DIAS", "12 DIAS" e "10 E 14 DIAS" cabem; "15 DIAS" não). Venda antecipada (à vista ou 01 dia)
+    sempre cabe; sem faixa, só ela. Prazo sem número -> False."""
     dias = dias_prazo(nome)
     if dias is None:
         return False
-    if dias == [0]:
+    if antecipada(nome):
         return True
     if ind["sem_prazo"]:
         return False
-    dias = sorted(dias)
-    return len(dias) <= ind["parcelas"] and all(d <= ind["dias_maximos"][i] for i, d in enumerate(dias))
+    return len(dias) <= ind["parcelas"] and max(dias) <= ind["dias_maximos"][-1]
+
+
+def acima_do_maximo(limite: float, prazo: str | None, ind: dict) -> bool:
+    """O limite concedido passa do máximo indicado: não na venda antecipada (qualquer limite vale) nem com a
+    negociação da diretoria (Grande)."""
+    return limite > ind["limite_maximo"] + 0.005 and not ind.get("diretoria") and not antecipada(prazo)
 
 
 def cnpj_formatado(digitos: str) -> str:
@@ -703,7 +723,8 @@ class CapasCredito:
             "pontos": d["pontos"], "faixa": d["faixa"], "faixa_rotulo": FAIXAS[d["faixa"]]["rotulo"], "indicacao": ind,
             "limite_antes": d["limite_antes"], "prazo_antes": d["prazo_antes"],
             "limite_concedido": d["limite_concedido"], "prazo_concedido": d["prazo_concedido"],
-            "acima_do_maximo": d["limite_concedido"] > d["limite_maximo"] + 0.005 and not ind.get("diretoria"),
+            "acima_do_maximo": acima_do_maximo(d["limite_concedido"], d["prazo_concedido"], ind),
+            "antecipada": antecipada(d["prazo_concedido"]),
             "prazo_dentro": prazo_dentro(d["prazo_concedido"], ind),
             "observacoes": d["observacoes"], "justificativa": d["justificativa"], "respostas": d["respostas"],
             "historico_de": d["id_cliente_historico"], "bloqueio": d["bloqueio"],

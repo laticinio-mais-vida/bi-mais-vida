@@ -1635,11 +1635,12 @@ como reanálise do cliente (`#/credito-capa?c=12`). As contas ficam em `bi/capa_
 | N/C jurídico, Mosselo (4) | Nada consta 4 · Consta processo contra 0 | analista |
 
    Quando o PDF não traz um item do Serasa, o analista escolhe, com o aviso. A página não muda os itens automáticos.
-5. **Indicação**, pelo quadro LIMITES da planilha "Classificação e Limites", na escada do desenho. A pontuação dá a
+5. **Indicação**, pelo quadro LIMITES da planilha "Classificação e Limites". A pontuação dá a
    faixa: menos de 40, sem prazo (venda à vista); 40 a 54, faixa 1; 55 a 64, faixa 2; 65 a 74, faixa 3; 75 ou mais,
-   faixas 4 e 5. O porte dá até que bloco o cliente chega: Pequena, o 1º; Pequena para média, até o 2º; Média, até o
-   3º; Média para grande, até o 4º; Grande, até o 5º, que é a negociação com a diretoria.
-   - **Limite:** o sugerido é o menor valor da coluna da faixa nesses blocos; o máximo, o maior.
+   faixas 4 e 5. O porte dá o bloco: Pequena, o 1º; Pequena para média, o 2º; Média, o 3º; Média para grande, o 4º;
+   Grande, o 4º e, acima dele, o 5º, que é a negociação com a diretoria (desde 25/11/2026; antes valiam também os
+   blocos de cima, e a Pequena para média com 55 pontos saía com R$ 400 sugeridos em vez de R$ 1.000).
+   - **Limite:** o sugerido é o menor valor da coluna da faixa no bloco do porte; o máximo, o maior.
    - **Prazo:** as parcelas da faixa (1 a 4), até o máximo do porte (2, 2, 3, 4, 4). O sugerido usa os dias mais baixos
      de cada parcela (5, 12, 19, 26) e o máximo, os mais altos (7, 14, 21, 29).
    - A casa vazia da planilha (Pequena com 75 ou mais) vale a da faixa anterior.
@@ -1647,12 +1648,16 @@ como reanálise do cliente (`#/credito-capa?c=12`). As contas ficam em `bi/capa_
 | Porte | 40–54 | 55–64 | 65–74 | 75+ |
 |---|---|---|---|---|
 | Pequena | 400 | 400 – 1.000 | 700 – 1.000 | 700 – 1.000 |
-| Pequena para média | 400 – 1.000 | 400 – 1.500 | 700 – 2.000 | 2.000 – 3.000 |
-| Média | 400 – 3.000 | 400 – 3.750 | 700 – 4.500 | 2.000 – 6.000 |
-| Média para grande e Grande | 400 – 6.000 | 400 – 8.250 | 700 – 10.500 | 2.000 – 15.000 |
+| Pequena para média | 1.000 | 1.000 – 1.500 | 1.000 – 2.000 | 2.000 – 3.000 |
+| Média | 3.000 | 3.000 – 3.750 | 3.000 – 4.500 | 3.000 – 6.000 |
+| Média para grande e Grande | 6.000 | 6.000 – 8.250 | 6.000 – 10.500 | 6.000 – 15.000 |
 
 6. **Registrar:** o limite e o prazo concedidos (os prazos do ERP; os que cabem no indicado ficam marcados), as
    observações (opcional) e a justificativa. Acima do máximo ou com prazo além do indicado, a página avisa, mas grava.
+   - O prazo está dentro do indicado quando não tem mais parcelas que ele e o último dia não passa do último dia do
+     máximo: com "07 E 14 DIAS", 12 ou 14 dias estão dentro e 15 não.
+   - À vista ou 01 dia é venda antecipada (o cliente paga antes de faturar o pedido): qualquer limite vale, sem o aviso
+     de "acima do máximo", e o prazo está sempre dentro, mesmo com menos de 40 pontos.
    - O servidor recalcula a capa e a indicação a partir do PDF gravado e do cache; se o histórico Mais Vida veio do
      ERP e chegou uma extração nova no meio, recusa.
    - Na reanálise, guarda o limite e o prazo de antes, e um aumento esbarra no prazo mínimo entre reanálises como na

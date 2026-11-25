@@ -4,8 +4,8 @@ Sem banco:
 - a capa (pesos e opções da planilha);
 - os itens do Serasa e do histórico Mais Vida, nas bordas;
 - a faixa pela pontuação;
-- o quadro inteiro (porte × faixa, em escada, como no desenho da planilha);
-- o prazo "dentro do indicado";
+- o quadro inteiro (porte × faixa: a coluna da faixa no bloco do porte);
+- o prazo "dentro do indicado" (pelo último dia) e a venda antecipada (à vista ou 01 dia: qualquer limite);
 - o exemplo da capa de 30/09.
 
 Com o banco:
@@ -29,9 +29,9 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from bi.capa_credito import (AVISO_PC, CAPA, DADOS_NOVOS, PORTES, CapasCredito, faixa, faixa_de_pontualidade,
-                             indicar, nome_prazo, opcao_da_fundacao, pontuar, prazo_dentro, respostas_historico,
-                             respostas_serasa)
+from bi.capa_credito import (AVISO_PC, CAPA, DADOS_NOVOS, PORTES, CapasCredito, acima_do_maximo, antecipada, faixa,
+                             faixa_de_pontualidade, indicar, nome_prazo, opcao_da_fundacao, pontuar, prazo_dentro,
+                             respostas_historico, respostas_serasa)
 from bi.conversas import NaoEncontrada, novo_id
 from bi.credito import Credito
 from bi.reanalise import ConfigCredito, Reanalises
@@ -80,9 +80,9 @@ class TestRegra(unittest.TestCase):
         self.assertEqual((p["pontos"], p["faltam"]), (50, []))
         self.assertEqual(r["fundacao"]["fonte"], "fundada em 14/08/2025, há 1 ano e 1 mês")
         self.assertEqual(faixa(50)["faixa"], 1)
-        i = indicar(1, "C")
+        i = indicar(1, "C")  # Média = o 3º bloco, onde a faixa 1 só tem R$ 3.000
         self.assertEqual((i["limite_sugerido"], i["limite_maximo"], i["prazo_sugerido"], i["prazo_maximo"], i["parcelas"]),
-                         (400.0, 3000.0, "05 DIAS", "07 DIAS", 1))
+                         (3000.0, 3000.0, "05 DIAS", "07 DIAS", 1))
 
     def test_bordas(self):
         def score(v):
@@ -105,22 +105,28 @@ class TestRegra(unittest.TestCase):
                          "jovem")
 
     def test_o_quadro_inteiro(self):
-        # (sugerido, máximo) de cada porte em cada faixa, a tabela do plano aprovado
+        # (sugerido, máximo) de cada porte em cada faixa: a coluna da faixa só no bloco do porte (decisão de
+        # 2026-11-25; antes valiam também os blocos de cima, e a Pequena para média saía com R$ 400 sugeridos)
         esperado = {
             "E": [(400, 400), (400, 1000), (700, 1000), (700, 1000)],
-            "D": [(400, 1000), (400, 1500), (700, 2000), (2000, 3000)],
-            "C": [(400, 3000), (400, 3750), (700, 4500), (2000, 6000)],
-            "B": [(400, 6000), (400, 8250), (700, 10500), (2000, 15000)],
-            "A": [(400, 6000), (400, 8250), (700, 10500), (2000, 15000)],
+            "D": [(1000, 1000), (1000, 1500), (1000, 2000), (2000, 3000)],
+            "C": [(3000, 3000), (3000, 3750), (3000, 4500), (3000, 6000)],
+            "B": [(6000, 6000), (6000, 8250), (6000, 10500), (6000, 15000)],
+            "A": [(6000, 6000), (6000, 8250), (6000, 10500), (6000, 15000)],
         }
         parcelas = {"E": [1, 2, 2, 2], "D": [1, 2, 2, 2], "C": [1, 2, 3, 3], "B": [1, 2, 3, 4], "A": [1, 2, 3, 4]}
+        bloco = {"E": 1, "D": 2, "C": 3, "B": 4, "A": 4}  # a Grande usa o 4º, com a diretoria acima
         for porte, linhas in esperado.items():
             for f, (sug, maxi) in enumerate(linhas, 1):
                 i = indicar(f, porte)
-                self.assertEqual((i["limite_sugerido"], i["limite_maximo"], i["parcelas"]),
-                                 (sug, maxi, parcelas[porte][f - 1]), (porte, f))
+                self.assertEqual((i["limite_sugerido"], i["limite_maximo"], i["parcelas"], i["bloco"]),
+                                 (sug, maxi, parcelas[porte][f - 1], bloco[porte]), (porte, f))
                 self.assertEqual(i["diretoria"], porte == "A", (porte, f))
                 self.assertEqual(i["faixa_vazia"], (porte, f) == ("E", 4), (porte, f))
+        # a capa do ARTHUR DA CRUZ NETO (25/11): 56 pontos, Pequena para média -> 2º bloco, de R$ 1.000 a R$ 1.500
+        i = indicar(faixa(56)["faixa"], "D")
+        self.assertEqual((i["limite_sugerido"], i["limite_maximo"], i["prazo_sugerido"], i["prazo_maximo"]),
+                         (1000.0, 1500.0, "05 E 12 DIAS", "07 E 14 DIAS"))
         i = indicar(4, "B")
         self.assertEqual((i["prazo_sugerido"], i["prazo_maximo"], i["dias_maximos"]),
                          ("05, 12, 19 E 26 DIAS", "07, 14, 21 E 29 DIAS", [7, 14, 21, 29]))
@@ -134,14 +140,33 @@ class TestRegra(unittest.TestCase):
         self.assertEqual(set(PORTES), {"A", "B", "C", "D", "E"})
 
     def test_prazo_dentro_do_indicado(self):
-        tres = indicar(3, "C")  # 3 parcelas: até 7, 14 e 21
-        dentro = ["A VISTA", "04 DIAS", "07 DIAS", "07 E 14 DIAS", "05, 12 E 19 DIAS", "07, 14 E 21 DIAS"]
-        fora = ["10 DIAS", "14 E 21 DIAS", "07, 14, 21 E 28 DIAS", "01, 30, 60 DIAS", "SEM NUMERO"]
+        tres = indicar(3, "C")  # 3 parcelas: até 7, 14 e 21; dentro = até 3 parcelas e o último dia até 21
+        dentro = ["A VISTA", "01 DIA", "04 DIAS", "07 DIAS", "10 DIAS", "21 DIAS", "07 E 14 DIAS", "14 E 21 DIAS",
+                  "05, 12 E 19 DIAS", "07, 14 E 21 DIAS"]
+        fora = ["22 DIAS", "14 E 28 DIAS", "07, 14, 21 E 28 DIAS", "01, 07, 14 E 21 DIAS", "01, 30, 60 DIAS",
+                "SEM NUMERO"]
         self.assertEqual([prazo_dentro(x, tres) for x in dentro], [True] * len(dentro))
         self.assertEqual([prazo_dentro(x, tres) for x in fora], [False] * len(fora))
         self.assertTrue(prazo_dentro("07, 14, 21 E 28 DIAS", indicar(4, "B")))  # a 4ª parcela vai até 29
-        sem = indicar(0, "C")
-        self.assertEqual((prazo_dentro("A VISTA", sem), prazo_dentro("07 DIAS", sem)), (True, False))
+        # a capa do ARTHUR: "07 E 14 DIAS" no máximo; 12 e 14 dias estão dentro, 15 não
+        dois = indicar(2, "D")
+        self.assertEqual([prazo_dentro(x, dois) for x in ("12 DIAS", "14 DIAS", "10 E 14 DIAS", "15 DIAS",
+                                                          "05, 07 E 14 DIAS")], [True, True, True, False, False])
+        sem = indicar(0, "C")  # sem faixa: só a venda antecipada (à vista ou 01 dia)
+        self.assertEqual([prazo_dentro(x, sem) for x in ("A VISTA", "01 DIA", "01 DIAS", "02 DIAS", "07 DIAS")],
+                         [True, True, True, False, False])
+
+    def test_venda_antecipada_qualquer_limite(self):
+        """À vista ou 01 dia: o cliente paga antes de faturar, então nenhum limite fica acima do máximo indicado."""
+        self.assertEqual([antecipada(x) for x in ("A VISTA", "01 DIA", "01 DIAS", "02 DIAS", "01, 30, 60 DIAS", None)],
+                         [True, True, True, False, False, False])
+        um, sem = indicar(1, "E"), indicar(0, "D")  # até R$ 400; sem faixa, R$ 0
+        self.assertEqual([acima_do_maximo(100000, p, um) for p in ("A VISTA", "01 DIAS", "05 DIAS")],
+                         [False, False, True])
+        self.assertEqual([acima_do_maximo(100000, p, sem) for p in ("A VISTA", "01 DIA", "10 DIAS")],
+                         [False, False, True])
+        self.assertEqual((acima_do_maximo(400, "05 DIAS", um), acima_do_maximo(400.01, "05 DIAS", um)), (False, True))
+        self.assertFalse(acima_do_maximo(50000, "28 DIAS", indicar(4, "A")))  # Grande: acima, a diretoria
         self.assertEqual((nome_prazo([]), nome_prazo([7]), nome_prazo([7, 14])), ("A VISTA", "07 DIAS", "07 E 14 DIAS"))
 
     def test_o_que_o_pdf_nao_traz_o_analista_escolhe(self):
@@ -242,7 +267,7 @@ class TestAnalise(Base):
         a = self.cad.analisar({"serasa_id": r["serasa"]["id"], "respostas": ANALISTA, "porte": "C"}, self.ana)
         i = a["indicacao"]
         self.assertEqual((i["limite_sugerido"], i["limite_maximo"], i["prazo_sugerido"], i["prazo_maximo"]),
-                         (400.0, 3000.0, "05 DIAS", "07 DIAS"))
+                         (3000.0, 3000.0, "05 DIAS", "07 DIAS"))
         self.assertEqual(a["prazos_dentro"], ["A VISTA", "07 DIAS"])  # dos prazos do ERP (o 28 DIAS passa)
         # o mesmo PDF de novo não grava outra vez (os mesmos bytes: o PDF de teste leva a hora em que foi feito)
         conteudo = pdf(texto_30_09())
@@ -299,8 +324,8 @@ class TestRegistrar(Base):
                 "limite_sugerido, limite_maximo, limite_concedido, prazo_concedido, observacoes, id_cliente_historico, "
                 "dados_ate, regra_versao, feita_por_nome, respostas, indicacao FROM credito_capas").fetchone()
         self.assertEqual(linha[:18], ("62237700000151", "MERCADO NOVO", "JOAO COMERCIO LTDA EPP", ES, "Rubens",
-                                      r["serasa"]["id"], "C", 50, 1, Decimal("400.00"), Decimal("3000.00"),
-                                      Decimal("400.00"), "07 DIAS", "Visitado em 29/09.", None, None, 1, "Ana"))
+                                      r["serasa"]["id"], "C", 50, 1, Decimal("3000.00"), Decimal("3000.00"),
+                                      Decimal("400.00"), "07 DIAS", "Visitado em 29/09.", None, None, 2, "Ana"))
         self.assertEqual(len(linha[18]), 14)
         self.assertEqual(linha[18][3], {"chave": "fundacao", "grupo": "Serasa", "eixo": "Ano de fundação", "peso": 9,
                                         "opcao": "jovem", "rotulo": "Jovem: 1 a 3 anos", "pontos": 3, "auto": True,
@@ -317,6 +342,11 @@ class TestRegistrar(Base):
         self.assertTrue(self.cad.registrar(self.ana, d)["ja_existia"])
         self.assertEqual(self.contar("credito_capas"), 2)
         self.assertTrue(self.cad.listar(self.ana)["capas"][0]["acima_do_maximo"])  # 5.000 passa dos 3.000
+        # à vista (venda antecipada): qualquer limite, sem o aviso
+        self.cad.registrar(self.ana, self.dados(r["serasa"]["id"], limite=100000, prazo="A VISTA"))
+        x = self.cad.listar(self.ana)["capas"][0]
+        self.assertEqual((x["limite_concedido"], x["acima_do_maximo"], x["antecipada"], x["prazo_dentro"]),
+                         (100000.0, False, True, True))
 
     def test_a_capa_registrada_traz_o_serasa_dela(self):
         """O Serasa da capa vem inteiro (o histórico de pagamento e as anotações, só para ver junto da capa), com a

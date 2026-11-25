@@ -504,7 +504,7 @@ function desenharIndicacao() {
   let corpo;
   if (i.sem_prazo) {
     corpo = `<div class="cr-parecer ruim"><div class="cr-parecer-cab"><span class="status ruim">${icone("x")}Sem prazo</span>
-      <span class="cr-parecer-pedido">Menos de 40 pontos: <b>venda à vista</b>, sem limite.</span></div></div>`;
+      <span class="cr-parecer-pedido">Menos de 40 pontos: <b>venda à vista</b> ou em 01 dia (venda antecipada), e aí qualquer limite vale.</span></div></div>`;
   } else {
     const porque = [`${esc(i.faixa_rotulo)}: até ${parcelas(i.parcelas_da_faixa)}`,
       `porte ${esc(i.porte_nome)}: até ${parcelas(i.parcelas_do_porte)}`].join("; ");
@@ -515,20 +515,22 @@ function desenharIndicacao() {
         <div class="cc-indica-caixa"><span>Pode chegar a</span><b>${fmt.moeda(i.limite_maximo)}</b>
           <small>em ${esc(i.prazo_maximo)} · ${parcelas(i.parcelas)} (${dias(i.dias_maximos)})</small></div>
       </div>
-      <p class="cc-porque">${icone("info")}<span>${porque}.${i.diretoria ? ` <b>Acima de ${fmt.moeda(i.limite_maximo)}, só com negociação da diretoria.</b>` : ""}${i.faixa_vazia ? " Na planilha, esta casa do quadro está vazia: vale a da faixa anterior." : ""}</span></p>`;
+      <p class="cc-porque">${icone("info")}<span>${porque}.${i.diretoria ? ` <b>Acima de ${fmt.moeda(i.limite_maximo)}, só com negociação da diretoria.</b>` : ""}${i.faixa_vazia ? " Na planilha, esta casa do quadro está vazia: vale a da faixa anterior." : ""}
+        À vista ou em 01 dia (venda antecipada), qualquer limite vale.</span></p>`;
   }
   alvo.innerHTML = cab + corpo + quadro(i);
 }
 
-// O quadro LIMITES em miniatura: as casas do cruzamento (a coluna da faixa, do 1º bloco até o do porte) marcadas, com o
-// sugerido e o máximo em destaque.
+// O quadro LIMITES em miniatura: as casas do cruzamento (a coluna da faixa no bloco do porte; na Grande, o 4º bloco e a
+// diretoria) marcadas, com o sugerido e o máximo em destaque.
 function quadro(i) {
   const l = estado.lista;
   const cab = l.faixas.map((f) => `<th${i.coluna === f.faixa || (i.sem_prazo && f.faixa === 0) ? ' class="cc-q-col"' : ""}>${f.faixa === 0 ? "menos de 40" : f.faixa === 4 ? "75 ou mais" : `${f.de} a ${f.ate}`}</th>`).join("");
   const prazos = l.faixas.map((f) => `<td>${f.parcelas ? parcelas(f.parcelas) : "sem prazo"}</td>`).join("");
   let marcouSugerido = false;
   const blocos = l.quadro.map((b, bi) => {
-    const noPorte = bi < i.blocos;
+    // o bloco do porte (i.bloco, de 1 a 4) e, na Grande, a diretoria logo abaixo dele
+    const noPorte = bi + 1 === i.bloco || (b.diretoria && i.diretoria);
     if (b.diretoria) {
       return `<tr class="cc-q-bloco${noPorte && !i.sem_prazo ? " no-porte" : ""}"><th class="esq">${bi + 1}º bloco<small>até ${parcelas(b.parcelas)}</small></th>
         <td>—</td><td colspan="4" class="cc-q-diretoria${noPorte && !i.sem_prazo ? " marcada" : ""}">negociação com a diretoria</td></tr>`;
@@ -548,7 +550,7 @@ function quadro(i) {
       <div class="tabela-rolagem"><table class="dados cc-q">
         <thead><tr><th class="esq">Pontos</th>${cab}</tr><tr class="cc-q-prazo"><th class="esq">Prazo</th>${prazos}</tr></thead>
         <tbody>${blocos}</tbody></table></div>
-      <p class="cr-parecer-nota">Em laranja, as casas do cruzamento: a coluna da faixa, do 1º bloco até o ${i.blocos}º (o porte ${esc(i.porte_nome)}).
+      <p class="cr-parecer-nota">${i.sem_prazo ? "Menos de 40 pontos não entram no quadro." : `Em laranja, as casas do cruzamento: a coluna da faixa no ${i.bloco}º bloco (o do porte ${esc(i.porte_nome)})${i.diretoria ? " e, acima dele, a negociação com a diretoria" : ""}.`}
         Limites em R$. Cada parcela tem uma janela de dias: 5 a 7, 12 a 14, 19 a 21 e 26 a 29.</p>
     </details>`;
   // o máximo: a última casa marcada com o maior valor
@@ -613,6 +615,13 @@ function desenharRegistro() {
 
 const desdeBloqueio = (b) => (b.origem === "capa" ? "a capa de análise de crédito" : "a reanálise");
 
+// À vista ou 01 dia: venda antecipada (o cliente paga antes de o pedido ser faturado), em que qualquer limite vale.
+// Igual ao antecipada() de bi/capa_credito.py: "A VISTA" ou um prazo de um só dia, 0 ou 1.
+function antecipada(prazo) {
+  const dias = String(prazo || "").match(/\d+/g);
+  return dias ? dias.length === 1 && Number(dias[0]) <= 1 : /VISTA/i.test(String(prazo || ""));
+}
+
 // O que o registro vai gravar e se passa do indicado, enquanto a pessoa digita. Na reanálise, o limite e o prazo de hoje
 // e o prazo mínimo entre reanálises (só aumento esbarra; o administrador marca "Registrar mesmo assim").
 function resumo() {
@@ -624,7 +633,8 @@ function resumo() {
   if (v == null) partes.push("Digite o limite concedido (0 = sem crédito, só à vista)");
   else {
     let nota = "";
-    if (v > i.limite_maximo + 0.005) nota = i.diretoria ? ` <span class="cr-v-ruim">acima do quadro: negociação com a diretoria</span>` : ` <span class="cr-v-ruim">acima do máximo indicado (${fmt.moeda(i.limite_maximo)})</span>`;
+    if (v > i.limite_maximo + 0.005 && antecipada(prazo)) nota = ` <span class="cr-v-bom">venda antecipada: qualquer limite vale</span>`;
+    else if (v > i.limite_maximo + 0.005) nota = i.diretoria ? ` <span class="cr-v-ruim">acima do quadro: negociação com a diretoria</span>` : ` <span class="cr-v-ruim">acima do máximo indicado (${fmt.moeda(i.limite_maximo)})</span>`;
     else if (v + 0.005 >= i.limite_sugerido) nota = ` <span class="cr-v-bom">dentro do indicado</span>`;
     partes.push(c ? `Limite ${fmt.moeda2(c.limite)} → <b>${fmt.moeda2(v)}</b>${nota}` : `Limite <b>${fmt.moeda2(v)}</b>${nota}`);
   }
