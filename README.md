@@ -1686,6 +1686,76 @@ do cliente (`#/credito-capa?e=7`). O formulário abre com a capa registrada:
   contando da data do registro;
 - na reanálise, um aumento esbarra no prazo mínimo que valia quando a capa foi registrada, sem contar a própria capa.
 
+### Contrato de avalista
+
+O botão **Avalista**, na página de crédito, abre o contrato usado quando o cliente compra num CNPJ que não está no nome
+dele e outra empresa ou uma pessoa garante o pagamento. A página preenche os dados, guarda o contrato e baixa o PDF
+igual ao modelo em Word. Para qualquer pessoa com a página de crédito; só no site. As regras ficam em
+`bi/avalista.py`, o PDF em `bi/avalista_pdf.py`, o texto fixo das cláusulas em `bi/avalista_texto.py` e a tela em
+`web/js/avalista.js`.
+
+**Dois modelos**, pelo tipo de quem garante (a compradora é sempre uma empresa):
+
+| Quem garante | Contrato | No PDF |
+|---|---|---|
+| Pessoa jurídica | Contrato de Garantia Fidejussória e Outras Avenças (11 cláusulas) | com o cabeçalho da Mais Vida |
+| Pessoa física | Contrato de Compra e Venda de Produtos Lácteos por Prazo Indeterminado, com a garantia na cláusula 8 | sem cabeçalho |
+
+**O formulário:**
+
+- **compradora:** razão social, CNPJ, inscrição estadual (opcional), endereço da sede, CEP, a qualificação de quem
+  representa ("sócio administrador") e quem assina, uma ou mais pessoas (até 4). A busca "Já é cliente?" puxa a razão
+  social e o CNPJ de um cliente do ERP; o endereço, a inscrição estadual e os sócios não chegam ao painel e são
+  digitados;
+- **quem garante:** uma empresa, com os mesmos campos, ou uma pessoa (nome, nacionalidade, estado civil, profissão,
+  RG, CPF, endereço e CEP);
+- **cada pessoa que assina:** nome, nacionalidade, estado civil, profissão, RG e CPF. O modelo Pessoa jurídica traz
+  também "Sr." ou "Sra." e onde a pessoa mora; o Pessoa física não;
+- **"Poderes conferidos por"** (só no Pessoa jurídica, opcional): a frase "conforme poderes conferidos por …" só sai
+  quando o campo é preenchido;
+- **data do contrato:** começa em hoje;
+- **dados da Mais Vida:** uma configuração só, para todos os contratos, que o administrador altera na própria página.
+  O PDF sai sempre com os de agora, mesmo num contrato guardado antes. O modelo Pessoa física pede mais dados que o
+  Pessoa jurídica (a inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão, RG e CPF); a
+  página avisa enquanto faltam.
+
+**Salvar pela metade:** basta a razão social da compradora. O passo 5 lista o que falta, e cada item leva ao campo. No
+PDF, o que falta sai como uma linha para preencher à mão. CNPJ, CPF ou CEP que não confere fica marcado em vermelho e
+entra na mesma lista, sem impedir de salvar. O CNPJ aceita letras (o formato novo, de julho de 2026). Quem garante com
+o mesmo CNPJ da compradora também é avisado.
+
+**Os contratos guardados:**
+
+- todos com a página de crédito veem todos os contratos e baixam o PDF;
+- só quem fez ou um administrador edita ou exclui;
+- editar grava por cima, sem guardar as versões antigas, e anota quem editou e quando. Se outra pessoa gravou o mesmo
+  contrato enquanto ele estava aberto, a página pede para recarregar;
+- excluir tira da página; a linha fica no banco;
+- a busca acha pela compradora, por quem garante, pelo CNPJ ou pelo CPF.
+
+**O PDF e o modelo em Word:**
+
+- a página é a do Word: A4, margens de 3 cm e 2,5 cm, texto justificado, os mesmos negritos e os mesmos parágrafos em
+  branco. Com os dados dos modelos, sai nas mesmas 6 páginas;
+- a letra dos modelos é a Aptos 12, que é da Microsoft e só pode ser usada dentro do Office. No lugar entra a
+  Liberation Sans (livre, com as medidas da Arial; `bi/fontes/`, com a licença) em 11,4: as maiúsculas ficam da mesma
+  altura e o texto ocupa quase a mesma largura. As quebras de linha não caem exatamente nos mesmos pontos;
+- o título de uma cláusula não fica sozinho no fim da página, um bloco de assinatura não se divide e as duas
+  testemunhas ficam juntas;
+- cada empresa tem uma linha de assinatura, como nos modelos, com todos os representantes em "Representada por".
+
+**O que mudou no texto em relação aos modelos** (combinado em 2026-11-25; só digitação e pontuação):
+
+- Pessoa jurídica, 4.2: "não será inferior **a** 5 (cinco) dias úteis";
+- Pessoa jurídica: "E, como interveniente garantidora:" em parágrafo próprio (estava colado no fim do parágrafo da
+  compradora); a razão social completa da garantidora na cláusula 1.2 e na assinatura;
+- Pessoa física, 4.3: o parêntese de "(conforme Art. 406 … do CTN)"; 15.2: "Comarca de Itabela - BA";
+- nos dois: o CNPJ da Mais Vida na assinatura (o modelo trazia "[Número do CNPJ]"), a vírgula antes de "CEP" e a data
+  como "Itabela – BA, 4 de fevereiro de 2026.".
+
+Mudar uma cláusula é mudar `bi/avalista_texto.py` (o texto) ou `bi/avalista_pdf.py` (as partes, a data e as
+assinaturas).
+
 ### Cores da página
 
 Só verde (bom) e vermelho (ruim), num tom cada, pelo que cada número é comparado: pontualidade com o "ok" da regra do
@@ -1843,6 +1913,7 @@ O painel usa dois bancos, cada um para uma coisa:
 | `credito_reanalises` | as reanálises de crédito, só no site (migração 029): uma linha por registro, que não muda depois, com o cliente, o limite e o prazo de antes, o limite pedido, o liberado e o prazo liberado, a justificativa, o parecer da regra para o pedido e para o liberado, o limite sugerido, a extração usada (`dados_ate`), o retrato do cliente (`retrato`, veja [Reanálises](#reanálises)) e quem registrou; a excluída fica com `excluida_em`; a registrada pelo administrador dentro do prazo mínimo guarda a regra em `bloqueio` (migração 038) |
 | `credito_serasa` | os dados do Serasa, só no site (migração 038): uma linha por envio, que não muda depois, com o cliente, o CNPJ e a razão social do relatório, a emissão, o hash do arquivo (o mesmo PDF não grava duas vezes), a fundação, o score e o resto em `dados` (veja [Dados do Serasa](#dados-do-serasa)) e quem enviou; o excluído fica com `excluido_em` |
 | `credito_capas` | as capas de análise de crédito, só no site (migração 046): uma linha por capa, que não muda depois, com o tipo (cadastro novo ou reanálise), o cliente da reanálise (`id_cliente`; vazio no cadastro novo, que liga pelo CNPJ), o CNPJ (só os dígitos), o nome, o vendedor, o PDF do Serasa (`serasa_id`), o porte, as respostas da capa com os pontos e de onde vieram (`respostas`), a pontuação, a faixa, a indicação (`indicacao`, com o limite sugerido e o máximo também em colunas), o limite e o prazo de antes (na reanálise), os concedidos, as observações, a justificativa, o código de onde veio o histórico Mais Vida e a extração, a regra do prazo mínimo que o administrador passou (`bloqueio`) e quem registrou; a excluída fica com `excluida_em`. A edição (migração 049) grava uma linha nova com `versao_anterior` (a que ela substitui) e `editada_em/por/por_nome`, repetindo o `feita_em/por` do registro; a de antes fica com `substituida_em`. A 046 também deixa `credito_serasa.id_cliente` vazio para o PDF do cadastro novo |
+| `credito_avalistas` | os contratos de avalista, só no site (migração 050): uma linha por contrato, com o tipo de quem garante (`pj` ou `pf`), tudo o que foi digitado (`dados`), cópias para a lista e a busca (a compradora e quem garante, com o CNPJ ou o CPF sem pontuação, só quando conferem), o cliente do ERP de onde veio a compradora (`id_cliente`, opcional), a `versao` (sobe a cada gravação) e quem fez e quem editou; o excluído fica com `excluido_em`. Os dados da Mais Vida que saem no contrato ficam em `regras`, com o nome `avalista` |
 | `parametros` | o segredo que assina os cookies de sessão |
 
 O PC e o site têm cada um o seu PostgreSQL, com cadastros separados. No PC é o PostgreSQL instalado no Windows; no
@@ -2026,6 +2097,10 @@ salvou e quando, e as anteriores ficam guardadas. O padrão reproduz exatamente 
 | `web/js/crm.js`, `web/js/configcrm.js` | a página CRM e a configuração dela |
 | `bi/reanalise.py` | as reanálises de crédito (tabela credito_reanalises, só no site): registrar com o retrato, listar, excluir e o que o Assistente lê (por cliente e parecidas); as regras do crédito (tabela regras) e o prazo mínimo entre reanálises |
 | `bi/serasa.py` | os dados do Serasa (tabela credito_serasa, só no site): a leitura do PDF do Relato PJ, enviar, listar, excluir e o último envio para o retrato |
+| `bi/avalista.py` | os contratos de avalista (tabela credito_avalistas, só no site): conferir o que veio da página, o que falta, CNPJ e CPF, salvar, editar, excluir, buscar, o cliente do ERP e os dados da Mais Vida |
+| `bi/avalista_pdf.py`, `bi/avalista_texto.py` | o contrato de avalista em PDF (fpdf2), igual aos dois modelos em Word: a página, as partes, a data e as assinaturas; e o texto fixo das cláusulas |
+| `bi/fontes/` | a letra do contrato de avalista (Liberation Sans, livre, com a licença) |
+| `web/js/avalista.js` | a página do contrato de avalista (o botão Avalista da página de crédito) |
 | `bi/assistente.py` | página Assistente: dados de cada acesso, ferramentas de consulta e chamada à API da Anthropic |
 | `bi/arquivos.py` | os arquivos Excel e PDF que o Assistente prepara para baixar (formatos das colunas, montagem) |
 | `bi/conversas.py` | histórico de conversas do Assistente (no PostgreSQL) |

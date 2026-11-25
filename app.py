@@ -52,6 +52,7 @@ from bi.banco import Banco, BancoForaDoAr  # noqa: E402
 from bi.cache import Cache  # noqa: E402
 from bi.carteira import Carteira  # noqa: E402
 from bi.configuracao import VISOES, Configuracao  # noqa: E402
+from bi.avalista import Avalistas, ConfigAvalista  # noqa: E402
 from bi.capa_credito import CapasCredito  # noqa: E402
 from bi.credito import Credito  # noqa: E402
 from bi.conversas import Conversas, NaoEncontrada, id_valido  # noqa: E402
@@ -174,6 +175,9 @@ class Aplicacao:
         self.reanalises = Reanalises(self.banco, self.credito, self.vps, config=self.config_credito, serasa=self.serasa,
                                      capas=self.capas)
         self.capas.reanalises = self.reanalises
+        # Os contratos de avalista (botão "Avalista" da página de crédito), também só no site; os dados da Mais Vida
+        # que saem neles são do administrador (tabela regras).
+        self.avalistas = Avalistas(self.banco, self.credito, ConfigAvalista(self.banco), self.vps)
         self.conversas = Conversas(self.banco)
         # Os limites do Assistente (gasto total; perguntas e gasto de cada pessoa) são do administrador, na tabela
         # regras; até ele salvar, valem os de [ia] no config.ini.
@@ -682,6 +686,29 @@ class Manipulador(BaseHTTPRequestHandler):
         if not r["ja_existia"]:
             log.info("%s registrou a capa de análise de crédito %s (%s)", usuario["login"], r["id"],
                      corpo.get("tipo") or "cadastro")
+        return self._json({"ok": True, **r})
+
+    def _mudar_avalista(self, usuario: dict, caminho: str, corpo: dict):
+        """Os contratos de avalista (bi/avalista.py), para quem tem a página de crédito: conferir o que falta sem
+        gravar, salvar (novo, ou por cima de um que existe: quem fez ou um administrador), excluir (idem) e gravar os
+        dados da Mais Vida (só o administrador)."""
+        if not self._pode_credito(usuario):
+            return
+        avalistas = self.app.avalistas
+        if caminho == "/api/credito/avalista/conferir":
+            return self._json(avalistas.conferir(corpo))
+        if caminho == "/api/credito/avalista/fornecedor":
+            r = avalistas.salvar_fornecedor(usuario, corpo.get("fornecedor"))
+            log.info("%s salvou os dados da Mais Vida do contrato de avalista", usuario["login"])
+            return self._json({"ok": True, **r})
+        if caminho == "/api/credito/avalista/excluir":
+            r = avalistas.excluir(usuario, corpo.get("id"))
+            log.info("%s excluiu o contrato de avalista %s", usuario["login"], corpo.get("id"))
+            return self._json({"ok": True, **r})
+        r = avalistas.salvar(usuario, corpo, self._ids(usuario))
+        if not r["ja_existia"]:
+            log.info("%s %s o contrato de avalista %s (%s)", usuario["login"],
+                     "editou" if corpo.get("id") not in (None, "") else "fez", r["id"], r["contrato"]["tipo"])
         return self._json({"ok": True, **r})
 
     def _pode_manejo(self, usuario: dict) -> bool:
@@ -1327,6 +1354,18 @@ class Manipulador(BaseHTTPRequestHandler):
                     return
                 # busca=texto: o nome do cliente, a razão social, o CNPJ ou o código; id=12: só essa capa
                 return self._json(self.app.capas.listar(usuario, self._ids(usuario), q.get("busca"), q.get("id")))
+            if url.path in ("/api/credito/avalistas", "/api/credito/avalista/cliente", "/api/credito/avalista/pdf"):
+                if not self._pode_credito(usuario):
+                    return
+                if url.path == "/api/credito/avalista/cliente":  # id=12: a razão social e o CNPJ de um cliente do ERP
+                    return self._json(self.app.avalistas.cliente(q.get("id"), self._ids(usuario)))
+                if url.path == "/api/credito/avalista/pdf":  # id=7: o contrato guardado, em PDF
+                    conteudo, nome = self.app.avalistas.pdf(q.get("id"))
+                    log.info("%s baixou o contrato de avalista %s (%s KB)", usuario["login"], q.get("id"),
+                             len(conteudo) // 1024)
+                    return self._baixavel(conteudo, TIPO_PDF, nome)
+                # busca=texto: a compradora, quem garante, o CNPJ ou o CPF; id=7: esse contrato inteiro, para o formulário
+                return self._json(self.app.avalistas.listar(usuario, q.get("busca"), q.get("id")))
             if url.path in ("/api/manejo", "/api/manejo/historico"):
                 if not self._pode_manejo(usuario):
                     return
@@ -1461,6 +1500,9 @@ class Manipulador(BaseHTTPRequestHandler):
             if url.path in ("/api/credito/capa", "/api/credito/capa/serasa", "/api/credito/capa/calcular",
                             "/api/credito/capa/editar", "/api/credito/capa/excluir"):
                 return self._mudar_capa(usuario, url.path)
+            if url.path in ("/api/credito/avalista", "/api/credito/avalista/conferir", "/api/credito/avalista/excluir",
+                            "/api/credito/avalista/fornecedor"):
+                return self._mudar_avalista(usuario, url.path, self._corpo_json())
             if url.path == "/api/credito/config":
                 cfg = self.app.config_credito.salvar(self._corpo_json().get("config") or {}, usuario)
                 log.info("%s salvou as regras do crédito: %s", usuario["login"], cfg)

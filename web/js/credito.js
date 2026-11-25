@@ -97,6 +97,7 @@ export function montarCredito(container, contexto) {
           <option value="">Todos os vendedores</option></select></label>
         <button class="btn btn-limpar" type="button" id="cr-limpar" hidden>${icone("x")}Limpar filtros</button>
         <a class="btn cr-novo" href="#/credito-capa" title="A capa de análise de crédito de um cadastro novo ou de uma reanálise">${icone("caderneta")}<span>Capa de análise de crédito</span></a>
+        <a class="btn cr-novo" href="#/credito-avalista" title="O contrato de avalista: para quando o cliente compra num CNPJ que não está no nome dele">${icone("escudo")}<span>Avalista</span></a>
         ${ctx.admin ? `<a class="btn btn-config" href="#/config-credito" title="Prazo mínimo entre reanálises e validade dos dados do Serasa">${icone("ajustes")}<span>Configurar</span></a>` : ""}
       </div>
       <div class="cr-escolhidos" id="cr-escolhidos" aria-label="Clientes escolhidos" hidden></div>

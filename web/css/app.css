@@ -1693,6 +1693,50 @@ a.cr-hist-excluir { text-decoration: none; display: inline-flex; align-items: ce
 .cc-porte[aria-checked="true"] { border-color: var(--laranja); background: color-mix(in srgb, var(--laranja) 12%, var(--surface)); }
 .cr-novo { height: 42px; border-radius: 14px; text-decoration: none; color: var(--tinta-2); }
 .cr-novo .ic { color: var(--acento); }
+/* ---------- contrato de avalista (avalista.js): o formulário e os contratos guardados ---------- */
+.av-modelo { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--tinta-2); font-size: 13px; }
+.av-modelo .ic { flex: none; width: 16px; height: 16px; color: var(--tinta-3); }
+.av-campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; margin-top: 14px; }
+.av-campos .campo-form { align-content: start; }
+.av-campos .av-largo { grid-column: span 2; }
+.av-campos .av-curto { max-width: 240px; }
+.av-campos .campo, .av-campos .campo select { width: 100%; }
+.av .campo-form input:disabled, .av .campo select:disabled { opacity: .7; cursor: default; }
+.av .campo-form input.av-errado { border-color: var(--ruim-forte); box-shadow: 0 0 0 3px var(--ruim-bg); }
+.av-rep { margin: 16px 0 0; padding: 4px 14px 14px; border: 1px solid var(--linha); border-radius: 14px; min-width: 0; }
+.av-rep legend { padding: 0 6px; font-size: 13px; font-weight: 700; color: var(--tinta-2); }
+.av-rep legend .link-botao { margin-left: 8px; font-size: 12.5px; }
+.av-mais { margin-top: 12px; height: 36px; padding: 0 12px; font-size: 13px; }
+.av-erp { margin-top: 0; }
+.av-poderes { margin-top: 16px; }
+.av-mv { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--linha); }
+.av-mv-texto { flex: 1 1 320px; min-width: 0; }
+.av-mv-texto b { display: block; font-size: 14.5px; }
+.av-mv-texto small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.av-mv .btn { height: 34px; padding: 0 12px; font-size: 13px; }
+.av-mv-form { display: grid; gap: 12px; margin-top: 14px; padding: 14px; border-radius: 14px; border: 1px dashed var(--linha-forte); }
+.av-mv-form .av-campos { margin-top: 0; }
+.av-mv-nota { display: flex; gap: 8px; margin: 0; color: var(--tinta-2); font-size: 13px; }
+.av-mv-nota .ic { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--tinta-3); }
+.av-ok, .av-faltam > p { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 14px; }
+.av-ok { padding: 10px 14px; border-radius: 14px; background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+.av-ok .ic, .av-faltam > p .ic { flex: none; margin-top: 2px; }
+.av-faltam { padding: 12px 14px; border-radius: 14px; background: var(--atencao-bg); border: 1px solid color-mix(in srgb, var(--atencao-forte) 40%, transparent); }
+.av-faltam > p .ic { color: var(--atencao); }
+.av-faltam ul { margin: 8px 0 0; padding: 0 0 0 26px; columns: 2 260px; column-gap: 24px; font-size: 13px; }
+.av-faltam li { break-inside: avoid; padding: 1px 0; }
+.av-faltam .link-botao { font-weight: 600; text-align: left; }
+.av-acoes { align-items: center; margin-top: 14px; }
+.av-situacao { display: inline-flex; align-items: center; gap: 5px; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; }
+.av-situacao .ic { width: 14px; height: 14px; color: var(--ok); }
+.av-item.av-aberto { border-color: var(--laranja); }
+.av-item-acoes { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.av-item p { margin: 6px 0 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.av-item-nome b { font-size: 15px; }
+.av-item small { color: var(--tinta-3); font-size: 12.5px; }
+.av-item-garante { color: var(--tinta-2); }
+.av-item p.av-item-quem { color: var(--tinta-3); font-size: 12.5px; }
+@media (max-width: 560px) { .av-campos .av-largo { grid-column: auto; } }
 .cc .cr-registro-campos .campo, .cc .cr-registro-campos .campo select { width: 100%; }
 .cc-tabela { max-height: none; }
 .cc-de-peso { display: none; }

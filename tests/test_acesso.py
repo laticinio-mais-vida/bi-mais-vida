@@ -184,7 +184,8 @@ class TestMigracao041(BaseBanco):
         self.assertEqual(self.banco.migrar(), ["041_premiacoes_acesso", "042_efetividade_area_varios_dias",
                                                "043_agenda_dia_util_do_mes", "044_manejo", "045_crm", "046_credito_capas",
                                                "047_limites_assistente", "048_agenda_atividade_pessoas",
-                                               "049_credito_capas_edicao"])
+                                               "049_credito_capas_edicao",
+                                               "050_credito_avalistas"])
         with self.banco.conexao() as con:
             acessos = dict(con.execute("SELECT login, premiacoes FROM usuarios").fetchall())
         tudo = {"abas": ["vendedores", "supervisores", "comissao"], "supervisores": ["marcos", "ronaldo", "valdirene"]}

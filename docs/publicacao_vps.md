@@ -920,6 +920,25 @@ pessoas"): quem cria escolhe as pessoas, com ou sem autonomia, e cada uma marca 
   `DELETE FROM migracoes WHERE versao = '048_agenda_atividade_pessoas'`.
 - **PC:** recebe a 048 quando o código for atualizado lá (o iniciar.bat aplica); a agenda do PC é outra.
 
+#### Contrato de avalista (migração 050)
+
+Página filha do Crédito (veja o README, "Contrato de avalista"): o contrato de quando o cliente compra num CNPJ que
+não está no nome dele, preenchido na tela, guardado e baixado em PDF igual ao modelo em Word.
+
+- **Ordem:** só o site precisa; nada muda no que o PC manda. A busca "Já é cliente?" usa o que o cache já tem (a razão
+  social e, quando o PC manda a tabela `clientes_cnpj`, o CNPJ).
+- **A migração 050** cria `credito_avalistas` e acrescenta `avalista` aos nomes aceitos em `regras` (os dados da Mais
+  Vida que saem no contrato). Não mexe em dado que já existe. Ensaie em BEGIN/ROLLBACK.
+- **Sem pacote novo:** o PDF usa o fpdf2, que a imagem já tem. A letra vai junto com o código, em `bi/fontes/` (três
+  arquivos `.ttf`): confira que chegaram ao servidor, porque sem eles o PDF não sai.
+- **Depois de publicar:** abra Crédito › Avalista. Como administrador, complete em "Alterar" os dados da Mais Vida
+  que o modelo Pessoa física pede (inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão,
+  RG e CPF). Faça um contrato de cada tipo, baixe o PDF e compare com o modelo em Word.
+- **Voltar atrás:** o código anterior ignora a tabela. Para apagar de vez, depois do dump: `DROP TABLE
+  credito_avalistas`, `DELETE FROM regras WHERE nome = 'avalista'`, recriar `regras_nome_check` sem `'avalista'` e
+  `DELETE FROM migracoes WHERE versao = '050_credito_avalistas'`.
+- **PC:** recebe a 050 quando o código for atualizado lá; os contratos ficam só no site (no PC, a página avisa).
+
 #### Voltar as regras para uma versão anterior
 
 Cada Salvar em Metas › Configurar, em Projeções › Configurar, em Sugestão de Metas › Configurar e em Premiações ›

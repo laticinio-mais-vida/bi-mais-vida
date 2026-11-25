@@ -7,6 +7,7 @@ import { montarProjecoes, recarregarProjecoes } from "./projecoes.js";
 import { montarCredito, recarregarCredito, textoSubtitulo as subtituloCredito } from "./credito.js";
 import { montarConfigCredito, configCreditoTemAlteracoes } from "./configcredito.js";
 import { montarCapaCredito, capaTemAlteracoes } from "./capacredito.js";
+import { montarAvalista, avalistaTemAlteracoes } from "./avalista.js";
 import { montarConfig, configTemAlteracoes } from "./config.js";
 import { montarConfigProjecoes, configProjecoesTemAlteracoes } from "./configprojecoes.js";
 import { montarSugestao, recarregarSugestao, sugestaoTemAlteracoes } from "./sugestao.js";
@@ -172,6 +173,16 @@ const PAGINAS = {
     pendente: capaTemAlteracoes,
     // remontarCredito: a página de crédito lê o cliente do link (#/credito?c=…) só quando monta
     montar: (el) => montarCapaCredito(el, { admin: ehAdmin(), remontarCredito: () => app.remontar.add("credito") }),
+  },
+  // Também para quem tem a página de crédito: o contrato de avalista (o cliente compra num CNPJ que não está no nome
+  // dele e outra empresa ou pessoa garante), preenchido aqui e baixado em PDF igual ao modelo em Word.
+  "credito-avalista": {
+    titulo: "Contrato de avalista",
+    fixo: "Para quando o cliente compra num CNPJ que não está no nome dele: preencha, guarde e baixe o PDF",
+    pai: "credito",
+    sempreMonta: true,
+    pendente: avalistaTemAlteracoes,
+    montar: (el) => montarAvalista(el, { admin: ehAdmin() }),
   },
   manejo: {
     nome: "Manejo da Base",

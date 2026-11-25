@@ -1,2 +1,4 @@
 # Scripts que rodam no servidor Linux: sempre com quebra de linha LF, mesmo com core.autocrlf no Windows.
 *.sh text eol=lf
+# A letra do contrato de avalista (bi/fontes): arquivo binário, sem troca de quebra de linha.
+*.ttf binary
