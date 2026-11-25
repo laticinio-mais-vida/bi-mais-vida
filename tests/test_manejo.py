@@ -3,16 +3,22 @@ mês, as justificativas, os vereditos e as rotas."""
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import logging
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
 import duckdb
+try:
+    import pypdf
+except ImportError:  # o PDF é lido de volta só onde o pacote existe
+    pypdf = None
 
 import app
 from bi.banco import BancoForaDoAr
@@ -20,6 +26,7 @@ from bi.calendario import Calendario
 from bi.conversas import NaoEncontrada
 from bi.manejo import PADRAO, ConfigManejo, Manejo, _valida, avaliar, prazo_do_mes
 from tests.apoio import BA, ES, BaseBanco, D, criar_calc
+from tests.test_arquivos import TEM_PDF, TEM_XLSX, ler_excel
 
 DIA = D(2026, 10, 1)              # o dia da cópia do ERP no cache de teste
 INICIO = D(2026, 8, 1)            # o primeiro dia do histórico da carteira no teste
@@ -409,9 +416,12 @@ class TestLista(Base):
         self.manejo.sincronizar()
         linhas = self.linhas()
         self.assertEqual((linhas[(20, "central")][0], linhas[(28, "inativar")][0]), ("comprou", "pagou"))
-        i = self.item(20)
-        self.assertEqual((i["situacao"], i["encerrada"], i["fatos"]["ultima_compra"]),
-                         ("saiu", {"em": "2026-10-02", "motivo": "comprou"}, "2026-10-01"))
+        # quem saiu sozinho some da lista da página e fica só no histórico do cliente
+        self.assertFalse({20, 28} & {i["cliente"]["id"] for i in self.manejo.listar(self.chefe, None)["itens"]})
+        with self.assertRaises(AssertionError):
+            self.item(20)
+        (s,) = self.manejo.historico(self.chefe, None, 20)["sugestoes"]
+        self.assertEqual(s["encerrada"], {"em": "2026-10-02", "motivo": "comprou"})
         self.assertIn((21, "central"), linhas)   # completou 30 dias em 02/10
         self.assertIn((29, "inativar"), linhas)  # e este, 120 dias de atraso
         # outro título do 28 passa dos 120 dias no mesmo mês: a mesma linha reabre, com a justificativa de antes
@@ -438,11 +448,13 @@ class TestLista(Base):
         self.assertEqual(linhas[(25, "central")], ("fora_da_regra", JAMILLE))
         i = self.item(20)
         self.assertEqual((i["vendedor"]["nome"], i["vendedor_entrada"]), ("Jamille", "Rubens"))
-        self.assertEqual(self.item(23)["vendedor_entrada"], None)
+        # os que saíram (já na central, inativado, fora da regra) não aparecem mais na lista
+        na_lista = {x["cliente"]["id"] for x in self.manejo.listar(self.chefe, None)["itens"]}
+        self.assertIn(20, na_lista)
+        self.assertFalse({23, 24, 25, 26} & na_lista)
         # quem vê a BA passa a ver o 20; quem vê o ES, não mais
         self.assertIn(20, {x["cliente"]["id"] for x in self.manejo.listar(self.marcos, DA_BA)["itens"]})
-        self.assertNotIn(20, {x["cliente"]["id"] for x in self.manejo.listar(self.val, DO_ES)["itens"]
-                              if x["situacao"] != "saiu"})
+        self.assertNotIn(20, {x["cliente"]["id"] for x in self.manejo.listar(self.val, DO_ES)["itens"]})
 
     def test_inativacao_tem_prioridade(self):
         self.manejo.sincronizar()
@@ -699,6 +711,73 @@ class TestRespostas(Base):
         self.assertEqual(self.contar("manejo_sugestoes"), 9)
 
 
+@unittest.skipUnless(TEM_XLSX and TEM_PDF and pypdf, "sem os pacotes XlsxWriter, fpdf2 e pypdf")
+class TestArquivo(Base):
+    """O Excel e o PDF da tabela, como está na tela (bi/manejo.py exportar)."""
+
+    def setUp(self):
+        super().setUp()
+        self.manejo.sincronizar()
+
+    def ids(self, quem, acesso, aba: str) -> dict[int, int]:
+        """{cliente: id da linha} da aba, como a pessoa vê."""
+        return {x["cliente"]["id"]: x["id"] for x in self.manejo.listar(quem, acesso)["itens"] if x["sugestao"] == aba}
+
+    def test_excel_na_ordem_da_tela_e_so_com_o_que_a_pessoa_ve(self):
+        self.manejo.justificar(self.val, DO_ES, {"itens": [self.marcar(20)], "decisao": "manter",
+                                                "texto": "=Em reforma, reabre dia 25."})
+        central = self.ids(self.val, DO_ES, "central")
+        self.assertEqual(set(central), {20, 23, 26})
+        da_ba = self.ids(self.chefe, None, "central")[24]          # de um vendedor que ela não vê
+        de_outra_aba = self.ids(self.chefe, None, "inativar")[30]  # da lista de inativação
+        corpo = {"mes": "2026-10", "aba": "central", "formato": "excel", "filtros": "Busca: “mercado”",
+                 "itens": [central[26], central[20], da_ba, de_outra_aba, central[20], 999999]}
+        conteudo, nome, formato = self.manejo.exportar(self.val, DO_ES, corpo)
+        self.assertEqual(formato, "excel")
+        self.assertRegex(nome, r"^Manejo da Base - Passar para a central - outubro de 2026 - \d{4}-\d{2}-\d{2}\.xlsx$")
+        linhas = ler_excel(conteudo, {"cliente": "Cliente", "codigo": "Código do cliente", "vendedor": "Vendedor",
+                                      "dias": "Dias sem compra", "contagem": "Contagem dos dias",
+                                      "situacao": "Situação", "resposta": "Resposta do supervisor",
+                                      "texto": "Texto da resposta"})
+        self.assertEqual([(int(x["codigo"]), x["cliente"]) for x in linhas],
+                         [(26, "COMPROU ANTES DO CACHE"), (20, "MERCADO TRINTA")])  # a ordem da tela, sem repetir
+        x = linhas[1]
+        self.assertEqual((x["vendedor"], int(x["dias"]), x["contagem"], x["situacao"], x["resposta"], x["texto"]),
+                         ("Rubens", 30, "desde a última compra", "Justificado", "Deve continuar com o vendedor",
+                          "=Em reforma, reabre dia 25."))  # o texto fica texto, não vira fórmula
+        self.assertEqual(linhas[0]["contagem"], "desde o último título de venda (antes de 2024)")
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as z:
+            folha = z.read("xl/worksheets/sheet1.xml").decode()
+            textos = z.read("xl/sharedStrings.xml").decode() if "xl/sharedStrings.xml" in z.namelist() else folha
+        self.assertNotIn("<f>", folha)
+        self.assertIn("Manejo da Base · Passar para a central · outubro de 2026", textos)
+        self.assertIn("Busca: “mercado” · 2 clientes", textos)
+
+    def test_pdf_da_inativacao_com_o_motivo(self):
+        inativar = self.ids(self.chefe, None, "inativar")
+        corpo = {"mes": "2026-10", "aba": "inativar", "formato": "pdf", "itens": [inativar[28], inativar[31]]}
+        conteudo, nome, formato = self.manejo.exportar(self.chefe, None, corpo)
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+        self.assertTrue(nome.startswith("Manejo da Base - Inativar - outubro de 2026 - ") and nome.endswith(".pdf"))
+        texto = " ".join(" ".join(p.extract_text().split()) for p in pypdf.PdfReader(io.BytesIO(conteudo)).pages)
+        self.assertIn("Inadimplente há", texto)
+        self.assertIn("Na central, 61 dias sem compra", texto)
+        self.assertNotIn("Código do cliente", texto)  # o código só vai no Excel
+
+    def test_pedidos_errados(self):
+        central = list(self.ids(self.val, DO_ES, "central").values())
+        certo = {"mes": "2026-10", "aba": "central", "formato": "excel", "itens": central}
+        for errado, msg in (({"formato": "csv"}, "Excel ou PDF"), ({"aba": "todas"}, "escolha a lista"),
+                            ({"itens": []}, "nenhum cliente"), ({"itens": "1,2"}, "nenhum cliente"),
+                            ({"itens": ["a"]}, "cliente inválido"), ({"itens": [999999]}, "atualize a página"),
+                            ({"formato": "pdf", "itens": list(range(2001))}, "até 2000 clientes")):
+            with self.subTest(errado=str(errado)[:40]), self.assertRaisesRegex(ValueError, msg):
+                self.manejo.exportar(self.val, DO_ES, {**certo, **errado})
+        pc = Manejo(self.banco, self.calc, self.config, lambda: dict(NOMES), False)
+        with self.assertRaisesRegex(ValueError, "site"):
+            pc.exportar(self.val, DO_ES, certo)
+
+
 class UsuariosFalsos:
     """Só o que o Manipulador usa para saber quem pede: a sessão (o valor do cookie) -> o usuário."""
 
@@ -769,6 +848,27 @@ class TestRotas(Base):
         self.assertEqual((status, [e["tipo"] for e in d["sugestoes"][0]["eventos"]]), (200, ["justificativa", "veredito"]))
         self.assertEqual(self.pedir("/api/manejo/historico?cliente=5", "val")[0], 404)
         self.assertEqual(self.pedir("/api/manejo?mes=outubro", "val")[0], 400)
+
+    @unittest.skipUnless(TEM_XLSX, "sem o pacote XlsxWriter")
+    def test_baixar_a_tabela(self):
+        _, d = self.pedir("/api/manejo", "val")
+        corpo = {"mes": "2026-10", "aba": "central", "formato": "excel",
+                 "itens": [x["id"] for x in d["itens"] if x["sugestao"] == "central"]}
+        self.assertEqual(self.pedir("/api/manejo/exportar", "ana", corpo)[0], 403)
+        con = http.client.HTTPConnection("127.0.0.1", self.servidor.server_address[1], timeout=30)
+        try:
+            con.request("POST", "/api/manejo/exportar", headers={"Cookie": f"{app.COOKIE}=leitor"},  # quem só consulta
+                        body=json.dumps(corpo))
+            r = con.getresponse()
+            conteudo = r.read()
+            self.assertEqual((r.status, r.getheader("Content-Type")),
+                             (200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            self.assertIn("filename*=UTF-8''Manejo%20da%20Base%20-%20Passar", r.getheader("Content-Disposition"))
+        finally:
+            con.close()
+        self.assertTrue(conteudo.startswith(b"PK"))
+        self.assertEqual(self.pedir("/api/manejo/exportar", "val", {**corpo, "formato": "csv"}),
+                         (400, {"erro": "escolha o formato: Excel ou PDF"}))
 
 
 class TestDepoisDeReceber(unittest.TestCase):

@@ -333,7 +333,7 @@ export function marcaOrdem(niveis, campo, { ativa = "ativa", vazio = "↕" } = {
 // A linha acima da tabela com a ordem que vale ("Ordem: Valor (maior primeiro) › Cliente (A a Z)") e, fora da ordem
 // com que a tabela abre, o botão de voltar a ela (data-ordem-padrao: cada página trata o clique).
 // coluna(campo) -> { rotulo, tipo: "texto" | "data" | "numero" (padrão), sentidos?: [crescente, decrescente] } ou null.
-const SENTIDOS = { texto: ["A a Z", "Z a A"], data: ["mais antiga primeiro", "mais recente primeiro"], numero: ["menor primeiro", "maior primeiro"] };
+export const SENTIDOS = { texto:["A a Z", "Z a A"], data: ["mais antiga primeiro", "mais recente primeiro"], numero: ["menor primeiro", "maior primeiro"] };
 export function linhaOrdem(niveis, padrao, coluna) {
   const partes = niveis.map((n) => {
     const c = coluna(n.campo);

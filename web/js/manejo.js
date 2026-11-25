@@ -5,7 +5,7 @@
 // quem pode o quê ficam no servidor (bi/manejo.py); aqui é a apresentação: as duas listas, os filtros, a tabela
 // ordenável, o histórico de cada cliente e as respostas, uma a uma ou de vários clientes de uma vez. A tela não mostra
 // os códigos do ERP: só os nomes (a busca também acha pelo código do cliente).
-import { api, esc, fmt, icone, toast, guardar, ler, clicarOrdem, ordenarPorNiveis, marcaOrdem, linhaOrdem } from "./util.js";
+import { api, esc, fmt, icone, toast, guardar, ler, clicarOrdem, ordenarPorNiveis, marcaOrdem, linhaOrdem, irParaLogin, SENTIDOS } from "./util.js";
 import { multiSelecao } from "./multiselecao.js";
 import { ligarTelaCheia, sairTelaCheia, reajustarTelaCheia } from "./telacheia.js";
 
@@ -33,9 +33,9 @@ const SITUACOES = {
   aguardando_erp: { rotulo: "Aguardando o ERP", icone: "relogio", classe: "erp" },
   feita: { rotulo: "Feito no ERP", icone: "certo", classe: "feita" },
   mantida: { rotulo: "Continua", icone: "menos", classe: "mantida" },
-  saiu: { rotulo: "Saiu da lista", icone: "sair", classe: "saiu" },
 };
-const ORDEM_SIT = { a_justificar: 1, sem_justificativa: 2, justificada: 3, aguardando_erp: 4, feita: 5, mantida: 6, saiu: 7 };
+// Quem sai sozinho da lista (voltou a comprar, pagou...) não vem do servidor: só aparece no histórico do cliente.
+const ORDEM_SIT = { a_justificar: 1, sem_justificativa: 2, justificada: 3, aguardando_erp: 4, feita: 5, mantida: 6 };
 const MOTIVO_SAIDA = {
   comprou: "voltou a comprar", pagou: "pagou", na_central: "já está na central", inativado: "foi inativado no ERP",
   fora_da_regra: "saiu da regra", outra_sugestao: "passou para a lista de inativação", mantido: "continua como está",
@@ -48,7 +48,6 @@ const FILTROS = [
   { id: "justificada", rotulo: "Justificados", cabe: (x) => x.situacao === "justificada" },
   { id: "sem_justificativa", rotulo: "Sem justificativa", cabe: (x) => x.situacao === "sem_justificativa" },
   { id: "veredito", rotulo: "Com veredito", cabe: (x) => ["aguardando_erp", "feita", "mantida"].includes(x.situacao) },
-  { id: "saiu", rotulo: "Saíram", cabe: (x) => x.situacao === "saiu" },
   { id: "todas", rotulo: "Todos", cabe: () => true },
 ];
 const FILTRO = Object.fromEntries(FILTROS.map((f) => [f.id, f]));
@@ -419,8 +418,8 @@ function cartoes(d) {
     ${kpi({
       i: 1, cor: "var(--s-fat)", ic: L.icone, rotulo: `Na lista de ${esc(mesDe(r.rotulo) || r.mes)}`, valor: fmt.num(base.length),
       meta: `${base.length === 1 ? "cliente sugerido" : "clientes sugeridos"} para <b>${estado.aba === "central" ? "a central" : "inativar"}</b>`,
-      rodape: [["Com veredito", fmt.num(comVeredito)], ["Saíram da lista sozinhos", fmt.num(sit("saiu"))]],
-      dica: "Todos os clientes que entraram nesta lista no mês, com os que já saíram dela",
+      rodape: [["Sem veredito", fmt.num(base.length - comVeredito)], ["Com veredito", fmt.num(comVeredito)]],
+      dica: "Os clientes desta lista no mês que esperam a resposta do supervisor ou o veredito, e os que já têm veredito. Quem volta a comprar ou paga antes do veredito sai da lista",
     })}
     ${r.aberta ? kpi({
       i: 2, cor: "var(--atencao-forte)", ic: "relogio", rotulo: "A justificar", valor: fmt.num(sit("a_justificar")),
@@ -481,7 +480,7 @@ function colunaDaOrdem(cols, id) {
   const c = cols.find((x) => x.id === id);
   if (!c) return null;
   if (id === "frequencia") return { rotulo: c.rotulo, sentidos: ["semanal primeiro", "sem frequência primeiro"] };
-  if (id === "situacao") return { rotulo: c.rotulo, sentidos: ["a justificar primeiro", "saíram primeiro"] };
+  if (id === "situacao") return { rotulo: c.rotulo, sentidos: ["a justificar primeiro", "com veredito primeiro"] };
   if (id === "ultima" || id === "resposta" || id === "veredito") return { rotulo: c.rotulo, tipo: "data" };
   return { rotulo: c.rotulo, tipo: c.texto ? "texto" : "numero" };
 }
@@ -491,6 +490,69 @@ function visiveis(d) {
   const base = itensDaAba(d), filtro = filtroAtivo(d, base), termo = semAcento(estado.busca.trim());
   const cols = colunas();
   return { base, filtro, cols, itens: ordenar(base.filter(FILTRO[filtro].cabe).filter((x) => cabeNaBusca(x, termo)), cols) };
+}
+
+// ---------- o arquivo da tabela ----------
+// Os filtros da tela por extenso, para o cabeçalho do arquivo (vazio = a lista inteira, na ordem padrão).
+function textoFiltros(d, v) {
+  const partes = [];
+  if (v.filtro !== "todas") partes.push(`Situação: ${FILTRO[v.filtro].rotulo}`);
+  if (estado.vendedores.length) {
+    const nomes = new Map((d.vendedores || []).map((x) => [x.id, x.nome]));
+    partes.push(`Vendedores: ${estado.vendedores.map((id) => nomes.get(id)).filter(Boolean).join(", ")}`);
+  }
+  if (estado.busca.trim()) partes.push(`Busca: “${estado.busca.trim()}”`);
+  const ordem = estado.ordens.map((n) => {
+    const c = colunaDaOrdem(v.cols, n.campo);
+    if (!c) return null;
+    const s = c.sentidos || SENTIDOS[c.tipo] || SENTIDOS.numero;
+    return `${c.rotulo} (${s[n.desc ? 1 : 0]})`;
+  }).filter(Boolean);
+  if (ordem.length) partes.push(`Ordem: ${ordem.join(" › ")}`);
+  return partes.join(" · ");
+}
+
+// Pede ao servidor o Excel ou o PDF das linhas que aparecem agora, na ordem da tela, e baixa.
+async function exportar(formato, botao) {
+  const d = estado.dados;
+  if (!d?.rodada) return;
+  const v = visiveis(d);
+  if (!v.itens.length) { toast("Nenhum cliente na tabela para baixar.", "erro"); return; }
+  const nome = formato === "pdf" ? "PDF" : "Excel";
+  botao.disabled = true;
+  botao.classList.add("girando");
+  toast(`Montando o ${nome}…`);
+  try {
+    const r = await fetch("/api/manejo/exportar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mes: d.rodada.mes, aba: estado.aba, formato, itens: v.itens.map((x) => x.id), filtros: textoFiltros(d, v) }),
+    });
+    if (r.status === 401) { irParaLogin(); return; }
+    if (!r.ok) {
+      let msg = `erro ${r.status}`;
+      try { msg = (await r.json()).erro || msg; } catch { /* sem corpo */ }
+      throw new Error(msg);
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await r.blob());
+    link.download = nomeDoArquivo(r.headers.get("Content-Disposition")) || `Manejo da Base.${formato === "pdf" ? "pdf" : "xlsx"}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    toast("Arquivo salvo em Downloads.");
+  } catch (err) {
+    toast(`Não foi possível baixar o ${nome}: ${err.message}`, "erro");
+  } finally {
+    botao.classList.remove("girando"); // a tabela pode ter sido desenhada de novo enquanto o arquivo vinha
+    botao.disabled = false;
+  }
+}
+
+function nomeDoArquivo(cabecalho) {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cabecalho || "");
+  if (utf8) { try { return decodeURIComponent(utf8[1]); } catch { /* usa o outro */ } }
+  return /filename="([^"]+)"/i.exec(cabecalho || "")?.[1];
 }
 
 function desenharLista() {
@@ -545,10 +607,16 @@ function lista(d, v) {
   }
   const contagem = v.itens.length === v.base.length ? plural(v.base.length, "cliente", "clientes")
     : `${fmt.num(v.itens.length)} de ${plural(v.base.length, "cliente", "clientes")}`;
+  const semLinhas = v.itens.length ? "" : " disabled";
+  const dicaArquivo = (f) => `Baixar em ${f} os ${plural(v.itens.length, "cliente", "clientes")} que aparecem na tabela, com os filtros e a ordem da tela`;
   return `
     <div class="cartao-cab mj-lista-cab">
       <div><h3>${icone(L.icone)}${esc(L.titulo)}</h3>
         <p class="sub">${esc(sub)} · ${contagem} · clique no cliente para ver o histórico${d.admin || d.pode_justificar ? " e responder" : ""}</p></div>
+      <div class="acoes-relatorio mj-exportar">
+        <button type="button" class="btn" data-exportar="excel" title="${esc(dicaArquivo("Excel"))}"${semLinhas}>${icone("abaixo")}<span>Excel</span></button>
+        <button type="button" class="btn" data-exportar="pdf" title="${esc(dicaArquivo("PDF"))}"${semLinhas}>${icone("arquivo")}<span>PDF</span></button>
+      </div>
     </div>
     ${recusados()}
     <div class="mj-chips" role="group" aria-label="Filtrar pela situação">${chips}</div>
@@ -639,7 +707,6 @@ function celDoze(x) {
 function celSituacao(x) {
   const s = SITUACOES[x.situacao] || SITUACOES.a_justificar, e = x.encerrada;
   let rotulo = s.rotulo, nota = "";
-  if (x.situacao === "saiu" && e) { rotulo = `Saiu: ${MOTIVO_SAIDA[e.motivo] || "saiu da regra"}`; nota = `em ${dataCurta(e.em)}`; }
   if (x.situacao === "mantida") rotulo = LISTAS[x.sugestao].veredito.manter;
   if (x.situacao === "feita" && e) nota = `em ${dataCurta(e.em)}`;
   return `<span class="status mj-sit ${s.classe}">${icone(s.icone)}${esc(rotulo)}</span>${nota ? `<small>${nota}</small>` : ""}`;
@@ -778,7 +845,6 @@ function dicaTexto(tipo, decisao) {
 
 function porQueNao(x) {
   const d = estado.dados, prazo = d.rodada ? data(d.rodada.prazo) : "";
-  if (x.situacao === "saiu") return "O cliente saiu da lista: não precisa mais de resposta nem de veredito.";
   if (x.situacao === "feita") return "O cadastro do ERP já mostra a mudança feita.";
   if (d.admin) {
     if (x.situacao === "a_justificar") return `O supervisor ainda pode justificar até ${prazo}. O veredito sai depois da resposta dele ou do prazo.`;
@@ -828,6 +894,8 @@ function validar(tipo, decisao, texto) {
 // ---------- cliques, marcações e digitação dentro do cartão da lista ----------
 function aoClicarLista(e) {
   const t = e.target;
+  const arquivo = t.closest("[data-exportar]");
+  if (arquivo) { exportar(arquivo.dataset.exportar, arquivo); return; }
   const ordem = t.closest("[data-ordem]");
   if (ordem) {
     const campo = ordem.dataset.ordem, cols = colunas(), col = cols.find((c) => c.id === campo);
@@ -1072,7 +1140,9 @@ function metodo(d) {
             “aguardando o ERP” até o cadastro mostrar a mudança, e então aparece como feita. Com “continua”, o cliente volta
             na lista do mês seguinte se ainda estiver na regra, com o histórico à vista.</li>
           <li><b>Saída sozinho:</b> antes do veredito, o cliente sai da lista quando volta a comprar, paga o que devia, já
-            aparece com a central ou é inativado no ERP. A linha e as respostas ficam no histórico.</li>
+            aparece com a central ou é inativado no ERP. Ele deixa de aparecer aqui, porque não há mais o que justificar
+            nem decidir. O que já tinha sido respondido fica no histórico do cliente, e ele volta à lista se cair de novo
+            numa regra.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar (de novo, para inverter) e no cliente para abrir o
             histórico. As colunas clicadas antes continuam valendo para desempatar (até 3: o número ao lado da seta diz
             a vez de cada uma). As caixas marcam vários clientes para responder de uma vez.</li>

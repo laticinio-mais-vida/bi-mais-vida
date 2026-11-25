@@ -1720,8 +1720,10 @@ cair já entra na lista do mês seguinte.
 | Aguardando o ERP | veredito "passar para a central" ou "inativar": espera o cadastro mostrar a mudança |
 | Feito | o ERP já mostra o cliente na central ou inativo |
 | Mantido | veredito "continua": não volta no mesmo mês; se continuar na regra, entra na lista do mês seguinte |
-| Saiu | antes do veredito, voltou a comprar, pagou, já foi para a central ou já foi inativado |
 
+- **Saiu sozinho:** antes do veredito, o cliente voltou a comprar, pagou, já foi para a central ou já foi inativado.
+  Ele some da lista da página (não há mais o que justificar nem decidir), e a linha fica no banco e no histórico do
+  cliente. Se cair de novo numa regra no mesmo mês, a mesma linha volta, com o que já tinha sido respondido.
 - Cada justificativa e cada veredito é uma linha nova no histórico, com quem, quando e os números do dia. O veredito
   pode ser trocado, menos o que o ERP já mostra como feito.
 - Enquanto não há veredito, a sugestão acompanha o vendedor atual do cliente.
@@ -1731,6 +1733,15 @@ cair já entra na lista do mês seguinte.
 **Quem faz o quê.** O administrador vê todos os vendedores, dá o veredito e configura. Quem tem a página e a marca
 "pode justificar" responde pelos clientes dos vendedores do acesso dele (tela Usuários). Quem tem a página sem a marca
 só consulta.
+
+**Excel e PDF.** Os botões no cabeçalho da lista baixam a tabela como está na tela: a lista (central ou inativar), a
+situação, os vendedores, a busca e a ordem (`POST /api/manejo/exportar`, com os ids das linhas na ordem da tela). O
+servidor lê a lista de novo com o acesso de quem baixa, e o que não está nela fica de fora. O cabeçalho do arquivo diz
+os filtros, quantos clientes, o dia da cópia do banco e quem baixou.
+- **Excel:** os números em colunas separadas (dias de atraso, em aberto, comprou em 12 meses), o código do cliente
+  (para achar no ERP), a resposta e o veredito com quem e quando, e o texto de cada um.
+- **PDF:** a página deitada, para ler no papel, até 2.000 clientes. A resposta e o veredito ficam numa coluna cada, e o
+  código do cliente não aparece.
 
 ### Configurar (Manejo da Base)
 

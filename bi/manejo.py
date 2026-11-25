@@ -9,8 +9,9 @@ Os números são os da campanha e mudam em Manejo da Base › Configurar (Config
 
 Como funciona:
 - Cada mês tem a sua lista (manejo_rodadas), com o prazo no penúltimo dia útil. O cliente entra na lista aberta assim
-  que cai numa regra e sai sozinho se deixar de cair antes do veredito (voltou a comprar, pagou). Quem cair depois do
-  prazo já entra na lista do mês seguinte.
+  que cai numa regra e sai sozinho se deixar de cair antes do veredito (voltou a comprar, pagou). Quem sai sozinho some
+  da lista da página (a linha fica no banco e no histórico do cliente). Quem cair depois do prazo já entra na lista do
+  mês seguinte.
 - Quem tem a página e a marca "pode justificar" (bi/acesso.py pode_justificar) responde, até o fim do dia do prazo, se
   o cliente pode seguir a sugestão ou deve continuar como está. Depois o administrador dá o veredito: "seguir" espera o
   ERP mostrar a mudança (o painel não mexe no ERP); "manter" encerra, e o cliente só volta na lista de outro mês.
@@ -50,7 +51,10 @@ DECISOES = ("seguir", "manter")  # seguir: fazer o que a lista sugere; manter: o
 SAIDAS = {"comprou": "voltou a comprar", "pagou": "pagou os títulos vencidos", "na_central": "já está na central",
           "inativado": "já foi inativado no ERP", "fora_da_regra": "saiu da regra",
           "outra_sugestao": "passou para a lista de inativação"}
-REGRAS = {"central": ("sem_compra",), "inativar": ("inadimplente", "central_sem_compra")}  # as regras de cada lista
+# As linhas encerradas que a lista da página ainda mostra: as com veredito (feita no ERP ou mantida). As que saíram
+# sozinhas (SAIDAS) não aparecem, porque não há mais o que justificar nem decidir; ficam só no histórico do cliente.
+NA_LISTA = ("aplicado", "mantido")
+REGRAS ={"central": ("sem_compra",), "inativar": ("inadimplente", "central_sem_compra")}  # as regras de cada lista
 FREQUENCIAS = {1: "semanal", 2: "quinzenal", 4: "mensal"}  # semanas_da_frequencia -> o nome
 NOME_DIAS = {"semanal": "dias sem compra do cliente semanal", "quinzenal": "dias sem compra do cliente quinzenal",
              "mensal": "dias sem compra do cliente mensal", "inadimplencia": "dias de atraso do inadimplente",
@@ -250,6 +254,119 @@ def _entrada(retrato: dict) -> dict:
     """Os números do dia em que o cliente entrou na lista."""
     return {"dias_sem_compra": retrato.get("dias_sem_compra"), "ultima_compra": retrato.get("ultima_compra"),
             "dias_inadimplencia": (retrato.get("inadimplencia") or {}).get("dias")}
+
+
+# --- o arquivo da lista (Excel e PDF), com os nomes que a página usa (web/js/manejo.js) ---------------------------
+TITULOS = {"central": "Passar para a central", "inativar": "Inativar"}
+RESPOSTAS = {"central": {"seguir": "Pode passar para a central", "manter": "Deve continuar com o vendedor"},
+             "inativar": {"seguir": "Pode inativar", "manter": "Deve continuar ativo"}}
+VEREDITOS = {"central": {"seguir": "Passar para a central", "manter": "Continua com o vendedor"},
+             "inativar": {"seguir": "Inativar", "manter": "Continua ativo"}}
+NOME_SITUACAO = {"a_justificar": "A justificar", "justificada": "Justificado", "sem_justificativa": "Sem justificativa",
+                 "aguardando_erp": "Aguardando o ERP", "feita": "Feito no ERP"}
+NOME_FREQUENCIA = {"semanal": "Semanal", "quinzenal": "Quinzenal", "mensal": "Mensal",
+                   "sem_frequencia": "Sem frequência (conta como semanal)"}
+
+
+def _plural(n, um: str, varios: str) -> str:
+    return f"{n} {um if n == 1 else varios}"
+
+
+def _dia(iso) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(str(iso)[:10]) if iso else None
+    except ValueError:
+        return None
+
+
+def _contagem(f: dict) -> str:
+    """De onde os dias sem compra contam, como a página diz."""
+    origem = f.get("origem_conta")
+    if origem == "compra":
+        return ("desde o último título de venda (antes de 2024)" if f.get("origem_ultima_compra") == "titulo"
+                else "desde a última compra")
+    if origem == "reativacao":
+        d = _dia(f.get("conta_desde"))
+        return f"desde a reativação{f', em {d:%d/%m/%Y}' if d else ''}"
+    return {"central": "desde a entrada na central", "cadastro": "desde o cadastro"}.get(origem, "")
+
+
+def _motivo_texto(f: dict) -> str:
+    """O motivo da lista de inativação, por extenso (a coluna Motivo da página)."""
+    from .arquivos import texto
+    partes, motivos, i = [], f.get("motivos") or [], f.get("inadimplencia")
+    if "inadimplente" in motivos and i:
+        venceu = _dia(i.get("vencimento_mais_antigo"))
+        partes.append(f"Inadimplente há {_plural(i.get('dias'), 'dia', 'dias')}: {texto(i.get('saldo'), 'reais')} em "
+                      f"{_plural(i.get('titulos'), 'título', 'títulos')}"
+                      f"{f', o mais antigo venceu em {venceu:%d/%m/%Y}' if venceu else ''}")
+    if "central_sem_compra" in motivos:
+        desde = _dia(f.get("na_central_desde"))
+        onde = (f"na central {'desde antes de' if f.get('na_central_desde_antes') else 'desde'} {desde:%d/%m/%Y}"
+                if desde else "na central")
+        partes.append(f"Na central, {_plural(f.get('dias_sem_compra'), 'dia', 'dias')} sem compra ({onde})")
+    if "sem_compra" in motivos:
+        partes.append(f"{_plural(f.get('dias_sem_compra'), 'dia', 'dias')} sem compra (também estaria na lista de "
+                      "passar para a central)")
+    return "; ".join(partes)
+
+
+def _quem(e: dict | None) -> str:
+    if not e:
+        return ""
+    em = e.get("em") or ""
+    try:
+        quando = f"{dt.datetime.fromisoformat(em):%d/%m/%Y %H:%M}"
+    except ValueError:
+        quando = ""
+    return ", ".join(p for p in (e.get("por"), quando) if p)
+
+
+def _tabela_exportada(itens: list[dict], aba: str, excel: bool) -> tuple[list[str], list[list]]:
+    """As colunas e as linhas do arquivo, na ordem dos itens. O Excel separa os números (para filtrar e somar) e traz o
+    código do cliente (para achar no ERP); o PDF junta o que cabe numa coluna, para ler no papel."""
+    inativar = aba == "inativar"
+    if excel:
+        colunas = ["Cliente", "Código do cliente", "Cidade", "Vendedor",
+                   *(["Motivo", "Dias de atraso", "Em aberto (R$)"] if inativar else []),
+                   "Frequência", "Última compra", "Dias sem compra", "Contagem dos dias", "Comprou em 12 meses (R$)",
+                   "Na lista desde", "Situação", "Resposta do supervisor", "Respondida por", "Texto da resposta",
+                   "Veredito", "Veredito por", "Texto do veredito"]
+    else:
+        colunas = ["Cliente", "Vendedor", *(["Motivo"] if inativar else []), "Frequência", "Última compra",
+                   "Dias sem compra", "Comprou em 12 meses (R$)", "Na lista desde", "Situação",
+                   "Resposta do supervisor", "Veredito"]
+    linhas = []
+    for x in itens:
+        f, c, j, v = x["fatos"], x["cliente"], x.get("justificativa"), x.get("veredito")
+        cidade = "/".join(p for p in (c.get("cidade"), c.get("uf")) if p)
+        vendedor = x["vendedor"]["nome"] + (f" (entrou na lista com {x['vendedor_entrada']})"
+                                            if x.get("vendedor_entrada") else "")
+        situacao = (VEREDITOS[aba]["manter"] if x["situacao"] == "mantida"
+                    else NOME_SITUACAO.get(x["situacao"], x["situacao"]))
+        resposta = RESPOSTAS[aba].get(j["decisao"], "") if j else (
+            "aguardando" if x["situacao"] == "a_justificar" else
+            "não respondeu" if x["situacao"] == "sem_justificativa" else "")
+        veredito = VEREDITOS[aba].get(v["decisao"], "") if v else ""
+        doze = (f.get("compras_12_meses") or {}).get("valor")
+        comuns = [NOME_FREQUENCIA.get(f.get("frequencia"), ""), _dia(f.get("ultima_compra")), f.get("dias_sem_compra")]
+        if excel:
+            inad = f.get("inadimplencia") or {}
+            linhas.append([
+                c["nome"], c["id"], cidade, vendedor,
+                *([_motivo_texto(f), inad.get("dias"), inad.get("saldo")] if inativar else []),
+                *comuns, _contagem(f), doze, _dia(x["entrou_em"]), situacao,
+                resposta, _quem(j), (j or {}).get("texto") or "", veredito, _quem(v), (v or {}).get("texto") or ""])
+        else:
+            def junto(rotulo, e):
+                if not e:
+                    return rotulo
+                quem, texto = _quem(e), (e.get("texto") or "").strip()
+                return f"{rotulo}{f' ({quem})' if quem else ''}{f' — {texto}' if texto else ''}"
+            linhas.append([
+                " · ".join(p for p in (c["nome"], cidade) if p), vendedor, *([_motivo_texto(f)] if inativar else []),
+                *comuns, doze, _dia(x["entrou_em"]), situacao, junto(resposta, j), junto(veredito, v) if v else ""])
+    return colunas, linhas
 
 
 # --- a página -----------------------------------------------------------------------------
@@ -572,7 +689,8 @@ class Manejo:
 
     def listar(self, usuario: dict, ids, mes=None) -> dict:
         """A lista de um mês para a página (mes "AAAA-MM"; vazio ou desconhecido = a aberta, ou a mais recente), só com
-        os clientes dos vendedores do acesso (ids; None = todos). Cada item diz o que a pessoa pode fazer nele."""
+        os clientes dos vendedores do acesso (ids; None = todos) e sem os que saíram sozinhos (NA_LISTA). Cada item diz
+        o que a pessoa pode fazer nele."""
         cache = self.calc.cache
         data_ref = cache.info.get("data_ref")
         if not self.ativo:
@@ -594,7 +712,9 @@ class Manejo:
             escolhido = pedido if pedido in meses else aberta or (rodadas[0][0] if rodadas else None)
             linhas, anteriores, pendencias = [], {}, []
             if escolhido:
-                linhas = self._linhas(con, "s.mes = %s", [escolhido], ids)
+                linhas = self._linhas(
+                    con, "s.mes = %s AND (s.encerrada_motivo IS NULL OR s.encerrada_motivo = ANY(%s))",
+                    [escolhido, list(NA_LISTA)], ids)
                 anteriores = dict(con.execute(
                     "SELECT s.id_cliente, COUNT(*) FROM manejo_sugestoes s WHERE s.mes <> %s AND s.id_cliente = ANY(%s)"
                     f"{filtro} GROUP BY 1", [escolhido, [x[2] for x in linhas], *acesso]).fetchall())
@@ -681,6 +801,66 @@ class Manejo:
                 "eventos": eventos.get(x[0], []),
             } for x in sorted(linhas, key=lambda x: (x[1], x[0]), reverse=True)],
         }
+
+    # --- o arquivo da lista -----------------------------------------------------------------
+    def exportar(self, usuario: dict, ids, corpo: dict) -> tuple[bytes, str, str]:
+        """A tabela da página em Excel ou PDF, como está na tela: corpo = {mes, aba (central|inativar), formato
+        (excel|pdf), itens (os ids das linhas, na ordem da tela), filtros (o texto dos filtros, para o cabeçalho)}. A
+        lista é lida de novo com o acesso de quem baixa: o id que não está nela (ou é de outra aba) fica de fora.
+        Devolve (conteúdo, nome do arquivo, formato)."""
+        from . import arquivos
+        corpo = corpo if isinstance(corpo, dict) else {}
+        formato, aba, pedidos = corpo.get("formato"), corpo.get("aba"), corpo.get("itens")
+        if formato not in (arquivos.EXCEL, arquivos.PDF):
+            raise ValueError("escolha o formato: Excel ou PDF")
+        if aba not in SUGESTOES:
+            raise ValueError("escolha a lista: passar para a central ou inativar")
+        if not isinstance(pedidos, list) or not pedidos:
+            raise ValueError("nenhum cliente na tabela para baixar")
+        maximo = arquivos.MAX_LINHAS[formato]
+        if len(pedidos) > maximo:
+            raise ValueError(f"o {'PDF' if formato == arquivos.PDF else 'Excel'} vai até {maximo} clientes: filtre a lista")
+        try:
+            pedidos = list(dict.fromkeys(int(x) for x in pedidos if not isinstance(x, bool)))
+        except (TypeError, ValueError):
+            raise ValueError("cliente inválido na lista") from None
+        filtros = " ".join(str(corpo.get("filtros") or "").split())[:600]
+        d = self.listar(usuario, ids, corpo.get("mes"))
+        if not d["ativo"]:
+            raise ValueError(AVISO_PC)
+        if not d["rodada"]:
+            raise ValueError("ainda não há lista neste mês")
+        por_id = {x["id"]: x for x in d["itens"] if x["sugestao"] == aba}
+        itens = [por_id[i] for i in pedidos if i in por_id]
+        if not itens:
+            raise ValueError("os clientes da tabela não estão mais na lista: atualize a página")
+        r, dias = d["rodada"], d["regras"]["dias"]
+        nome_lista = TITULOS[aba]
+        if aba == "central":
+            quinzenal = "" if dias["quinzenal"] == dias["semanal"] else f", {dias['quinzenal']} para o quinzenal"
+            regra = (f"Parou de comprar: {dias['semanal']} dias ou mais para o cliente semanal"
+                     f"{', o quinzenal' if not quinzenal else ''} e o sem frequência no cadastro{quinzenal}; "
+                     f"{dias['mensal']} para o mensal")
+        else:
+            regra = (f"Inadimplente há {dias['inadimplencia']} dias ou mais, ou cliente da central há "
+                     f"{dias['central']} dias ou mais sem compra")
+        prazo = dt.date.fromisoformat(r["prazo"])
+        regra += f". Prazo para justificar: {prazo:%d/%m/%Y}{'' if r['aberta'] else ' (encerrado)'}."
+        agora = dt.datetime.now()
+        info = " · ".join(p for p in (
+            filtros or "Todos os clientes da lista",
+            f"{len(itens)} {'cliente' if len(itens) == 1 else 'clientes'}",
+            f"números da cópia do banco de {dt.date.fromisoformat(d['dia']):%d/%m/%Y}",
+            f"baixado em {agora:%d/%m/%Y às %H:%M} por {usuario.get('nome') or usuario.get('login') or ''}".strip()) if p)
+        titulo = f"Manejo da Base · {nome_lista} · {r['rotulo']}"
+        excel = formato == arquivos.EXCEL
+        colunas, linhas = _tabela_exportada(itens, aba, excel)
+        if excel:
+            conteudo = arquivos.excel(titulo, regra, info, colunas, linhas)
+        else:
+            conteudo = arquivos.pdf(titulo, regra, info, "", colunas, linhas)
+        hoje = self._hoje()
+        return conteudo, arquivos.nome_arquivo(f"Manejo da Base - {nome_lista} - {r['rotulo']}", formato, hoje), formato
 
     # --- respostas ------------------------------------------------------------------------
     @staticmethod

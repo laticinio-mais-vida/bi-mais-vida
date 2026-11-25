@@ -3460,18 +3460,21 @@ table.dados.dv-clientes td:first-child { white-space: normal; min-width: 260px; 
 #pagina-manejo .mj-kpis .kpi-valor { font-size: 34px; }
 #pagina-manejo .vazio .btn { text-decoration: none; }
 /* a lista: os filtros da situação e a tabela */
-#pagina-manejo .mj-lista-cab { margin-bottom: 10px; }
-#pagina-manejo .mj-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-#pagina-manejo .mj-chip {
+.mj-lista-cab { margin-bottom: 10px; }
+.mj-lista.com-tela-cheia .mj-lista-cab { padding-right: 38px; } /* o botão de tela cheia fica no canto */
+.mj-exportar .btn { height: 34px; font-size: 13px; }
+@media (max-width: 640px) { .mj-lista-cab { flex-wrap: wrap; } }
+.mj-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.mj-chip {
   display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 6px 0 12px; border-radius: 999px;
   border: 1px solid var(--linha); background: var(--surface); color: var(--tinta-2); font-weight: 700; font-size: 13px;
   cursor: pointer; transition: border-color .2s, background .2s, color .2s;
 }
-#pagina-manejo .mj-chip b { min-width: 24px; padding: 2px 7px; border-radius: 999px; background: var(--surface-3); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
-#pagina-manejo .mj-chip:hover { border-color: var(--linha-forte); }
-#pagina-manejo .mj-chip.ativo { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 45%, var(--linha)); color: var(--acento-tinta); }
-#pagina-manejo .mj-chip.ativo b { background: var(--laranja); color: #fff; }
-#pagina-manejo .mj-chip.zero:not(.ativo) { opacity: .55; }
+.mj-chip b { min-width: 24px; padding: 2px 7px; border-radius: 999px; background: var(--surface-3); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+.mj-chip:hover { border-color: var(--linha-forte); }
+.mj-chip.ativo { background: var(--acento-suave); border-color: color-mix(in srgb, var(--laranja) 45%, var(--linha)); color: var(--acento-tinta); }
+.mj-chip.ativo b { background: var(--laranja); color: #fff; }
+.mj-chip.zero:not(.ativo) { opacity: .55; }
 .mj-recusados { margin: 0 0 12px; }
 .mj-recusados > div { flex: 1; min-width: 0; }
 .mj-recusados ul { margin: 4px 0 0; padding-left: 18px; }
@@ -3526,7 +3529,7 @@ table.dados.mj-tabela tr.mj-detalhe > td, table.dados.mj-tabela tr.mj-detalhe:ho
 .mj-sit.sem { background: var(--ruim-bg); color: var(--ruim); }
 .mj-sit.erp { background: var(--acento-suave); color: var(--acento-tinta); }
 .mj-sit.feita { background: var(--ok-bg); color: var(--ok); }
-.mj-sit.mantida, .mj-sit.saiu { background: var(--neutro-bg); color: var(--tinta-2); }
+.mj-sit.mantida { background: var(--neutro-bg); color: var(--tinta-2); }
 .mj-resp { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
 .mj-resp .ic { width: 14px; height: 14px; stroke-width: 2.4; }
 .mj-resp.seguir { color: var(--s-fat); }

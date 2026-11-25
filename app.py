@@ -1467,6 +1467,12 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "config": cfg, "ativo": self.app.vps})
             if url.path in ("/api/manejo/justificar", "/api/manejo/veredito"):
                 return self._mudar_manejo(usuario, url.path, self._corpo_json())
+            if url.path == "/api/manejo/exportar":  # a tabela como está na tela, em Excel ou PDF (só lê)
+                if not self._pode_manejo(usuario):
+                    return
+                conteudo, nome, formato = self.app.manejo.exportar(usuario, self._ids(usuario), self._corpo_json())
+                log.info("%s baixou %s (%s KB)", usuario["login"], nome, len(conteudo) // 1024)
+                return self._baixavel(conteudo, TIPOS_ARQUIVO[formato][1], nome)
             if url.path == "/api/manejo/config":
                 return self._salvar_config_manejo(usuario, self._corpo_json())
             if url.path == "/api/crm/config":

@@ -292,13 +292,32 @@ def _quebrar(doc, texto: str, largura: float, max_linhas: int = 6) -> list[str]:
     return linhas
 
 
+def _encaixar(doc, cabecalho, corpo, tamanho, larguras, folga) -> list[float]:
+    """As larguras apertadas para caber na página. O aperto sai primeiro das colunas largas: nenhuma fica mais estreita
+    que a maior palavra dela (a do cabeçalho, em negrito, ou a das primeiras linhas), para não quebrar palavra no meio.
+    Se nem assim couber, aperta todas por igual."""
+    if sum(larguras) <= doc.epw:
+        return larguras
+    doc.set_font("helvetica", "B", tamanho)
+    minimos = [max((doc.get_string_width(p) for p in c.split()), default=0) for c in cabecalho]
+    doc.set_font("helvetica", "", tamanho)
+    for j in range(len(cabecalho)):
+        palavras = (p for ln in corpo[:300] if j < len(ln) for p in ln[j].split())
+        minimos[j] = min(max(minimos[j], max((doc.get_string_width(p) for p in palavras), default=0)) + 2 * folga + 0.5,
+                         larguras[j])
+    sobra = [w - m for w, m in zip(larguras, minimos)]
+    excesso = sum(larguras) - doc.epw
+    if sum(sobra) < excesso:
+        return [w * doc.epw / sum(larguras) for w in larguras]
+    return [w - s * excesso / sum(sobra) for w, s in zip(larguras, sobra)]
+
+
 def _tabela(doc, cabecalho, corpo, alinhar, tamanho, larguras=None) -> None:
     """Tabela desenhada direto (a do fpdf2 mede cada célula duas vezes e leva segundos em milhares de linhas): cabeçalho
     repetido em cada página, linhas zebradas e o texto quebrado dentro da coluna."""
-    larguras = larguras or _larguras_pdf(doc, cabecalho, corpo, tamanho)
-    if sum(larguras) > doc.epw:
-        larguras = [w * doc.epw / sum(larguras) for w in larguras]
     altura, folga = tamanho * 0.42, 1.2  # mm por linha de texto; espaço em volta do texto
+    larguras = _encaixar(doc, cabecalho, corpo, tamanho, larguras or _larguras_pdf(doc, cabecalho, corpo, tamanho),
+                         folga)
 
     def linha(celulas, negrito: bool, fundo) -> None:
         doc.set_font("helvetica", "B" if negrito else "", tamanho)
