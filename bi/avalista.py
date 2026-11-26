@@ -14,6 +14,8 @@ compradora e de quem garante, guarda o contrato e baixa o PDF igual ao modelo em
 - Os dados da Mais Vida (o fornecedor) são uma configuração só, salva pelo administrador (tabela regras, nome
   "avalista"), e valem para todos os contratos: o PDF sai sempre com os de agora. O modelo Pessoa Física pede mais
   dados dela (inscrição estadual e a qualificação de quem representa) que o Pessoa Jurídica.
+- Cada pessoa entra só com o CPF: o RG que os modelos traziam saiu do contrato (pedido do usuário em 2026-11-26). O
+  "rg" de um contrato guardado antes disso é ignorado.
 - Só o site grava (ativo), como as capas de análise e as reanálises.
 """
 from __future__ import annotations
@@ -44,8 +46,7 @@ CAMPOS_EMPRESA = (("razao_social", "razão social", 200), ("cnpj", "CNPJ", 24), 
                   ("endereco", "endereço", 300), ("cep", "CEP", 12),
                   ("qualificacao", "qualificação de quem representa", 80))
 CAMPOS_PESSOA = (("nome", "nome", 200), ("nacionalidade", "nacionalidade", 40), ("estado_civil", "estado civil", 40),
-                 ("profissao", "profissão", 80), ("rg", "RG", 30), ("cpf", "CPF", 20), ("endereco", "endereço", 300),
-                 ("cep", "CEP", 12))
+                 ("profissao", "profissão", 80), ("cpf", "CPF", 20), ("endereco", "endereço", 300), ("cep", "CEP", 12))
 MAX_PODERES = 300
 SO_NO_PJ = ("endereco", "cep")  # do representante: só o modelo Pessoa Jurídica diz onde ele mora
 OPCIONAIS = ("ie",)             # "se houver"
@@ -56,15 +57,14 @@ CAMPOS_FORNECEDOR = (("razao_social", "razão social", 200), ("cnpj", "CNPJ", 24
                      ("endereco", "endereço", 300), ("cep", "CEP", 12),
                      ("qualificacao", "qualificação de quem representa", 80), ("tratamento", "tratamento", 4),
                      ("representante", "nome de quem representa", 200), ("nacionalidade", "nacionalidade", 40),
-                     ("estado_civil", "estado civil", 40), ("profissao", "profissão", 80), ("rg", "RG", 30),
-                     ("cpf", "CPF", 20))
+                     ("estado_civil", "estado civil", 40), ("profissao", "profissão", 80), ("cpf", "CPF", 20))
 PADRAO_FORNECEDOR = {"razao_social": "LATICINIO MAIS VIDA LTDA", "cnpj": "96.845.748/0001-64", "ie": "",
                      "endereco": "Av. Guaratinga, km 02, Zona Rural, Itabela - BA", "cep": "45848-000",
                      "qualificacao": "sócio administrador", "tratamento": "Sr.",
                      "representante": "MAURO SERGIO PIMENTEL QUEIROZ", "nacionalidade": "", "estado_civil": "",
-                     "profissao": "", "rg": "", "cpf": ""}
+                     "profissao": "", "cpf": ""}
 FORNECEDOR_OBRIGATORIOS = ("razao_social", "cnpj", "endereco", "cep", "qualificacao", "representante")
-FORNECEDOR_SO_NO_PF = ("nacionalidade", "estado_civil", "profissao", "rg", "cpf")
+FORNECEDOR_SO_NO_PF = ("nacionalidade", "estado_civil", "profissao", "cpf")
 
 
 # ---------- CNPJ, CPF e CEP ----------

@@ -932,8 +932,9 @@ não está no nome dele, preenchido na tela, guardado e baixado em PDF igual ao 
 - **Sem pacote novo:** o PDF usa o fpdf2, que a imagem já tem. A letra vai junto com o código, em `bi/fontes/` (três
   arquivos `.ttf`): confira que chegaram ao servidor, porque sem eles o PDF não sai.
 - **Depois de publicar:** abra Crédito › Avalista. Como administrador, complete em "Alterar" os dados da Mais Vida
-  que o modelo Pessoa física pede (inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão,
-  RG e CPF). Faça um contrato de cada tipo, baixe o PDF e compare com o modelo em Word.
+  que o modelo Pessoa física pede (inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão
+  e CPF; o RG saiu do contrato em 2026-11-26, sem migração). Faça um contrato de cada tipo, baixe o PDF e compare com
+  o modelo em Word.
 - **Voltar atrás:** o código anterior ignora a tabela. Para apagar de vez, depois do dump: `DROP TABLE
   credito_avalistas`, `DELETE FROM regras WHERE nome = 'avalista'`, recriar `regras_nome_check` sem `'avalista'` e
   `DELETE FROM migracoes WHERE versao = '050_credito_avalistas'`.

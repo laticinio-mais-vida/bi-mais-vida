@@ -23,7 +23,7 @@ const MODELO = {
 const ESTADOS_CIVIS = ["Solteiro", "Solteira", "Casado", "Casada", "Divorciado", "Divorciada", "Viúvo", "Viúva", "União estável"];
 const ROTULOS_MV = { razao_social: "Razão social", cnpj: "CNPJ", ie: "Inscrição estadual", endereco: "Endereço da sede",
   cep: "CEP", qualificacao: "Qualificação de quem representa", tratamento: "Tratamento", representante: "Nome de quem representa",
-  nacionalidade: "Nacionalidade", estado_civil: "Estado civil", profissao: "Profissão", rg: "RG", cpf: "CPF" };
+  nacionalidade: "Nacionalidade", estado_civil: "Estado civil", profissao: "Profissão", cpf: "CPF" };
 
 let ctx = null, raiz = null;
 // lista: o que /api/credito/avalistas trouxe (os contratos e o que o formulário usa); form: o que está na tela
@@ -35,7 +35,7 @@ let ctx = null, raiz = null;
 const estado = { lista: null, form: null, cliente: null, aberto: null, pendencias: null, erroConferir: null, sujo: false,
   salvando: false, fornecedor: false, digitacoes: 0, buscaLista: "", pedidoLista: 0, pedidoBusca: 0, pedidoConferir: 0 };
 
-const pessoa = () => ({ tratamento: "", nome: "", nacionalidade: "", estado_civil: "", profissao: "", rg: "", cpf: "", endereco: "", cep: "" });
+const pessoa = () => ({ tratamento: "", nome: "", nacionalidade: "", estado_civil: "", profissao: "", cpf: "", endereco: "", cep: "" });
 const empresa = () => ({ razao_social: "", cnpj: "", ie: "", endereco: "", cep: "", qualificacao: "sócio administrador",
   poderes: "", representantes: [pessoa()] });
 const formNovo = () => ({ tipo: null, data: estado.lista?.hoje || "", compradora: empresa(), garantidores: { pj: empresa(), pf: pessoa() } });
@@ -198,7 +198,7 @@ function tratamento(caminho) {
 }
 
 // Os dados de uma pessoa (representante ou garantidor). No modelo Pessoa física, o representante da compradora sai sem
-// "Sr./Sra." e sem o endereço de casa.
+// "Sr./Sra." e sem o endereço de casa. O documento é só o CPF (o RG dos modelos saiu do contrato).
 function camposPessoa(caminho, { comTratamento, comEndereco }) {
   return `<div class="av-campos">
     ${comTratamento ? tratamento(`${caminho}.tratamento`) : ""}
@@ -206,7 +206,6 @@ function camposPessoa(caminho, { comTratamento, comEndereco }) {
     ${campo(`${caminho}.nacionalidade`, "Nacionalidade", { max: 40, exemplo: "Brasileiro(a)" })}
     ${campo(`${caminho}.estado_civil`, "Estado civil", { max: 40, lista: "av-estados-civis" })}
     ${campo(`${caminho}.profissao`, "Profissão", { max: 80, exemplo: "Empresário(a)" })}
-    ${campo(`${caminho}.rg`, "RG", { max: 30 })}
     ${campo(`${caminho}.cpf`, "CPF", { max: 20, modo: "numeric", exemplo: "000.000.000-00" })}
     ${comEndereco ? campo(`${caminho}.endereco`, "Endereço de onde mora", { classe: "av-largo", max: 300, dica: "Rua, número, complemento, bairro, cidade e estado." }) : ""}
     ${comEndereco ? campo(`${caminho}.cep`, "CEP", { max: 12, modo: "numeric", exemplo: "00000-000" }) : ""}
@@ -343,12 +342,12 @@ function desenharMaisVida() {
     alvo.innerHTML = `
       <form class="av-mv-form" id="av-mv-form" novalidate>
         <p class="av-mv-nota">${icone("info")}<span>Valem para <b>todos</b> os contratos, inclusive os já guardados: o PDF sai sempre com os dados de agora.
-          Os cinco últimos (da nacionalidade ao CPF) e a inscrição estadual só saem no modelo Pessoa física.</span></p>
+          Os quatro últimos (da nacionalidade ao CPF) e a inscrição estadual só saem no modelo Pessoa física.</span></p>
         <div class="av-campos">
           ${c("razao_social", "av-largo")}${c("cnpj")}${c("ie")}${c("endereco", "av-largo")}${c("cep")}${c("qualificacao")}
           <label class="campo-form av-curto"><span>${ROTULOS_MV.tratamento}</span><span class="campo"><select name="tratamento">
             <option value=""></option>${l.tratamentos.map((t) => `<option${t === f.tratamento ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></span></label>
-          ${c("representante", "av-largo")}${c("nacionalidade")}${c("estado_civil")}${c("profissao")}${c("rg")}${c("cpf")}
+          ${c("representante", "av-largo")}${c("nacionalidade")}${c("estado_civil")}${c("profissao")}${c("cpf")}
         </div>
         <div class="cc-acoes-registro"><button class="btn primario" type="submit">${icone("certo")}Salvar os dados da Mais Vida</button>
           <button type="button" class="btn" data-cancelar-mv>${icone("x")}Cancelar</button></div>

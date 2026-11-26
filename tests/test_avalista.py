@@ -2,7 +2,7 @@
 
 Sem banco:
 - CNPJ (com letras, desde julho de 2026) e CPF: os dígitos verificadores e a pontuação;
-- o que vem da página (normalizar) e o que falta (pendencias), nos dois modelos;
+- o que vem da página (normalizar) e o que falta (pendencias), nos dois modelos; o RG, que saiu do contrato;
 - os dados da Mais Vida (o padrão e o que o modelo Pessoa Física pede a mais);
 - o texto do contrato (as correções combinadas, os campos, as linhas para preencher à mão) e o PDF (6 páginas com os
   dados dos modelos, o texto inteiro, o que a pessoa digita nunca vira marca de negrito).
@@ -45,6 +45,7 @@ GARANTIDORA = {**EMPRESA, "razao_social": "SUPERMERCADO FORTE LTDA", "cnpj": "22
 PJ = {"tipo": "pj", "data": "2026-02-04", "compradora": EMPRESA, "garantidor": GARANTIDORA}
 PF = {"tipo": "pf", "data": "2026-02-01", "compradora": EMPRESA,
       "garantidor": {k: v for k, v in SOCIO_2.items() if k != "tratamento"}}
+# O "rg" que aparece aqui e nos sócios é o de um contrato guardado antes de o RG sair: tem de ser ignorado.
 MAIS_VIDA = {**PADRAO_FORNECEDOR, "ie": "012.345.678", "nacionalidade": "brasileiro", "estado_civil": "casado",
              "profissao": "empresário", "rg": "0102030405", "cpf": "111.444.777-35"}
 
@@ -106,10 +107,23 @@ class TestDados(unittest.TestCase):
         d = normalizar(PF)
         # o representante da compradora sai sem "Sr./Sra." e sem o endereço de casa; quem garante é uma pessoa
         self.assertEqual(sorted(d["compradora"]["representantes"][0]),
-                         ["cpf", "estado_civil", "nacionalidade", "nome", "profissao", "rg"])
+                         ["cpf", "estado_civil", "nacionalidade", "nome", "profissao"])
         self.assertNotIn("poderes", d["compradora"])
         self.assertEqual(sorted(d["garantidor"]),
-                         ["cep", "cpf", "endereco", "estado_civil", "nacionalidade", "nome", "profissao", "rg"])
+                         ["cep", "cpf", "endereco", "estado_civil", "nacionalidade", "nome", "profissao"])
+
+    def test_sem_rg(self):
+        # só o CPF: o RG que vem de um contrato antigo não é guardado, não falta e não sai no texto
+        for dados in (PJ, PF):
+            d = normalizar(dados)
+            pessoas = [*d["compradora"]["representantes"],
+                       *(d["garantidor"]["representantes"] if dados["tipo"] == "pj" else [d["garantidor"]])]
+            self.assertTrue(all("rg" not in p and p["cpf"] for p in pessoas))
+            texto = texto_do_contrato(dados, MAIS_VIDA)
+            for resto in ("RG nº", " RG ", "Cédula de Identidade", "portador(a)", "1234567890", "9876543210", "0102030405"):
+                self.assertNotIn(resto, texto)
+        self.assertNotIn("rg", _valida_fornecedor(MAIS_VIDA))
+        self.assertFalse([p for p in pendencias(normalizar({"tipo": "pj"})) if "RG" in p["texto"] or p["campo"].endswith(".rg")])
 
     def test_recusa(self):
         for dados, erro in (({}, "escolha quem garante"), ({"tipo": "outro"}, "escolha quem garante"),
@@ -127,12 +141,12 @@ class TestDados(unittest.TestCase):
         self.assertEqual(pendencias(normalizar(PJ)), [])
         self.assertEqual(pendencias(normalizar(PF)), [])
         vazio = [p["texto"] for p in pendencias(normalizar({"tipo": "pj"}))]
-        self.assertEqual(len(vazio), 29)  # 5 + 9 da compradora, 5 + 9 da garantidora e a data
+        self.assertEqual(len(vazio), 27)  # 5 + 8 da compradora, 5 + 8 da garantidora e a data
         self.assertEqual((vazio[0], vazio[5], vazio[-1]),
                          ("Compradora: razão social", "Compradora, representante: Sr. ou Sra.", "Data do contrato"))
         self.assertNotIn("Compradora: inscrição estadual", vazio)  # "se houver"
         vazio = [p["campo"] for p in pendencias(normalizar({"tipo": "pf"}))]
-        self.assertEqual(len(vazio), 5 + 6 + 8 + 1)
+        self.assertEqual(len(vazio), 5 + 5 + 7 + 1)
         self.assertIn("garantidor.endereco", vazio)
         self.assertNotIn("compradora.representantes.0.endereco", vazio)
 
@@ -153,9 +167,10 @@ class TestDados(unittest.TestCase):
 
     def test_os_dados_da_mais_vida(self):
         self.assertEqual(_valida_fornecedor(PADRAO_FORNECEDOR), PADRAO_FORNECEDOR)
+        self.assertNotIn("rg", PADRAO_FORNECEDOR)
         self.assertEqual(faltas_do_fornecedor(PADRAO_FORNECEDOR, "pj"), [])
         self.assertEqual(faltas_do_fornecedor(PADRAO_FORNECEDOR, "pf"),
-                         ["nacionalidade", "estado civil", "profissão", "RG", "CPF"])
+                         ["nacionalidade", "estado civil", "profissão", "CPF"])
         self.assertEqual(faltas_do_fornecedor(MAIS_VIDA, "pf"), [])
         self.assertEqual(_valida_fornecedor({**MAIS_VIDA, "cnpj": "96845748000164"})["cnpj"], "96.845.748/0001-64")
         for mudar, erro in (({"razao_social": " "}, "preencha razão social"), ({"cnpj": "96.845.748/0001-65"}, "CNPJ"),
@@ -204,13 +219,13 @@ class TestTexto(unittest.TestCase):
         self.assertIn("COMPRADORA: MERCADO NOVO LTDA, com sede em Rua B, 220, Zabelê, Vitória da Conquista - BA, CEP "
                       "45077-014, inscrita no CNPJ sob o nº 11.222.333/0001-81, e Inscrição Estadual nº 078.420.714, neste ato "
                       "representada por seu(s) sócio administrador, Sra. MARIA DA SILVA, Brasileira, Casada, Empresária, "
-                      "portador(a) da Cédula de Identidade RG nº 1234567890 e inscrito(a) no CPF sob o nº 529.982.247-25, "
+                      "inscrito(a) no CPF sob o nº 529.982.247-25, "
                       "residente e domiciliado(a) em Rua das Flores, 100, Centro, Eunápolis - BA, CEP 45820-000, BRASIL. "
                       "Doravante denominada simplesmente COMPRADORA;", linhas)
         self.assertIn("E, como interveniente garantidora:", linhas)  # em parágrafo próprio
         # a garantidora sem inscrição estadual e com dois sócios
         self.assertIn("inscrita no CNPJ sob o nº 22.333.444/0001-81, neste ato representada por seu(s) sócio administrador, "
-                      "Sr. JOSE DE SOUZA, Brasileiro, Casado, Empresário, portador(a) da Cédula de Identidade RG nº 9876543210", t)
+                      "Sr. JOSE DE SOUZA, Brasileiro, Casado, Empresário, inscrito(a) no CPF sob o nº 111.444.777-35, residente", t)
         self.assertIn(", BRASIL, e Sra. MARIA DA SILVA, ", t)
         self.assertIn("a) FORNECEDOR: A empresa LATICINIO MAIS VIDA LTDA, responsável", t)
         self.assertIn("b) COMPRADORA: A empresa MERCADO NOVO LTDA, responsável", t)
@@ -236,16 +251,16 @@ class TestTexto(unittest.TestCase):
         self.assertIn("1.1. COMPRADORA: MERCADO NOVO LTDA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº "
                       "11.222.333/0001-81, com Inscrição Estadual nº 078.420.714, com sede e foro na Rua B, 220, Zabelê, "
                       "Vitória da Conquista - BA, CEP 45077-014, neste ato representada por seu(s) sócio administrador, MARIA "
-                      "DA SILVA, Brasileira, Casada, Empresária, portador(a) da Cédula de Identidade RG nº 1234567890 e "
+                      "DA SILVA, Brasileira, Casada, Empresária, "
                       "inscrito(a) no CPF sob o nº 529.982.247-25, doravante denominada simplesmente \"COMPRADORA\".", linhas)
         self.assertIn("1.2. FORNECEDOR: LATICINIO MAIS VIDA LTDA, pessoa jurídica de direito privado, inscrita no CNPJ sob o "
                       "nº 96.845.748/0001-64, com Inscrição Estadual nº 012.345.678, com sede e foro na Av. Guaratinga, km 02, "
                       "Zona Rural, Itabela - BA, CEP 45848-000, neste ato representada por seu(s) sócio administrador, MAURO "
-                      "SERGIO PIMENTEL QUEIROZ, brasileiro, casado, empresário, portador(a) da Cédula de Identidade RG nº "
-                      "0102030405 e inscrito(a) no CPF sob o nº 111.444.777-35, doravante denominado simplesmente "
+                      "SERGIO PIMENTEL QUEIROZ, brasileiro, casado, empresário, "
+                      "inscrito(a) no CPF sob o nº 111.444.777-35, doravante denominado simplesmente "
                       "\"FORNECEDOR\".", linhas)
-        self.assertIn("1.3. GARANTIDORA: JOSE DE SOUZA, Brasileiro, Casado, Empresário, portador(a) da Cédula de Identidade RG "
-                      "nº 9876543210 e inscrito(a) no CPF sob o nº 111.444.777-35, residente e domiciliado(a) na Rua das "
+        self.assertIn("1.3. GARANTIDORA: JOSE DE SOUZA, Brasileiro, Casado, Empresário, "
+                      "inscrito(a) no CPF sob o nº 111.444.777-35, residente e domiciliado(a) na Rua das "
                       "Flores, 100, Centro, Eunápolis - BA, CEP 45820-000, doravante denominada simplesmente "
                       "\"GARANTIDORA\".", linhas)
         self.assertIn("Itabela – BA, 1º de fevereiro de 2026.", linhas)
@@ -258,13 +273,12 @@ class TestTexto(unittest.TestCase):
         t = texto_do_contrato({"tipo": "pf", "compradora": {"razao_social": "MERCADO NOVO LTDA"}})
         self.assertIn(f"1.1. COMPRADORA: MERCADO NOVO LTDA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº "
                       f"{LACUNA}, com sede e foro na {LACUNA}, CEP {LACUNA}, neste ato representada por seu(s) {LACUNA}, "
-                      f"{LACUNA}, {LACUNA}, {LACUNA}, {LACUNA}, portador(a) da Cédula de Identidade RG nº {LACUNA} e "
-                      f"inscrito(a) no CPF sob o nº {LACUNA}, doravante", t)
+                      f"{LACUNA}, {LACUNA}, {LACUNA}, {LACUNA}, inscrito(a) no CPF sob o nº {LACUNA}, doravante", t)
         self.assertIn(f"1.3. GARANTIDORA: {LACUNA}, {LACUNA}", t)
         self.assertIn(f"Itabela – BA, {data_por_extenso(None)}.", t)
         # a Mais Vida sem a qualificação de quem representa (o padrão): também em linha
-        self.assertIn(f"MAURO SERGIO PIMENTEL QUEIROZ, {LACUNA}, {LACUNA}, {LACUNA}, portador(a) da Cédula de Identidade RG nº "
-                      f"{LACUNA} e inscrito(a) no CPF sob o nº {LACUNA}, doravante", t)
+        self.assertIn(f"MAURO SERGIO PIMENTEL QUEIROZ, {LACUNA}, {LACUNA}, {LACUNA}, inscrito(a) no CPF sob o nº {LACUNA}, "
+                      "doravante", t)
         self.assertNotIn("Inscrição Estadual", t)
 
     def test_nome_do_arquivo(self):
@@ -359,7 +373,7 @@ class TestContratos(Base):
         c = r["contrato"]
         self.assertEqual((r["ja_existia"], c["tipo"], c["compradora"], c["garantidor"], c["compradora_cnpj"], c["versao"],
                           c["feito_por"], c["editado_em"], c["pode_editar"], c["faltam"], len(c["pendencias"])),
-                         (False, "pf", "mercado novo ltda", None, None, 1, "Ana", None, True, 19, 19))
+                         (False, "pf", "mercado novo ltda", None, None, 1, "Ana", None, True, 17, 17))
         self.assertEqual([x["id"] for x in r["contratos"]], [c["id"]])
         self.assertNotIn("dados", r["contratos"][0])  # a lista leva só a linha; o contrato inteiro vem ao abrir
         with self.assertRaisesRegex(ValueError, "razão social da compradora"):
@@ -494,7 +508,8 @@ class TestMaisVida(Base):
         self.assertIn("com sede e foro na Av. Nova, 10, Itabela - BA, CEP 45848-000", texto)
         self.assertIn("MAURO SERGIO PIMENTEL QUEIROZ, brasileiro, casado, empresário", texto)
         # outra instância (o painel reiniciado) lê o que foi salvo
-        self.assertEqual(ConfigAvalista(self.banco).atual()["rg"], "0102030405")
+        salvo = ConfigAvalista(self.banco).atual()
+        self.assertEqual((salvo["profissao"], salvo["cpf"], "rg" in salvo), ("empresário", "111.444.777-35", False))
 
 
 class TestNoPc(Base):

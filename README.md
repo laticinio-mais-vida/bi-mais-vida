@@ -1708,15 +1708,15 @@ igual ao modelo em Word. Para qualquer pessoa com a página de crédito; só no 
   social e o CNPJ de um cliente do ERP; o endereço, a inscrição estadual e os sócios não chegam ao painel e são
   digitados;
 - **quem garante:** uma empresa, com os mesmos campos, ou uma pessoa (nome, nacionalidade, estado civil, profissão,
-  RG, CPF, endereço e CEP);
-- **cada pessoa que assina:** nome, nacionalidade, estado civil, profissão, RG e CPF. O modelo Pessoa jurídica traz
+  CPF, endereço e CEP);
+- **cada pessoa que assina:** nome, nacionalidade, estado civil, profissão e CPF (sem RG). O modelo Pessoa jurídica traz
   também "Sr." ou "Sra." e onde a pessoa mora; o Pessoa física não;
 - **"Poderes conferidos por"** (só no Pessoa jurídica, opcional): a frase "conforme poderes conferidos por …" só sai
   quando o campo é preenchido;
 - **data do contrato:** começa em hoje;
 - **dados da Mais Vida:** uma configuração só, para todos os contratos, que o administrador altera na própria página.
   O PDF sai sempre com os de agora, mesmo num contrato guardado antes. O modelo Pessoa física pede mais dados que o
-  Pessoa jurídica (a inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão, RG e CPF); a
+  Pessoa jurídica (a inscrição estadual e, de quem representa, nacionalidade, estado civil, profissão e CPF); a
   página avisa enquanto faltam.
 
 **Salvar pela metade:** basta a razão social da compradora. O passo 5 lista o que falta, e cada item leva ao campo. No
@@ -1751,7 +1751,10 @@ o mesmo CNPJ da compradora também é avisado.
   compradora); a razão social completa da garantidora na cláusula 1.2 e na assinatura;
 - Pessoa física, 4.3: o parêntese de "(conforme Art. 406 … do CTN)"; 15.2: "Comarca de Itabela - BA";
 - nos dois: o CNPJ da Mais Vida na assinatura (o modelo trazia "[Número do CNPJ]"), a vírgula antes de "CEP" e a data
-  como "Itabela – BA, 4 de fevereiro de 2026.".
+  como "Itabela – BA, 4 de fevereiro de 2026.";
+- nos dois, desde 2026-11-26: **sem o RG**. Onde os modelos diziam "portador(a) da Cédula de Identidade RG nº … e
+  inscrito(a) no CPF sob o nº …", fica só "inscrito(a) no CPF sob o nº …". O formulário não pede mais o RG, e o de um
+  contrato guardado antes é ignorado.
 
 Mudar uma cláusula é mudar `bi/avalista_texto.py` (o texto) ou `bi/avalista_pdf.py` (as partes, a data e as
 assinaturas).

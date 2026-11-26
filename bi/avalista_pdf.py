@@ -19,7 +19,9 @@ página. O que ficou sem preencher sai como uma linha (LACUNA), para completar �
 O que mudou no texto das partes em relação aos modelos (combinado com o usuário em 2026-11-25): o CNPJ da Mais Vida na
 assinatura (o modelo trazia "[Número do CNPJ]"); "E, como interveniente garantidora:" em parágrafo próprio (estava
 colado no fim do parágrafo da compradora); a vírgula antes de "CEP"; a data como "Itabela – BA, 4 de fevereiro de
-2026."; e "conforme poderes conferidos por ..." só quando o campo é preenchido.
+2026."; e "conforme poderes conferidos por ..." só quando o campo é preenchido. Em 2026-11-26, a pedido dele, saiu o
+RG: onde os modelos diziam "portador(a) da Cédula de Identidade RG nº ... e inscrito(a) no CPF sob o nº ...", fica só
+"inscrito(a) no CPF sob o nº ...".
 """
 from __future__ import annotations
 
@@ -152,7 +154,7 @@ def _representantes(empresa: dict, modelo: str) -> str:
     partes = []
     for r in empresa.get("representantes") or [{}]:
         pessoa = (f"{_v(r, 'nome')}, {_v(r, 'nacionalidade')}, {_v(r, 'estado_civil')}, {_v(r, 'profissao')}, "
-                  f"portador(a) da Cédula de Identidade RG nº {_v(r, 'rg')} e inscrito(a) no CPF sob o nº {_v(r, 'cpf')}")
+                  f"inscrito(a) no CPF sob o nº {_v(r, 'cpf')}")
         if modelo == "pj":  # o modelo Pessoa Jurídica traz o tratamento e onde a pessoa mora
             tratamento = str(r.get("tratamento") or "").strip()
             pessoa = (f"{tratamento + ' ' if tratamento else ''}{pessoa}, residente e domiciliado(a) em "
@@ -269,17 +271,16 @@ def paragrafos(dados: dict, fornecedor: dict) -> list[Paragrafo]:
             "representantes": _representantes(c, "pf")}),
         _p("**1.2. FORNECEDOR:** **{razao}**, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº **{cnpj}**"
            "{ie}, com sede e foro na {endereco}, CEP {cep}, neste ato representada por seu(s) {qualificacao}, "
-           "{representante}, {nacionalidade}, {estado_civil}, {profissao}, portador(a) da Cédula de Identidade RG nº "
-           "{rg} e inscrito(a) no CPF sob o nº {cpf}, doravante denominado simplesmente **\"FORNECEDOR\"**.",
+           "{representante}, {nacionalidade}, {estado_civil}, {profissao}, inscrito(a) no CPF sob o nº {cpf}, doravante "
+           "denominado simplesmente **\"FORNECEDOR\"**.",
            {"razao": _v(f, "razao_social"), "cnpj": _v(f, "cnpj"), "endereco": _v(f, "endereco"), "cep": _v(f, "cep"),
             "ie": f", com Inscrição Estadual nº {ie_f}" if ie_f else "", "qualificacao": _v(f, "qualificacao"),
             "representante": _v(f, "representante"), "nacionalidade": _v(f, "nacionalidade"),
-            "estado_civil": _v(f, "estado_civil"), "profissao": _v(f, "profissao"), "rg": _v(f, "rg"),
-            "cpf": _v(f, "cpf")}),
-        _p("**1.3. GARANTIDORA:** **{nome}**, {nacionalidade}, {estado_civil}, {profissao}, portador(a) da Cédula de "
-           "Identidade RG nº {rg} e inscrito(a) no CPF sob o nº **{cpf}**, residente e domiciliado(a) na {endereco}, CEP "
-           "{cep}, doravante denominada simplesmente **\"GARANTIDORA\"**.",
-           {k: _v(g, k) for k in ("nome", "nacionalidade", "estado_civil", "profissao", "rg", "cpf", "endereco", "cep")}),
+            "estado_civil": _v(f, "estado_civil"), "profissao": _v(f, "profissao"), "cpf": _v(f, "cpf")}),
+        _p("**1.3. GARANTIDORA:** **{nome}**, {nacionalidade}, {estado_civil}, {profissao}, inscrito(a) no CPF sob o nº "
+           "**{cpf}**, residente e domiciliado(a) na {endereco}, CEP {cep}, doravante denominada simplesmente "
+           "**\"GARANTIDORA\"**.",
+           {k: _v(g, k) for k in ("nome", "nacionalidade", "estado_civil", "profissao", "cpf", "endereco", "cep")}),
         *_fixos(PF_CLAUSULAS),
         data,
         Paragrafo([]),
