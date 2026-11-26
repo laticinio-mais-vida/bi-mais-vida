@@ -374,6 +374,21 @@ class Base(BaseBanco):
 
 
 class TestLista(Base):
+    def test_nome_do_erp(self):
+        self.manejo.sincronizar()
+        with self.banco.conexao() as con:
+            self.assertEqual(con.execute("SELECT cliente FROM manejo_sugestoes WHERE id_cliente = 20").fetchone()[0],
+                             "MERCADO TRINTA (CLIENTE 20)")
+            # a linha gravada antes, sem o código no nome: a página mostra o nome do cadastro do ERP
+            con.execute("UPDATE manejo_sugestoes SET cliente = 'MERCADO TRINTA' WHERE id_cliente = 20")
+        self.assertEqual(self.item(20)["cliente"]["nome"], "MERCADO TRINTA (CLIENTE 20)")
+        self.copia(DIA, "UPDATE clientes SET nome = '  MERCADO  TRINTA E UM (CLIENTE 20)' WHERE id = 20")
+        self.assertEqual(self.item(20)["cliente"]["nome"], "MERCADO TRINTA E UM (CLIENTE 20)")  # o nome de hoje
+        self.assertEqual(self.manejo.historico(self.chefe, None, 20)["cliente"]["nome"],
+                         "MERCADO TRINTA E UM (CLIENTE 20)")
+        self.assertEqual(self.manejo._nomes_erp([20, 999999]), {20: "MERCADO TRINTA E UM (CLIENTE 20)"})  # fora do cache:
+        self.assertEqual(self.manejo._nomes_erp([]), {})                       # fica o nome guardado na linha
+
     def test_primeira_lista(self):
         self.assertEqual(self.manejo.sincronizar(), [])
         self.assertEqual(self.linhas(), {**{(c, "central"): (None, v) for c, v in (
@@ -389,7 +404,7 @@ class TestLista(Base):
         itens = {i["cliente"]["id"]: i for i in d["itens"]}
         i = itens[20]
         self.assertEqual((i["cliente"]["nome"], i["sugestao"], i["situacao"], i["entrou_em"], i["versao"]),
-                         ("MERCADO TRINTA", "central", "a_justificar", "2026-10-01", 0))  # sem o código no nome
+                         ("MERCADO TRINTA (CLIENTE 20)", "central", "a_justificar", "2026-10-01", 0))  # o nome do ERP
         self.assertEqual(i["vendedor"], {"id": ES, "nome": "Rubens", "equipe": "ES"})
         self.assertEqual(i["entrada"], {"dias_sem_compra": 30, "ultima_compra": "2026-09-01", "dias_inadimplencia": None})
         self.assertEqual(i["pode"], {"justificar": False, "veredito": False})  # o administrador espera a justificativa
@@ -578,7 +593,7 @@ class TestRespostas(Base):
         self.assertEqual(i["pode"], {"justificar": False, "veredito": True})  # para o administrador
         # com a versão que a pessoa via antes da resposta, recusa: a lista mudou
         r = self.manejo.justificar(self.val, DO_ES, {"itens": [m], "decisao": "seguir"})
-        self.assertEqual((r["gravados"], r["recusados"]), (0, [{"id": m["id"], "cliente": "MERCADO TRINTA",
+        self.assertEqual((r["gravados"], r["recusados"]), (0, [{"id": m["id"], "cliente": "MERCADO TRINTA (CLIENTE 20)",
                                                                "motivo": "mudou enquanto você olhava; confira de novo"}]))
         m = self.marcar(20)
         self.manejo.justificar(self.val, DO_ES, {"itens": [m], "decisao": "manter", "texto": texto})  # a mesma de novo
@@ -587,7 +602,7 @@ class TestRespostas(Base):
         self.assertEqual(self.eventos(20), [("justificativa", "manter", texto, "Valdirene"),
                                             ("justificativa", "seguir", "", "Valdirene")])
         h = self.manejo.historico(self.val, DO_ES, 20)
-        self.assertEqual(h["cliente"], {"id": 20, "nome": "MERCADO TRINTA"})
+        self.assertEqual(h["cliente"], {"id": 20, "nome": "MERCADO TRINTA (CLIENTE 20)"})
         (s,) = h["sugestoes"]
         self.assertEqual((s["mes"], s["sugestao"], s["vendedor"], s["encerrada"]), ("2026-10", "central", "Rubens", None))
         self.assertEqual([(e["tipo"], e["decisao"], e["dias_sem_compra"], e["ultima_compra"]) for e in s["eventos"]],
@@ -766,7 +781,7 @@ class TestArquivo(Base):
                                       "situacao": "Situação", "resposta": "Resposta do supervisor",
                                       "texto": "Texto da resposta"})
         self.assertEqual([(int(x["codigo"]), x["cliente"]) for x in linhas],
-                         [(26, "COMPROU ANTES DO CACHE"), (20, "MERCADO TRINTA")])  # a ordem da tela, sem repetir
+                         [(26, "COMPROU ANTES DO CACHE"), (20, "MERCADO TRINTA (CLIENTE 20)")])  # a ordem da tela, sem repetir
         x = linhas[1]
         self.assertEqual((x["vendedor"], int(x["dias"]), x["contagem"], x["situacao"], x["resposta"], x["texto"]),
                          ("Rubens", 30, "desde a última compra", "Justificado", "Deve continuar com o vendedor",

@@ -38,7 +38,6 @@ from .calendario import REGIOES, Calendario
 from .configuracao import RegrasNoBanco
 from .conversas import NaoEncontrada
 from .indicadores import semanas_da_frequencia
-from .premiacoes import nome_cliente
 
 log = logging.getLogger("bi.manejo")
 
@@ -127,6 +126,12 @@ class ConfigManejo(RegrasNoBanco):
 # --- contas sem banco ---------------------------------------------------------------------
 def rotulo_mes(mes: dt.date) -> str:
     return f"{MESES[mes.month - 1]} de {mes.year}"
+
+
+def nome_erp(nome) -> str:
+    """O nome do cliente como está no cadastro do ERP, com o código que o vendedor conhece ("BAR DO ZE (CLIENTE 5959)"),
+    só sem os espaços repetidos."""
+    return " ".join(str(nome or "").replace("\xa0", " ").split()) or "Cliente sem nome"
 
 
 def _iso(d: dt.date | None) -> str | None:
@@ -414,6 +419,20 @@ class Manejo:
     def _nome(self, nomes: dict, vendedor: int, guardado: str | None = None) -> str:
         return nomes.get(vendedor) or guardado or f"Vendedor {vendedor}"
 
+    def _nomes_erp(self, clientes) -> dict[int, str]:
+        """{cliente: o nome do cadastro do ERP hoje (nome_erp)}, para a página mostrar o nome que o vendedor conhece,
+        mesmo nas linhas gravadas antes (sem o código) e depois de uma troca de nome no ERP. Quem não está no cache (ou
+        com o cache ainda sendo preparado) fica com o nome guardado na linha."""
+        ids = sorted({int(c) for c in clientes})
+        if not ids or not self.calc.cache.pronto():
+            return {}
+        try:
+            linhas = self.calc.cache.consulta(
+                "SELECT id, nome FROM clientes WHERE id IN (SELECT unnest(?::INTEGER[]))", [ids])
+        except RuntimeError:  # o cache fechou no meio (uma cópia nova chegando)
+            return {}
+        return {i: nome_erp(n) for i, n in linhas if str(n or "").strip()}
+
     def _fatos(self, dia: dt.date, cfg: dict, escopo: set[int], central: set[int], vivos: list[int]):
         """Os fatos crus de cada cliente ativo dos vendedores do escopo e dos clientes com sugestão em andamento
         (vivos), numa consulta só ao cache: ({cliente: fato}, {regra: deu para conferir}, avisos, o primeiro dia do
@@ -669,7 +688,7 @@ class Manejo:
                     "INSERT INTO manejo_sugestoes (mes, id_cliente, cliente, sugestao, id_vendedor, vendedor, "
                     "id_vendedor_entrada, entrou_em, retrato, fatos, dados_ate) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)",
-                    [mes, cliente, nome_cliente(f["nome"]), nova, *vendedor, vendedor[0], dia, dados, dados, dados_ate])
+                    [mes, cliente, nome_erp(f["nome"]), nova, *vendedor, vendedor[0], dia, dados, dados, dados_ate])
                 n["novas"] += 1
             elif existente[1] in SAIDAS:  # tinha saído da regra neste mês e voltou: a mesma linha, com o histórico
                 con.execute("UPDATE manejo_sugestoes SET encerrada_em = NULL, encerrada_motivo = NULL, "
@@ -751,7 +770,7 @@ class Manejo:
             return {"mes": f"{m:%Y-%m}", "rotulo": rotulo_mes(m), "prazo": meses[m].isoformat(),
                     "aberta": meses[m] >= hoje, "atual": m == aberta}
 
-        itens, vendedores = [], {}
+        itens, vendedores, nomes_erp = [], {}, self._nomes_erp(x[2] for x in linhas)
         for x in linhas:
             (id_, _mes_linha, id_cliente, cliente, sugestao, id_vendedor, vendedor, entrada, entrou_em, retrato, fatos,
              encerrada_em, motivo, prazo) = x[:14]
@@ -762,7 +781,7 @@ class Manejo:
             itens.append({
                 "id": id_, "versao": max(justificativa["id"] if justificativa else 0, veredito["id"] if veredito else 0),
                 "sugestao": sugestao, "situacao": self._situacao(motivo, justificativa, veredito, hoje, prazo),
-                "cliente": {"id": id_cliente, "nome": cliente, "cidade": fatos.get("cidade"), "uf": fatos.get("uf"),
+                "cliente": {"id": id_cliente, "nome": nomes_erp.get(id_cliente, cliente), "cidade": fatos.get("cidade"), "uf": fatos.get("uf"),
                             "area": fatos.get("area")},
                 "vendedor": vendedores[id_vendedor],
                 "vendedor_entrada": self._nome(nomes, entrada) if entrada != id_vendedor else None,
@@ -812,7 +831,7 @@ class Manejo:
                     "em": hora(em), "dias_sem_compra": retrato.get("dias_sem_compra"),
                     "ultima_compra": retrato.get("ultima_compra")})
         return {
-            "cliente": {"id": cliente, "nome": linhas[-1][3]},
+            "cliente": {"id": cliente, "nome": self._nomes_erp([cliente]).get(cliente, linhas[-1][3])},
             "sugestoes": [{
                 "id": x[0], "mes": f"{x[1]:%Y-%m}", "rotulo": rotulo_mes(x[1]), "sugestao": x[4],
                 "entrou_em": x[8].isoformat(), "vendedor": self._nome(nomes, x[5], x[6]), "entrada": _entrada(x[9]),
@@ -946,6 +965,7 @@ class Manejo:
         with self.banco.conexao() as con:
             con.execute("SELECT pg_advisory_xact_lock(%s)", [TRAVA])
             linhas = self._para_mudar(con, [i for i, _ in itens])
+            nomes = self._nomes_erp(x["id_cliente"] for x in linhas.values())
             if ids is not None and any(x["id_vendedor"] not in ids for x in linhas.values()):
                 raise PermissionError("há clientes de vendedores fora do seu acesso; atualize a página")
             for id_, versao in itens:
@@ -963,7 +983,8 @@ class Manejo:
                 else:
                     recusa = None
                 if recusa:
-                    recusados.append({"id": id_, "cliente": x and x["cliente"], "motivo": recusa})
+                    recusados.append({"id": id_, "cliente": x and nomes.get(x["id_cliente"], x["cliente"]),
+                                      "motivo": recusa})
                     continue
                 j = x["justificativa"]
                 if not (j and (j["decisao"], j["texto"], j["por"]) == (decisao, texto, usuario["id"])):
@@ -986,6 +1007,7 @@ class Manejo:
         with self.banco.conexao() as con:
             con.execute("SELECT pg_advisory_xact_lock(%s)", [TRAVA])
             linhas = self._para_mudar(con, [i for i, _ in itens])
+            nomes = self._nomes_erp(x["id_cliente"] for x in linhas.values())
             for id_, versao in itens:
                 x = linhas.get(id_)
                 reabrir = bool(x) and x["motivo"] == "mantido" and decisao == "seguir"
@@ -1006,7 +1028,8 @@ class Manejo:
                 else:
                     recusa = None
                 if recusa:
-                    recusados.append({"id": id_, "cliente": x and x["cliente"], "motivo": recusa})
+                    recusados.append({"id": id_, "cliente": x and nomes.get(x["id_cliente"], x["cliente"]),
+                                      "motivo": recusa})
                     continue
                 v = x["veredito"]
                 if not (v and (v["decisao"], v["texto"]) == (decisao, texto)):

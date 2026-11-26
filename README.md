@@ -1785,6 +1785,9 @@ Só no site: no PC a página avisa.
 - **Uma lista só por vez:** quem cai nas duas fica só na de inativação, com os dois motivos.
 - **Ficam fora:** terceiros, Edir e contas internas (quem não é das equipes ES e BA de Metas › Configurar), inativos e
   os clientes "PEDIDO BLOQUEADO".
+- **Nome do cliente:** o do cadastro do ERP hoje, com o código que o vendedor conhece ("BAR DO ZE (CLIENTE 5959)"), na
+  tela, no histórico, no Excel e no PDF. Vale também para as linhas gravadas antes, quando o nome ia sem o código, e
+  acompanha uma troca de nome no ERP; quem não está mais no cache fica com o nome guardado na linha.
 - **Títulos em atraso:** a linha aberta do cliente mostra todos os títulos em aberto vencidos há 8 dias ou mais
   (quantos, o saldo e o mais antigo), para o supervisor justificar sabendo do atraso que ainda não chega aos 120 dias.
   É só informação: não põe nem tira ninguém da lista (`ATRASO_DIAS` em `bi/manejo.py`, fixo, sem tela). O vencimento é o
@@ -1822,8 +1825,8 @@ servidor lê a lista de novo com o acesso de quem baixa, e o que não está nela
 os filtros, quantos clientes, o dia da cópia do banco e quem baixou.
 - **Excel:** os números em colunas separadas (dias de atraso, em aberto, comprou em 12 meses), o código do cliente
   (para achar no ERP), a resposta e o veredito com quem e quando, e o texto de cada um.
-- **PDF:** a página deitada, para ler no papel, até 2.000 clientes. A resposta e o veredito ficam numa coluna cada, e o
-  código do cliente não aparece.
+- **PDF:** a página deitada, para ler no papel, até 2.000 clientes. A resposta e o veredito ficam numa coluna cada, e a
+  coluna do código interno do cliente não aparece (o nome vai como no ERP, com o "(CLIENTE 5959)").
 
 ### Configurar (Manejo da Base)
 
