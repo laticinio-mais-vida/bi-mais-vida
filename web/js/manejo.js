@@ -755,9 +755,19 @@ function fatos(x) {
   const origem = { reativacao: `contados da reativação do cadastro, em ${data(f.conta_desde)}`, central: "contados da entrada na central",
     cadastro: "contados do cadastro", compra: "contados da última compra" }[f.origem_conta] || "";
   par("Dias sem compra", `<b>${f.dias_sem_compra == null ? "—" : fmt.num(f.dias_sem_compra)}</b> <small>${[origem, f.limite ? `o limite é ${fmt.num(f.limite)}` : ""].filter(Boolean).join(" · ")}</small>`);
+  // Os títulos vencidos há 8 dias ou mais (bi/manejo.py ATRASO_DIAS), para quem justifica: não mudam a lista. Sem o
+  // campo (linha encerrada antes dele, ou os títulos não vieram nos dados), a linha não aparece.
+  const a = f.em_atraso;
+  if (a) {
+    const desde = `há ${fmt.num(a.a_partir_de)} dias ou mais`;
+    par("Títulos em atraso", a.titulos > 0
+      ? `<b>${plural(a.titulos, "título vencido", "títulos vencidos")}</b> ${desde} <small>${fmt.moeda2(a.saldo)} em aberto${
+        a.total > a.saldo + 0.005 ? ` (de ${fmt.moeda2(a.total)}, com uma parte já paga)` : ""} · o mais antigo venceu em ${data(a.vencimento_mais_antigo)}, há ${plural(a.dias, "dia", "dias")}</small>`
+      : `nenhum <small>sem título vencido ${desde}</small>`);
+  }
   if (f.inadimplencia) {
-    const i = f.inadimplencia;
-    par("Inadimplência", `<b>${plural(i.dias, "dia", "dias")}</b> de atraso <small>${fmt.moeda2(i.saldo)} em aberto em ${plural(i.titulos, "título", "títulos")}${
+    const i = f.inadimplencia, regra = estado.dados?.regras?.dias?.inadimplencia;
+    par(regra ? `Inadimplência de ${fmt.num(regra)} dias ou mais` : "Inadimplência", `<b>${plural(i.dias, "dia", "dias")}</b> de atraso <small>${fmt.moeda2(i.saldo)} em aberto em ${plural(i.titulos, "título", "títulos")}${
       i.total > i.saldo + 0.005 ? ` (de ${fmt.moeda2(i.total)}, com uma parte já paga)` : ""} · o mais antigo venceu em ${data(i.vencimento_mais_antigo)}</small>`);
   }
   const doze = f.compras_12_meses;
@@ -1121,7 +1131,8 @@ function metodo(d) {
             (com o nome de uma rede no campo Rede, ou com o campo vazio) conta como semanal. Quem já está com a central não entra aqui.</li>
           <li><b>Inativar:</b> cliente com título em aberto vencido há ${fmt.num(dias.inadimplencia)} dias ou mais; ou cliente
             da central (${nomesCentral}) há ${fmt.num(dias.central)} dias ou mais sem compra, contados do que for mais
-            recente: o dia em que entrou na central ou a última compra.</li>
+            recente: o dia em que entrou na central ou a última compra. Ao abrir o cliente, “Títulos em atraso” mostra
+            todos os títulos vencidos há 8 dias ou mais, para ajudar na justificativa: eles não põem nem tiram ninguém da lista.</li>
           <li><b>Dias sem compra:</b> da última venda faturada até o dia da cópia do banco${d.dia ? ` (${data(d.dia)})` : ""}.
             Quem não comprou desde janeiro de 2024 conta do último título de venda antigo; sem nenhum, do cadastro. O cliente
             reativado conta da reativação, e a troca de vendedor não recomeça a contagem.</li>

@@ -67,7 +67,10 @@ MIN_TEXTO = 10      # letras de quem justifica que o cliente deve continuar
 MAX_TEXTO = 2000
 MAX_ITENS = 500     # clientes respondidos de uma vez
 TRAVA = 7_240_144   # pg_advisory_xact_lock: a atualização da lista e as respostas, uma de cada vez
-FATOS_VERSAO = 1
+FATOS_VERSAO = 2    # 2: com os títulos em atraso (em_atraso)
+# Dias de atraso a partir dos quais o título vencido aparece na linha aberta do cliente ("Títulos em atraso"). Só para
+# o supervisor ver ao justificar: não põe nem tira ninguém da lista (a inativação é a regra dos 120 dias).
+ATRASO_DIAS = 8
 CADASTRO_NOVO = 7   # dias: entrar na carteira até aqui depois do cadastro é o próprio cadastro, não uma reativação
 MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
          "novembro", "dezembro")
@@ -166,7 +169,8 @@ def avaliar(f: dict, ctx: dict) -> tuple[str | None, dict]:
     - Inadimplente: tem título em aberto vencido há mais que os dias da regra (o corte está na consulta).
     - Central sem compra: vendedor da central e dias >= o limite, contados do mais recente entre a entrada na central
       e a última compra.
-    A inativação tem prioridade: quem cai nela não é sugerido para a central."""
+    A inativação tem prioridade: quem cai nela não é sugerido para a central.
+    Os títulos vencidos há ATRASO_DIAS ou mais (em_atraso) só são mostrados: não mudam a sugestão."""
     dia, dias, central = ctx["dia"], ctx["dias"], ctx["central"]
     vendedor = f["id_vendedor"]
     na_central = vendedor in central
@@ -199,12 +203,19 @@ def avaliar(f: dict, ctx: dict) -> tuple[str | None, dict]:
     motivos = [m for m, vale in (("inadimplente", inadimplente), ("central_sem_compra", central_sem_compra),
                                  ("sem_compra", sem_compra)) if vale]
     sugestao = "inativar" if inadimplente or central_sem_compra else "central" if sem_compra else None
-    inadimplencia = None
-    if (f["inad_titulos"] or 0) > 0:
-        inadimplencia = {"titulos": int(f["inad_titulos"]), "total": round(float(f["inad_total"] or 0), 2),
-                         "saldo": round(float(f["inad_saldo"] or 0), 2),
-                         "vencimento_mais_antigo": _iso(f["inad_desde"]),
-                         "dias": (dia - f["inad_desde"]).days if f["inad_desde"] else None}
+    def vencidos(prefixo: str) -> dict:
+        return {"titulos": int(f[f"{prefixo}_titulos"]), "total": round(float(f[f"{prefixo}_total"] or 0), 2),
+                "saldo": round(float(f[f"{prefixo}_saldo"] or 0), 2),
+                "vencimento_mais_antigo": _iso(f[f"{prefixo}_desde"]),
+                "dias": (dia - f[f"{prefixo}_desde"]).days if f[f"{prefixo}_desde"] else None}
+
+    inadimplencia = vencidos("inad") if (f["inad_titulos"] or 0) > 0 else None
+    # Os títulos vencidos há ATRASO_DIAS ou mais (os da inadimplência inclusive): None quando os títulos não vieram no
+    # cache (não dá para dizer), {"titulos": 0, ...} quando não há nenhum.
+    em_atraso = None
+    if pode["inadimplente"]:
+        em_atraso = {"a_partir_de": ATRASO_DIAS, **(vencidos("atraso") if (f["atraso_titulos"] or 0) > 0 else
+                                                    {"titulos": 0})}
     com_vendedor = f["com_vendedor_desde"]
     return sugestao, {
         "versao": FATOS_VERSAO, "dia": dia.isoformat(), "id_vendedor": vendedor, "inativo": bool(f["inativo"]),
@@ -217,7 +228,7 @@ def avaliar(f: dict, ctx: dict) -> tuple[str | None, dict]:
         "na_central_desde_antes": bool(na_central and primeiro and entrada <= primeiro),
         "com_vendedor_desde": _iso(com_vendedor),
         "com_vendedor_desde_antes": bool(com_vendedor and primeiro and com_vendedor <= primeiro),
-        "inadimplencia": inadimplencia,
+        "inadimplencia": inadimplencia, "em_atraso": em_atraso,
         "bloqueado_no_erp": None if f["bloqueado"] is None else bool(f["bloqueado"]),
         "compras_12_meses": {"valor": round(float(f["compras_valor"] or 0), 2), "meses": int(f["compras_meses"] or 0)},
     }
@@ -450,25 +461,33 @@ class Manejo:
         else:
             colunas.append("r.rede")
             juntas.append("LEFT JOIN clientes_rede r ON r.id = a.id")
-        chaves += ["ultimo_titulo", "inad_titulos", "inad_total", "inad_saldo", "inad_desde"]
+        chaves += ["ultimo_titulo", "inad_titulos", "inad_total", "inad_saldo", "inad_desde",
+                   "atraso_titulos", "atraso_total", "atraso_saldo", "atraso_desde"]
         if com_titulos:
             # Há datas digitadas erradas no ERP (ano 7190): a emissão só vale até o dia dos dados. O saldo desconta o
             # que já foi pago das parcelas; o vencimento do título é o da última parcela, como na Reavaliação de Crédito.
+            # inad_*: os vencidos há os dias da regra de inativar; atraso_*: os vencidos há ATRASO_DIAS (só mostrados).
             junta, pago = ("", "0") if cache.sem_parcelas else (" LEFT JOIN titulos_parcelas p ON p.id = t.id",
                                                                 "COALESCE(p.pago, 0)")
             vencido = "t.quitado = 0 AND t.vencimento <= ?"
+
+            def somas(nome: str) -> str:
+                return (f"COUNT(*) FILTER (WHERE {vencido}) AS {nome}_n, "
+                        f"SUM(t.total) FILTER (WHERE {vencido}) AS {nome}_total, "
+                        f"SUM(t.total - {pago}) FILTER (WHERE {vencido}) AS {nome}_saldo, "
+                        f"MIN(t.vencimento) FILTER (WHERE {vencido}) AS {nome}_desde")
             ctes.append(
                 "titulos AS (SELECT t.id_cliente, MAX(t.emissao) FILTER (WHERE t.emissao <= ?) AS ultimo, "
-                f"COUNT(*) FILTER (WHERE {vencido}) AS n, SUM(t.total) FILTER (WHERE {vencido}) AS total, "
-                f"SUM(t.total - {pago}) FILTER (WHERE {vencido}) AS saldo, "
-                f"MIN(t.vencimento) FILTER (WHERE {vencido}) AS desde "
+                f"{somas('inad')}, {somas('atraso')} "
                 f"FROM titulos_receber t{junta} WHERE t.id_cliente IN (SELECT id FROM alvo) GROUP BY 1)")
             corte = dia - dt.timedelta(days=cfg["dias"]["inadimplencia"])
-            params += [dia, corte, corte, corte, corte]
-            colunas += ["t.ultimo", "t.n", "t.total", "t.saldo", "t.desde"]
+            corte_atraso = dia - dt.timedelta(days=ATRASO_DIAS)
+            params += [dia, *[corte] * 4, *[corte_atraso] * 4]
+            colunas += ["t.ultimo", *(f"t.{nome}_{c}" for nome in ("inad", "atraso")
+                                      for c in ("n", "total", "saldo", "desde"))]
             juntas.append("LEFT JOIN titulos t ON t.id_cliente = a.id")
         else:
-            colunas += ["NULL"] * 5
+            colunas += ["NULL"] * 9
         chaves += ["na_base_desde", "com_vendedor_desde", "vendedor_do_trecho", "na_central_desde"]
         primeiro = None
         if com_carteira:

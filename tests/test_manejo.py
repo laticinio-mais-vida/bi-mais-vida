@@ -118,7 +118,8 @@ def fato(**mudar) -> dict:
     return {"id": 1, "nome": "CLIENTE", "id_vendedor": ES, "cidade": "SERRA", "uf": "ES", "area": "ROTA 1",
             "data_cadastro": D(2020, 1, 1), "inativo": False, "ficticio": False, "rede": "SEMANAL",
             "ultima_venda": None, "ultimo_titulo": None, "inad_titulos": 0, "inad_total": None, "inad_saldo": None,
-            "inad_desde": None, "na_base_desde": INICIO, "com_vendedor_desde": INICIO, "na_central_desde": None,
+            "inad_desde": None, "atraso_titulos": 0, "atraso_total": None, "atraso_saldo": None, "atraso_desde": None,
+            "na_base_desde": INICIO, "com_vendedor_desde": INICIO, "na_central_desde": None,
             "bloqueado": False, "compras_valor": None, "compras_meses": None, **mudar}
 
 
@@ -226,6 +227,20 @@ class TestAvaliar(unittest.TestCase):
         self.assertEqual((s, f["motivos"]), ("inativar", ["inadimplente", "central_sem_compra"]))
         self.assertIsNone(self.sugestao(id_vendedor=TERCEIRO, ultima_venda=D(2026, 9, 25), **titulos)[0])
 
+    def test_titulos_em_atraso_so_mostrados(self):
+        # vencido há 30 dias: aparece na linha aberta, sem pôr o cliente na lista de inativar
+        atraso = {"atraso_titulos": 2, "atraso_total": 900.0, "atraso_saldo": 700.0, "atraso_desde": D(2026, 9, 1)}
+        s, f = self.sugestao(ultima_venda=D(2026, 9, 25), **atraso)
+        self.assertEqual((s, f["motivos"], f["inadimplencia"]), (None, [], None))
+        self.assertEqual(f["em_atraso"], {"a_partir_de": 8, "titulos": 2, "total": 900.0, "saldo": 700.0,
+                                          "vencimento_mais_antigo": "2026-09-01", "dias": 30})
+        self.assertEqual(self.sugestao(ultima_venda=D(2026, 3, 1), **atraso)[0], "central")  # a lista segue a regra
+        # sem nenhum: diz que não há; sem os títulos no cache: não diz nada
+        self.assertEqual(self.sugestao()[1]["em_atraso"], {"a_partir_de": 8, "titulos": 0})
+        self.assertEqual(self.sugestao(atraso_titulos=None)[1]["em_atraso"], {"a_partir_de": 8, "titulos": 0})
+        sem_titulos = contexto(regras={"sem_compra": True, "inadimplente": False, "central_sem_compra": True})
+        self.assertIsNone(self.sugestao(sem_titulos, **atraso)[1]["em_atraso"])
+
 
 class TestFatos(unittest.TestCase):
     def setUp(self):
@@ -254,6 +269,14 @@ class TestFatos(unittest.TestCase):
         self.assertEqual((t["inad_titulos"], t["inad_total"], t["inad_saldo"], t["inad_desde"]),
                          (1, 1000.0, 600.0, D(2026, 6, 3)))
         self.assertEqual(fatos[29]["inad_titulos"], 0)
+        # em atraso (8 dias ou mais): o de 120 dias também conta; o de 119 dias conta só aqui
+        atraso = lambda c: tuple(fatos[c][f"atraso_{k}"] for k in ("titulos", "total", "saldo", "desde"))  # noqa: E731
+        self.assertEqual(atraso(28), (1, 1000.0, 600.0, D(2026, 6, 3)))
+        self.assertEqual(atraso(29), (1, 500.0, 500.0, D(2026, 6, 4)))
+        # o mercado (1): vencido há 8 dias exatos entra (o 103, com metade paga); há 7 dias (o 104), ainda não
+        self.assertEqual(atraso(1), (1, 1300.0, 650.0, D(2026, 9, 23)))
+        self.assertEqual(atraso(2), (1, 2500.0, 2500.0, D(2026, 9, 3)))
+        self.assertEqual(fatos[20]["atraso_titulos"], None)  # sem nenhum título
         self.assertEqual((fatos[20]["compras_valor"], fatos[20]["compras_meses"]), (100.0, 1))
         self.assertTrue(fatos[2]["bloqueado"])
         self.assertFalse(fatos[20]["bloqueado"])
@@ -277,6 +300,7 @@ class TestFatos(unittest.TestCase):
         self.assertEqual(disponivel, {"sem_compra": False, "inadimplente": False, "central_sem_compra": True})
         self.assertEqual(len(avisos), 2)
         self.assertIsNone(fatos[28]["inad_titulos"])
+        self.assertIsNone(fatos[28]["atraso_titulos"])
 
     def test_sem_parcelas_e_sem_carteira(self):
         fatos, disponivel, _, primeiro = self.fatos(parcelas=False, carteira=False, bloqueios=False)
@@ -375,6 +399,8 @@ class TestLista(Base):
         self.assertEqual(itens[26]["fatos"]["origem_ultima_compra"], "titulo")
         self.assertEqual(itens[30]["fatos"]["motivos"], ["inadimplente", "sem_compra"])
         self.assertEqual(itens[28]["fatos"]["inadimplencia"]["saldo"], 600.0)
+        self.assertEqual((itens[28]["fatos"]["em_atraso"]["titulos"], itens[28]["fatos"]["em_atraso"]["dias"]), (1, 120))
+        self.assertEqual(itens[20]["fatos"]["em_atraso"], {"a_partir_de": 8, "titulos": 0})
         f = itens[31]["fatos"]
         self.assertEqual((f["motivos"], f["na_central_desde"], f["na_central_desde_antes"], f["dias_sem_compra"]),
                          (["central_sem_compra"], "2026-08-01", True, 61))

@@ -1785,6 +1785,10 @@ Só no site: no PC a página avisa.
 - **Uma lista só por vez:** quem cai nas duas fica só na de inativação, com os dois motivos.
 - **Ficam fora:** terceiros, Edir e contas internas (quem não é das equipes ES e BA de Metas › Configurar), inativos e
   os clientes "PEDIDO BLOQUEADO".
+- **Títulos em atraso:** a linha aberta do cliente mostra todos os títulos em aberto vencidos há 8 dias ou mais
+  (quantos, o saldo e o mais antigo), para o supervisor justificar sabendo do atraso que ainda não chega aos 120 dias.
+  É só informação: não põe nem tira ninguém da lista (`ATRASO_DIAS` em `bi/manejo.py`, fixo, sem tela). O vencimento é o
+  da última parcela e o saldo desconta as parcelas pagas, como na inadimplência e na Reavaliação de Crédito.
 
 **A lista do mês.** Cada mês tem a sua, com o prazo no penúltimo dia útil (de segunda a sexta; com feriado diferente no
 ES e na BA, vale o mais cedo). O cliente entra assim que cai numa regra, a cada envio dos dados; depois do prazo, quem
