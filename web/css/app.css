@@ -3829,3 +3829,72 @@ table.dados.cc-imp-tabela input[list] { width: 100%; min-width: 200px; height: 3
   #pagina-config-crm .sug-campo.cc-largo { grid-template-columns: 1fr; }
   .cc-barra-tabela .cc-busca-custo, .cc-barra-tabela .cc-busca-custo input { width: 100%; }
 }
+
+
+/* ---------- Metas: as listas de clientes dos cards (metasclientes.js) ---------- */
+/* o botão embaixo do card "Clientes atendidos" e do "Composição do faturamento", sempre no pé do card */
+.kpi.com-acao { display: flex; flex-direction: column; }
+.kpi-pe { margin-top: auto; padding-top: 14px; }
+.kpi-acao {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--cor, var(--acento)) 35%, var(--linha));
+  background: color-mix(in srgb, var(--cor, var(--acento)) 8%, var(--surface)); color: var(--tinta);
+  font: inherit; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer; position: relative; z-index: 1;
+  transition: background .2s, border-color .2s, transform .25s var(--mola);
+}
+.kpi-acao .ic { width: 16px; height: 16px; color: var(--cor, var(--acento)); flex: 0 0 auto; }
+.kpi-acao span { flex: 1; min-width: 0; }
+.kpi-acao .ic:last-child { color: var(--tinta-3); }
+.kpi-acao:hover { background: color-mix(in srgb, var(--cor, var(--acento)) 16%, var(--surface)); border-color: var(--cor, var(--acento)); transform: translateY(-1px); }
+.kpi-acao:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+
+/* a janela: o conteúdo preenche o <dialog> inteiro, para o clique no fundo escuro cair no próprio <dialog> */
+.mc-janela { width: min(1120px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; }
+.mc-janela[open] { display: flex; flex-direction: column; }
+.mc-corpo { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; padding: 22px 24px 18px; overflow: auto; }
+.mc-cab h2 { flex-wrap: wrap; }
+.mc-cab .sub { margin: 4px 0 0; }
+.mc-corpo > .aviso { margin: 14px 0 0; }
+.mc-resumo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.mc-resumo .mini-stat small { display: block; margin-top: 2px; color: var(--tinta-3); font-size: 12px; font-weight: 600; }
+.mc-resumo .mc-destaque { border-color: color-mix(in srgb, var(--acento) 45%, var(--linha)); background: var(--acento-suave); }
+.mc-resumo .mc-destaque .v { color: var(--acento-tinta); }
+.mc-nota { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; color: var(--tinta-3); font-size: 12.5px; }
+.mc-nota .ic { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; }
+.mc-como { margin-top: 12px; font-size: 13px; color: var(--tinta-2); }
+.mc-como summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--acento-tinta); font-weight: 700; }
+.mc-como summary .ic { width: 15px; height: 15px; }
+.mc-como p { margin: 8px 0 0; max-width: 90ch; line-height: 1.5; }
+.mc-como a { color: var(--acento-tinta); font-weight: 700; }
+.mc-ferramentas { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 14px 0 10px; }
+.mc-busca input { width: 300px; }
+.mc-contagem { color: var(--tinta-3); font-size: 13px; font-weight: 600; }
+.mc-area { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.mc-area .tabela-rolagem { max-height: none; min-height: 120px; flex: 1 1 auto; }
+table.dados.mc-tabela { font-size: 13px; }
+table.dados.mc-tabela tbody tr { animation: none; }
+table.dados.mc-tabela th, table.dados.mc-tabela td { padding: 9px 10px; vertical-align: top; }
+table.dados.mc-tabela th.esq, table.dados.mc-tabela td.esq { text-align: left; }
+table.dados.mc-tabela td small { display: block; color: var(--tinta-3); font-size: 11.5px; font-weight: 500; }
+table.dados.mc-tabela td.mc-cliente { min-width: 220px; max-width: 320px; white-space: normal; }
+table.dados.mc-tabela td.mc-cliente b { font-weight: 700; }
+.mc-outro { display: flex; align-items: center; gap: 4px; margin-top: 3px; color: var(--acento-tinta); font-size: 11.5px; font-weight: 700; }
+.mc-outro .ic { width: 13px; height: 13px; flex: 0 0 auto; }
+.mc-fraco { color: var(--tinta-3); }
+td.mc-mix b { font-weight: 700; }
+.mc-barra { display: block; width: 80px; height: 6px; margin: 5px 0 0 auto; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.mc-barra span { display: block; height: 100%; border-radius: inherit; background: var(--s-mus); }
+table.dados.mc-tabela td.mc-faltou { min-width: 300px; white-space: normal; }
+table.dados.mc-tabela td.mc-seg { min-width: 110px; max-width: 160px; white-space: normal; }
+.mc-itens { display: flex; flex-wrap: wrap; gap: 3px 4px; }
+.mc-item { padding: 1px 7px; border-radius: 999px; background: var(--ruim-bg); color: var(--ruim); font-size: 11px; font-weight: 700; line-height: 1.5; }
+.mc-itens.recolhido .mc-item:nth-child(n+7) { display: none; }
+.mc-ver-itens { padding: 1px 8px; border: 1px dashed color-mix(in srgb, var(--ruim) 45%, var(--linha)); border-radius: 999px; background: none; color: var(--ruim); font: inherit; font-size: 11px; font-weight: 800; line-height: 1.5; cursor: pointer; }
+.mc-ver-itens:hover { background: var(--ruim-bg); }
+.mc-ver-itens:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+.mc-mais { margin: 8px 2px 0; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; text-align: center; }
+@media (max-width: 860px) {
+  .mc-corpo { padding: 18px 16px 14px; }
+  .mc-resumo { grid-template-columns: 1fr; gap: 8px; }
+  .mc-busca, .mc-busca input { width: 100%; }
+}

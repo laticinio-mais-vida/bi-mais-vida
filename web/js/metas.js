@@ -9,6 +9,7 @@ import { anel, corrida, ranking, barras } from "./graficos.js";
 import { relatorioVendedores, relatorioProdutos, ligarCaptura } from "./relatorio.js";
 import { ligarTelaCheia, sairTelaCheia } from "./telacheia.js";
 import { multiSelecao } from "./multiselecao.js";
+import { abrirListaClientes, fecharListaClientes } from "./metasclientes.js";
 
 const ICONE_VISAO = { es: "mapa", ba: "mapa", edir: "usuario", outras_es: "leite", produtos_ba: "caixa", produtos_es: "caixa" };
 const COR = { fat: "var(--s-fat)", mus: "var(--s-mus)", out: "var(--s-out)", cli: "var(--k-cli)", vm: "var(--k-vm)" };
@@ -183,6 +184,7 @@ async function carregar(silencioso = false) {
   if (!conteudo) return;
   const pedido = ++estado.pedido;
   sairTelaCheia();
+  fecharListaClientes();
   if (estado.dados) conteudo.classList.add("recarregando");
   atualizarUrl();
   try {
@@ -244,6 +246,15 @@ function posRender(raiz, d) {
   }
   raiz.querySelectorAll("[data-vendedor]").forEach((el) => el.addEventListener("click", (ev) => {
     escolherVendedor(Number(el.dataset.vendedor), ev);
+  }));
+  // As listas de clientes dos cards: com a aba, os meses e os vendedores desta resposta (os mesmos dos números).
+  raiz.querySelectorAll("[data-lista]").forEach((b) => b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    sairTelaCheia();
+    abrirListaClientes({
+      tipo: b.dataset.lista, visao: d.visao.id, admin: !!ctx.admin,
+      meses: d.periodo.meses.map((m) => `${m.ano}-${m.mes}`), vendedores: d.selecionados || [],
+    });
   }));
 }
 
@@ -325,7 +336,12 @@ function rotuloMetaDia(iso) {
   return !iso || iso === hoje ? "Meta de venda de hoje" : `Meta de venda de ${fmt.semana(iso)}, ${fmt.dataCurta(iso)}`;
 }
 
-function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
+// O botão no pé de um card que abre uma lista de clientes (metasclientes.js): o que dá para fazer pelo número dele.
+function botaoLista(lista, rotulo, ic) {
+  return `<div class="kpi-pe"><button type="button" class="kpi-acao" data-lista="${lista}">${icone(ic)}<span>${esc(rotulo)}</span>${icone("proximo")}</button></div>`;
+}
+
+function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "", acao = "" }) {
   const f = tipo === "moeda" ? "moedaC" : "num";
   const v = tipo === "moeda" ? fmt.moedaC : fmt.num;
   const linhas = [];
@@ -337,7 +353,7 @@ function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
     else if (ind.falta_por_dia) linhas.push(["Necessário por dia útil", v(ind.falta_por_dia)]);
   }
   return `
-  <article class="cartao kpi entra" style="--i:${i};--cor:${cor}">
+  <article class="cartao kpi entra${acao ? " com-acao" : ""}" style="--i:${i};--cor:${cor}">
     <div class="kpi-cab">
       <span class="kpi-rotulo"><span class="kpi-icone">${icone(ic)}</span>${esc(titulo)}</span>
       ${ind.meta ? chipStatus(ind.status) : chipStatus("sem_meta")}
@@ -351,6 +367,7 @@ function kpi({ i, titulo, ic, cor, ind, tipo = "moeda", cal, extra = "" }) {
       </div>
     </div>
     ${linhas.length ? `<div class="kpi-rodape">${linhas.map(([a, b]) => `<div class="linha-r"><span>${a}</span><b>${b}</b></div>`).join("")}</div>` : ""}
+    ${acao}
   </article>`;
 }
 
@@ -379,7 +396,7 @@ function kpiVendaMedia(i, vm) {
 function kpiComposicao(i, ind) {
   const mus = ind.mussarela.realizado, out = ind.outras.realizado, tot = mus + out || 1;
   return `
-  <article class="cartao kpi kpi-simples entra" style="--i:${i};--cor:var(--s-mus)">
+  <article class="cartao kpi kpi-simples entra com-acao" style="--i:${i};--cor:var(--s-mus)">
     <div class="kpi-cab"><span class="kpi-rotulo"><span class="kpi-icone">${icone("queijo")}</span>Composição do faturamento</span></div>
     <div class="kpi-corpo"><div>
       <div class="kpi-valor" data-contar="${mus / tot}" data-fmt="pct0">0%</div>
@@ -392,6 +409,7 @@ function kpiComposicao(i, ind) {
         <span class="item"><span class="quadro" style="--c:var(--s-out)"></span>Outras linhas ${fmt.moedaC(out)}</span>
       </div>
     </div></div>
+    ${botaoLista("mix", "Clientes que não compraram produtos indicados", "etiqueta")}
   </article>`;
 }
 
@@ -429,7 +447,8 @@ function renderVendedores(d) {
   const cards = [];
   if (tipo === "faturamento") { // Metas ES, Metas BA e Metas Edir
     cards.push(kpi({ i: 1, titulo: "Faturamento", ic: "moeda", cor: COR.fat, ind: ind.faturamento, cal }));
-    cards.push(kpi({ i: 2, titulo: "Clientes atendidos", ic: "pessoas", cor: COR.cli, ind: ind.clientes, tipo: "num", cal }));
+    cards.push(kpi({ i: 2, titulo: "Clientes atendidos", ic: "pessoas", cor: COR.cli, ind: ind.clientes, tipo: "num", cal,
+      acao: botaoLista("nao_atendidos", "Clientes não atendidos", "usuario") }));
     cards.push(kpiVendaMedia(3, ind.venda_media));
     cards.push(kpiComposicao(4, ind));
   } else {

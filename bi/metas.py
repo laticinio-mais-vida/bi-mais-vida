@@ -295,15 +295,7 @@ class Calculadora:
               permitidos: set[int] | None = None) -> dict:
         """periodos: (ano, mês) escolhidos no filtro; vendedores: filtro (None ou vazio = todos);
         permitidos: vendedores que o usuário pode ver (None = todos). Os totais somam só esses."""
-        if visao not in VISOES:
-            raise ValueError(f"visão desconhecida: {visao}")
-        if not self.cache.pronto():
-            raise RuntimeError("os dados ainda estão sendo preparados")
-        meses = sorted({dt.date(int(a), int(m), 1) for a, m in periodos})
-        if not meses:
-            raise ValueError("escolha ao menos um mês")
-        if len(meses) > 60:
-            raise ValueError("escolha no máximo 60 meses")
+        meses = self._meses_da_visao(visao, periodos)
         info = VISOES[visao]
         regras = self.regras()
         cal_obj = self.calendario(regras)
@@ -326,15 +318,46 @@ class Calculadora:
             return {**base, **self._visao_produtos(regras, info, meses, cal, filtro, permitidos)}
         return {**base, **self._visao_vendedores(regras, info, meses, cal, filtro, permitidos)}
 
-    def _visao_vendedores(self, regras, info, meses, cal, filtro, permitidos):
+    def _meses_da_visao(self, visao: str, periodos: list[tuple[int, int]]) -> list[dt.date]:
+        """Confere a visão e os (ano, mês) do filtro e devolve o 1º dia de cada mês, em ordem."""
+        if visao not in VISOES:
+            raise ValueError(f"visão desconhecida: {visao}")
+        if not self.cache.pronto():
+            raise RuntimeError("os dados ainda estão sendo preparados")
+        meses = sorted({dt.date(int(a), int(m), 1) for a, m in periodos})
+        if not meses:
+            raise ValueError("escolha ao menos um mês")
+        if len(meses) > 60:
+            raise ValueError("escolha no máximo 60 meses")
+        return meses
+
+    def _vendedores_com_meta(self, regras, info, meses, filtro, permitidos) -> tuple[dict[int, dict], dict[int, dict]]:
+        """As metas dos vendedores da aba com meta nos meses: (os do acesso, para o filtro de vendedores da página; os
+        que a página mostra, que são esses com o filtro aplicado)."""
         metas = self._metas(regras, set(meses), info["grupos"])
         if permitidos is not None:
             metas = {k: v for k, v in metas.items() if k in permitidos}
+        mostrados = metas if filtro is None else {k: v for k, v in metas.items() if k in filtro}
+        return metas, mostrados
+
+    def vendedores_da_visao(self, visao: str, periodos: list[tuple[int, int]], vendedores: list[int] | None = None,
+                            permitidos: set[int] | None = None) -> dict:
+        """Os vendedores que uma aba de vendedores (Metas ES, BA, Edir) mostra com estes filtros, com o nome da página, e
+        os meses: as listas de clientes dos cards (bi/metas_clientes.py) usam os mesmos vendedores dos números."""
+        meses = self._meses_da_visao(visao, periodos)
+        info = VISOES[visao]
+        if info["tipo"] != "faturamento":
+            raise ValueError("as listas de clientes são só das abas Metas ES, Metas BA e Metas Edir")
+        _, metas = self._vendedores_com_meta(self.regras(), info, meses, set(vendedores) if vendedores else None,
+                                             permitidos)
+        return {"meses": meses, "rotulo": rotulo_periodo(meses),
+                "vendedores": {vid: nome_bonito(m["nome"]) for vid, m in metas.items()}}
+
+    def _visao_vendedores(self, regras, info, meses, cal, filtro, permitidos):
+        do_acesso, metas = self._vendedores_com_meta(regras, info, meses, filtro, permitidos)
         nomes_erp = self.nomes_erp()
         lista = sorted(({"id": vid, "nome": nome_bonito(m["nome"]), "nome_erp": nomes_erp.get(vid, "")}
-                        for vid, m in metas.items()), key=lambda x: x["nome"])
-        if filtro is not None:
-            metas = {k: v for k, v in metas.items() if k in filtro}
+                        for vid, m in do_acesso.items()), key=lambda x: x["nome"])
         ids = sorted(metas)
         mov, por_dia = self._movimento(regras, ids, meses)
         cli_vend, cli_total = self._clientes(ids, meses)

@@ -197,6 +197,28 @@ Em cada aba:
   PRODUTOS.xlsx (que só tem o ES em janeiro de 2026) ou da meta aprovada no painel (Aprovação de metas). Nas duas abas de
   produtos, o filtro de meses mostra só os meses com meta de produto de algum vendedor da aba.
   - As linhas de categoria seguem as categorias definidas em Configurações.
+- **Listas de clientes** (Metas ES, Metas BA e Metas Edir; bi/metas_clientes.py e web/js/metasclientes.js): dois botões
+  nos cartões abrem uma janela sobre a página, com o fundo escuro. Ela fecha no X, no Esc ou com um clique fora. As duas
+  listas usam a aba, os meses e os vendedores da página, e também os vendedores do acesso da pessoa. A base é a
+  **carteira de hoje** de cada vendedor: os clientes ativos, sem "PEDIDO BLOQUEADO" no nome, como no painel de
+  desempenho.
+  - **Clientes não atendidos** (cartão Clientes atendidos): os clientes da carteira que não compraram com o próprio
+    vendedor no mês. É a regra do cartão, que conta o cliente para quem fez a venda.
+    - Quem comprou com outro vendedor aparece com o nome dele.
+    - Com vários meses, entra quem passou pelo menos um deles sem comprar, e a coluna "Meses sem compra" mostra quais.
+    - A janela mostra a última compra (com qualquer vendedor) e a compra média por mês dos 6 meses fechados antes do
+      período. A lista começa pela maior média.
+    - O número do cartão pode ser um pouco diferente: ele conta todos os clientes para quem o vendedor vendeu, estejam ou
+      não na carteira dele hoje.
+  - **Clientes que não compraram produtos indicados** (cartão Composição do faturamento): os clientes da carteira que
+    compraram com o vendedor no período e deixaram de levar algum item do mix ideal do segmento (CRM › Configurar ›
+    Mix ideal).
+    - Vale a regra do CRM: um item vale com qualquer um dos seus produtos, "Qualquer mussarela" vale com qualquer
+      produto da linha mussarela, e a equivalência de produtos vale.
+    - Conta o que o cliente levou com qualquer vendedor, pelas notas, e devolução não tira o item.
+    - Clientes de segmento sem mix ideal ou sem segmento ficam fora, contados no topo da janela.
+    - A busca também acha pelo produto: "manteiga" mostra só quem não levou manteiga.
+    - Precisa das vendas por cliente no cache.
 - **Tela cheia:** todo cartão tem um botão de tela cheia no canto superior direito (aparece ao passar o
   mouse), como no Power BI web. Indicadores e tabelas são ampliados para caber na tela, o gráfico da corrida
   é redesenhado maior e as animações rodam de novo. Esc ou o mesmo botão voltam.

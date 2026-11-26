@@ -63,6 +63,7 @@ from bi.manejo import ConfigManejo, Manejo  # noqa: E402
 from bi.crm import MAX_PLANILHA as MAX_PLANILHA_CUSTOS, ConfigCrm, Crm  # noqa: E402
 from bi.arquivos import EXCEL, TIPOS as TIPOS_ARQUIVO  # noqa: E402
 from bi.metas import Calculadora  # noqa: E402
+from bi.metas_clientes import ClientesDaMeta  # noqa: E402
 from bi.notificacoes import Notificacoes  # noqa: E402
 from bi.planilhas import PlanilhaMonitorada, ler_metas, ler_metas_produtos  # noqa: E402
 from bi.premiacoes import ConfigPremiacoes, Premiacoes  # noqa: E402
@@ -204,6 +205,8 @@ class Aplicacao:
         # regras, o mix ideal de cada segmento e os custos industriais são do administrador (tabela regras).
         self.config_crm = ConfigCrm(self.banco)
         self.crm = Crm(self.calc, self.config_crm, self.projetor._nomes_vendedores)
+        # As listas de clientes dos cards da página Metas (não atendidos e fora do mix ideal do CRM).
+        self.metas_clientes = ClientesDaMeta(self.calc, self.config_crm, self.projetor._nomes_vendedores)
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -1261,6 +1264,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 opcoes["visoes"] = [v for v in opcoes["visoes"] if v["id"] in permitidas]
                 return self._json(opcoes)
             lista = lambda k: [int(x) for x in q[k].split(",") if x.strip()] if q.get(k) else None  # noqa: E731
+            meses_q = lambda: [tuple(int(p) for p in m.split("-"))  # noqa: E731
+                               for m in (q.get("meses") or "").split(",") if m.strip()]
             if url.path == "/api/visao":
                 if "metas" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Metas", HTTPStatus.FORBIDDEN)
@@ -1268,8 +1273,19 @@ class Manipulador(BaseHTTPRequestHandler):
                 if visao not in self._visoes_do_acesso(usuario):
                     return self._erro("seu acesso não inclui esta visão", HTTPStatus.FORBIDDEN)
                 # meses=2026-09,2026-10 (vários meses somados); vendedores=12,15 (vazio = todos do acesso)
-                meses = [tuple(int(p) for p in m.split("-")) for m in (q.get("meses") or "").split(",") if m.strip()]
-                return self._json(self.app.calc.visao(visao, meses, lista("vendedores"), self._ids(usuario)))
+                return self._json(self.app.calc.visao(visao, meses_q(), lista("vendedores"), self._ids(usuario)))
+            if url.path == "/api/metas/clientes":
+                # As janelas dos cards das abas Metas ES, BA e Edir: lista=nao_atendidos ou mix, com os filtros da página.
+                if "metas" not in paginas_permitidas(usuario):
+                    return self._erro("seu acesso não inclui a página de Metas", HTTPStatus.FORBIDDEN)
+                visao = q.get("visao", "es")
+                if visao not in self._visoes_do_acesso(usuario):
+                    return self._erro("seu acesso não inclui esta visão", HTTPStatus.FORBIDDEN)
+                listas = {"nao_atendidos": self.app.metas_clientes.nao_atendidos,
+                          "mix": self.app.metas_clientes.fora_do_mix}
+                if q.get("lista") not in listas:
+                    return self._erro("lista desconhecida")
+                return self._json(listas[q["lista"]](visao, meses_q(), lista("vendedores"), self._ids(usuario)))
             if url.path == "/api/projecoes":
                 if "projecoes" not in paginas_permitidas(usuario):
                     return self._erro("seu acesso não inclui a página de Projeções", HTTPStatus.FORBIDDEN)
