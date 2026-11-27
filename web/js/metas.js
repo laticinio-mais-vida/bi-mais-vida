@@ -252,8 +252,9 @@ function posRender(raiz, d) {
     ev.stopPropagation();
     sairTelaCheia();
     abrirListaClientes({
-      tipo: b.dataset.lista, visao: d.visao.id, admin: !!ctx.admin,
-      meses: d.periodo.meses.map((m) => `${m.ano}-${m.mes}`), vendedores: d.selecionados || [],
+      tipo: b.dataset.lista, url: "/api/metas/clientes", admin: !!ctx.admin,
+      params: { lista: b.dataset.lista, visao: d.visao.id, meses: d.periodo.meses.map((m) => `${m.ano}-${m.mes}`).join(","),
+                vendedores: (d.selecionados || []).join(",") },
     });
   }));
 }

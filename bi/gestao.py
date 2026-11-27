@@ -939,6 +939,9 @@ class Gestao:
         self.calc = calc
         self.assistente = assistente
         self.hoje = hoje or dt.date.today
+        # As listas de clientes do painel de desempenho (bi/metas_clientes.py, as mesmas da página Metas): ligadas pelo
+        # app.py, que monta o mix ideal do CRM depois da Gestão.
+        self.listas_clientes = None
 
     # --- dados do ERP ------------------------------------------------------------------------
     def _conferir_dados(self) -> None:
@@ -1469,6 +1472,46 @@ class Gestao:
             saida.update(painel)
             saida["vendedores"] = sorted(painel["vendedores"], key=lambda v: _chave(v["nome"]))
         return saida
+
+    def desempenho_clientes(self, usuario: dict, escopo, regiao: str | None = None, periodo: str | None = None,
+                            lista: str | None = None, vendedor=None) -> dict:
+        """A lista de clientes de uma linha do painel de desempenho (Positivação, Atendimentos, Mussarela ou Outras
+        linhas; bi/metas_clientes.py do_painel), com a região, o período e a equipe do painel (os vendedores com meta no
+        mês, só os do acesso de quem vê). vendedor: um da equipe (vazio = a equipe toda)."""
+        if self.listas_clientes is None:
+            raise RuntimeError("as listas de clientes não estão ligadas neste painel")
+        k = self._contas()  # SemDados (RuntimeError): os dados ainda não chegaram
+        with k:
+            ids = self.ids(escopo)
+            _, regiao = self._regiao_do_acesso(k, ids, regiao)
+            if regiao is None:
+                raise PermissionError("nenhum vendedor no seu acesso; fale com o administrador")
+            per = periodo_desempenho(periodo, self.hoje(), k.cal, regiao)
+            mes = per["fim"].replace(day=1)
+            time = self._time(k, regiao, {mes}) or self._time_padrao(k, regiao)
+            time = sorted(vid for vid in time if ids is None or vid in ids)
+            nomes = {v["id"]: v["nome"] for v in self._catalogo(k)}
+            faltam = [vid for vid in time if vid not in nomes]
+            nomes.update({vid: n for vid, (n, _) in k.nomes(faltam).items()})
+            equipe = sorted(({"id": vid, "nome": nomes.get(vid, f"Vendedor {vid}")} for vid in time),
+                            key=lambda v: _chave(v["nome"]))
+            escolhido = None
+            if vendedor not in (None, ""):
+                try:
+                    escolhido = int(vendedor)
+                except (TypeError, ValueError):
+                    raise ValueError("vendedor deve ser o código de um vendedor") from None
+                if escolhido not in time:
+                    raise PermissionError("esse vendedor não está na equipe do painel do seu acesso")
+            alvo = [escolhido] if escolhido is not None else time
+            painel = Painel(self.calc, k, self._areas(), regiao, EQUIPES_REGIAO[regiao])
+            r = self.listas_clientes.do_painel(lista, painel, per, {vid: nomes.get(vid, f"Vendedor {vid}")
+                                                                     for vid in alvo})
+        return {**r, "regiao": regiao, "periodo": {**per, "inicio": per["inicio"].isoformat(),
+                                                    "fim": per["fim"].isoformat()},
+                "mes": mes.isoformat(), "equipe": equipe, "vendedor": escolhido,
+                "vendedores": [v for v in equipe if v["id"] in alvo],
+                "data_ref": self.calc.cache.info.get("data_ref"), "copia": self.calc.cache.info.get("banco_copia")}
 
     def _regiao_do_acesso(self, k: _Contas, ids, regiao: str | None) -> tuple[list[str], str | None]:
         """(as regiões que a pessoa vê, a pedida ou a primeira delas); None quando ela não vê nenhuma. Levanta

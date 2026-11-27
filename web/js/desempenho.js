@@ -110,15 +110,27 @@ export function heroDesempenho(d) {
   </div>`;
 }
 
+// As linhas que abrem a lista de clientes (bi/metas_clientes.py do_painel; a janela em metasclientes.js): no quadro, a
+// própria linha; na ficha, o botão do cartão. O texto completa "Clique para ver …".
+const COM_LISTA = {
+  positivacao: "os clientes que não compraram no mês",
+  atendimentos: "os clientes esperados que não foram atendidos",
+  mussarela: "os clientes que não levaram mussarela",
+  outras: "os clientes que não levaram os produtos indicados",
+};
+
 function linha(v, [onde, k, nome, un]) {
   const b = v[onde][k];
   const pct = b.pct == null ? "—" : fmt.pct(b.pct, 0);
   const meta = b.meta == null ? "sem meta" : cru(k, b.meta);
-  return `<div class="dsp-linha" style="--c:${cor(b)}" title="${esc(COMO[k])}">
-    <div class="dsp-linha-top"><span>${nome}</span><b>${pct}</b></div>
-    <div class="dsp-linha-val"><span>${cru(k, b.real)}</span><i>/</i><span class="dsp-meta">${meta}</span><small>${un}</small></div>
-    <div class="dsp-barra"><i style="width:${largura(b)}%"></i></div>
-  </div>`;
+  const lista = COM_LISTA[k];
+  // spans (e não divs) para caber num botão; dentro da .dsp-linha (grid) eles viram blocos
+  const conteudo = `<span class="dsp-linha-top"><span>${nome}${lista ? icone("pessoas", "dsp-ic-lista") : ""}</span><b>${pct}</b></span>
+    <span class="dsp-linha-val"><span>${cru(k, b.real)}</span><i>/</i><span class="dsp-meta">${meta}</span><small>${un}</small></span>
+    <span class="dsp-barra"><i style="width:${largura(b)}%"></i></span>`;
+  if (!lista) return `<div class="dsp-linha" style="--c:${cor(b)}" title="${esc(COMO[k])}">${conteudo}</div>`;
+  return `<button type="button" class="dsp-linha dsp-linha-lista" style="--c:${cor(b)}" data-dsp-lista="${k}" data-dsp-lista-vendedor="${v.id}"
+    title="${esc(`${COMO[k]}\n\nClique para ver ${lista}.`)}" aria-label="${esc(`${nome} de ${v.nome}: ver ${lista}`)}">${conteudo}</button>`;
 }
 
 // B: o quadro, uma coluna por vendedor (arrasta para o lado quando não cabe).
@@ -194,6 +206,8 @@ export function fichaDesempenho(d, v, abertos) {
       <div class="dsp-cartao-pe">${chipStatus(b.status, rotulo(k, b))}</div>
       <small class="dsp-cartao-nota">${esc(notaCartao(v, onde, k, d))}</small>
       <p class="dsp-como"${aberto ? "" : " hidden"}>${esc(COMO[k])}</p>
+      ${COM_LISTA[k] ? `<button type="button" class="btn dsp-ver-clientes" data-dsp-lista="${k}" data-dsp-lista-vendedor="${v.id}"
+        title="${esc(`Ver ${COM_LISTA[k]}`)}">${icone("pessoas")}Ver clientes</button>` : ""}
     </div>`;
   }).join("");
   const sem = v.programacao?.sem_programacao;

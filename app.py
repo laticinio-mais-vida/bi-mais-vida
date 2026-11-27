@@ -85,8 +85,9 @@ CONEXAO_PERDIDA = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError
 # Página Gestão: quem tem a página lê; só o administrador lança e muda campanhas, objetivos e observações. O catálogo
 # (vendedores, produtos com a venda de 12 meses e o preço médio da empresa toda…) só serve aos formulários do
 # administrador: fica em ROTAS_ADMIN.
-ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/desempenho", "/api/gestao/evolucao", "/api/gestao/vendedor",
-                    "/api/gestao/acao", "/api/gestao/catalogo", "/api/gestao/rascunho")
+ROTAS_GESTAO_LER = ("/api/gestao", "/api/gestao/desempenho", "/api/gestao/desempenho/clientes",
+                    "/api/gestao/evolucao", "/api/gestao/vendedor", "/api/gestao/acao", "/api/gestao/catalogo",
+                    "/api/gestao/rascunho")
 ROTAS_GESTAO_MUDAR = {"/api/gestao/acoes", "/api/gestao/acao/editar", "/api/gestao/acao/encerrar",
                       "/api/gestao/acao/prorrogar", "/api/gestao/acao/arquivar", "/api/gestao/acao/excluir",
                       "/api/gestao/objetivos", "/api/gestao/objetivo/editar", "/api/gestao/objetivo/excluir",
@@ -207,6 +208,7 @@ class Aplicacao:
         self.crm = Crm(self.calc, self.config_crm, self.projetor._nomes_vendedores)
         # As listas de clientes dos cards da página Metas (não atendidos e fora do mix ideal do CRM).
         self.metas_clientes = ClientesDaMeta(self.calc, self.config_crm, self.projetor._nomes_vendedores)
+        self.gestao.listas_clientes = self.metas_clientes  # as mesmas listas no painel de desempenho
         # O Google Agenda de cada pessoa (só leitura, onde [google] tem a chave: no site): aparece na agenda e ocupa
         # horários das tarefas e atividades.
         self.google = GoogleAgenda(self.banco, ini)
@@ -558,6 +560,10 @@ class Manipulador(BaseHTTPRequestHandler):
             return self._json(gestao.quadro(usuario, escopo, q.get("regiao")))
         if caminho == "/api/gestao/desempenho":  # o painel de desempenho; periodo: ultimo_dia, semana ou hoje
             return self._json(gestao.desempenho(usuario, escopo, q.get("regiao"), q.get("periodo")))
+        if caminho == "/api/gestao/desempenho/clientes":  # a lista de clientes de uma linha do painel; lista:
+            # positivacao, atendimentos, mussarela ou outras; vendedor: um da equipe (vazio = a equipe toda)
+            return self._json(gestao.desempenho_clientes(usuario, escopo, q.get("regiao"), q.get("periodo"),
+                                                         q.get("lista"), q.get("vendedor")))
         if caminho == "/api/gestao/evolucao":  # a evolução mensal do painel; vendedor: um só (vazio = a equipe)
             return self._json(gestao.evolucao(usuario, escopo, q.get("regiao"), q.get("vendedor")))
         if caminho == "/api/gestao/vendedor":  # o histórico interno de um vendedor

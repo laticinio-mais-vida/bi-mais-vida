@@ -27,6 +27,7 @@ import { ABERTURAS, BASE_ANTIGA, METAS, META_ANTIGA, PERIODOS_BASE, SOBRE_PREMIA
          textoAlvo, textoBase, textoFaixas, textoFalta, textoFiltros, textoGanho, textoPeriodoBase, textoPremiacao, textoPremio,
          textoProgresso, valorIndicador, valorParte, visual } from "./indicadores.js";
 import { abrirComoCalcula, construtorIndicador } from "./construtorindicador.js";
+import { abrirListaClientes, fecharListaClientes } from "./metasclientes.js";
 import { abasDesempenho, avisosDesempenho, evolucaoDesempenho, fichaDesempenho, filtroPeriodo, filtroVendedor,
          heroDesempenho, legendaDesempenho, metaDiariaDesempenho, quadroDesempenho, textoPeriodo } from "./desempenho.js";
 
@@ -1715,6 +1716,7 @@ async function carregarDesempenho({ silencioso = false } = {}) {
   const el = raiz?.querySelector("#g-desempenho");
   if (!el || !estado.regiao) return;
   const pedido = ++estado.dsp.pedido;
+  if (!silencioso) fecharListaClientes(); // outro período ou outra região: a lista aberta era do painel de antes
   if (estado.dsp.dados) el.classList.add("recarregando");
   try {
     const d = await api(`/api/gestao/desempenho?regiao=${encodeURIComponent(estado.regiao)}&periodo=${encodeURIComponent(estado.dsp.periodo)}`);
@@ -1795,6 +1797,17 @@ function alternarTabela() {
   guardar("mv-gestao-meta-tabela", estado.dsp.tabela);
   desenharDesempenho();
   raiz.querySelector("[data-dsp-tabela]")?.focus({ preventScroll: true });
+}
+
+// A lista de clientes de uma linha do painel (Positivação, Atendimentos, Mussarela, Outras linhas), na janela das listas
+// (metasclientes.js), com a região e o período do painel carregado; o seletor da janela troca o vendedor pela equipe.
+function abrirListaDesempenho(tipo, vendedor) {
+  const d = estado.dsp.dados;
+  if (!d?.regiao) return;
+  abrirListaClientes({
+    tipo, url: "/api/gestao/desempenho/clientes", admin: !!ctx.admin,
+    params: { lista: tipo, regiao: d.regiao, periodo: d.periodo?.chave || estado.dsp.periodo, vendedor: vendedor || "" },
+  });
 }
 
 function trocarPeriodo(p) {
@@ -1901,9 +1914,10 @@ function aoClicar(e) {
     "[data-encerrar],[data-prorrogar],[data-editar-acao],[data-arquivar-acao],[data-excluir-acao],[data-excluir-nota]," +
     "[data-enviar-nota],[data-cancelar-form],[data-lancar],[data-meta-propria],[data-tirar-meta],[data-parar]," +
     "[data-marcar-todos],[data-como],[data-minimizar],[data-minimizar-tudo],[data-premio-forma],[data-premio-mais],[data-premio-tirar]," +
-    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info],[data-dsp-tabela],[data-dsp-vista]");
+    "[data-dsp-periodo],[data-dsp-vendedor],[data-dsp-voltar],[data-dsp-info],[data-dsp-tabela],[data-dsp-vista],[data-dsp-lista]");
   if (!t) return;
   const ds = t.dataset;
+  if (ds.dspLista) return abrirListaDesempenho(ds.dspLista, Number(ds.dspListaVendedor) || null);
   if (ds.dspVista) return trocarVista(ds.dspVista);
   if ("dspTabela" in ds) return alternarTabela();
   if (ds.dspPeriodo) return trocarPeriodo(ds.dspPeriodo);

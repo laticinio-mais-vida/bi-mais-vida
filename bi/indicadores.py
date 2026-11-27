@@ -678,7 +678,8 @@ _VISITAVEL = "NOT COALESCE(k.inativo, false) AND NOT contains(upper(COALESCE(k.c
 
 
 def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, areas: dict[int, list[int]],
-                 abrir: str | None = None, distintos: bool = False, atendido_no_dia: bool = False) -> dict:
+                 abrir: str | None = None, distintos: bool = False, atendido_no_dia: bool = False,
+                 por_cliente: bool = False) -> dict:
     """A média da efetividade de cada dia, pelo vendedor da carteira: em cada dia com visita esperada, os pedidos na
     rota do dia (de clientes das áreas atendidas nesse dia da semana) ÷ as visitas esperadas no dia. Pedido de cliente
     de área de outro dia não conta (o "fora de rota" do Power BI). Dia sem visita esperada (o fim de semana, o dia sem
@@ -704,7 +705,11 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
     inativo ou com "PEDIDO BLOQUEADO" no nome conta sem visita, como antes.
 
     distintos: o numerador conta os clientes com pedido na rota do dia (cada um uma vez), não os pedidos: os
-    atendimentos do painel de desempenho (bi/desempenho.py). As visitas esperadas são as mesmas."""
+    atendimentos do painel de desempenho (bi/desempenho.py). As visitas esperadas são as mesmas.
+
+    por_cliente: devolve também, em "clientes", as linhas de cada cliente que entram na conta (a lista de clientes do
+    painel de desempenho): {"id", "vendedor", "id_area", "area", "dia", "pedidos", "visitas"}. Saem das mesmas linhas
+    que a conta soma, então batem com ela."""
     onde_k, params_k = _carteira(c, ids)
     grupos = ("k.id_vendedor_carteira AS v, k.id_area AS a, COALESCE(k.area, '(sem área)') AS ar, "
               "COALESCE(k.segmento, '(sem segmento)') AS s")
@@ -716,12 +721,13 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
         [sorted(areas), sorted(a for a, d in areas.items() if d), *params_k]).fetchone()
     pedidos: dict = {}  # na rota: o dia do pedido é um dia de atendimento da área do cliente
     visitas: dict = {}
+    clientes: list[dict] = []
     if rota:
         # As semanas inteiras que tocam o período: o primeiro e o último dia marcado delas podem cair fora dele.
         de = inicio - dt.timedelta(days=inicio.isoweekday() % 7)  # o domingo
         ate_sabado = ate + dt.timedelta(days=6 - ate.isoweekday() % 7)
         dias = [de + dt.timedelta(days=i) for i in range((ate_sabado - de).days + 1)]
-        for v, a, ar, s, data, n_pedidos, n_visitas in cur.execute(
+        consulta = (
                 f"WITH rota AS (SELECT unnest(?::INTEGER[]) AS id_area, unnest(?::INTEGER[]) AS dia_semana), "
                 f"dias AS (SELECT unnest(?::DATE[]) AS dia), "
                 f"compras AS (SELECT p.id_cliente, p.data, {'1' if distintos else 'SUM(p.pedidos)'} AS n "
@@ -738,23 +744,30 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
                 f"MIN(g.dia) FILTER (WHERE c.id_cliente IS NOT NULL) AS atendido "
                 f"FROM agenda g LEFT JOIN compras c ON c.id_cliente = g.id_cliente AND c.data = g.dia "
                 f"GROUP BY 1, 2, 3, 4, 5, 6), "
-                f"marcas AS (SELECT w.v, w.a, w.ar, w.s, {'w.atendido' if atendido_no_dia else 'w.ultimo'} AS dia, "
-                f"c.n AS pedidos, "
+                f"marcas AS (SELECT w.id_cliente, w.v, w.a, w.ar, w.s, "
+                f"{'w.atendido' if atendido_no_dia else 'w.ultimo'} AS dia, c.n AS pedidos, "
                 f"CASE WHEN w.visitavel THEN 1 ELSE 0 END AS visitas "
                 f"FROM semanas w JOIN compras c ON c.id_cliente = w.id_cliente AND c.data = w.atendido "
                 f"UNION ALL "
-                f"SELECT w.v, w.a, w.ar, w.s, w.ultimo, 0, 1 FROM semanas w "
+                f"SELECT w.id_cliente, w.v, w.a, w.ar, w.s, w.ultimo, 0, 1 FROM semanas w "
                 f"WHERE w.atendido IS NULL AND w.visitavel AND (w.semanas <= 1 OR NOT EXISTS ("
                 f"SELECT 1 FROM compras p WHERE p.id_cliente = w.id_cliente "
-                f"AND p.data BETWEEN w.primeiro - 7 * (w.semanas - 1) AND w.primeiro - 1))) "
-                f"SELECT v, a, ar, s, dia, SUM(pedidos), SUM(visitas) FROM marcas WHERE dia BETWEEN ? AND ? "
-                f"GROUP BY 1, 2, 3, 4, 5",
-                [[a for a, _ in rota], [d for _, d in rota], dias, de - dt.timedelta(days=7 * (MAX_SEMANAS - 1)),
-                 ate, *params_k, inicio, ate]).fetchall():
+                f"AND p.data BETWEEN w.primeiro - 7 * (w.semanas - 1) AND w.primeiro - 1))) ")
+        params = [[a for a, _ in rota], [d for _, d in rota], dias, de - dt.timedelta(days=7 * (MAX_SEMANAS - 1)),
+                  ate, *params_k, inicio, ate]
+        for v, a, ar, s, data, n_pedidos, n_visitas in cur.execute(
+                consulta + "SELECT v, a, ar, s, dia, SUM(pedidos), SUM(visitas) FROM marcas WHERE dia BETWEEN ? AND ? "
+                           "GROUP BY 1, 2, 3, 4, 5", params).fetchall():
             if n_pedidos:
                 pedidos.setdefault((v, a, ar, s), Counter())[data] += _numero(n_pedidos)
             if n_visitas:
                 visitas.setdefault((v, a, ar, s), Counter())[data] += int(n_visitas)
+        if por_cliente:
+            clientes = [{"id": int(i), "vendedor": int(v), "id_area": a, "area": ar, "dia": data,
+                         "pedidos": _numero(n_pedidos), "visitas": int(n_visitas)}
+                        for i, v, a, ar, data, n_pedidos, n_visitas in cur.execute(
+                            consulta + "SELECT id_cliente, v, a, ar, dia, pedidos, visitas FROM marcas "
+                                       "WHERE dia BETWEEN ? AND ? ORDER BY 1, 5", params).fetchall()]
     vend: dict = {}
     total = (Counter(), Counter())  # (pedidos, visitas) por dia
     por: dict = {}
@@ -767,6 +780,8 @@ def _efetividade(cur, c: dict, ids: list[int], inicio: dt.date, ate: dt.date, ar
             p_dia.update(pedidos.get(chave, {}))
             v_dia.update(visitas.get(chave, {}))
     r = {"vend": {v: _media_dos_dias(*x) for v, x in vend.items()}, "total": _media_dos_dias(*total), "avisos": []}
+    if por_cliente:
+        r["clientes"] = clientes
     if sem_dia:
         r["avisos"].append(f"{sem_dia} cliente{'s' if sem_dia != 1 else ''} ativo{'s' if sem_dia != 1 else ''} da "
                            f"carteira {SEM_DIA}")

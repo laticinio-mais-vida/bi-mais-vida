@@ -3893,8 +3893,25 @@ table.dados.mc-tabela td.mc-seg { min-width: 110px; max-width: 160px; white-spac
 .mc-ver-itens:hover { background: var(--ruim-bg); }
 .mc-ver-itens:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
 .mc-mais { margin: 8px 2px 0; color: var(--tinta-3); font-size: 12.5px; font-weight: 600; text-align: center; }
+.mc-filtros { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mc-vendedor select { width: 240px; }
+.mc-outro.mc-sem { color: var(--tinta-3); }
 @media (max-width: 860px) {
   .mc-corpo { padding: 18px 16px 14px; }
   .mc-resumo { grid-template-columns: 1fr; gap: 8px; }
-  .mc-busca, .mc-busca input { width: 100%; }
+  .mc-filtros { width: 100%; }
+  .mc-busca, .mc-busca input, .mc-vendedor, .mc-vendedor select { width: 100%; }
 }
+
+/* o painel de desempenho da Gestão: as linhas do quadro e os botões da ficha que abrem a lista de clientes */
+button.dsp-linha-lista {
+  width: 100%; margin: 0; border: 0; border-top: 1px solid var(--linha); border-radius: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; transition: background .15s;
+}
+button.dsp-linha-lista:first-child { border-top: 0; }
+button.dsp-linha-lista:hover { background: color-mix(in srgb, var(--c) 10%, var(--surface)); }
+button.dsp-linha-lista:focus-visible { outline: 3px solid var(--azul); outline-offset: -3px; }
+.dsp-ic-lista { width: 12px; height: 12px; margin-left: 5px; vertical-align: -1px; color: var(--tinta-3); }
+button.dsp-linha-lista:hover .dsp-ic-lista, button.dsp-linha-lista:focus-visible .dsp-ic-lista { color: var(--acento-tinta); }
+.dsp-ver-clientes { justify-self: start; height: 32px; margin-top: 4px; padding: 0 12px; font-size: 12.5px; }
+.dsp-ver-clientes .ic { width: 15px; height: 15px; color: var(--acento); }

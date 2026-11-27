@@ -400,6 +400,17 @@ class Painel:
                          atendido_no_dia=distintos)
         return r["vend"]
 
+    def atendimentos_clientes(self, ids: list[int], inicio: dt.date, fim: dt.date) -> list[dict] | None:
+        """Os atendimentos do período cliente a cliente (a mesma conta da linha Atendimentos, _efetividade com
+        distintos e atendido_no_dia): uma linha por visita esperada ("visitas" 1; "pedidos" > 0 quando atendida) e as
+        dos clientes inativos ou bloqueados com pedido na rota ("visitas" 0). None sem os pedidos ou a frequência."""
+        if self.cache.sem_pedidos or self.cache.sem_rede:
+            self._aviso("os pedidos de venda ou a frequência de compra dos clientes ainda não chegaram do computador "
+                        "da empresa: atendimentos e efetividade aparecem depois da próxima atualização")
+            return None
+        return _efetividade(self.cur, {"filtros": {}}, ids, inicio, fim, self.areas, distintos=True,
+                            atendido_no_dia=True, por_cliente=True)["clientes"]
+
     def frequencia(self, ids: list[int], mes: dt.date, fim: dt.date) -> dict[int, dict]:
         """Realizado (semanas com compra ÷ clientes positivados, as campanhas) e a meta: a média das compras esperadas
         no mês inteiro dos mesmos clientes (os que têm dia de atendimento)."""

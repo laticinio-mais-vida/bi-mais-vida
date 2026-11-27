@@ -1018,6 +1018,29 @@ navegador.
   esperados), o % de troca do mês e a situação. Passar o mouse na barra ou na meta mostra de onde ela veio: o saldo
   do mês, o potencial do dia e os pedidos em aberto. A escolha entre barras e tabela fica guardada no navegador.
 - **Ficha**: clicar no nome de um vendedor abre os 9 cartões dele; o ⓘ de cada cartão explica a conta.
+- **Listas de clientes** (bi/metas_clientes.py `do_painel`, na mesma janela das [listas da página Metas](#página-metas)):
+  - **Onde abrem:**
+    - no quadro, clicar nas linhas **Positivação**, **Atendimentos**, **Mussarela** e **Outras linhas** de um vendedor
+      (elas têm o ícone de pessoas) abre a lista dele;
+    - na ficha, os quatro cartões têm o botão **Ver clientes**;
+    - na janela, o seletor troca o vendedor pela equipe toda.
+  - **Base:** a carteira de hoje (clientes ativos, sem "PEDIDO BLOQUEADO"), no período do painel. Cada lista sai da
+    conta da linha, então bate com ela.
+  - **Positivação:** os clientes da carteira sem nota do próprio vendedor do dia 1º do mês até o fim do período (a
+    lista "Clientes não atendidos" da página Metas). Quem comprou com outro vendedor aparece com o nome dele.
+  - **Atendimentos:** as visitas esperadas sem pedido no dia da rota, cliente a cliente.
+    - Saem da mesma consulta da linha (`_efetividade(..., por_cliente=True)`): esperados e atendidos dão o "X de Y" do
+      quadro.
+    - A lista mostra a área, o dia esperado, a frequência e o último pedido.
+    - Quem fez pedido na mesma semana em outro dia aparece marcado ("pedido em 18/11, fora do dia da rota").
+  - **Mussarela:** os clientes que compraram com o vendedor no período e os esperados na rota, mesmo sem compra.
+    - Entra quem é de um segmento com "Qualquer mussarela" no mix ideal (CRM › Configurar) e não levou mussarela.
+    - Levar mussarela é comprar um produto do grupo mussarela da página Metas, como na linha Mussarela.
+  - **Outras linhas:** os mesmos clientes, com o mix ideal sem o item da mussarela.
+  - **Marcas e ordem:**
+    - Nas duas listas de mix, quem não comprou nada aparece marcado. Quem fez pedido, mas ainda não tem nota, também.
+    - Cada cliente traz o **potencial do mês** (a média dos 2 meses fechados antes, a conta da meta do dia). A lista
+      começa pelo maior.
 - **Sem avisos de cadastro** (decisão de 11/11/2026): o painel não mostra os avisos de clientes em área sem dia de
   atendimento nem de clientes sem frequência de compra no cadastro. As campanhas continuam avisando.
 - **Cores**: verde a partir de 100% da meta, amarelo de 90% a 99%, vermelho abaixo de 90%. No % de troca, quanto menor
