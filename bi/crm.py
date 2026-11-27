@@ -30,6 +30,9 @@ quando ela é mais recente.
 A nota é a soma dos quatro, guardada exata e arredondada só no fim. As regras (os números, o mix e os custos) ficam na
 tabela regras (nome "crm", com versões), editadas em CRM › Configurar. O cálculo é do cache inteiro e fica na memória
 até chegar uma cópia nova do ERP ou mudar uma regra; cada pedido só filtra os clientes dos vendedores do acesso.
+
+A página de Crédito mostra a rentabilidade dos clientes escolhidos com as mesmas contas (Crm.rentabilidade): o lucro
+bruto de qualquer cliente, esteja ou não no CRM, e a faixa (quintil) de quem está.
 """
 from __future__ import annotations
 
@@ -59,6 +62,7 @@ MAX_CUSTO = 100_000.0                  # R$ por unidade: acima disso é erro de 
 MAX_PLANILHA = 5 * 1024 * 1024         # a planilha de custos importada
 LINHA_MUSSARELA = "MUSSARELA"          # "qualquer mussarela": os produtos cuja linha no ERP tem esta palavra
 ANTIGO = dt.date(1900, 1, 1)           # âncora de quem nunca comprou antes do semestre (a conta de atraso começa no início)
+MAX_CLIENTES = 100                     # os que a página de Crédito deixa escolher juntos (bi/credito.py)
 
 # --- o padrão: a planilha MIX IDEAL SEGMENTOS (com os ajustes do usuário) e a de custos industriais ---------------
 # Mix: um item é uma lista de códigos (qualquer um atende) ou "M" (qualquer mussarela).
@@ -386,6 +390,24 @@ def _mes_seguinte(mes: str) -> dt.date:
     return dt.date(a + m // 12, m % 12 + 1, 1)
 
 
+def tabela_custos(custos: dict[int, dict[str, float]], desde: str, ate: str) -> tuple[list[int], list[dt.date], list[float]]:
+    """As três listas paralelas (produto, mês, custo) de desde a ate (AAAA-MM), que as consultas do lucro bruto usam."""
+    prods, meses, valores = [], [], []
+    for p, linha in custos.items():
+        for mes, v in linha.items():
+            if desde <= mes <= ate:
+                prods.append(p)
+                meses.append(dt.date.fromisoformat(mes + "-01"))
+                valores.append(float(v))
+    return prods, meses, valores
+
+
+def margem(x: dict) -> float | None:
+    """Lucro bruto ÷ o faturamento dos produtos com custo, em % (o produto sem custo não entra nos dois)."""
+    base = x["faturamento"] - x["sem_custo"]
+    return round(100.0 * x["lucro"] / base, 2) if base > 0 else None
+
+
 # --- a importação da planilha de custos (Configurar) -------------------------------------------
 _NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
@@ -575,9 +597,9 @@ class Crm:
                  "rede": (rede_txt or "").strip() or None, "frequencia": freq, "semanas": semanas,
                  "primeira": primeira}
             if primeira is None:
-                fora.append({"vendedor": int(v), "motivo": "sem_compra"})
+                fora.append({"id": c["id"], "vendedor": int(v), "motivo": "sem_compra"})
             elif primeira >= per["corte"]:
-                fora.append({"vendedor": int(v), "motivo": "recente"})
+                fora.append({"id": c["id"], "vendedor": int(v), "motivo": "recente"})
             else:
                 clientes[c["id"]] = c
         ids = sorted(clientes)
@@ -770,13 +792,7 @@ class Crm:
                 c["rentabilidade"] = None
             return info
         de, para = self._equivalentes()
-        prods, mes_c, valores = [], [], []
-        for p, linha in custos.items():
-            for mes, v in linha.items():
-                if r["desde"] <= mes <= meses[-1]:
-                    prods.append(p)
-                    mes_c.append(dt.date.fromisoformat(mes + "-01"))
-                    valores.append(float(v))
+        prods, mes_c, valores = tabela_custos(custos, r["desde"], meses[-1])
         ini, fim = dt.date.fromisoformat(r["desde"] + "-01"), _mes_seguinte(meses[-1])
         params = [ids, prods, mes_c, valores, de, para, ini, fim]
         comum = """
@@ -898,16 +914,9 @@ class Crm:
                                else " ou ".join(nomes.get(p, f"Produto {p}") for p in it["produtos"]),
                                "atendido": n in feitos} for n, it in enumerate(lista)]
         if c.get("rentabilidade") is not None and d["rentabilidade"]["ate"]:
-            custos = custos_efetivos(cfg)
             rr = cfg["rentabilidade"]
             de, para = self._equivalentes()
-            prods, mes_c, valores = [], [], []
-            for p, linha in custos.items():
-                for mes, v in linha.items():
-                    if rr["desde"] <= mes <= d["rentabilidade"]["ate"]:
-                        prods.append(p)
-                        mes_c.append(dt.date.fromisoformat(mes + "-01"))
-                        valores.append(float(v))
+            prods, mes_c, valores = tabela_custos(custos_efetivos(cfg), rr["desde"], d["rentabilidade"]["ate"])
             linhas = cache.consulta("""
                 WITH custos AS (SELECT unnest(?::INTEGER[]) AS id_produto, unnest(?::DATE[]) AS mes,
                                        unnest(?::DOUBLE[]) AS custo),
@@ -943,6 +952,112 @@ class Crm:
             r["rent_produtos"] = sorted((arred(p) for p in produtos.values()), key=lambda p: -p["lucro"])
         r["regras"] = self._regras_resumo(d)
         return r
+
+    # ---------- para a página de Crédito ----------
+    def rentabilidade(self, clientes) -> dict:
+        """A rentabilidade de um ou mais clientes (os escolhidos na página de Crédito), com as contas do indicador do CRM:
+        o lucro bruto (faturamento − custo industrial × volume, por produto e mês) das vendas faturadas a eles, de
+        qualquer vendedor, de rentabilidade.desde até o último mês com custo. Cada cliente, a soma, o mês a mês (todos os
+        meses do período; o sem venda fica com zero) e os produtos. Vale para qualquer cliente, esteja ou não no CRM: de
+        quem está, a faixa (quintil, pelos cortes do CRM inteiro) e os pontos; de quem não está, o motivo. Quem chama
+        confere o acesso. Código inválido, nenhum cliente ou mais de MAX_CLIENTES -> ValueError."""
+        try:
+            ids = list(dict.fromkeys(int(c) for c in clientes or []))
+        except (TypeError, ValueError):
+            raise ValueError("cliente inválido") from None
+        if not ids:
+            raise ValueError("escolha um cliente")
+        if len(ids) > MAX_CLIENTES:
+            raise ValueError(f"escolha no máximo {MAX_CLIENTES} clientes")
+        cache = self.calc.cache
+        if not cache.pronto():
+            raise RuntimeError("os dados ainda estão sendo preparados")
+        cfg = self.config.atual()
+        r = cfg["rentabilidade"]
+        custos = custos_efetivos(cfg)
+        meses = sorted({m for linha in custos.values() for m in linha if m >= r["desde"]})
+        saida = {"desde": r["desde"], "ate": meses[-1] if meses else None, "pontos": list(r["pontos"]), "cortes": [],
+                 "avisos": []}
+        if cache.sem_detalhe or not meses:
+            saida["indisponivel"] = ("As vendas por cliente ainda não chegaram do computador da empresa: a rentabilidade "
+                                     "aparece depois da próxima atualização." if cache.sem_detalhe else
+                                     "Ainda não há custo industrial em CRM › Configurar: sem ele não dá para calcular o "
+                                     "lucro bruto.")
+            return saida
+        try:  # a faixa no CRM; sem ela, o lucro aparece do mesmo jeito
+            d = self._dados()
+        except RuntimeError as e:
+            d = None
+            saida["avisos"].append(f"A faixa dos clientes no CRM não aparece agora: {e}.")
+        if d:
+            saida["cortes"] = list(d["rentabilidade"]["cortes"])
+
+        de, para = self._equivalentes()
+        prods, mes_c, valores = tabela_custos(custos, r["desde"], saida["ate"])
+        linhas = cache.consulta("""
+            WITH custos AS (SELECT unnest(?::INTEGER[]) AS id_produto, unnest(?::DATE[]) AS mes, unnest(?::DOUBLE[]) AS custo),
+            eq AS (SELECT unnest(?::INTEGER[]) AS de, unnest(?::INTEGER[]) AS para),
+            vendas AS (
+              SELECT CAST(date_trunc('month', v.data) AS DATE) AS mes, v.id_cliente,
+                     COALESCE(e.para, v.id_produto) AS id_produto, sum(v.valor) AS valor, sum(v.quantidade) AS qtd
+              FROM vendas_clientes_itens v LEFT JOIN eq e ON e.de = v.id_produto
+              WHERE v.id_cliente IN (SELECT unnest(?::INTEGER[])) AND v.tipocliente = 'CLIENTE'
+                AND v.data >= CAST(? AS DATE) AND v.data < CAST(? AS DATE)
+              GROUP BY 1, 2, 3
+            )
+            SELECT v.mes, v.id_cliente, v.id_produto, v.valor, v.qtd, c.custo
+            FROM vendas v LEFT JOIN custos c ON c.id_produto = v.id_produto AND c.mes = v.mes
+            ORDER BY 1, 2, 3""", [prods, mes_c, valores, de, para, ids, dt.date.fromisoformat(r["desde"] + "-01"),
+                                  _mes_seguinte(saida["ate"])])
+
+        def zero() -> dict:
+            return {"faturamento": 0.0, "sem_custo": 0.0, "lucro": 0.0}
+
+        todos_meses, m = [], r["desde"]
+        while m <= saida["ate"]:
+            todos_meses.append(m)
+            m = _mes_seguinte(m).isoformat()[:7]
+        por_cliente = {i: zero() for i in ids}
+        por_mes = {m: {"mes": m, **zero()} for m in todos_meses}
+        por_produto: dict[int, dict] = {}
+        nomes = dict(cache.consulta("SELECT id, nome FROM produtos")) if linhas else {}
+        for mes, cliente, p, valor, qtd, custo in linhas:
+            valor, qtd = float(valor), float(qtd)
+            pr = por_produto.setdefault(int(p), {"nome": nomes.get(p, f"Produto {p}"), "volume": 0.0, **zero()})
+            pr["volume"] += qtd
+            for alvo in (por_cliente[int(cliente)], por_mes[mes.isoformat()[:7]], pr):
+                alvo["faturamento"] += valor
+                if custo is None:
+                    alvo["sem_custo"] += valor
+                else:
+                    alvo["lucro"] += valor - float(custo) * qtd
+
+        def arred(x: dict) -> dict:
+            return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in x.items()}
+
+        no_crm = d["clientes"] if d else {}
+        fora = {f["id"]: f["motivo"] for f in d["fora"]} if d else {}
+        n = cfg["meses_para_entrar"]
+        motivos = {"sem_compra": "nunca fez pedido de venda",
+                   "recente": f"a primeira compra foi há menos de {n} {'mês' if n == 1 else 'meses'}"}
+        fora_texto = (f"o CRM tem só os clientes ativos da carteira {'da equipe' if len(cfg['equipes']) == 1 else 'das equipes'}"
+                      f" {' e '.join(cfg['equipes'])}")
+        saida["clientes"] = []
+        for i in ids:
+            x, c = por_cliente[i], no_crm.get(i)
+            rent = (c or {}).get("rentabilidade")
+            saida["clientes"].append({
+                "id": i, **arred(x), "margem": margem(x),
+                "crm": {"quintil": rent["quintil"], "pontos": rent["pontos"]} if rent else None,
+                # None também quando a faixa não apareceu (o aviso explica)
+                "fora": None if d is None or c else motivos.get(fora.get(i), fora_texto),
+            })
+        total = {k: sum(x[k] for x in por_cliente.values()) for k in ("faturamento", "sem_custo", "lucro")}
+        saida["total"] = {**arred(total), "margem": margem(total)}
+        saida["meses"] = [{**arred(x), "margem": margem(x)} for x in por_mes.values()]
+        saida["produtos"] = sorted(({**arred(x), "margem": margem(x)} for x in por_produto.values()),
+                                   key=lambda x: (-x["lucro"], x["nome"]))
+        return saida
 
     def excel(self, ids) -> tuple[bytes, str]:
         from . import arquivos

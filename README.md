@@ -1536,6 +1536,13 @@ dia, quanto deve e quanto ainda cabe no limite.
   marca quem está bloqueado. O bloqueio **não muda o parecer** (decisão do usuário): ele aparece ao lado, para quem
   analisa ver o motivo antes de liberar. O ERP não guarda o histórico, só como o cliente está agora. Em 11/11/2026 eram
   74 clientes ativos bloqueados (1.300 contando os inativos) e 92 desbloqueados com observação.
+- **Rentabilidade** (não existe no Power BI): com um ou mais clientes escolhidos, o cartão abaixo dos de limite mostra o
+  lucro bruto com as mesmas contas da [página CRM](#página-crm) (faturamento − custo industrial × volume, por produto e
+  mês, das vendas faturadas ao cliente, de qualquer vendedor, de jan/2026 até o último mês com custo), a margem bruta, o
+  mês a mês, os 10 produtos de maior lucro e a faixa (quintil) no CRM de quem está nele; quem está fora do CRM tem o
+  lucro, sem faixa, com o motivo. Com vários clientes, soma e mostra cada um. Não muda com os filtros de mês, ano e
+  vendedor, nem muda o parecer. Quem tem a página de crédito vê, mesmo sem a página CRM
+  (`/api/credito/rentabilidade?clientes=12,15`, `Crm.rentabilidade`).
 - **Quem vê:** quem tem a página marcada em Usuários vê todos os clientes e vendedores; ela não tem configuração.
 
 Diferenças em relação ao Power BI, combinadas com o usuário:
@@ -1919,6 +1926,9 @@ da manteiga a granel 1 kg (27); as mussarelas Muller (12175 e 12189) usam o da m
 produto vendido sem custo fica fora do lucro bruto, e a página avisa quanto do faturamento ficou de fora.
 
 O cálculo é do cache inteiro e fica na memória até chegar uma cópia nova do ERP ou mudar uma regra.
+
+A Reavaliação de Crédito mostra o lucro bruto dos clientes escolhidos com as mesmas contas, e a faixa no CRM de quem está
+nele (veja [Página Reavaliação de Crédito](#página-reavaliação-de-crédito)).
 
 ### Configurar (CRM)
 

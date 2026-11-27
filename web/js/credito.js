@@ -4,7 +4,8 @@
 // limite total novo (Indicado, com ressalvas ou Não indicado), o registro da reanálise (o limite e o prazo liberados e
 // a justificativa) e as reanálises anteriores dele, e os dados do Serasa que vieram do PDF. As capas de análise de crédito
 // (o botão "Capa de análise de crédito", capacredito.js) do cliente aparecem com as reanálises: as de reanálise dele e as de
-// cadastro novo, quando o CNPJ dele chega do ERP. A conta, a regra do parecer,
+// cadastro novo, quando o CNPJ dele chega do ERP. Com um ou mais clientes, a rentabilidade deles (o lucro bruto com as
+// contas da página CRM). A conta, a regra do parecer,
 // o prazo mínimo entre reanálises, a ordem da tabela, a leitura do PDF e o retrato que a reanálise grava ficam no
 // servidor (bi/credito.py, bi/reanalise.py e bi/serasa.py); aqui é a apresentação.
 //
@@ -50,10 +51,11 @@ let ctx = null;
 // parecer: o último parecer mostrado (o registro grava o pedido dele); reanalises: o que /api/credito/reanalises
 // trouxe do cliente (historico: o pedido em andamento); rascunho: o que foi digitado no registro, que fica quando a
 // página é refeita por um filtro e some ao trocar de cliente ou depois de registrar; serasa: o que /api/credito/serasa
-// trouxe do cliente (lendoSerasa: o pedido em andamento; enviandoSerasa: um PDF subindo).
+// trouxe do cliente (lendoSerasa: o pedido em andamento; enviandoSerasa: um PDF subindo); rentab: o que
+// /api/credito/rentabilidade trouxe dos clientes escolhidos (lendoRentab: o pedido em andamento).
 const estado = { clientes: [], mes: null, ano: null, vendedor: null, ordens: ORDEM_PADRAO, limite: null, dados: null, pedido: 0,
   busca: 0, analise: 0, parecer: null, reanalises: null, historico: 0, rascunho: null, serasa: null, lendoSerasa: 0,
-  enviandoSerasa: false };
+  enviandoSerasa: false, rentab: null, lendoRentab: 0 };
 
 export function montarCredito(container, contexto) {
   ctx = contexto;
@@ -218,6 +220,7 @@ async function carregar(silencioso = false, soTabela = false) {
     ligarSerasa();
     ligarAnalise();
     ligarReanalises();
+    ligarRentabilidade();
   } catch (e) {
     if (pedido !== estado.pedido) return;
     if (e.status === 400 && (estado.clientes.length || estado.ano || estado.vendedor || !mesmosNiveis(estado.ordens, ORDEM_PADRAO))) {
@@ -423,8 +426,9 @@ function render(d) {
       "Tudo o que o cliente ainda tem em aberto.")}
     ${cr ? kpiRestante(8, cr) : kpiSemCliente(8, COR.neutro, "Limite restante", "escudo")}
   </section>`;
-  h += tabela(d, 9);
-  h += comoCalcula(d, 10);
+  if (n) h += cartaoRentabilidade(9);
+  h += tabela(d, 10);
+  h += comoCalcula(d, 11);
   return h;
 }
 
@@ -631,6 +635,117 @@ function tabela(d, i, animar = true) {
     ${linha}
     ${corpo}
   </section>`;
+}
+
+// ---------- rentabilidade: o lucro bruto com as contas da página CRM (bi/crm.py, Crm.rentabilidade) ----------
+// Só dos clientes escolhidos: não muda com os filtros de mês, ano e vendedor. Não entra no parecer do limite novo.
+const SUB_RENTAB = "o lucro bruto das vendas faturadas, com as mesmas contas da página CRM";
+const mesCurto = (m) => `${MESES[Number(m.slice(5)) - 1].slice(0, 3)}/${m.slice(2, 4)}`;
+const chaveClientes = () => estado.clientes.map((c) => c.id).join(",");
+const cabRentab = (sub) => `<div class="cartao-cab"><div><h3>${icone("grafico")}Rentabilidade</h3><p class="sub">${sub}</p></div></div>`;
+// O lucro e a margem contra zero: negativo (vendeu abaixo do custo) fica vermelho; o resto não é comparado com nada.
+const corLucro = (v) => (v != null && v < -0.005 ? ' class="cr-v-ruim"' : "");
+const textoMargem = (v) => (v == null ? "—" : `${fmt.num(v, 1)}%`);
+
+function cartaoRentabilidade(i) {
+  return `
+  <section class="cartao secao entra cr-rentab" id="cr-rentab" style="--i:${i}">
+    ${cabRentab(SUB_RENTAB)}
+    <div class="esqueleto" style="height:110px"></div>
+  </section>`;
+}
+
+function ligarRentabilidade() {
+  desenharRentabilidade(); // a página refeita por um filtro já mostra a dos mesmos clientes enquanto lê de novo
+  carregarRentabilidade();
+}
+
+async function carregarRentabilidade() {
+  if (!document.getElementById("cr-rentab") || !estado.clientes.length) return;
+  const chave = chaveClientes(), pedido = ++estado.lendoRentab;
+  try {
+    const r = await api(`/api/credito/rentabilidade?clientes=${chave}`);
+    if (pedido !== estado.lendoRentab) return;
+    estado.rentab = { ...r, chave };
+  } catch (e) {
+    if (pedido !== estado.lendoRentab) return;
+    estado.rentab = { erro: e.message, chave };
+  }
+  desenharRentabilidade();
+}
+
+// A faixa no CRM: os clientes do CRM em 5 faixas iguais pelo lucro bruto; a 1ª é a dos 20% de maior lucro.
+function faixaCrm(x, max) {
+  const q = x.crm.quintil;
+  const quem = q === 1 ? "os 20% de maior lucro do CRM" : q === 5 ? "os 20% de menor lucro do CRM (ou sem lucro)"
+    : "faixas de 20% dos clientes do CRM, da 1ª (maior lucro) à 5ª";
+  return numero("Faixa no CRM", `${q}ª de 5`, `${quem} · ${fmt.num(x.crm.pontos)} de ${fmt.num(max)} pontos na nota`);
+}
+
+function desenharRentabilidade() {
+  const card = document.getElementById("cr-rentab"), r = estado.rentab;
+  if (!card || !r || r.chave !== chaveClientes()) return;
+  if (r.erro || r.indisponivel) {
+    card.innerHTML = cabRentab(SUB_RENTAB) + `<div class="aviso">${icone(r.erro ? "alerta" : "info")}<span>${r.erro
+      ? `Não foi possível calcular a rentabilidade: ${esc(r.erro)}` : esc(r.indisponivel)}</span></div>`;
+    return;
+  }
+  const t = r.total, varios = r.clientes.length > 1, max = r.pontos[0], periodo = `${mesCurto(r.desde)} a ${mesCurto(r.ate)}`;
+  const nomes = new Map((estado.dados?.clientes || []).map((c) => [c.id, c.nome]));
+  const sub = `${SUB_RENTAB}, de ${periodo} (os meses com custo industrial), de qualquer vendedor · não muda com os
+    filtros de mês, ano e vendedor`;
+  const avisos = (r.avisos || []).map((a) => `<div class="aviso">${icone("alerta")}<span>${esc(a)}</span></div>`).join("");
+  if (!t.faturamento) {
+    card.innerHTML = cabRentab(sub) + avisos + `<p class="cr-hist-vazio">${varios ? "Nenhum dos clientes escolhidos teve"
+      : "O cliente não teve"} venda faturada de ${periodo}.</p>`;
+    return;
+  }
+  const um = r.clientes[0], comCrm = r.clientes.some((x) => x.crm || x.fora); // sem os dois: o CRM não fechou (aviso)
+  const posicao = varios
+    ? numero("No CRM", comCrm ? `${fmt.num(r.clientes.filter((x) => x.crm).length)} de ${fmt.num(r.clientes.length)} clientes` : "—",
+      comCrm ? "a faixa de cada um está na tabela" : "")
+    : um.crm ? faixaCrm(um, max) : numero("Faixa no CRM", "—", um.fora ? `fora do CRM: ${esc(um.fora)}` : "");
+  const numeros = `
+    <div class="cr-parecer-numeros cr-rentab-numeros">
+      <div><span>Lucro bruto</span><b${corLucro(t.lucro)}>${fmt.moeda(t.lucro)}</b>${t.margem == null ? ""
+        : `<small>margem bruta de ${textoMargem(t.margem)}</small>`}</div>
+      ${numero("Faturamento", fmt.moeda(t.faturamento), t.sem_custo > 0
+        ? `${fmt.moeda(t.sem_custo)} em produtos sem custo industrial ficaram fora do lucro e da margem`
+        : "todos os produtos com custo industrial")}
+      ${posicao}
+    </div>`;
+  const faixa = (x) => (x.crm ? `${x.crm.quintil}ª de 5<small>${fmt.num(x.crm.pontos)} de ${fmt.num(max)} pontos</small>`
+    : x.fora ? `<span class="fraco" data-tt="${esc(`<div class='tt-t'>Fora do CRM</div>${esc(x.fora)}`)}">fora do CRM</span>` : "—");
+  const porCliente = varios ? `
+    <div class="tabela-rolagem cr-rentab-clientes"><table class="dados cr-serasa-tab">
+      <thead><tr><th class="esq">Cliente</th><th>Faturamento</th><th>Lucro bruto</th><th>Margem</th><th class="esq">Faixa no CRM</th></tr></thead>
+      <tbody>${r.clientes.map((x) => `<tr><td class="esq cr-quebra">${esc(nomes.get(x.id) || `Cliente ${x.id}`)}</td>
+        <td>${fmt.moeda(x.faturamento)}</td><td${corLucro(x.lucro)}>${fmt.moeda(x.lucro)}</td>
+        <td${corLucro(x.margem)}>${textoMargem(x.margem)}</td><td class="esq">${faixa(x)}</td></tr>`).join("")}</tbody>
+      <tfoot><tr><td class="esq">Total</td><td>${fmt.moeda(t.faturamento)}</td><td${corLucro(t.lucro)}>${fmt.moeda(t.lucro)}</td>
+        <td${corLucro(t.margem)}>${textoMargem(t.margem)}</td><td></td></tr></tfoot>
+    </table></div>` : "";
+  const meses = `
+    <div><h4>Mês a mês${varios ? " (a soma)" : ""}</h4>
+      <div class="tabela-rolagem"><table class="dados cr-serasa-tab">
+        <thead><tr><th class="esq">Mês</th><th>Faturamento</th><th>Lucro bruto</th><th>Margem</th></tr></thead>
+        <tbody>${r.meses.map((m) => (m.faturamento
+          ? `<tr><td class="esq">${mesCurto(m.mes)}</td><td>${fmt.moeda(m.faturamento)}</td>
+              <td${corLucro(m.lucro)}>${fmt.moeda(m.lucro)}</td><td${corLucro(m.margem)}>${textoMargem(m.margem)}</td></tr>`
+          : `<tr><td class="esq fraco">${mesCurto(m.mes)}</td><td class="fraco" colspan="3">sem venda faturada</td></tr>`)).join("")}</tbody>
+      </table></div></div>`;
+  const top = r.produtos.slice(0, 10);
+  const produtos = `
+    <div><h4>Produtos de maior lucro${varios ? " (a soma)" : ""}</h4>
+      <div class="tabela-rolagem"><table class="dados cr-serasa-tab">
+        <thead><tr><th class="esq">Produto</th><th>Volume</th><th>Faturamento</th><th>Lucro bruto</th></tr></thead>
+        <tbody>${top.map((p) => `<tr><td class="esq cr-quebra">${esc(p.nome)}${p.sem_custo ? ' <small class="fraco">sem custo</small>' : ""}</td>
+          <td>${fmt.num(p.volume, 1)}</td><td>${fmt.moeda(p.faturamento)}</td>
+          <td${corLucro(p.lucro)}>${p.sem_custo && !p.lucro ? "—" : fmt.moeda(p.lucro)}</td></tr>`).join("")}</tbody>
+      </table></div>
+      ${r.produtos.length > top.length ? `<p class="cr-parecer-nota">Os ${top.length} de maior lucro, de ${fmt.num(r.produtos.length)} produtos.</p>` : ""}</div>`;
+  card.innerHTML = cabRentab(sub) + avisos + numeros + porCliente + `<div class="cr-serasa-blocos cr-rentab-blocos">${meses}${produtos}</div>`;
+  ligarTooltips(card);
 }
 
 // ---------- dados do Serasa (o PDF do Relato PJ, lido no servidor: bi/serasa.py) ----------
@@ -1412,10 +1527,20 @@ function comoCalcula(d, i) {
             valor). O PDF não fica guardado. A idade conta da data em que o Serasa emitiu o relatório: passando de
             ${d.regras ? `${d.regras.serasa_validade_dias} dias` : "a validade definida em Configurar"}, aparece como
             desatualizado. Os dados ficam só no site e entram no retrato das próximas reanálises do cliente.</li>
+          <li><b>Rentabilidade</b> (com cliente escolhido): as mesmas contas do indicador da página CRM. Lucro bruto =
+            faturamento − custo industrial × volume, por produto e mês, das vendas faturadas ao cliente, de qualquer
+            vendedor, do primeiro mês da rentabilidade do CRM até o último mês com custo (os custos ficam em CRM ›
+            Configurar). Não muda com os filtros de mês, ano e vendedor. Margem bruta = lucro bruto ÷ faturamento dos
+            produtos com custo; o produto sem custo aparece no faturamento, mas fica fora do lucro e da margem.
+            <b>Faixa no CRM:</b> os clientes do CRM (os ativos da carteira das equipes do CRM, com a primeira compra há
+            mais de um mês) divididos em 5 faixas iguais pelo lucro bruto; a 1ª é a dos 20% de maior lucro, e cada faixa
+            dá os pontos da rentabilidade na nota do CRM. Quem está fora do CRM tem o lucro, mas não tem faixa. Com
+            vários clientes, os valores somam. A rentabilidade não muda o parecer do limite novo.</li>
           <li><b>Cores:</b> verde é o que está bom e vermelho o que está ruim, pelo que cada número é comparado:
             pontualidade com ${fmt.pct(d.regra_parecer?.pontual_ok ?? 0.9, 0)}, inadimplência com zero, o que está em
-            aberto com o limite, o atraso com ${TOLERANCIA} dias, a idade do Serasa com a validade. O que bate exato
-            fica verde; o que não tem com o que comparar (compras, ticket, limite, score) fica cinza.</li>
+            aberto com o limite, o atraso com ${TOLERANCIA} dias, a idade do Serasa com a validade, o lucro bruto e a
+            margem com zero (negativo: vendeu abaixo do custo). O que bate exato fica verde; o que não tem com o que
+            comparar (compras, ticket, limite, score, o lucro positivo) fica cinza.</li>
           <li><b>Dias de atraso:</b> quitado = quitação − vencimento; em aberto = ${fmt.data(d.hoje)} (o dia da extração dos
             dados) − vencimento. Negativo = antes do vencimento.</li>
           <li><b>Tabela:</b> clique no nome de uma coluna para ordenar; de novo, para inverter. As colunas clicadas antes

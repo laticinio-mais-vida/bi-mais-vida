@@ -148,6 +148,8 @@ VENDAS = [
     (D(2026, 8, 12), BA, 5, "CLIENTE", 9999, 500.0, 5.0),             # sem custo: fica fora do lucro
     (D(2026, 9, 10), BA, 6, "CLIENTE", 32, 220.0, 10.0),              # 20
     (D(2026, 9, 10), BA, 6, "FUNCIONARIO", 32, 9999.0, 1.0),          # não é cliente: fora
+    (D(2026, 5, 10), EDIR, 13, "CLIENTE", 26, 300.0, 20.0),           # fora do CRM (outra equipe): 100 na página de Crédito
+    (D(2026, 9, 20), EDIR, 13, "CLIENTE", 3643, 90.0, 10.0),          # 3643 conta como 11469, que não tem custo
 ]
 
 
@@ -394,6 +396,74 @@ class TestCalculo(unittest.TestCase):
             self.crm.cliente(None, 10)                                       # fora do CRM
         with self.assertRaises(ValueError):
             self.crm.cliente(None, "x")
+
+    def test_rentabilidade_para_o_credito(self):
+        r = self.crm.rentabilidade([5])
+        self.assertEqual((r["desde"], r["ate"]), ("2026-01", "2026-09"))
+        self.assertEqual(r["cortes"], [0.0, 0.0, 50.0, 250.0])
+        c = r["clientes"][0]
+        # as mesmas contas do CRM: 1.600 de lucro, 500 sem custo fora do lucro e da margem
+        self.assertEqual((c["faturamento"], c["sem_custo"], c["lucro"]), (6100.0, 500.0, 1600.0))
+        self.assertEqual(c["lucro"], self.c[5]["rentabilidade"]["lucro"])
+        self.assertEqual(c["margem"], self.c[5]["rentabilidade"]["margem"])
+        self.assertAlmostEqual(c["margem"], 100 * 1600 / 5600, places=2)
+        self.assertEqual(c["crm"], {"quintil": 1, "pontos": 40})
+        self.assertIsNone(c["fora"])
+        self.assertEqual([m["mes"] for m in r["meses"]], [f"2026-{m:02d}" for m in range(1, 10)])  # os 9, com zero
+        self.assertEqual(r["meses"][7], {"mes": "2026-08", "faturamento": 6100.0, "sem_custo": 500.0, "lucro": 1600.0,
+                                         "margem": c["margem"]})
+        self.assertEqual(r["meses"][0]["faturamento"], 0.0)
+        self.assertIsNone(r["meses"][0]["margem"])
+        self.assertEqual([p["nome"] for p in r["produtos"]], ["QUEIJO MUSSARELA MAIS VIDA 4KG", "PRODUTO SEM CUSTO"])
+        self.assertEqual((r["produtos"][1]["sem_custo"], r["produtos"][1]["volume"]), (500.0, 5.0))
+
+    def test_rentabilidade_de_quem_esta_fora_do_crm(self):
+        r = self.crm.rentabilidade(["13", 10, 9, 14, 13])  # repetido conta uma vez
+        c = {x["id"]: x for x in r["clientes"]}
+        self.assertEqual(list(c), [13, 10, 9, 14])
+        self.assertEqual((c[13]["lucro"], c[13]["sem_custo"], c[13]["faturamento"]), (100.0, 90.0, 390.0))
+        self.assertIsNone(c[13]["crm"])
+        self.assertEqual(c[13]["fora"], "o CRM tem só os clientes ativos da carteira das equipes ES e BA")
+        self.assertEqual(c[14]["fora"], "o CRM tem só os clientes ativos da carteira das equipes ES e BA")  # inativo
+        self.assertEqual(c[10]["fora"], "nunca fez pedido de venda")
+        self.assertEqual(c[9]["fora"], "a primeira compra foi há menos de 1 mês")
+        self.assertEqual((c[10]["faturamento"], c[10]["lucro"], c[10]["margem"]), (0.0, 0.0, None))
+        self.assertEqual(r["produtos"][-1]["nome"], "BEB. LACTEA MORANGO 500G BANDEJA")  # o 3643 pelo 11469
+
+    def test_rentabilidade_de_varios_clientes_soma(self):
+        r = self.crm.rentabilidade([1, 3, 5])
+        self.assertEqual(r["total"]["lucro"], 1000.0 + 250.0 + 1600.0)                   # a venda de outubro fica fora
+        self.assertEqual(r["total"]["faturamento"], 3000.0 + 1250.0 + 6100.0)
+        self.assertAlmostEqual(r["total"]["margem"], 100 * 2850 / 9850, places=2)
+        self.assertEqual([x["crm"]["quintil"] for x in r["clientes"]], [1, 2, 1])
+        self.assertEqual(r["produtos"][0], {"nome": "QUEIJO MUSSARELA MAIS VIDA 4KG", "volume": 350.0,
+                                            "faturamento": 9850.0, "sem_custo": 0.0, "lucro": 2850.0,
+                                            "margem": round(100 * 2850 / 9850, 2)})
+        with self.assertRaises(ValueError):
+            self.crm.rentabilidade([])
+        with self.assertRaises(ValueError):
+            self.crm.rentabilidade(["x"])
+        with self.assertRaises(ValueError):
+            self.crm.rentabilidade(list(range(1, 102)))
+
+    def test_rentabilidade_sem_custo_ou_sem_crm(self):
+        cfg = regras_teste()
+        cfg["rentabilidade"]["custos"], cfg["rentabilidade"]["usa_custo_de"] = {}, {}
+        sem_custo = Crm(self.crm.calc, ConfigFixa(cfg), self.crm.nomes_vendedores)
+        r = sem_custo.rentabilidade([5])
+        self.assertIn("custo industrial", r["indisponivel"])
+        self.assertNotIn("clientes", r)
+        # o CRM não fecha (ex.: os pedidos ainda não chegaram): o lucro aparece, sem a faixa
+        quebrado = Crm(self.crm.calc, self.crm.config, self.crm.nomes_vendedores)
+
+        def falha():
+            raise RuntimeError("os pedidos de venda ainda não chegaram")
+
+        quebrado._dados = falha
+        r = quebrado.rentabilidade([5])
+        self.assertEqual(r["clientes"][0]["lucro"], 1600.0)
+        self.assertEqual((r["clientes"][0]["crm"], r["clientes"][0]["fora"], r["cortes"]), (None, None, []))
+        self.assertIn("os pedidos de venda ainda não chegaram", r["avisos"][0])
 
     def test_excel(self):
         conteudo, nome = self.crm.excel(frozenset({ES}))

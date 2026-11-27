@@ -1629,6 +1629,15 @@ table.dados.cr-serasa-anot td.esq { white-space: normal; }
 .cr-serasa-anteriores ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
 .cr-serasa-anteriores li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--linha); border-radius: 12px; font-size: 13px; }
 .cr-serasa-anteriores li small { display: block; color: var(--tinta-3); font-size: 12px; }
+/* rentabilidade (as contas do CRM) */
+.cr-rentab .cartao-cab { margin-bottom: 4px; }
+.cr-rentab-numeros { margin-top: 8px; padding-top: 0; border-top: 0; }
+.cr-rentab-clientes { margin-top: 14px; }
+.cr-rentab-clientes td small { display: block; color: var(--tinta-3); font-size: 11.5px; font-weight: 500; }
+.cr-rentab-clientes tfoot td:first-child { background: var(--surface-3); }  /* a 1ª coluna grudada tem o fundo do cartão */
+.cr-rentab-blocos { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
+.cr-rentab table.dados.cr-serasa-tab td.cr-quebra { white-space: normal; min-width: 130px; }  /* o nome quebra; os números, não */
+.cr-rentab .cr-serasa-tab tbody tr { animation: none; }
 /* a data da consulta ao Serasa em destaque (consultaSerasa em credito.js): verde dentro da validade, vermelho fora */
 .cr-consulta { --cr-cor: var(--cr-bom); display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 10px 0 4px; padding: 12px 16px; border-radius: 14px; border: 1.5px solid var(--cr-cor); background: color-mix(in srgb, var(--cr-cor) 7%, var(--surface)); }
 .cr-consulta.ruim { --cr-cor: var(--cr-ruim); }

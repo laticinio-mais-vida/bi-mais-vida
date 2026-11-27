@@ -1342,7 +1342,7 @@ class Manipulador(BaseHTTPRequestHandler):
                 return self._json(self.app.devolucoes.calcular(q.get("aba"), q.get("mes"), q.get("regiao"),
                                                                lista("vendedores"), permitidos, equipes))
             if url.path in ("/api/credito", "/api/credito/busca", "/api/credito/analise", "/api/credito/reanalises",
-                            "/api/credito/serasa"):
+                            "/api/credito/serasa", "/api/credito/rentabilidade"):
                 if not self._pode_credito(usuario):
                     return
                 # Os vendedores do acesso: a busca só acha os clientes deles, os títulos são só deles, e cliente de
@@ -1358,6 +1358,11 @@ class Manipulador(BaseHTTPRequestHandler):
                 if url.path == "/api/credito/serasa":  # cliente=12: o último envio do Serasa e os anteriores
                     self.app.credito.conferir_cliente(q.get("cliente"), ids)
                     return self._json(self.app.serasa.listar(q.get("cliente"), usuario))
+                if url.path == "/api/credito/rentabilidade":  # clientes=12,15: o lucro bruto com as contas do CRM
+                    clientes = lista("clientes") or []
+                    for c in clientes:
+                        self.app.credito.conferir_cliente(c, ids)
+                    return self._json(self.app.crm.rentabilidade(clientes))
                 # clientes=12,15 (os limites somam); ordem=valor,cliente&sentido=desc,asc ordena a tabela de títulos
                 # (a primeira coluna manda, as outras desempatam)
                 inteiro = lambda k: int(q[k]) if q.get(k, "").strip() else None  # noqa: E731
